@@ -40,6 +40,7 @@ No prompt, response, conversation, code, path, file name, session id, mission ti
 The private `product-analytics-id` file under the core state directory holds the random UUID; it derives from neither the account nor hardware, and remains stable across restarts and moves with the core's state.
 The server necessarily observes the connection's source IP; project-side Discard client IP data complements the event flags, and this design does not assert that the events are legally anonymous or that opt-out is sufficient in every jurisdiction.
 The owning operator must disclose the purpose, data fields, US destination and opt-out in the product's privacy notice, and assess prior consent where applicable.
+The public privacy notice is `site/privacy.html` (withhide.dev/privacy); an event's name or fields change its event table in the same pull request, and `site/tests/legal.test.mjs` fails when the table and `Event::name` differ.
 One worker waits on a condition variable, retains at most 128 events in memory, sends one at a time with a five-second global HTTP timeout and no redirects, retries or disk spool, and drops pending events on opt-out or shutdown.
 Its owner joins it outside `Mutex<Runtime>`; transport failure, a full queue or an invalid identity produces a content-free diagnostic and cannot block a provider request or turn into a user alert.
 An already-started send may finish after opt-out; nothing observed while disabled is retained or replayed on re-enable.

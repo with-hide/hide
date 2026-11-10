@@ -112,6 +112,7 @@ No IP address, key, credential, URL, application payload or close reason supplie
 A disconnected stderr collector does not panic connection tasks; deployment must monitor its collector too.
 The relay itself retains no log files; deployment owns the stderr collector, seven-day retention and alerts on `cap_exceeded`, `server_failed` and missing health responses.
 Those collection and alert settings are deployment work, not established by running the binary locally.
+The public statement of what the relay sees, logs and keeps is `site/privacy.html`, section 3; a change to the log fields or the retention edits it in the same pull request.
 Installing and operating the production relay, with its collector, retention and alerts, is owned by a private operations document.
 
 TLS terminates at the deployment's reverse proxy.

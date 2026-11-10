@@ -39,7 +39,8 @@ test("both pages carry an English and a Korean body, each labelled with its lang
 });
 
 test("the privacy policy states an effective date, a contact address and the policy sections", () => {
-  assert.match(privacy, /<p class="meta">Effective \d{1,2} [A-Z][a-z]+ \d{4}<\/p>/);
+  // The Conductor writes the launch date over the "from the day" form when the iOS app is released.
+  assert.match(privacy, /<p class="meta">Effective (\d{1,2} [A-Z][a-z]+ \d{4}|from the day the iOS app is released on the App Store)<\/p>/);
   assert.match(privacy, /mailto:hello@withhide\.dev/);
   for (const heading of [
     "The desktop app", "This website", "The relay", "The phone app", "Hide AI",
@@ -80,4 +81,35 @@ test("the pages the policy links live on this site point at a page that exists",
       assert.ok(["privacy", "support", ""].includes(href), `${name} links only to this site's pages, found ./${href}`);
     }
   }
+});
+
+// The product's own files are the expected answer here: the event names in the Rust
+// source and the retention in the deploy files. The page is the public statement of
+// both, so it fails the build when it falls behind them.
+const repoFile = rel => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), "utf8");
+const section = (html, id) => html.match(new RegExp(`<section class="legal" id="${id}"[\\s\\S]*?</section>`))[0];
+
+test("the usage-statistics table has one row per event hide-core sends, in each language", () => {
+  const source = repoFile("hide-core/src/product_analytics.rs");
+  const names = [...source.match(/pub fn name\(self\)[\s\S]*?\n    }\n/)[0].matchAll(/=> "(hide_[a-z_]+)"/g)].map(m => m[1]).sort();
+  assert.ok(names.length >= 7, `read the event names from Event::name, found ${names}`);
+  for (const id of ["en", "ko"]) {
+    const rows = [...section(privacy, id).matchAll(/<tr data-event="([a-z_]+)">/g)].map(m => m[1]).sort();
+    assert.deepEqual(rows, names, `${id}: the policy's event table matches Event::name in hide-core/src/product_analytics.rs`);
+  }
+});
+
+test("the docs that own the events and the relay logs name the page that states them", () => {
+  assert.match(repoFile("docs/ARCHITECTURE.md"), /site\/privacy\.html/);
+  assert.match(repoFile("docs/RELAY_PROTOCOL.md"), /site\/privacy\.html/);
+});
+
+test("the policy's relay journal retention is not shorter than what the deploy keeps", () => {
+  const vacuum = repoFile("deploy/relay/hide-relay-retention.service").match(/--vacuum-time=(\d+)d/);
+  assert.ok(vacuum, "the deploy vacuums the journal by days");
+  // Whole files are vacuumed after an hourly rotation, so a line can outlive the vacuum
+  // age by up to a day; the page promises the day count plus that one.
+  assert.equal(Number(vacuum[1]) + 1, 7, "the page says seven days");
+  assert.equal((privacy.match(/at most seven days/g) ?? []).length, 1);
+  assert.equal((privacy.match(/최대 7일/g) ?? []).length, 1);
 });
