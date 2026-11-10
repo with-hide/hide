@@ -28,7 +28,7 @@ function fixture() {
   facts = join(root, 'facts');
   write(join(facts, 'info.json'), {
     CFBundleIdentifier: want.bundleId, CFBundleExecutable: 'App', CFBundleShortVersionString: '1.2.5', CFBundleVersion: '20261110120000',
-    CAPACITOR_DEBUG: 'false', MinimumOSVersion: '15.0', DTSDKName: 'iphoneos26.5', UIDeviceFamily: [1],
+    CAPACITOR_DEBUG: 'false', MinimumOSVersion: '15.0', DTSDKName: 'iphoneos26.5', UIDeviceFamily: [1], ITSAppUsesNonExemptEncryption: false,
   });
   write(join(facts, 'privacy.json'), { NSPrivacyTracking: false, NSPrivacyTrackingDomains: [], NSPrivacyCollectedDataTypes: [], NSPrivacyAccessedAPITypes: [] });
   write(join(facts, 'entitlements.json'), want.entitlements);
@@ -57,8 +57,9 @@ describe('the release gate on the signed app', () => {
   const spoil = {
     'a debug switch left on': [(app) => edit('info.json', (v) => { v.CAPACITOR_DEBUG = 'true'; }), 'CAPACITOR_DEBUG'],
     'an App Transport Security exception': [(app) => edit('info.json', (v) => { v.NSAppTransportSecurity = { NSAllowsArbitraryLoads: true }; }), 'App Transport Security'],
-    'an export compliance answer given by the app': [(app) => edit('info.json', (v) => { v.ITSAppUsesNonExemptEncryption = false; }), 'export compliance question'],
-    'an export compliance code given by the app': [(app) => edit('info.json', (v) => { v.ITSEncryptionExportComplianceCode = 'x'; }), 'export compliance question'],
+    'no export compliance answer in the app': [(app) => edit('info.json', (v) => { delete v.ITSAppUsesNonExemptEncryption; }), 'ITSAppUsesNonExemptEncryption'],
+    'an export compliance answer of true': [(app) => edit('info.json', (v) => { v.ITSAppUsesNonExemptEncryption = true; }), 'ITSAppUsesNonExemptEncryption'],
+    'an export compliance code in the app': [(app) => edit('info.json', (v) => { v.ITSEncryptionExportComplianceCode = 'x'; }), 'export compliance code'],
     'another bundle id': [(app) => edit('info.json', (v) => { v.CFBundleIdentifier = 'me.example.other'; }), 'bundle id is'],
     'another version': [(app) => edit('info.json', (v) => { v.CFBundleShortVersionString = '9.9.9'; }), 'version is'],
     'an iPad build': [(app) => edit('info.json', (v) => { v.UIDeviceFamily = [1, 2]; }), 'iPhone only'],
