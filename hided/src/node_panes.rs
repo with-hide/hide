@@ -107,7 +107,6 @@ impl NodePanes {
         let link = link.clone();
         self.runtime.spawn_blocking(move || {
             let _permit = permit;
-            hide_core::diagnostic!(json!({"component":"hook_probe","kind":"proof.started","node":node,"request":request,"request_id":hook.as_ref().map(|hook|&hook.request_id),"queued_ms":received.elapsed().as_millis(),"at_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|value|value.as_millis())}));
             let answer = match panes.state.get() {
                 Some(state) => match hook {
                     Some(hook)
@@ -414,7 +413,6 @@ fn answer_hook(
     hook: HookRequest,
     received: std::time::Instant,
 ) -> ProofAnswer {
-    let mark = |stage: &str| hide_core::diagnostic!(json!({"component":"hook_probe","kind":"proof.stage","node":node,"request_id":hook.request_id,"stage":stage,"elapsed_ms":received.elapsed().as_millis()}));
     let executor = match &proof {
         Proof::Pane { executor, .. } => *executor,
         Proof::Checkout { .. } => None,
@@ -435,7 +433,6 @@ fn answer_hook(
     };
     let one_shot = hook.command.one_shot();
     let issued = issue(state, node, link, proof, one_shot);
-    mark("issued");
     let ProofAnswer::Issued { token, issued_new } = issued else {
         return issued;
     };
@@ -447,7 +444,6 @@ fn answer_hook(
             &state.core,
             attested.as_ref(),
         )?;
-        mark("validated");
         if let Some(named) = hook.token.as_deref()
             && state
                 .pane_capabilities
@@ -467,8 +463,7 @@ fn answer_hook(
         if link.closed_reason().is_some() {
             return Err("remote_unavailable");
         }
-        mark("answer_start");
-        let answer = crate::hook_request::answer(
+        Ok(crate::hook_request::answer(
             &state.core,
             &cap,
             &hook,
@@ -477,9 +472,7 @@ fn answer_hook(
                 .desktop_renderers
                 .load(std::sync::atomic::Ordering::SeqCst)
                 > 0,
-        );
-        mark("answer_end");
-        Ok(answer)
+        ))
     })();
     match result {
         Ok(answer) if !one_shot && answer["ok"] == true => {

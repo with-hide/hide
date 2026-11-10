@@ -504,11 +504,7 @@ pub fn answer_of(
         Ok(request_id) => request_id,
         Err(_) => return (Err("cli".into()), Timing::default()),
     };
-    let asked = Instant::now();
     let sent = crate::hook_request::send(&caller, &request_id, command, deadline);
-    if let Err(failure) = &sent.answer {
-        eprintln!("{}", serde_json::json!({"component":"hook_probe","kind":"request.failed","request_id":request_id,"reason":failure.reason,"connected_ms":sent.timing.connected.map(|value|value.as_millis()),"answered_ms":sent.timing.answered.map(|value|value.as_millis()),"ended_ms":asked.elapsed().as_millis()}));
-    }
     let answer = sent
         .answer
         .map_err(|failure| Failure::from(refusal_cause(Some(failure.reason))));

@@ -228,7 +228,6 @@ impl Prepared {
 
 impl Client {
     pub(crate) fn submit(&self, effect: Effect, timeout: Duration) -> Result<Value, String> {
-        probe_effect(&effect, "sent", Duration::ZERO);
         let (reply, result) = mpsc::sync_channel(1);
         let request = Request { effect, reply };
         self.requests
@@ -264,20 +263,6 @@ impl Client {
                 mpsc::TrySendError::Full(_) => "capacity".to_owned(),
                 mpsc::TrySendError::Disconnected(_) => "delivery_unavailable".to_owned(),
             })
-    }
-}
-
-fn probe_effect(effect: &Effect, stage: &str, elapsed: Duration) {
-    if let Effect::Command { actor, command, .. } = effect
-        && matches!(command.as_ref(), Command::Pull { .. })
-    {
-        crate::diagnostic!(json!({"component":"hook_probe","kind":"store.stage","stage":stage,"pane":actor.pane_id,"elapsed_ms":elapsed.as_millis(),"at_ms":now()}));
-    }
-}
-
-fn probe_batch(batch: &[Request], stage: &str, started: Instant) {
-    for request in batch {
-        probe_effect(&request.effect, stage, started.elapsed());
     }
 }
 
@@ -988,8 +973,6 @@ fn run(
                 Err(_) => break,
             }
         }
-        let probe_started = Instant::now();
-        probe_batch(&batch, "received", probe_started);
         let Some(runtime) = runtime.upgrade() else {
             break;
         };
@@ -1007,7 +990,6 @@ fn run(
                     guard.delivery_undeliverable(),
                 ))
             });
-        probe_batch(&batch, "state", probe_started);
         let (state, gone, rebinds, reach, asleep, woken, undeliverable) = match state {
             Ok(state) => state,
             Err(code) => {
@@ -1062,19 +1044,13 @@ fn run(
             moved,
             ended,
         } = settle(&runtime, &state, &upkeep, &batch, now);
-        probe_batch(&batch, "settled", probe_started);
         transitions |= !ended.is_empty() || !moved.is_empty();
         let changed = bytes.is_some();
-        let save_started = Instant::now();
         let mut saved = match bytes {
             None => Ok(()),
             Some(Ok(bytes)) => ledger::write(&path, &bytes),
             Some(Err(code)) => Err(ledger::SaveError::Validation(code)),
         };
-        if changed {
-            crate::diagnostic!(json!({"component":"hook_probe","kind":"store.saved","elapsed_ms":save_started.elapsed().as_millis(),"at_ms":now,"requests":batch.len()}));
-        }
-        probe_batch(&batch, "saved", probe_started);
         if let Err(error) = &saved {
             if error.uncertain() {
                 match runtime.lock() {
@@ -1134,7 +1110,6 @@ fn run(
                 }
             }
         }
-        probe_batch(&batch, "published", probe_started);
         for (request, result) in batch.into_iter().zip(results) {
             let result = saved
                 .as_ref()
@@ -1182,19 +1157,12 @@ fn settle(
     let mut accepted = vec![false; batch.len()];
     let mut transitions = false;
     for (index, request) in batch.iter().enumerate() {
-        let probe_started = Instant::now();
-        probe_effect(&request.effect, "current_start", probe_started.elapsed());
         let result = match current(runtime, request, &candidate, now) {
             Err(code) => Err(code),
             // Checked after each request: a later one that drops a letter
             // can bring the batch's end back under a limit this one broke.
-            Ok(()) => match {
-                probe_effect(&request.effect, "current_end", probe_started.elapsed());
-                apply(&mut candidate, request, now)
-            }.and_then(|landed| {
-                probe_effect(&request.effect, "applied", probe_started.elapsed());
+            Ok(()) => match apply(&mut candidate, request, now).and_then(|landed| {
                 candidate.check()?;
-                probe_effect(&request.effect, "checked", probe_started.elapsed());
                 Ok(landed)
             }) {
                 Ok((value, publish)) => {

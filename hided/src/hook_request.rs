@@ -87,8 +87,6 @@ pub(crate) fn answer(
     executor: Option<ExecProcess>,
     desktop: bool,
 ) -> Value {
-    let started = Instant::now();
-    let mark = |stage: &str| hide_core::diagnostic!(json!({"component":"hook_probe","kind":"answer.stage","request_id":request.request_id,"stage":stage,"elapsed_ms":started.elapsed().as_millis()}));
     let result = match &request.command {
         HookCommand::WorkspaceInfo {} => workspace_info(core, cap, desktop),
         // The caller's proof admitted it to a registered checkout.
@@ -110,7 +108,6 @@ pub(crate) fn answer(
             None,
         )
         .map(|mut result| {
-            mark("delivery_end");
             // The prompt's pull also carries the pane's plan summary, which
             // the hook keeps for its hint and its refusals (PRD hide-plan
             // D-30): no request of its own, and none at a tool event.
@@ -120,7 +117,6 @@ pub(crate) fn answer(
             {
                 fields.insert("plan_context".to_owned(), json!(context));
             }
-            mark("plan_end");
             result
         }),
         HookCommand::LetterConfirm { ids } => delivery(
@@ -279,20 +275,14 @@ pub(crate) fn delivery(
     command: hide_core::delivery::Command,
     hint: Option<String>,
 ) -> Result<Value, Failure> {
-    let started = Instant::now();
-    let prepared = core.prepare_delivery(
+    core.prepare_delivery(
         &cap.context.device_id,
         &cap.pane_id,
         &cap.context,
         cap.canonical_hint(hint),
         command,
-    );
-    hide_core::diagnostic!(json!({"component":"hook_probe","kind":"delivery.prepared","pane":cap.pane_id,"elapsed_ms":started.elapsed().as_millis()}));
-    prepared.and_then(|prepared| {
-        let result = prepared.run(Duration::from_secs(5));
-        hide_core::diagnostic!(json!({"component":"hook_probe","kind":"delivery.ran","pane":cap.pane_id,"elapsed_ms":started.elapsed().as_millis()}));
-        result
-    })
+    )
+    .and_then(|prepared| prepared.run(Duration::from_secs(5)))
     .map_err(|code| {
         let next = crate::server::delivery_next_action(&code);
         (code, next)
