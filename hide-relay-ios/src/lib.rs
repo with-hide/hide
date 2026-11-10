@@ -45,11 +45,17 @@ pub struct HideBuf {
 }
 
 impl HideBuf {
-    const EMPTY: Self = Self { ptr: ptr::null_mut(), len: 0 };
+    const EMPTY: Self = Self {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
 
     fn of(bytes: Vec<u8>) -> Self {
         let slice = Box::leak(bytes.into_boxed_slice());
-        Self { ptr: slice.as_mut_ptr(), len: slice.len() }
+        Self {
+            ptr: slice.as_mut_ptr(),
+            len: slice.len(),
+        }
     }
 }
 
@@ -99,7 +105,9 @@ unsafe fn clear(out: *mut HideBuf) -> Result<(), i32> {
 /// # Safety
 /// `session` is null or a live pointer from `hide_relay_session_initiator`.
 unsafe fn session<'a>(session: *mut HideRelaySession) -> Result<&'a mut Session, i32> {
-    unsafe { session.as_mut() }.map(|session| &mut session.0).ok_or(BAD_ARGUMENT)
+    unsafe { session.as_mut() }
+        .map(|session| &mut session.0)
+        .ok_or(BAD_ARGUMENT)
 }
 
 /// Opens an initiator toward the computer's 32-byte Noise key on the relay `connection` the relay gave.
@@ -107,13 +115,19 @@ unsafe fn session<'a>(session: *mut HideRelaySession) -> Result<&'a mut Session,
 /// # Safety
 /// `remote_public` points to 32 readable bytes and `out` to a writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_session_initiator(remote_public: *const u8, connection: u32, out: *mut *mut HideRelaySession) -> i32 {
+pub unsafe extern "C" fn hide_relay_session_initiator(
+    remote_public: *const u8,
+    connection: u32,
+    out: *mut *mut HideRelaySession,
+) -> i32 {
     guarded(|| {
         if out.is_null() {
             return Err(BAD_ARGUMENT);
         }
         unsafe { *out = ptr::null_mut() };
-        let key: &[u8; 32] = unsafe { input(remote_public, 32) }?.try_into().map_err(|_| BAD_ARGUMENT)?;
+        let key: &[u8; 32] = unsafe { input(remote_public, 32) }?
+            .try_into()
+            .map_err(|_| BAD_ARGUMENT)?;
         let session = Session::initiator(key, connection).map_err(code)?;
         unsafe { *out = Box::into_raw(Box::new(HideRelaySession(session))) };
         Ok(())
@@ -123,9 +137,14 @@ pub unsafe extern "C" fn hide_relay_session_initiator(remote_public: *const u8, 
 /// # Safety
 /// `session` is live and `out` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_write_handshake(session_ptr: *mut HideRelaySession, out: *mut HideBuf) -> i32 {
+pub unsafe extern "C" fn hide_relay_write_handshake(
+    session_ptr: *mut HideRelaySession,
+    out: *mut HideBuf,
+) -> i32 {
     guarded(|| {
-        let bytes = unsafe { session(session_ptr) }?.write_handshake().map_err(code)?;
+        let bytes = unsafe { session(session_ptr) }?
+            .write_handshake()
+            .map_err(code)?;
         unsafe { put(out, bytes) }
     })
 }
@@ -133,10 +152,16 @@ pub unsafe extern "C" fn hide_relay_write_handshake(session_ptr: *mut HideRelayS
 /// # Safety
 /// `session` is live and `frame` points to `len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_read_handshake(session_ptr: *mut HideRelaySession, frame: *const u8, len: usize) -> i32 {
+pub unsafe extern "C" fn hide_relay_read_handshake(
+    session_ptr: *mut HideRelaySession,
+    frame: *const u8,
+    len: usize,
+) -> i32 {
     guarded(|| {
         let frame = unsafe { input(frame, len) }?;
-        unsafe { session(session_ptr) }?.read_handshake(frame).map_err(code)
+        unsafe { session(session_ptr) }?
+            .read_handshake(frame)
+            .map_err(code)
     })
 }
 
@@ -146,13 +171,24 @@ pub unsafe extern "C" fn hide_relay_read_handshake(session_ptr: *mut HideRelaySe
 /// # Safety
 /// `session` is live, `message` points to `len` readable bytes and `out` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_send_message(session_ptr: *mut HideRelaySession, message: *const u8, len: usize, out: *mut HideBuf) -> i32 {
+pub unsafe extern "C" fn hide_relay_send_message(
+    session_ptr: *mut HideRelaySession,
+    message: *const u8,
+    len: usize,
+    out: *mut HideBuf,
+) -> i32 {
     guarded(|| {
         let message = unsafe { input(message, len) }?;
-        let frames = unsafe { session(session_ptr) }?.send_message(message).map_err(code)?;
+        let frames = unsafe { session(session_ptr) }?
+            .send_message(message)
+            .map_err(code)?;
         let mut packed = Vec::with_capacity(frames.iter().map(|frame| frame.len() + 4).sum());
         for frame in frames {
-            packed.extend_from_slice(&u32::try_from(frame.len()).map_err(|_| code(Error::SizeLimit))?.to_be_bytes());
+            packed.extend_from_slice(
+                &u32::try_from(frame.len())
+                    .map_err(|_| code(Error::SizeLimit))?
+                    .to_be_bytes(),
+            );
             packed.extend_from_slice(&frame);
         }
         unsafe { put(out, packed) }
@@ -164,11 +200,20 @@ pub unsafe extern "C" fn hide_relay_send_message(session_ptr: *mut HideRelaySess
 /// # Safety
 /// `session` is live, `frame` points to `len` readable bytes and `out` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_recv_message(session_ptr: *mut HideRelaySession, frame: *const u8, len: usize, now_ms: u64, out: *mut HideBuf) -> i32 {
+pub unsafe extern "C" fn hide_relay_recv_message(
+    session_ptr: *mut HideRelaySession,
+    frame: *const u8,
+    len: usize,
+    now_ms: u64,
+    out: *mut HideBuf,
+) -> i32 {
     guarded(|| {
         unsafe { clear(out) }?;
         let frame = unsafe { input(frame, len) }?;
-        match unsafe { session(session_ptr) }?.recv_message(frame, now_ms).map_err(code)? {
+        match unsafe { session(session_ptr) }?
+            .recv_message(frame, now_ms)
+            .map_err(code)?
+        {
             Some(message) => unsafe { put(out, message) },
             None => Ok(()),
         }
@@ -178,8 +223,15 @@ pub unsafe extern "C" fn hide_relay_recv_message(session_ptr: *mut HideRelaySess
 /// # Safety
 /// `session` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_check_timeout(session_ptr: *mut HideRelaySession, now_ms: u64) -> i32 {
-    guarded(|| unsafe { session(session_ptr) }?.check_timeout(now_ms).map_err(code))
+pub unsafe extern "C" fn hide_relay_check_timeout(
+    session_ptr: *mut HideRelaySession,
+    now_ms: u64,
+) -> i32 {
+    guarded(|| {
+        unsafe { session(session_ptr) }?
+            .check_timeout(now_ms)
+            .map_err(code)
+    })
 }
 
 /// Ends the session's use and zeroizes its keys; the pointer stays valid until `hide_relay_session_free`.
@@ -217,10 +269,18 @@ pub unsafe extern "C" fn hide_relay_buf_free(buf: HideBuf) {
 /// # Safety
 /// `json` points to `len` readable bytes and `out` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_client_message(json: *const u8, len: usize, out: *mut HideBuf) -> i32 {
+pub unsafe extern "C" fn hide_relay_client_message(
+    json: *const u8,
+    len: usize,
+    out: *mut HideBuf,
+) -> i32 {
     guarded(|| {
-        let json = std::str::from_utf8(unsafe { input(json, len) }?).map_err(|_| code(Error::InvalidMessage))?;
-        let text = ClientMessage::decode(json).map_err(code)?.encode().map_err(code)?;
+        let json = std::str::from_utf8(unsafe { input(json, len) }?)
+            .map_err(|_| code(Error::InvalidMessage))?;
+        let text = ClientMessage::decode(json)
+            .map_err(code)?
+            .encode()
+            .map_err(code)?;
         unsafe { put(out, text.into_bytes()) }
     })
 }
@@ -230,10 +290,18 @@ pub unsafe extern "C" fn hide_relay_client_message(json: *const u8, len: usize, 
 /// # Safety
 /// `json` points to `len` readable bytes and `out` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_server_message(json: *const u8, len: usize, out: *mut HideBuf) -> i32 {
+pub unsafe extern "C" fn hide_relay_server_message(
+    json: *const u8,
+    len: usize,
+    out: *mut HideBuf,
+) -> i32 {
     guarded(|| {
-        let json = std::str::from_utf8(unsafe { input(json, len) }?).map_err(|_| code(Error::InvalidMessage))?;
-        let text = ServerMessage::decode(json).map_err(code)?.encode().map_err(code)?;
+        let json = std::str::from_utf8(unsafe { input(json, len) }?)
+            .map_err(|_| code(Error::InvalidMessage))?;
+        let text = ServerMessage::decode(json)
+            .map_err(code)?
+            .encode()
+            .map_err(code)?;
         unsafe { put(out, text.into_bytes()) }
     })
 }
@@ -243,7 +311,11 @@ pub unsafe extern "C" fn hide_relay_server_message(json: *const u8, len: usize, 
 /// # Safety
 /// `bytes` points to `len` readable bytes and `connection` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_relay_frame_connection(bytes: *const u8, len: usize, connection: *mut u32) -> i32 {
+pub unsafe extern "C" fn hide_relay_frame_connection(
+    bytes: *const u8,
+    len: usize,
+    connection: *mut u32,
+) -> i32 {
     guarded(|| {
         if connection.is_null() {
             return Err(BAD_ARGUMENT);
@@ -266,5 +338,10 @@ static SOURCE: &str = match option_env!("HIDE_RELAY_IOS_SOURCE") {
 #[unsafe(no_mangle)]
 pub extern "C" fn hide_relay_source() -> *const u8 {
     static MARK: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
-    MARK.get_or_init(|| std::ffi::CString::new(format!("hide-relay-ios-source:{SOURCE}")).expect("no NUL in a digest")).as_ptr().cast()
+    MARK.get_or_init(|| {
+        std::ffi::CString::new(format!("hide-relay-ios-source:{SOURCE}"))
+            .expect("no NUL in a digest")
+    })
+    .as_ptr()
+    .cast()
 }
