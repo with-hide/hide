@@ -3129,7 +3129,7 @@ Off says `에이전트가 나를 기다리거나 일이 끝나면, Hide를 닫�
 On says `내 차례가 되거나 일이 끝나면 알려 줘요.`, or `알림을 받으려면 컴퓨터의 Hide를 업데이트하세요.` when the computer is older than the app's notifications.
 When iOS refuses (the person answered `허용 안 함` or turned it off in iOS Settings) the switch is off and held, the line says `iOS에서 Hide 알림이 꺼져 있어요.`, and a button `iOS 설정 열기` opens this app's page there, because only iOS can turn it back on; when the registration could not be made the line says `알림을 켜지 못했어요. 다시 시도해 주세요.` and the switch can be pressed again.
 Turning it off tells the connected computer and removes this phone's keys for every computer; removing a computer on the phone removes that computer's key too.
-In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button, that names no computer; nothing is sent or saved.
+In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button, that names no computer and carries the first sample agent's question in the words the list shows; nothing is sent or saved.
 The first screen's 언어 value reads `폰 따라가기` (the phone's own language) while no computer is connected, and `Mac 따라가기` only inside a computer; the camera view says the camera is already open (`카메라가 이미 열려 있어요. 닫고 다시 시도해 주세요.`) when another screen holds it, and keeps the permission wording for a camera that cannot be used.
 표시 has 언어 and 화면 as one-line values that open a bottom sheet to choose from, and under them `이 폰에만 저장돼요`.
 언어 offers Mac 따라가기, 한국어, English, 简体中文 and 日本語, each language named in itself; 화면 offers 시스템 따라가기, 밝게 and 어둡게.

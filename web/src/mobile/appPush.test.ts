@@ -96,9 +96,14 @@ describe("turning notifications on", () => {
   });
 
   it("posts only the local sample in the demo: no key, no registration, nothing sent", async () => {
+    let words: unknown;
+    install({ demoSample: (options) => { words = options?.words; return {}; } });
     patch({ demo: true });
     await turnOnAppPush();
     expect(calls).toEqual(["HidePush.demoSample"]);
+    // The sample reads as a real one does: the group in the title, the first sample agent's question, as the list words it, in the body.
+    const { translate } = await import("../i18n/translator");
+    expect(words).toEqual({ title: translate("mobile.group.needs_you"), body: translate("mobile.demo.a1.ask") });
     expect(sent).toEqual([]);
     expect(localStorage.getItem("hide.phone.app-push")).toBeNull();
     expect(useAppPush.getState().demo).toBe(true);
