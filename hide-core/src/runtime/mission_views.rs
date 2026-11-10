@@ -36,6 +36,57 @@ use crate::view_layout::{Display, DisplayKind};
 
 /// How deep an opener's parents are walked to find the node's worker.
 const LINEAGE_LIMIT: usize = 32;
+/// The reopen requests whose outcome is kept for the press that sent them;
+/// the oldest goes first.
+const REOPENS_KEPT: usize = 8;
+/// How long a reopen waits for its View before it reads as not opened: a
+/// device answers within a stage and its front lands within
+/// `CHOICE_LANDING_TIMEOUT_MS` after, as a reveal there does.
+const REOPEN_WAIT_MS: u64 =
+    super::CLOSE_STAGE_TIMEOUT_MS + super::workspace_view::CHOICE_LANDING_TIMEOUT_MS;
+
+/// The reopen requests a press named (`mission_view_reopen` with a request
+/// id, the phone's), so the press ends on what the core did. Memory only.
+#[derive(Default)]
+pub(crate) struct Reopens {
+    asked: std::collections::VecDeque<Reopen>,
+    /// Counts the outcomes' changes, which a decision card compares.
+    pub(super) edit: u64,
+}
+
+struct Reopen {
+    request_id: String,
+    mission: String,
+    key: u64,
+    /// The link's token (`ViewLink::token`).
+    view: String,
+    /// Where it opens and what, so a file that could not be read refuses it.
+    place: WorkspaceKey,
+    kind: DisplayKind,
+    address: String,
+    state: ReopenState,
+    until: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReopenState {
+    /// Its View may still open; the row says whether it has.
+    Waiting,
+    /// Its wait ended; the row says whether it opened.
+    Ended,
+    /// It opens nothing, for the reason the log names.
+    Refused,
+}
+
+/// What became of the last press that asked a row's View to open again, by
+/// its request id: open again when the row is no longer closed, refused
+/// when nothing will open, still waiting otherwise.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DecisionReopen {
+    pub request_id: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub refused: bool,
+}
 
 /// Who linked a View to the decision, as its row names it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -53,6 +104,9 @@ pub struct DecisionView {
     /// The checkout whose View list holds it.
     pub checkout_path: String,
     pub display_id: String,
+    /// The name a press asks for its View by (`ViewLink::token`), which
+    /// tells two checkouts apart without either path.
+    pub view: String,
     pub kind: crate::view_layout::DisplayKind,
     /// Its name as its tab says it.
     pub label: String,
@@ -66,9 +120,12 @@ pub struct DecisionView {
     pub closed: bool,
     pub by: DecisionViewBy,
     /// The pane the agent that opened it is in now, whose 볼 것 the phone
-    /// opens it from; absent while that agent is closed.
+    /// opens it from, a closed one once it opened again; absent while that
+    /// agent is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reopen: Option<DecisionReopen>,
 }
 
 impl Runtime {
@@ -284,33 +341,53 @@ impl Runtime {
                 } else {
                     DecisionViewBy::Conductor
                 };
+                let view = link.token();
+                let reopen = self
+                    .missions
+                    .reopens
+                    .asked
+                    .iter()
+                    .rev()
+                    .find(|asked| {
+                        asked.mission == mission.id
+                            && asked.key == question.key
+                            && asked.view == view
+                    })
+                    .map(|asked| DecisionReopen {
+                        request_id: asked.request_id.clone(),
+                        refused: asked.state == ReopenState::Refused,
+                    });
+                let pane_of = |opener: Option<&crate::view_feedback::Opener>| {
+                    opener.and_then(|opener| self.view_opener_snapshot(opener).pane_id)
+                };
                 let Some(display) = self.linked_display(link) else {
                     let kept = link.kept.as_ref()?;
                     return Some(DecisionView {
                         device_id: link.device_id.clone(),
                         checkout_path: link.checkout_path.clone(),
                         display_id: link.display_id.clone(),
+                        view,
                         kind: kept.kind,
                         label: kept.label.clone(),
                         unseen: false,
                         closed: true,
                         by,
-                        pane_id: None,
+                        pane_id: pane_of(kept.opener.as_ref()),
+                        reopen,
                     });
                 };
                 Some(DecisionView {
                     device_id: link.device_id.clone(),
                     checkout_path: link.checkout_path.clone(),
                     display_id: display.id.clone(),
+                    view,
                     kind: display.kind,
                     label: super::view_areas::display_label(display),
                     unseen: display.unseen.is_some(),
                     closed: false,
                     by,
-                    pane_id: display
-                        .opener
-                        .as_ref()
-                        .and_then(|opener| self.view_opener_snapshot(opener).pane_id),
+                    pane_id: pane_of(display.opener.as_ref()),
+                    reopen,
                 })
             })
             .collect()
@@ -330,20 +407,19 @@ impl Runtime {
         })
     }
 
-    /// The operator pressed a closed row of question `key` of mission `id`
-    /// (`mission_view_reopen`): the View its link (`device_id`,
-    /// `checkout_path`, `display_id`) kept opens again in that checkout,
-    /// brought forward, as a file, a diff or a page opened there would. A
-    /// View that is open again is only brought forward; a link that kept
-    /// nothing, or a question that changed, opens nothing.
-    pub(super) fn reopen_decision_view(
+    /// The operator pressed a row of question `key` of mission `id`
+    /// (`mission_view_reopen`), naming its link by `view`
+    /// (`ViewLink::token`): an open View takes its area, and a closed one
+    /// opens again from what the link kept, as the View of the agent that
+    /// had it open, if one did. Either is shown in its checkout brought
+    /// forward with its device, at once or once that device's engine has
+    /// brought it forward (`reveal_in_checkout`). Whether it is open now.
+    fn reopen_decision_view(
         &mut self,
         id: &str,
         key: u64,
-        device_id: &str,
-        checkout_path: &str,
-        display_id: &str,
-    ) -> Result<bool, &'static str> {
+        view: &str,
+    ) -> Result<(ViewLink, bool), &'static str> {
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
         let question = mission
             .decision
@@ -354,66 +430,193 @@ impl Runtime {
         let link = question
             .views
             .iter()
-            .find(|link| {
-                link.device_id == device_id
-                    && link.checkout_path == checkout_path
-                    && link.display_id == display_id
-            })
+            .find(|link| link.token() == view)
+            .cloned()
             .ok_or("mission_view_unknown")?;
         let place = (link.device_id.clone(), link.checkout_path.clone());
         let (workspace_id, checkout_id) = self
             .agent_workspace_ids(&place)
             .ok_or("mission_view_checkout_gone")?;
-        if let Some(open) = self.linked_display(link).map(|display| display.id.clone()) {
-            let mut changed = self.focus_checkout(&workspace_id, &checkout_id);
-            changed |= self.focus_view_display_of(&workspace_id, &checkout_id, &open);
-            return Ok(changed);
-        }
-        let kept = link.kept.clone().ok_or("mission_view_not_kept")?;
-        Ok(match kept.kind {
-            DisplayKind::File => self.reveal_path(super::events::RevealPathPayload {
-                path: kept.address,
+        if let Some(display_id) = self.linked_display(&link).map(|display| display.id.clone()) {
+            self.reveal_in_checkout(super::session::FrontReveal::Display {
                 workspace_id,
                 checkout_id,
-                is_directory: false,
-                opener_pane: None,
-            }),
-            DisplayKind::Browser => self.open_browser(
-                super::view_areas::BrowserOpenPayload::reveal(kept.address, place),
-            ),
+                display_id,
+            });
+            return Ok((link, true));
+        }
+        let kept = link.kept.clone().ok_or("mission_view_not_kept")?;
+        // A reveal refused as it was asked (a display cap, a checkout it
+        // cannot read from) says so in the error it sets.
+        let error_before = self.snapshot.status.last_error.clone();
+        match kept.kind {
+            DisplayKind::File => {
+                self.reveal_path(super::events::RevealPathPayload {
+                    path: kept.address,
+                    workspace_id,
+                    checkout_id,
+                    is_directory: false,
+                    opener_pane: None,
+                    kept_opener: kept.opener,
+                });
+            }
+            DisplayKind::Browser => {
+                self.place_browser_as(&kept.address, place, kept.opener)
+                    .map_err(|refusal| {
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.view_reopen_page_refused",
+                            "mission": id, "question": key, "refusal": refusal,
+                        }));
+                        "mission_view_open_refused"
+                    })?;
+            }
             DisplayKind::Diff => {
-                let mut changed = self.focus_checkout(&workspace_id, &checkout_id);
-                changed |= self.show_diff_in_view(
-                    &workspace_id,
-                    &checkout_id,
-                    &kept.address,
-                    kept.committed,
-                    false,
-                    false,
-                );
-                changed
+                self.reveal_in_checkout(super::session::FrontReveal::Diff {
+                    workspace_id,
+                    checkout_id,
+                    path: kept.address,
+                    committed: kept.committed,
+                    opener: kept.opener,
+                });
             }
             DisplayKind::External => return Err("mission_view_not_kept"),
-        })
+        }
+        if self.snapshot.status.last_error != error_before {
+            return Err("mission_view_open_refused");
+        }
+        let open = self.linked_display(&link).is_some();
+        Ok((link, open))
     }
 
     pub(super) fn mission_view_reopen_event(
         &mut self,
-        id: &str,
-        key: u64,
-        device_id: &str,
-        checkout_path: &str,
-        display_id: &str,
+        payload: super::events::MissionViewReopenPayload,
     ) -> bool {
-        self.reopen_decision_view(id, key, device_id, checkout_path, display_id)
-            .unwrap_or_else(|code| {
+        let super::events::MissionViewReopenPayload {
+            mission,
+            key,
+            view,
+            request_id,
+        } = payload;
+        let outcome = self.reopen_decision_view(&mission, key, &view);
+        if let Err(code) = outcome {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.view_reopen_refused",
+                "mission": mission, "question": key, "view": view, "code": code,
+            }));
+        }
+        let Some(request_id) = request_id else {
+            return outcome.is_ok();
+        };
+        // A press that names no row of this question has no row to tell.
+        let (place, kind, address, state) = match &outcome {
+            Ok((link, open)) => (
+                (link.device_id.clone(), link.checkout_path.clone()),
+                link.kept
+                    .as_ref()
+                    .map_or(DisplayKind::External, |kept| kept.kind),
+                link.kept
+                    .as_ref()
+                    .map(|kept| kept.address.clone())
+                    .unwrap_or_default(),
+                if *open {
+                    ReopenState::Ended
+                } else {
+                    ReopenState::Waiting
+                },
+            ),
+            Err(_) => (
+                Default::default(),
+                DisplayKind::External,
+                String::new(),
+                ReopenState::Refused,
+            ),
+        };
+        let reopens = &mut self.missions.reopens;
+        reopens.asked.retain(|asked| asked.request_id != request_id);
+        if reopens.asked.len() >= REOPENS_KEPT {
+            reopens.asked.pop_front();
+        }
+        reopens.asked.push_back(Reopen {
+            request_id,
+            mission,
+            key,
+            view,
+            place,
+            kind,
+            address,
+            state,
+            until: super::memory::now_ms().saturating_add(REOPEN_WAIT_MS),
+        });
+        reopens.edit = reopens.edit.wrapping_add(1);
+        true
+    }
+
+    /// A file a waiting reopen asked for could not be read: nothing will
+    /// open for it.
+    pub(super) fn refuse_reopens_of_file(&mut self, place: &WorkspaceKey, path: &str) {
+        let reopens = &mut self.missions.reopens;
+        let mut changed = false;
+        for asked in reopens.asked.iter_mut().filter(|asked| {
+            asked.state == ReopenState::Waiting
+                && asked.kind == DisplayKind::File
+                && asked.place == *place
+                && asked.address == path
+        }) {
+            asked.state = ReopenState::Refused;
+            changed = true;
+        }
+        if changed {
+            reopens.edit = reopens.edit.wrapping_add(1);
+        }
+    }
+
+    /// A reopen still waiting past its time ends: one whose View opened
+    /// reads as open by its row, any other as refused, so no press waits
+    /// for a View that never comes.
+    pub(super) fn expire_mission_view_reopens(&mut self, now_unix_ms: u64) -> bool {
+        let due: Vec<usize> = self
+            .missions
+            .reopens
+            .asked
+            .iter()
+            .enumerate()
+            .filter(|(_, asked)| asked.state == ReopenState::Waiting && asked.until <= now_unix_ms)
+            .map(|(index, _)| index)
+            .collect();
+        if due.is_empty() {
+            return false;
+        }
+        for index in due {
+            let asked = &self.missions.reopens.asked[index];
+            let open = self
+                .missions
+                .book
+                .get(&asked.mission)
+                .and_then(|mission| mission.decision.as_ref().and(mission.question.as_ref()))
+                .filter(|question| question.key == asked.key)
+                .and_then(|question| {
+                    question
+                        .views
+                        .iter()
+                        .find(|link| link.token() == asked.view)
+                })
+                .is_some_and(|link| self.linked_display(link).is_some());
+            if !open {
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.view_reopen_refused",
-                    "mission": id, "question": key, "device": device_id,
-                    "view": display_id, "code": code,
+                    "mission": asked.mission, "question": asked.key, "view": asked.view,
+                    "code": "mission_view_not_opened",
                 }));
-                false
-            })
+            }
+            self.missions.reopens.asked[index].state = if open {
+                ReopenState::Ended
+            } else {
+                ReopenState::Refused
+            };
+        }
+        self.missions.reopens.edit = self.missions.reopens.edit.wrapping_add(1);
+        true
     }
 
     /// What a decision's card compares to know its Views moved: the View
@@ -433,6 +636,7 @@ impl Runtime {
         self.workspace_views
             .as_ref()
             .map_or(0, |store| store.generation)
+            .wrapping_add(self.missions.reopens.edit)
     }
 
     /// The operator's `자료 요청` on question `key` of mission `id`: the

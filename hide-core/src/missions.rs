@@ -756,6 +756,11 @@ pub struct KeptView {
     /// The Changes group a diff compares against.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub committed: bool,
+    /// The agent that had it open when the decision linked it, which the
+    /// View opened again is stamped with, so it is listed in that agent's
+    /// 볼 것 as before; none for the operator's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<crate::view_feedback::Opener>,
 }
 
 impl KeptView {
@@ -777,6 +782,7 @@ impl KeptView {
             label: label.chars().take(KEPT_LABEL_LIMIT).collect(),
             address,
             committed: display.committed.unwrap_or(false),
+            opener: display.opener.clone(),
         })
     }
 
@@ -802,6 +808,24 @@ impl ViewLink {
         self.device_id == other.device_id
             && self.checkout_path == other.checkout_path
             && self.display_id == other.display_id
+    }
+
+    /// The name a decision card's row asks for this link by: it tells two
+    /// checkouts' Views with the same display id apart without saying
+    /// either path, which a phone never receives.
+    pub fn token(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(
+            format!(
+                "{}\0{}\0{}",
+                self.device_id, self.checkout_path, self.display_id
+            )
+            .as_bytes(),
+        );
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
@@ -4128,6 +4152,7 @@ pub(crate) mod tests {
                 label: "a.rs".into(),
                 address: "/repo/a.rs".into(),
                 committed: true,
+                opener: None,
             }),
             ..read
         };

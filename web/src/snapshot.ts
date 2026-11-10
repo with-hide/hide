@@ -1492,6 +1492,8 @@ export type DecisionView = {
   device_id: string;
   checkout_path: string;
   display_id: string;
+  /** The name a press asks for its View by, which says no path (`ViewLink::token`). */
+  view: string;
   kind: ViewDisplaySnapshot["kind"];
   label: string;
   /** The operator has not looked at it since it was opened; absent once they have. */
@@ -1502,7 +1504,12 @@ export type DecisionView = {
   by: "conductor" | "worker";
   /** The pane of the agent that opened it, while that agent is open. */
   pane_id?: string;
+  /** The last press that asked it to open again, by request id: refused when nothing will open; open again is `closed` gone. */
+  reopen?: DecisionReopen;
 };
+
+/** What became of a press that asked a decision's View to open again (`DecisionReopen`). */
+export type DecisionReopen = { request_id: string; refused?: boolean };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
 export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";

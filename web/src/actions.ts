@@ -2067,7 +2067,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const checkout = project?.checkouts.find((row) => row.path === view.checkout_path);
       if (!project || !checkout) return diagnostic(`decision view: ${view.checkout_path} is no longer open on ${view.device_id}`);
       beginOpening({ checkoutId: checkout.id, deviceId: view.device_id, path: checkout.path, workspaceId: project.id });
-      dispatch({ schema_version: 2, kind: "mission_view_reopen", payload: { mission: missionId, key, device_id: view.device_id, checkout_path: view.checkout_path, display_id: view.display_id } });
+      dispatch({ schema_version: 2, kind: "mission_view_reopen", payload: { mission: missionId, key, view: view.view } });
     },
 
     /** The fields of Settings › Mission one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */

@@ -1181,8 +1181,8 @@ it("says in 내 차례 how many letters the Conductor has not got and what to do
 
 it("keeps a looked-at or closed View on the decision, marked so, and opens a closed one again from its link in one event (PRD mission-human-gate B20)", async () => {
   const views = [
-    { device_id: "mac", checkout_path: "/repo", display_id: "d7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
-    { device_id: "mac", checkout_path: "/repo", display_id: "d8", kind: "file" as const, label: "notes.md", closed: true, by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d7", view: "v7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d8", view: "v8", kind: "file" as const, label: "notes.md", closed: true, by: "worker" as const },
   ];
   const map = await mount({ items: [asked({ decision_views: views })] });
   await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, navigator: { ...state.rest!.navigator!, workspaces: [{ id: "w", device_id: "mac", checkouts: [{ id: "c", path: "/repo" }] }] } } as unknown as SnapshotRest })));
@@ -1193,7 +1193,7 @@ it("keeps a looked-at or closed View on the decision, marked so, and opens a clo
     expect(rows[1]?.textContent).toContain("Closed");
     expect(rows[1]?.textContent).toContain("Reopen ›");
     await act(async () => rows[1]!.click());
-    expect(map.events.filter((event) => event.kind === "mission_view_reopen")).toEqual([{ schema_version: 2, kind: "mission_view_reopen", payload: { mission: "mission-1", key: 3, device_id: "mac", checkout_path: "/repo", display_id: "d8" } }]);
+    expect(map.events.filter((event) => event.kind === "mission_view_reopen")).toEqual([{ schema_version: 2, kind: "mission_view_reopen", payload: { mission: "mission-1", key: 3, view: "v8" } }]);
     // An open one comes forward as any View does, with no reopen.
     await act(async () => rows[0]!.click());
     expect(map.events.filter((event) => event.kind === "mission_view_reopen")).toHaveLength(1);
@@ -1203,10 +1203,10 @@ it("keeps a looked-at or closed View on the decision, marked so, and opens a clo
 
 it("lists the Views linked to the decision, seen or not, each bringing its View forward, and offers only a quiet 자료 요청 with none", async () => {
   const views = [
-    { device_id: "mac", checkout_path: "/repo", display_id: "d7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
-    { device_id: "mac", checkout_path: "/repo", display_id: "d8", kind: "file" as const, label: "notes.md", unseen: true, by: "worker" as const },
-    { device_id: "mac", checkout_path: "/repo", display_id: "d9", kind: "diff" as const, label: "screen.diff", by: "worker" as const },
-    { device_id: "mac", checkout_path: "/repo", display_id: "d10", kind: "file" as const, label: "measure.csv", by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d7", view: "v7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d8", view: "v8", kind: "file" as const, label: "notes.md", unseen: true, by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d9", view: "v9", kind: "diff" as const, label: "screen.diff", by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d10", view: "v10", kind: "file" as const, label: "measure.csv", by: "worker" as const },
   ];
   const linked = await mount({ items: [asked({ decision_views: views })] });
   try {

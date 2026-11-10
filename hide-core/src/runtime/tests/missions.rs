@@ -9146,6 +9146,214 @@ fn decision_views(runtime: &mut Runtime) -> Vec<(String, &'static str)> {
         .collect()
 }
 
+/// A decision's closed View opens again from what its link kept, in its
+/// checkout, as the View of the agent that had it open, so it is listed in
+/// that agent's 볼 것 again and is not raised as new: a page and a diff land
+/// at once, and one open already is only brought forward, never a second. A
+/// press that names a question that changed, a link recorded before links
+/// kept anything, a checkout that is gone, or a file that cannot be read
+/// opens nothing, and the row of a press that waits says so rather than
+/// leaving it waiting (PRD mission-human-gate D-20).
+#[test]
+fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_opened() {
+    use crate::view_layout::{Display, DisplayKind};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Screens"}),
+    )
+    .unwrap();
+    without_gate(&mut runtime);
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let agent = crate::view_feedback::Opener {
+        device_id: crate::node::TEST_NODE.into(),
+        terminal_id: "terminal-7".into(),
+        session: Some("session-7".into()),
+        resume: None,
+        resume_path: None,
+        provider: "codex".into(),
+        name: "worker".into(),
+        profile: None,
+    };
+    let url = "https://example.test/screens";
+    let page = runtime
+        .change_view_layout(&key, |layout, stamp| {
+            let display = layout.new_browser_display(url, 1);
+            let id = display.id.clone();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, stamp)?;
+            Ok((id, true))
+        })
+        .unwrap();
+    let diff_path = "/checkouts/fixture/src/main.rs";
+    let diff = runtime
+        .change_view_layout(&key, |layout, stamp| {
+            let display = layout.new_display(diff_path, DisplayKind::Diff, Some(false), false);
+            let id = display.id.clone();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, stamp)?;
+            Ok((id, true))
+        })
+        .unwrap();
+    let file = project_view(&mut runtime, "/checkouts/fixture/missing.md");
+    for view in [&page, &diff, &file] {
+        runtime.stamp_view_opener(&key, view, Some(agent.clone()));
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?", "show": [page, diff, file]}),
+    )
+    .unwrap();
+    let question = runtime.missions.book.missions[0]
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    let rows = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].decision_views.clone()
+    };
+    let row_of = |runtime: &mut Runtime, kind: DisplayKind| {
+        rows(runtime).into_iter().find(|row| row.kind == kind)
+    };
+    let close = |runtime: &mut Runtime, view: &str| {
+        runtime
+            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .unwrap();
+    };
+    let press = |runtime: &mut Runtime, key: u64, view: &str, request: &str| {
+        runtime.mission_view_reopen_event(super::events::MissionViewReopenPayload {
+            mission: "mission-1".into(),
+            key,
+            view: view.into(),
+            request_id: Some(request.into()),
+        });
+    };
+    let shown = |runtime: &Runtime, kind: DisplayKind, address: &str| -> Vec<Display> {
+        runtime
+            .view_layout_of(&key)
+            .map(|layout| {
+                layout
+                    .displays()
+                    .filter(|display| {
+                        display.kind == kind
+                            && (display.url.as_deref() == Some(address) || display.path == address)
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let token = |runtime: &mut Runtime, kind: DisplayKind| row_of(runtime, kind).unwrap().view;
+    let (page_view, diff_view, file_view) = (
+        token(&mut runtime, DisplayKind::Browser),
+        token(&mut runtime, DisplayKind::Diff),
+        token(&mut runtime, DisplayKind::File),
+    );
+    for view in [&page, &diff, &file] {
+        close(&mut runtime, view);
+    }
+    assert!(rows(&mut runtime).iter().all(|row| row.closed));
+
+    // A closed page opens again in its checkout as the agent's, not new.
+    press(&mut runtime, question, &page_view, "r1");
+    let opened = shown(&runtime, DisplayKind::Browser, url);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].opener.as_ref(), Some(&agent));
+    assert!(opened[0].openers.contains(&agent));
+    assert!(!opened[0].operator);
+    assert_eq!(opened[0].unseen, None);
+    let row = row_of(&mut runtime, DisplayKind::Browser).unwrap();
+    assert!(!row.closed);
+    assert_eq!(
+        row.reopen,
+        Some(super::mission_views::DecisionReopen {
+            request_id: "r1".into(),
+            refused: false
+        })
+    );
+    // Pressed again, the open page is only brought forward.
+    press(&mut runtime, question, &page_view, "r2");
+    assert_eq!(shown(&runtime, DisplayKind::Browser, url).len(), 1);
+
+    // A closed diff opens again in its checkout, brought forward.
+    press(&mut runtime, question, &diff_view, "r3");
+    let opened = shown(&runtime, DisplayKind::Diff, diff_path);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].opener.as_ref(), Some(&agent));
+    assert_eq!(runtime.front_workspace_key(), Some(key.clone()));
+    assert!(!row_of(&mut runtime, DisplayKind::Diff).unwrap().closed);
+
+    // A file that cannot be read opens nothing, and its press ends refused.
+    press(&mut runtime, question, &file_view, "r4");
+    let row = row_of(&mut runtime, DisplayKind::File).unwrap();
+    assert!(row.closed);
+    assert_eq!(
+        row.reopen,
+        Some(super::mission_views::DecisionReopen {
+            request_id: "r4".into(),
+            refused: true
+        })
+    );
+
+    // A question that changed, a link that kept nothing, and a checkout that
+    // is gone open nothing.
+    let open_diff = shown(&runtime, DisplayKind::Diff, diff_path)[0].id.clone();
+    close(&mut runtime, &open_diff);
+    press(&mut runtime, question + 1, &diff_view, "r5");
+    assert!(shown(&runtime, DisplayKind::Diff, diff_path).is_empty());
+    let open_page = shown(&runtime, DisplayKind::Browser, url)[0].id.clone();
+    close(&mut runtime, &open_page);
+    runtime.missions.book.missions[0]
+        .question
+        .as_mut()
+        .unwrap()
+        .views
+        .iter_mut()
+        .for_each(|link| {
+            if link
+                .kept
+                .as_ref()
+                .is_some_and(|kept| kept.kind == DisplayKind::Browser)
+            {
+                link.kept = None;
+            }
+        });
+    assert!(row_of(&mut runtime, DisplayKind::Browser).is_none());
+    press(&mut runtime, question, &page_view, "r6");
+    assert!(shown(&runtime, DisplayKind::Browser, url).is_empty());
+    runtime.missions.book.missions[0]
+        .question
+        .as_mut()
+        .unwrap()
+        .views
+        .iter_mut()
+        .filter(|link| {
+            link.kept
+                .as_ref()
+                .is_some_and(|kept| kept.kind == DisplayKind::Diff)
+        })
+        .for_each(|link| link.checkout_path = "/checkouts/removed".into());
+    let gone_view = token(&mut runtime, DisplayKind::Diff);
+    press(&mut runtime, question, &gone_view, "r7");
+    assert!(shown(&runtime, DisplayKind::Diff, diff_path).is_empty());
+    assert_eq!(
+        row_of(&mut runtime, DisplayKind::Diff).unwrap().reopen,
+        Some(super::mission_views::DecisionReopen {
+            request_id: "r7".into(),
+            refused: true
+        })
+    );
+}
+
 /// A View is linked to a decision only by what was recorded when it was
 /// named or opened (operator decision 2026-11-09, after mission-42's card
 /// asked the operator to look at captures it did not link): the Views
@@ -9281,24 +9489,10 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         row(&mut runtime, "screens.html"),
         Some((page.clone(), true))
     );
-    let question = runtime.missions.book.missions[0]
-        .question
-        .as_ref()
-        .unwrap()
-        .key;
-    assert_eq!(
-        runtime.reopen_decision_view("mission-1", question + 1, &key.0, &key.1, &page),
-        Err("mission_decision_changed")
-    );
     let again = project_view(&mut runtime, "/checkouts/fixture/screens.html");
     assert_eq!(
         row(&mut runtime, "screens.html"),
         Some((again.clone(), false))
-    );
-    assert!(
-        runtime
-            .reopen_decision_view("mission-1", question, &key.0, &key.1, &page)
-            .is_ok()
     );
 
     // The next question takes what the Conductor opened since this one and

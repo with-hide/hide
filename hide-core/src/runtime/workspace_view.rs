@@ -58,9 +58,9 @@ struct PendingChoice {
     acknowledged: bool,
     /// Core checkout navigation has already landed, without an engine effect.
     core_choice: bool,
-    /// A path the operator clicked in the chosen checkout, revealed once it
-    /// is in front (`Runtime::reveal_when_in_front`).
-    reveal: Option<super::RevealPathPayload>,
+    /// What the operator's press shows in the chosen checkout, once it is
+    /// in front (`Runtime::reveal_when_in_front`).
+    reveal: Option<super::session::FrontReveal>,
     terminal: Option<TerminalChoice>,
 }
 
@@ -624,7 +624,7 @@ impl Runtime {
         &mut self,
         device: &str,
         request: &str,
-        reveal: super::RevealPathPayload,
+        reveal: super::session::FrontReveal,
     ) -> bool {
         let Some(pending) = self
             .workspace_views
@@ -1044,7 +1044,7 @@ impl Runtime {
                 self.show_project_memory_at(key, project);
             }
             if let Some(reveal) = reveal {
-                self.reveal_path(reveal);
+                self.reveal_in_checkout(reveal);
             }
         }
         self.restore_front_when_ready();

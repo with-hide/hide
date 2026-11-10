@@ -456,6 +456,81 @@ fn a_file_of_a_nodes_checkout_behind_is_revealed_without_an_engine_focus_ack() {
     assert_eq!(f.last_error(), None);
 }
 
+/// A decision's diff opened again in a device's checkout behind ends where
+/// one in this machine's checkout does: the device and that checkout come
+/// forward, and the diff takes its View area as the agent's that had it
+/// open (PRD mission-human-gate D-20).
+#[test]
+fn a_diff_shown_in_a_devices_checkout_behind_brings_it_forward_with_its_device() {
+    let f = Fixture::with(|runtime| {
+        super::workspace_view::with_new_views(runtime, "documents-node-diff")
+    })
+    .in_node_session();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let agent = crate::view_feedback::Opener {
+        device_id: DEVICE.into(),
+        terminal_id: "terminal-3".into(),
+        session: Some("session-3".into()),
+        resume: None,
+        resume_path: None,
+        provider: "claude".into(),
+        name: "worker".into(),
+        profile: None,
+    };
+    let mut runtime = f.shared.lock().unwrap();
+    runtime.install_remote_control(RemoteControlContext::new(
+        DEVICE,
+        super::device_catalog::recording_engine(requests.clone()),
+        Weak::new(),
+        crate::handle::ChangeNotifier::noop(),
+    ));
+    let other = f.root.join("other").to_string_lossy().into_owned();
+    let other_id = crate::device_catalog::checkout_id(DEVICE, &other);
+    let mut project = workspace(
+        OTHER_WORKSPACE,
+        "Other",
+        &other,
+        vec![checkout(OTHER_WORKSPACE, &other_id, &other, None)],
+    );
+    project.device_id = DEVICE.to_owned();
+    project.remote_target_id = Some(DEVICE.to_owned());
+    runtime.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .workspaces
+        .push(project);
+    runtime.set_front_device(Some(crate::node::TEST_NODE.to_owned()));
+    let path = format!("{other}/src/main.rs");
+
+    runtime.reveal_in_checkout(super::session::FrontReveal::Diff {
+        workspace_id: OTHER_WORKSPACE.to_owned(),
+        checkout_id: other_id.clone(),
+        path: path.clone(),
+        committed: false,
+        opener: Some(agent.clone()),
+    });
+    runtime.sync_workspace_view();
+
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        runtime.snapshot.navigator.focused_device_id.as_deref(),
+        Some(DEVICE)
+    );
+    assert_eq!(
+        runtime.front_checkout().map(|(_, checkout)| checkout),
+        Some(other_id.as_str())
+    );
+    let layout = runtime
+        .view_layout_of(&(DEVICE.to_owned(), other.clone()))
+        .expect("the device checkout's View areas");
+    let diff = layout
+        .displays()
+        .find(|display| display.shows(&path, DisplayKind::Diff, Some(false)))
+        .expect("the diff in its View area");
+    assert_eq!(diff.opener.as_ref(), Some(&agent));
+}
+
 /// The read stays asynchronous after core navigation. A newer explicit
 /// checkout choice keeps the late result from taking the current screen.
 #[test]

@@ -514,6 +514,9 @@ impl Runtime {
                 return true;
             }
             Err(failure) => {
+                if let Some(key) = self.workspace_key(&request.workspace_id, &request.checkout_id) {
+                    self.refuse_reopens_of_file(&key, &request.path);
+                }
                 self.set_error(
                     if request.reload {
                         "file.reload_failed"

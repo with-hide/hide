@@ -359,6 +359,7 @@ impl Runtime {
         changed |= self.expire_provisional_tabs(now_unix_ms);
         changed |= self.expire_remote_operations(now_unix_ms);
         changed |= self.expire_pending_choice(now_unix_ms);
+        changed |= self.expire_mission_view_reopens(now_unix_ms);
         changed |= self.advance_tree_closes();
         changed |= self.advance_session_archive();
         changed |= self.advance_reopens();

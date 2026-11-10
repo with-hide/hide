@@ -337,9 +337,9 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting" } : null,
     answer_failed: shown === "decision-unreadable" ? "session_unreadable" : null,
     decision_views: looking ? [
-      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", kind: "browser" as const, label: "전후 비교 · screens.html", by: "conductor" as const },
-      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d8", kind: "file" as const, label: "리뷰 요약.md", unseen: true, by: "worker" as const },
-      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d9", kind: "file" as const, label: "이전 시안.png", closed: true, by: "worker" as const },
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", view: "v7", kind: "browser" as const, label: "전후 비교 · screens.html", by: "conductor" as const },
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d8", view: "v8", kind: "file" as const, label: "리뷰 요약.md", unseen: true, by: "worker" as const },
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d9", view: "v9", kind: "file" as const, label: "이전 시안.png", closed: true, by: "worker" as const },
     ] : undefined,
     delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
     created_at_unix_ms: now - 320 * MINUTE,

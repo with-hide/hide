@@ -111,26 +111,6 @@ pub(super) struct BrowserOpenPayload {
     request_id: Option<String>,
 }
 
-impl BrowserOpenPayload {
-    /// The operator's open of `url` in Workspace `key`, brought forward, as
-    /// a closed View a mission's decision linked opens again.
-    pub(super) fn reveal(url: String, key: WorkspaceKey) -> Self {
-        Self {
-            url,
-            reveal: true,
-            area_id: None,
-            beside_display: None,
-            workspace: Some(ViewWorkspace {
-                device_id: key.0,
-                path: key.1,
-            }),
-            pane_id: None,
-            opener_pane: None,
-            request_id: None,
-        }
-    }
-}
-
 /// The payload of `browser_state`: what a browser display's page says now,
 /// its address after it navigated and its title, as the desktop host reports
 /// it. It records; it never loads anything.
@@ -1747,6 +1727,25 @@ impl Runtime {
             self.record_open_receipt(request_id, outcome);
         }
         true
+    }
+
+    /// Opens `url` in the Workspace `key`, brought forward with its device,
+    /// as `opener`'s page, or the operator's with none: a decision's closed
+    /// page opened again (PRD mission-human-gate D-20). The display it is
+    /// in, or why it was refused.
+    pub(super) fn place_browser_as(
+        &mut self,
+        url: &str,
+        key: WorkspaceKey,
+        opener: Option<crate::view_feedback::Opener>,
+    ) -> Result<String, &'static str> {
+        let workspace = ViewWorkspace {
+            device_id: key.0,
+            path: key.1,
+        };
+        self.place_browser(url, Some(workspace), None, None, None, true, opener)
+            .map(|(_, display_id)| display_id)
+            .map_err(|refusal| refusal.kind)
     }
 
     /// The receipt a sender that named its open waits for.
