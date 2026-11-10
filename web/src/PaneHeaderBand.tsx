@@ -263,7 +263,7 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
  * The pane's `?N` after its title: how many questions the agent put to the
  * operator still wait (status-model.md, A question still waiting), at every
  * turn row mode and while the agent works, since the second row then keeps its
- * progress. A press opens the turn card, which lists them with 넘기기.
+ * progress. A press opens the turn card, which lists them with 무시하기.
  */
 export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();

@@ -34,7 +34,7 @@ const words = {
   "sessionWork.done": ["Done", "끝남", "完了", "完成"],
   "sessionWork.open": ["Open", "열림", "オープン", "打开"],
   "sessionWork.closed": ["Closed", "닫힘", "クローズ", "已关闭"],
-  "sessionWork.dismiss": ["Skip", "넘기기", "無視", "忽略"],
+  "sessionWork.dismiss": ["Skip", "무시하기", "無視", "忽略"],
   "sessionWork.sessions": ["Sessions", "세션", "セッション", "会话"],
   "sessionWork.creator": ["Created by", "만든 세션", "作成したセッション", "创建它的会话"],
   "sessionWork.empty": ["No recorded requests yet", "아직 기록된 요청 없음", "記録された依頼はありません", "暂无请求记录"],

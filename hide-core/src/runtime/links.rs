@@ -388,7 +388,7 @@ impl Runtime {
         let Some(client) = self.links_work.client.as_ref() else {
             return false;
         };
-        // An unanswered ask put away from the record (넘기기): a sign the
+        // An unanswered ask put away from the record (무시하기): a sign the
         // question verdict may have been wrong, with ids only
         // (needs-you-cleanup D-06, D-15).
         let put_away = (payload.status == MissedStatus::Dismissed)

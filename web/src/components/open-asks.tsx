@@ -9,7 +9,7 @@ export type AskLine = { id: string; text: string; at_unix_ms: number };
 
 /**
  * 나를 기다리는 것 (session-record-goal-flow D-12; status-model.md, A question
- * still waiting): the agent's open questions, oldest first, each with 넘기기.
+ * still waiting): the agent's open questions, oldest first, each with 무시하기.
  * A line put away keeps its place with 되돌리기 while the list stays drawn, and
  * leaves that state when the core lists it as open again after it was gone.
  * The session record and the turn card draw this one list, each in its own

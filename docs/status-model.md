@@ -96,7 +96,7 @@ Regression owners: `a_raise_the_operator_read_stays_read_while_its_conductor_wor
 ### A question still waiting
 
 A question the agent put to the operator is easy to lose: the agent asks, the operator looks elsewhere, a child's letter wakes the agent, and the new turn's work replaces the question on the row.
-Hide AI already keeps those questions: each judged turn end adds the ones it read to the session record's `나를 기다리는 것` (`MissedKind::Ask`, [AI_PROVIDERS.md](AI_PROVIDERS.md)), the same question asked again is one line, and a line leaves when a later judgment resolves it, when the session moves to its next flow, or when the operator presses `넘기기`.
+Hide AI already keeps those questions: each judged turn end adds the ones it read to the session record's `나를 기다리는 것` (`MissedKind::Ask`, [AI_PROVIDERS.md](AI_PROVIDERS.md)), the same question asked again is one line, and a line leaves when a later judgment resolves it, when the session moves to its next flow, or when the operator presses `무시하기`.
 The row reads that one list and decides nothing of its own: the link summary carries each session's open questions (`SessionWorkSummary::asks`, filtered by `ledger_store::open_asks`, which the record reads too), and the core lays them as a question it asks, `ask_subject` `{cause: "open_ask", id, line}`, the way it lays a plan review (`runtime/plans.rs::open_asks`).
 It adds no status, mark, colour or group.
 

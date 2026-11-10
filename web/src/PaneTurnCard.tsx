@@ -366,7 +366,7 @@ function AnswerItem({ answer, pill, read, onReadWhole, opened = false }: { answe
  * the shown request in a bubble under who sent it and when (its summary and
  * its own first two lines, who asked after), the agent's answer to it once
  * that turn is over, the questions it put to the operator that still wait
- * (나를 기다리는 것, the session record's list, each with 넘기기), the agents it
+ * (나를 기다리는 것, the session record's list, each with 무시하기), the agents it
  * worked with since, one line each, which opens into the letters in time
  * order, and the agent's half now: what it does as a coloured verb with the
  * label's words. A part with nothing to say is not drawn (B7).

@@ -211,7 +211,7 @@ fn the_rows_shown_take_and_drop_a_question_as_the_record_lists_it() {
         ("question", vec!["m1".to_owned()])
     );
 
-    // 넘기기 or Hide AI's verdict leaves the record's list empty: the row lets go.
+    // 무시하기 or Hide AI's verdict leaves the record's list empty: the row lets go.
     assert!(runtime.ingest_link_summaries(summaries(Vec::new())));
     let shown = &runtime.snapshot.navigator.agents[0];
     assert_eq!(

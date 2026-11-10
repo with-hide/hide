@@ -769,7 +769,7 @@ it("draws the answer, the questions still waiting and the letters since the requ
     const asks = () => [...card().querySelectorAll<HTMLElement>("[data-turn-card-asks] [data-record-ask]")];
     expect(asks().map((ask) => ask.textContent?.includes("Decide the closed tab defect") || ask.textContent?.includes("Merge now or wait for CI"))).toEqual([true, true]);
     expect(card().querySelector("[data-turn-card-asks] [data-open-asks]")?.textContent).toBe("?2");
-    // 넘기기 puts the question away in the session's record, and the line stays to undo while the card is open.
+    // 무시하기 puts the question away in the session's record, and the line stays to undo while the card is open.
     await act(async () => card().querySelector<HTMLButtonElement>("[data-record-ask-dismiss=m1]")!.click());
     expect(events.filter((event) => event.kind === "session_missed_status").map((event) => event.payload)).toEqual([{ session, id: "m1", status: "dismissed" }]);
     expect(card().querySelector("[data-record-ask=m1]")?.getAttribute("data-dismissed")).toBe("true");

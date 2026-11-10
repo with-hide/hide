@@ -1729,7 +1729,7 @@ pub enum AskSubject {
     },
     /// A question the agent put to the operator that still waits, as Hide
     /// AI recorded it in the session's `나를 기다리는 것`: the record's id
-    /// for it, which 넘기기 names, and its words (docs/status-model.md, A
+    /// for it, which 무시하기 names, and its words (docs/status-model.md, A
     /// question still waiting).
     OpenAsk { id: String, line: String },
 }
@@ -1737,7 +1737,7 @@ pub enum AskSubject {
 /// The questions a row's session put to the operator that still wait, as
 /// the session record's `나를 기다리는 것` lists them, oldest first: what
 /// the row's `?N`, the pane's mark and the turn card draw, and the session
-/// 넘기기 names (docs/status-model.md, A question still waiting).
+/// 무시하기 names (docs/status-model.md, A question still waiting).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OpenAsksSnapshot {
     pub session: crate::links::ledger::SessionIdentity,
@@ -1747,7 +1747,7 @@ pub struct OpenAsksSnapshot {
 /// One question that still waits on the operator.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OpenAskSnapshot {
-    /// The record's id for it, which 넘기기 names.
+    /// The record's id for it, which 무시하기 names.
     pub id: String,
     pub text: String,
     pub at_unix_ms: u64,

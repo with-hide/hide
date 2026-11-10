@@ -213,7 +213,7 @@ export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_a
 export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string } | { cause: "open_ask"; id: string; line: string };
 /** The questions a row's session put to the operator that still wait (`OpenAsksSnapshot`). */
 export type OpenAsks = { session: WorkSession; items: OpenAsk[] };
-/** One question that still waits on the operator; `id` is the record's, which 넘기기 names. */
+/** One question that still waits on the operator; `id` is the record's, which 무시하기 names. */
 export type OpenAsk = { id: string; text: string; at_unix_ms: number };
 
 export const HUMAN_KINDS = ["auth", "permission"] as const;
