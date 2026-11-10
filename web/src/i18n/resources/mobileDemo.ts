@@ -161,7 +161,7 @@ export const mobileDemoCatalogs = {
     "mobile.demo.bar": "体験中 · サンプルデータ",
     "mobile.demo.exit": "体験を終了",
     "mobile.demo.connectReal": "自分のパソコンを接続",
-    "mobile.demo.panelNote": "ここにあるものはすべてサンプルデータです。コンピューターには何も送られず、デモの内容も残りません。",
+    "mobile.demo.panelNote": "ここにあるものはすべてサンプルデータです。パソコンには何も送られず、デモの内容も残りません。",
     "mobile.demo.reply": "了解しました。これはサンプルの返信です。実際のパソコンにつなぐと、エージェントがこの内容ですぐ動きます。",
     "mobile.demo.started": "開始しました。サンプルのエージェントなので、実際には何も実行されません。",
     "mobile.demo.convoYou": "この作業を進めて: {{title}}",

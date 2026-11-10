@@ -351,7 +351,7 @@ const MessageItem = memo(function MessageItem({ message, timed }: { message: Con
           <span aria-hidden="true" className="text-muted-foreground">
             ❯
           </span>
-          <span className="min-w-0 whitespace-pre-wrap wrap-anywhere">{message.text}</span>
+          <span className="min-w-0 whitespace-pre-wrap break-keep wrap-anywhere">{message.text}</span>
         </p>
         {time}
       </li>
@@ -365,7 +365,7 @@ function AgentMessage({ message, time }: { message: ConversationMessage; time: R
   const body = useMemo(() => renderMarkdown(message.text), [message.text]);
   return (
     <li data-phone-message="agent">
-      <div className="space-y-sm wrap-anywhere text-body leading-normal text-foreground">
+      <div className="space-y-sm break-keep wrap-anywhere text-body leading-normal text-foreground">
         {body}
         {message.truncated ? <p className="text-muted-foreground">{t("mobile.truncated")}</p> : null}
       </div>

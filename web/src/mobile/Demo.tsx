@@ -48,7 +48,7 @@ export function DemoHostPanel() {
           </span>
         </span>
       </div>
-      <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.panelNote")}</p>
+      <p className="break-keep px-sm text-body text-muted-foreground wrap-anywhere">{t("mobile.demo.panelNote")}</p>
       <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" data-phone-demo-connect="true" onClick={() => leaveDemo(true)}>
         {t("mobile.demo.connectReal")}
       </Button>
