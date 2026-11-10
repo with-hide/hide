@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { preparePhone, confirmPhone, credentials, requireMain, SECRETS, ORIGIN } from '../phone-release.mjs';
+import { preparePhone, confirmPhone, credentials, requireMain, SECRETS, ORIGIN, ASSOCIATION } from '../phone-release.mjs';
 
 const runs = resolve('agents/runs/phone-release-tests');
 const source = 'a'.repeat(40);
@@ -28,6 +28,9 @@ async function fixture(t, protocol = 2) {
   await mkdir(resolve(dist, `p/${protocol}/assets`), { recursive: true });
   await writeFile(resolve(dist, 'index.html'), page);
   await writeFile(resolve(dist, 'protocols.json'), JSON.stringify([protocol]));
+  // The file the real build copies from web/public/m, so a change to it that the release would refuse fails here first.
+  await mkdir(resolve(dist, '.well-known'));
+  await writeFile(resolve(dist, ASSOCIATION), await readFile('web/public/m/apple-app-site-association', 'utf8'));
   await writeFile(resolve(dist, `p/${protocol}/index.html`), page);
   await writeFile(resolve(dist, `p/${protocol}/assets/new.js`), 'new bundle');
   const oldFiles = new Map([['p/1/index.html', oldPage], ['p/1/assets/old.js', 'old bundle'],
@@ -58,8 +61,10 @@ async function fixture(t, protocol = 2) {
     const data = address.origin === 'https://previous.vercel.app' ? state.previous : state.live;
     const path = address.pathname.endsWith('/') ? `${address.pathname.slice(1)}index.html` : address.pathname.slice(1);
     const csp = data === state.live ? served(address.pathname) : undefined;
-    return data.has(path) ? new Response(data.get(path), { headers: csp === undefined ? {} : {
-      'content-security-policy': state.badHeader ? "script-src *" : csp,
+    const type = data === state.live ? state.routes.find(route => route.headers?.['Content-Type'] && new RegExp(route.src).test(address.pathname))?.headers['Content-Type'] : undefined;
+    return data.has(path) ? new Response(data.get(path), { headers: {
+      ...(csp === undefined ? {} : { 'content-security-policy': state.badHeader ? "script-src *" : csp }),
+      ...(type === undefined ? {} : { 'content-type': state.badType ? 'application/octet-stream' : type }),
     } }) : new Response('missing', { status: 404 });
   };
   const stage = resolve(root, 'new-parent/stage');
@@ -270,4 +275,32 @@ test('a look frame that could talk back or reach the app stops before deployment
     await assert.rejects(f.prepare(), /look frame/);
     assert.equal(f.state.live.size, 0);
   }
+});
+
+test('the association file is served as JSON, says exactly this app and the pairing page, and belongs to the hosted site only', async (t) => {
+  const f = await fixture(t);
+  await f.prepare();
+  await f.serve();
+  const config = JSON.parse(await readFile(resolve(f.stage, '.vercel/output/config.json')));
+  assert.ok(config.routes.some(route => route.src === '^/\\.well-known/apple-app-site-association$' && route.headers['Content-Type'] === 'application/json'));
+  await confirmPhone(f.stage, f.fetcher);
+  f.state.badType = true;
+  await assert.rejects(confirmPhone(f.stage, f.fetcher), /application\/json/);
+});
+
+test('a release refuses an association file for another app, a looser one, or none', async (t) => {
+  for (const change of [
+    body => { body.applinks.details[0].appIDs.push('ABCDE12345.other.app'); },
+    body => { delete body.applinks.details[0].components[0]['#']; },
+    body => { body.applinks.details[0].components[0]['/'] = '*'; },
+  ]) {
+    const f = await fixture(t);
+    const body = JSON.parse(await readFile(resolve(f.dist, ASSOCIATION), 'utf8'));
+    change(body);
+    await writeFile(resolve(f.dist, ASSOCIATION), JSON.stringify(body));
+    await assert.rejects(f.prepare(), /apple-app-site-association/);
+  }
+  const f = await fixture(t);
+  await rm(resolve(f.dist, '.well-known'), { recursive: true });
+  await assert.rejects(f.prepare());
 });

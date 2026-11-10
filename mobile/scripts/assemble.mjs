@@ -18,8 +18,10 @@ import { ORIGIN, contentPolicy, filePath, framePolicy, get, sha256 } from '../..
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const PINS = resolve(ROOT, 'mobile/retained-bundles.json');
 const MAX_FILE = 16 * 1024 * 1024;
-// Files of the browser build that do nothing inside the app: the app registers no service worker.
+// Files of the browser build that do nothing inside the app: the app registers no service worker, and the file iOS reads
+// from the hosted site to hand it a link is the site's, not the app's.
 const NOT_IN_APP = new Set(['sw.js']);
+const notInApp = (path) => NOT_IN_APP.has(path) || path === '.well-known' || path.startsWith('.well-known/');
 
 // A read of a published file is the same read every time, so a network stumble is tried again, a few times.
 const ATTEMPTS = 3;
@@ -108,7 +110,7 @@ export async function assemble({ dist, out, pins, expected, origin = ORIGIN, fet
   // A fresh folder: a file left by an earlier build must never ride along.
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
-  await cp(dist, out, { recursive: true, filter: (source) => !NOT_IN_APP.has(source.slice(dist.length + 1)) });
+  await cp(dist, out, { recursive: true, filter: (source) => !notInApp(source.slice(dist.length + 1)) });
 
   for (const [number, files] of pins) {
     for (const [path, entry] of Object.entries(files)) {
