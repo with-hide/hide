@@ -1,5 +1,5 @@
-# Temporary desktop verification; reverted before delivery.
-name: desktop shell repetition
+# Temporary web verification; reverted before delivery.
+name: web shell repetition
 on:
   workflow_dispatch:
     inputs:
@@ -10,19 +10,21 @@ on:
 permissions:
   contents: read
 jobs:
-  desktop:
+  web:
     strategy:
       fail-fast: false
       matrix:
         include:
+          - {lane: shell-draw-linux, runner: ubuntu-24.04}
           - {lane: shell-draw-macos, runner: macos-15}
           - {lane: shell-draw-windows, runner: windows-latest}
-    uses: ./.github/workflows/desktop-e2e.yml
+    uses: ./.github/workflows/web-e2e.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       lane: ${{ matrix.lane }}
       runner: ${{ matrix.runner }}
       shards: 1
-      grep: "failure: a missing CLI|lifetime: a second launch"
-      keep-screenshots: true
+      grep: "a checkout's pull request:|expand takes the whole body|a right-click focuses its pane|Overview restores its exact current session|test browser startup preserves defaults"
+      specs: "checkout-pr.spec.ts right-lane.spec.ts layout.spec.ts overview-map.spec.ts browser-launch.spec.ts"
+      repeat: "20"
