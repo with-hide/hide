@@ -15,7 +15,7 @@
     "HIDE_IOS_ASC_KEY_PATH": {
       "requirement": "required",
       "shape": "^/.*/AuthKey_[A-Z0-9]{10}\\.p8$",
-      "note": "The key file on the build machine, outside the checkout; the command checks it exists and only its owner can read it, and never opens it for anything but the log check."
+      "note": "The key file on the build machine, outside the checkout; Apple's tools read it by path; the command checks its name, owner and mode and never opens, copies or passes its body."
     }
   }
 }

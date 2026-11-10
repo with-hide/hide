@@ -722,17 +722,14 @@ The simulator build is signed ad hoc (`CODE_SIGN_IDENTITY=-`, no account or cert
 `bash mobile/scripts/build-ios.sh release` is the one command that makes a signed build of the app and uploads it to TestFlight.
 It refuses a working tree with tracked changes, `HIDE_IOS_SKIP_PHONE_BUILD` (a release builds the phone bundle from the commit it uploads) and a commit that already has an upload record ([Uploading a commit twice](#uploading-a-commit-twice)); it runs everything `build` runs (the phone build, the pin check, `cap sync`, the Swift tests on the mini, and a failing test stops it before anything is signed), and then, on the mini (`mobile/scripts/mini-release.sh`, piped over `ssh` like `mini-ios.sh`):
 
-1. takes the branch's lock and reads the secrets, checking all of them ([secrets](#the-releases-secrets));
+1. takes the machine's release lock and reads the secrets, checking all of them ([secrets](#the-releases-secrets));
 2. archives the app in the Release configuration with signing off, with the version and build number given on the command line (never written into the repository);
 3. exports the archive with automatic signing, which makes the App Store profile and signs with the team's cloud-managed Apple Distribution certificate, so no distribution private key exists on the mini and no keychain is read or changed;
 4. unpacks the signed ipa, reads its property lists and signature, and runs the release checks ([Release checks](#release-checks)); one failed check stops the command with every failure named, before anything is uploaded;
 5. validates and uploads that same ipa with `xcrun altool --validate-app` and `--upload-app`, then writes the upload record and prints the build's state once with the delivery id Apple gave the upload. `HIDE_IOS_NO_UPLOAD=1` stops after the validation, before anything is sent to TestFlight, which proves a change to the command without making a build.
 
 It exits non-zero with the reason at the first failure (a step outside the tools names itself), prints the end of the log once the log has been searched for a secret, and ends each long step that outlives its bound (archive 20 minutes, export and validate 15, upload 30; a whole run took about 6).
-The archive, the export, the unpacked ipa, the derived data, a temporary folder and the lock are removed on every way out, including an interrupt or a dropped connection.
-xcodebuild writes its distribution logs, which hold a signed token and the key's ids in plain text, into the account's temporary folder, which it takes from the system and not from `$TMPDIR` (run 10 on the mini showed it); the command deletes by name, unread, every `App_*.xcdistributionlogs` and `XcodeDistPipeline.*` there that appeared since the release started, on every way out, so run one release on the machine at a time.
-What stays in `~/hide-ios-build/<branch>/` is the redacted `release.log` and `uploads.log`, the upload record; `clean` removes the folder.
-One release of a branch runs at a time: the folder holds `release.lock` with the running pid, and a second release, a `build` that would copy a project under the archive or a `clean` is refused naming the pid (a lock whose pid is gone is taken over); `status` and `uploads` take no lock and delete nothing.
+Each step runs in a process group of its own, so a bound or a signal ends it with everything it started.
 The command stops before it starts when the mini has less than 15 GB free; a whole run took about 6 minutes and the mini's free disk fell by about 1 GB (2026-11-10: 24 GB to 23 GB), most of the time in the Swift tests, Apple's validation and the upload.
 
 **Version and build number.**
@@ -744,11 +741,34 @@ A run that fails before the upload, or whose upload Apple refused, is run again 
 The version is the last tag's until a release is tagged, so a run between releases uploads another build of the last version: once Apple has approved a version, a run from main that still carries it is refused by Apple's validation after the whole build, and the next tag or `HIDE_VERSION` is the way out.
 Builds made between releases are development builds; expire them in App Store Connect before an external group or a review sees the build list.
 
+#### What a release owns
+
+`mini-release.sh` lists, in one place, everything a run creates, and one cleanup removes exactly that list on a normal end, a failed step, TERM, HUP or INT, and a closed standard output:
+
+| What | Where | How it goes |
+| --- | --- | --- |
+| The machine's release lock | `~/hide-ios-build/.release.lock` | held by the kernel (`flock`) on a descriptor of the running shell, so it ends with the shell however that ends; its text (pid, start time, branch) only names the holder, and is emptied |
+| The work folder | `~/hide-ios-build/<branch>/release/` | removed: the archive, derived data, both result bundles, the export, the unpacked ipa, the temporary folder and the private home the tools that reach App Store Connect run with |
+| xcodebuild's distribution logs | `App_*.xcdistributionlogs` and `XcodeDistPipeline.*` in the account's temporary folder | deleted unread, by name, those made since the run started |
+
+A dropped ssh connection sends the remote no hang-up and closes its output; the script ignores SIGPIPE, so its next write fails and it ends through the same cleanup, which never stops on its own output.
+The step that was running when the connection dropped finishes first (an upload goes, and is recorded).
+The lock is one per machine, not per branch, because what it guards is: the account's temporary folder, the disk floor, the Apple account and its build numbers.
+While it is held a second release, of any branch, is refused naming the holder, and a `build` or `clean` of the holder's branch is refused too; `status` and `uploads` take no lock.
+xcodebuild writes its distribution logs, which hold a signed token and the key's ids, into the account's temporary folder, which it takes from the system (confstr) and not from `$TMPDIR` or the home, so they cannot be put in the work folder; the machine lock is what makes deleting them by name safe, and the one case it does not cover is an export another program starts on the mini during a release.
+`xcodebuild -exportArchive`, `altool --validate-app`, `--upload-app` and `--build-status` run with `CFFIXED_USER_HOME` set to the work folder's private home: altool's logs (its command line with the key id and path) and xcodebuild's URL cache (signed App Store Connect tokens) land there and go with it.
+The home's `Library/Caches` is made before the tools start: without it CFNetwork puts the URL cache in the account's cache folder (`getconf DARWIN_USER_CACHE_DIR`) instead, which a run on the mini showed.
+On the mini (2026-11-10) the export still signed with the cloud certificate and got its App Store profile, and Apple's validation passed, that way; afterwards `~/Library/Logs/ContentDelivery/com.apple.itunes.altool/` and `~/Library/Caches/com.apple.dt.xcodebuild/` and the account's provisioning profile folders were unchanged.
+
+What stays on the mini after a run: `~/hide-ios-build/<branch>/release.log`, redacted and searched; `~/hide-ios-build/uploads.log`, the upload record; the empty lock file (a lock file is never deleted, since a run that opened the old one and a run that made a new one could both hold a lock); and in the account's temporary folder (mode 700) what Apple's frameworks leave under names any program uses, so they are not deleted by name: about 30 `CFNetworkDownload_*.tmp` files of 1 to 2 KB from the export and validation and 3 `cms~~~*` files of 8 KB from the export per run.
+On the mini none of those holds the key id or a token (counted, not read, 2026-11-10), and the folder did not keep them: none of the about 750 made by the day's earlier runs was there that evening, though nothing in this command removes them.
+`clean` removes the branch folder.
+
 #### Uploading a commit twice
 
-The mini's `uploads.log` gets a line when an upload starts and another when it ends: time, commit, version, build number and delivery id (`started` has none yet).
-A caller whose connection dropped, which sends the remote no hang-up, may not know whether the upload went; `bash mobile/scripts/build-ios.sh uploads` prints the record, `status <delivery id>` asks Apple, and a `started` line with no `uploaded` line after it means look in App Store Connect before running again.
-`release` refuses a commit that has any line in the record, before the build and again on the mini, and says which; `HIDE_IOS_RELEASE_AGAIN=1` uploads it again on purpose (a new build number, the same commit).
+The mini's `~/hide-ios-build/uploads.log`, one for the machine, gets a line when an upload starts and another when it ends: time, commit, version, build number, delivery id (`started` has none yet), state and branch.
+A caller whose connection dropped, which sends the remote no hang-up, may not know whether the upload went, and `build-ios.sh` then says to read the record; `bash mobile/scripts/build-ios.sh uploads` prints it, `status <delivery id>` asks Apple, and a `started` line with no `uploaded` line after it means look in App Store Connect before running again.
+`release` refuses a commit that has any line in the record, under any branch name (main after a merge, a renamed branch), before the build and again on the mini, and says which; `HIDE_IOS_RELEASE_AGAIN=1` uploads it again on purpose (a new build number, the same commit).
 
 **Why altool uploads.**
 Xcode 26.6 also uploads from `xcodebuild -exportArchive` with `destination` set to `upload`, but that signs again while it uploads, so the bytes that were checked are not the bytes that went.
@@ -765,9 +785,12 @@ The key needs the Admin role, since an App Manager key cannot make the cloud-man
 The command checks every key before it builds, in one report: a missing key, a value of the wrong shape, a key file named for another key id or readable by another account each stop it, naming the key and the kind of problem and never a value.
 A line of `release.env` that is not a registered name is refused, and the file is read as `KEY=VALUE` lines, never run.
 
-Nothing runs under `set -x`, and every line xcodebuild and altool print passes through a filter that replaces the three values with the names of their keys before it reaches the log or the terminal.
-Before a failed step shows the end of its log, and at every exit, the log is searched for the three values, for every line of the key file and for the shape of a token; if one is there the log is deleted, the end of it is not shown and the command fails.
-`mobile/scripts/mini-release.test.mjs` runs the script with stand-ins for the Apple tools and the two macOS commands it asks questions of (so it runs in the `checks` lane, not only on a Mac): the stand-ins print their arguments and write a distribution log holding a token, and the tests prove the log, the output and the account's temporary folder hold none of the values, the work folder and the lock are gone, the upload record and the duplicate refusal work, and a hung upload is ended.
+The key file is read by Apple's tools from its path and by nothing else: the command checks its name, owner and mode and never opens, copies or hashes it, and never passes its body anywhere.
+The ids and the path reach xcodebuild and altool as arguments (they are not the key); every pattern the command searches or replaces them with travels in a pipe, never in a file or another program's arguments.
+Nothing runs under `set -x`, and every line xcodebuild and altool print passes through a filter that replaces the three values with the names of their keys, and a whole token with `<token>`, before it reaches the log or the terminal.
+Before a failed step shows the end of its log, and at every exit, the log is searched for the three values, for anything shaped like a token or part of one (`eyJ` and a JSON header) and for a PEM private key header; if one is there the log is deleted, the end of it is not shown and the command fails.
+The search cannot see a key's body printed without its PEM header; nothing in the command has a path to print it, since only Apple's tools read the file.
+`mobile/scripts/mini-release.test.mjs` runs the script with stand-ins for the Apple tools and the macOS commands it asks questions of (so it runs in the `checks` lane, not only on a Mac): the stand-ins print their arguments and a token and write distribution logs where the real export does, and the tests prove that the script never reads the key file (it runs with the file unreadable), no copy of the key exists while the export runs, no value is in the arguments of a `sed` or `grep`, the log and the output hold none of the values, and the run leaves nothing behind after a failed export, a step outside the tools, a time bound (with the step's grandchildren), TERM during the export and a standard output closed mid-run; and that a second branch's release is refused while one runs, a lock whose text names a live process the kernel does not hold the lock for is not believed, and the upload record refuses the same commit under another branch name.
 Rotating a key is replacing the two files; nothing in the repository changes.
 
 #### Release checks
