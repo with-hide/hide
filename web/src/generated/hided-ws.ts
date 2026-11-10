@@ -826,7 +826,10 @@ export interface AgentNotice {
             | "conductor_failed"
             | "wake_refused"
             | "close_refused"
-            | "human_gate";
+            | "human_gate"
+            | "not_started"
+            | "warning_stood"
+            | "wait_stood";
           unmet?: number;
         }
       | {

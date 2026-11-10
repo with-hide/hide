@@ -4,7 +4,7 @@ import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
-import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
+import { formatElapsed, useElapsed, useMinuteClock, useRemaining } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
 import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
@@ -127,7 +127,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
       {mission.report && !open ? <ReportLine mission={mission} /> : null}
       <ConductorRow mission={mission} actions={actions} />
       <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
-      {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
+      {mission.delay && open ? <DelayLine line={mission.delay} until={mission.delay_until_unix_ms} /> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       {mission.nodes.length === 0 ? (
         <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
@@ -555,4 +555,12 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
       <span className="text-caption text-muted-foreground">{note}</span>
     </div>
   );
+}
+
+/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
+function DelayLine({ line, until }: { line: string; until: number | null | undefined }) {
+  const { t } = useInterfaceTranslation();
+  const left = useRemaining(until);
+  const text = left && left !== "past" ? t("mission.delayLeft", { line, left: left.text }) : t("mission.delay", { line });
+  return <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{text}</p>;
 }

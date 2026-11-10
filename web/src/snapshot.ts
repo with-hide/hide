@@ -1713,6 +1713,8 @@ export type Mission = {
   conductor_letters?: MissionHeldLetters | null;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
+  /** When the delay ends by itself; every delay has an end (`Mission::delay_until_unix_ms`). */
+  delay_until_unix_ms?: number | null;
   report: string | null;
   created_at_unix_ms: number;
   started_at_unix_ms: number | null;
