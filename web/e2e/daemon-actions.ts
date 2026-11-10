@@ -28,6 +28,46 @@ export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, u
   }
 }
 
+/** The core's log of `daemon`, every file of it, as text. */
+export function coreLog(daemon: Pick<Daemon, "stateDir">): string {
+  const dir = path.join(daemon.stateDir, "Logs");
+  if (!fs.existsSync(dir)) return "";
+  return fs
+    .readdirSync(dir)
+    .filter((name) => name.startsWith("core"))
+    .map((name) => fs.readFileSync(path.join(dir, name), "utf8"))
+    .join("\n");
+}
+
+/**
+ * How many records the core has logged so far whose fields include every field of `match`
+ * (`{ component: "mobile_push", kind: "push.skipped", reason: "viewing" }`). Each record is one JSON line; a line
+ * the core is still writing does not parse and is not counted yet.
+ */
+export function loggedCount(daemon: Pick<Daemon, "stateDir">, match: Record<string, unknown>): number {
+  let count = 0;
+  for (const line of coreLog(daemon).split("\n")) {
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (record && Object.entries(match).every(([key, value]) => record[key] === value)) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Waits until the core has logged `count` records matching `match` in all (`loggedCount` before the action, plus one,
+ * for "the action was answered"). This is how a spec waits for a decision whose outcome is that nothing happens: the
+ * daemon logs that it decided (`push.skipped`), so the test waits for the record instead of a time in which a push
+ * would have arrived. `what` names the record in the failure.
+ */
+export async function untilLogged(daemon: Pick<Daemon, "stateDir">, match: Record<string, unknown>, count: number, what: string, timeout = 20_000): Promise<void> {
+  await expect.poll(() => loggedCount(daemon, match), { message: `the core logging ${what}`, timeout }).toBeGreaterThanOrEqual(count);
+}
+
 /** Types `text` into `pane` as the operator's keys. */
 export function sendKeys(control: HidedControl, pane: string, text: string): void {
   control.send("key", { pane_id: pane, bytes_base64: Buffer.from(text, "utf8").toString("base64") });
@@ -264,10 +304,16 @@ export function tabGeometrySettled(rest: Rest, tab: string): boolean {
   return !operations.some((operation) => operation.scope_id === tab && GEOMETRY_PENDING.has(operation.phase));
 }
 
-/** Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it. */
+/**
+ * Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it and
+ * its tab's geometry line is empty: the core draws the close ahead of the engine, so a split or
+ * close sent next to the same tab would run beside it instead of behind it (`splitPane`).
+ */
 export async function closePane(control: HidedControl, pane: string): Promise<void> {
+  const { tab } = await control.until((rest) => ({ tab: tabOfPane(rest, pane) }), `the tab of ${pane}`);
   control.send("close_pane", { pane_id: pane, confirmed: true });
   await control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `the close of ${pane}`, 30_000);
+  if (tab) await control.until((rest) => tabGeometrySettled(rest, tab) || undefined, `the engine's confirmation of the close of ${pane} in ${tab}`, 30_000);
 }
 
 /** Gives `pane` the keyboard as the operator's click does, and waits until the core holds it there. */

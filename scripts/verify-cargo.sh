@@ -4,6 +4,7 @@
 # Usage: verify-cargo.sh test [args...] | lint | release | cli
 # CI-scoped lanes: test-scoped | check | build | clippy | metadata [cargo arguments...]
 #                  nextest [cargo nextest run arguments...] (the CI Rust lane; .config/nextest.toml)
+#                  nextest-list [cargo nextest list arguments...] (the tests `nextest` would run, which the repeat lane counts)
 #                  fmt-check (cargo fmt --all --check alone)
 #                  hakari (workspace-hack is current; scripts/install-hakari.sh)
 #
@@ -117,7 +118,7 @@ selects_vt() {
 # Scoped modes cannot move the checkout or its artifacts through cargo flags.
 # Keep the legacy modes unchanged for sealed verification commands.
 case "${1:-}" in
-    test-scoped|check|build|clippy|metadata|nextest)
+    test-scoped|check|build|clippy|metadata|nextest|nextest-list)
         mode=$1
         shift
         (( $# <= 128 )) || { printf 'too many cargo arguments\n' >&2; exit 2; }
@@ -142,6 +143,7 @@ case "${1:-}" in
             [[ ! -f "$report" ]] || mv "$report" "target/nextest/ci/junit.$$.$RANDOM.xml"
             exit "$status"
         fi
+        [[ "$mode" != nextest-list ]] || exec cargo nextest list --locked "$@"
         [[ "$mode" != test-scoped ]] || mode=test
         exec cargo "$mode" --locked "$@"
         ;;
@@ -185,7 +187,7 @@ case "${1:-}" in
         exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     *)
-        printf 'usage: %s test [args...]|lint|fmt-check|hakari|release|cli|test-scoped|check|build|clippy|metadata|nextest [args...]\n' "$0" >&2
+        printf 'usage: %s test [args...]|lint|fmt-check|hakari|release|cli|test-scoped|check|build|clippy|metadata|nextest|nextest-list [args...]\n' "$0" >&2
         exit 2
         ;;
 esac

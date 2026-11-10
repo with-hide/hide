@@ -1,59 +1,66 @@
 <!--
-리뷰어가 읽는 순서대로 씁니다: 무엇이 바뀌었나 -> 내가 무엇을 판단해야 하나 -> 이미 증명된 것은 무엇인가.
-위 세 섹션을 합쳐 40줄 안쪽, 불릿 한 줄에 사실 하나(120자 이내). 변경의 크기에 맞춰 짧게 쓰고, 넘치는 것은 접힌 블록으로.
-해당 없는 줄과 섹션은 "N/A"로 메우지 말고 지우세요. 게이트 목록은 CONTRIBUTING.md에 있습니다.
-PR 제목은 커밋과 같은 `<type>: <영어 명령형 문장>` 형식으로 씁니다. 예: `fix: keep a named tab when its last agent closes` (type 목록은 CONTRIBUTING.md, Commit messages and attribution).
+Write in the order a reviewer reads: what changed, what needs a human, what is proven.
+Keep the text above the folded blocks under about 40 lines, one fact per bullet (120 characters). Longer material goes in a folded block.
+Delete a line or section that does not apply; do not fill it with "N/A". The gates are listed in CONTRIBUTING.md.
+Title: `<type>: <imperative sentence>` in English, like the commits (types: CONTRIBUTING.md, Commit messages and attribution).
 -->
 
-Closes #<!-- 이 PR이 끝내는 이슈 번호. 큰 이슈의 조각이면 그 조각의 하위 이슈를 닫습니다. 닫는 이슈가 없으면 이 줄을 지우세요. 닫지 않는 언급은 hide가 이슈에 잇지 않습니다. -->
-Related: <!-- PRD 경로와 선행·의존 PR #만. 이슈 번호는 위 Closes 줄에 씁니다. 로컬 PRD 경로 대신 이 PR의 Summary와 Evidence에 검토할 계약을 씁니다. 없으면 이 줄을 지우세요. -->
+Closes #<!-- the issue this PR finishes; for a piece of a large issue, close that piece's sub-issue. Delete the line if none. -->
+Related: <!-- PRD path, prerequisite or dependent PRs. Delete the line if none. -->
 
 ## Summary
 
-<!-- 3~5줄. 어떤 문제를 푸는가, 그래서 무엇을 바꿨는가. 처음 보는 사람이 따라올 수 있는 말로. -->
+<!-- 3-5 lines: the problem, then the change, in words a first-time reader can follow. -->
 
 <!--
-화면이 바뀌면: 대표 before/after 이미지 한 장과, 어디를 보면 무엇이 다른지 말하는 캡션 한 줄.
-Pen 비교, 상태별 캡처 같은 나머지 이미지는 아래 Evidence의 접힌 블록으로 보냅니다. 업로더가 붙인 이미지 줄은 게시 전에 이 기준으로 고릅니다.
-이미지를 올리는 명령은 AGENTS.md의 Before Opening A Pull Request에 있습니다. 화면을 건드리고도 이미지를 못 넣을 이유가 있으면 `스크린샷 없음: <이유>` 한 줄을 쓰세요; 없으면 verify의 policy 검사가 PR을 막습니다.
-화면이 바뀌지 않으면: 스크린샷도 Pen 흐름도 필요 없습니다. 바뀐 동작 한두 줄과, 도움이 될 때만 관련 요청/응답, 재현 절차, 명령 출력이나 결과를 짧은 코드 블록 하나로.
-GitHub에 붙여넣은 이미지는 user-attachments로 인라인 렌더링됩니다. 로컬 파일 경로, file:// 링크, raw.githubusercontent.com 링크는 리뷰어에게 보이지 않습니다.
-캡처에 워크스테이션의 사용자·호스트명이 찍히면 패널만 크롭하세요.
+Screen change: one before/after image and one caption line saying where to look. Further images go in the folded block under Evidence.
+Upload command: AGENTS.md, Before Opening A Pull Request. Only GitHub user-attachments or committed repo paths render; crop out workstation names.
+A screen change with no image needs one line `No screenshot: <reason>`; verify's policy check blocks the PR without either.
+No screen change: no screenshot. Optionally one short code block with the changed behavior, request/response or repro.
 -->
 
 ## Review
 
-<!-- 리뷰어의 시간을 어디에 쓸지 정하는 섹션입니다. 테스트가 증명한 것은 다시 판단하지 않고, 판단할 것이 없는 줄은 지웁니다. -->
+<!-- Where the reviewer's time should go. A test already proves the rest; delete a line with nothing to decide. -->
 
-- **판단해 주세요**: <!-- 제품 해석, 문구, 트레이드오프, 되돌리기 어려운 결정. 각각 한 줄. 화면 변경이면 대표 이미지에서 사람이 정할 시각 판단 하나를 분명히 -->
-- **조심해서 볼 파일**: <!-- `path` - 왜. 이유는 이 저장소가 데인 자리에서 고릅니다: runtime mutex 안의 일, snapshot wire 채널, engine/core ownership, engine contract 밖의 호출, failure path, high-frequency path -->
-- **비용 검토**: <!-- 상시 작업·고빈도 경로 변경이면 입력/틱당 추가 작업, 알림 fan-out, 대기 상한과 없는 cap, 소유자와 종료 정리. docs/PERFORMANCE_TESTING.md#resident-work-cost-review를 따릅니다. -->
-- **질문**: <!-- 실제로 답이 필요한 것만, 구체적으로. 없으면 만들지 말고 이 줄을 지우세요 -->
+- **Decide**: <!-- product, copy and tradeoff calls only a human makes, one per line. For a screen change, the one visual judgment the image asks for. -->
+- **Risky files**: <!-- `path` - why. Pick from where this repository was burned: work under the runtime mutex, snapshot wire, engine/core ownership, calls outside the engine contract, failure path, high-frequency path. -->
+- **Cost**: <!-- Resident or hot-path change: added work per input or tick, notification fan-out, wait bounds and missing caps, owner and teardown (PERFORMANCE_TESTING.md#resident-work-cost-review). -->
+- **Questions**: <!-- Only ones that need an answer. Delete the line if none. -->
+
+## Tests
+
+<!-- Delete this section if the diff adds or changes no test. Criteria: docs/CODE_REVIEW.md perspective 6 and docs/TESTING.md, Reviewing a pull request that adds or changes a test. -->
+
+- **Layer**: <!-- unit / integration / e2e. For e2e: the user flow it protects and why a lower layer cannot observe it. -->
+- **Catches**: <!-- The plausible bug that makes it fail, and the planted defect you made to see it fail. -->
+- **Repeat**: <!-- Changed tests x runs, all green, with the link to the repeat job. -->
+- **Waits**: <!-- Each new wait, timeout or poll and the state it waits for, or "none". -->
 
 ## Evidence
 
-<!-- `agents/runs/<slug>/`는 로컬에 남습니다. 경로를 링크하지 말고 무엇을 어떻게 쟀는지 쓰세요. -->
+<!-- Name what was measured and how; `agents/runs/<slug>/` stays local, so do not link it. -->
 
-- **확인한 것**: <!-- "테스트 통과"가 아니라 무엇을, 몇 개, 어떤 조건에서, 어떻게 -->
-- **확인하지 못한 것**: <!-- 무엇과 이유. 비우지 마세요. 실패한 검사, 실행하지 못한 필수 검사, 중요한 위험은 접지 말고 여기에 둡니다. -->
-- **생성물**: <!-- `design/hide.pen`처럼 스크립트가 만든 큰 diff가 있으면 한 줄로 알리고 결과 이미지를 가리키세요. 없으면 이 줄을 지우세요. -->
+- **Verified**: <!-- Not "tests pass": what, how many, under which conditions. -->
+- **Not verified**: <!-- What and why. Never empty. Failed checks, required checks not run and major risks stay here, not folded. -->
+- **Generated**: <!-- A large script-made diff such as `design/hide.pen`: one line, pointing at the result image. Delete the line if none. -->
 
-<details><summary>추가 증거</summary>
+<details><summary>More evidence</summary>
 
-<!-- 대표 이미지 외의 Pen 비교와 상태별 캡처, 기술 로그, 긴 명령 출력. 각각 캡션 한 줄. 없으면 이 블록을 지우세요. -->
+<!-- Pen comparisons, per-state captures, technical logs, long command output, one caption line each. Delete the block if none. -->
 
 </details>
 
 ## Breaking change
 
 <!--
-설치, 상태 디렉터리, 저장된 설정, 공개 계약 중 무엇이 깨지는지와 운영자가 무엇을 해야 하는지.
-코드가 지울 수 없는 자리(셸 프로파일, 설치된 클론, 사용자 홈)가 있으면 여기에 목록으로.
-깨는 것이 없으면 이 섹션을 지우세요.
+What breaks (install, state folder, saved settings, public contract) and what the operator must do.
+List any place code cannot clean up (shell profile, installed clones, the user's home).
+Delete the section if nothing breaks.
 -->
 
 <details><summary>Verification record</summary>
 
-<!-- PRD 경로, base/head SHA, 실행한 suite와 결과, 리뷰 subagent의 Fix now·Follow-up, 등록된 증거 목록, 변경 경로. `ship` 스킬이 채웁니다. 이 블록을 유지하고, PR 생성·갱신과 승인된 머지는 `ship` 스킬로 진행하세요. -->
+<!-- PRD path, base/head SHAs, suites run and results, reviewer findings and their disposition, registered evidence, changed paths. Filled by the `ship` skill: keep this block, and open or update the PR through `ship`. -->
 
 </details>
