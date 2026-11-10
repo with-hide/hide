@@ -2410,7 +2410,7 @@ An earlier build's record may still hold a commit mark and a `not_stopped` resul
 
 The import reads any Herdr's save and leaves that Herdr running beside Hide: it never stops a server, and a server on the socket only makes its conversations wait (D-8).
 The save is offered from the sidebar's line, Settings, the first run and `hide import herdr [--yes]`, and the operator's answer is one event (`herdr_import {action}`: `import`, `look`, `continue`), handled on a worker off the runtime lock through the machine hided installs (`Core::set_herdr_import`, `herdr_import::Machine`).
-The import is asked in the record, and hided starts the core role again (`Event::HerdrRestart`); before the engine opens, `before_core` imports the asked workspaces and gives their panes' Hide state to the engine the core move's way (D-4), so the engine opens with them and restores them as a reboot does.
+The import is asked in the record, and hided starts the core role again (`Event::ImportRestart`); before the engine opens, `before_core` imports the asked workspaces and gives their panes' Hide state to the engine the core move's way (D-4), so the engine opens with them and restores them as a reboot does.
 A core role that does not start again ends the daemon with that failure (`Halt::Failed`, as any core start that fails), and the import stays asked in the record, so the next start makes it.
 A Herdr running on the socket again by then keeps its conversations: the start imports them waiting rather than resuming them (D-8).
 
