@@ -59,6 +59,15 @@ describe('what the project builds for the store', () => {
     expect(config.ios.webContentsDebuggingEnabled).toBe(false);
   });
 
+  it('names the same app and team as the list the signed app is held to', () => {
+    const want = JSON.parse(read('release-expect.json'));
+    const project = read('ios/App/App.xcodeproj/project.pbxproj');
+    expect(project).toContain(`PRODUCT_BUNDLE_IDENTIFIER = ${want.bundleId};`);
+    expect(project).toContain(`DEVELOPMENT_TEAM = ${want.teamId};`);
+    expect(JSON.parse(read('capacitor.config.json')).appId).toBe(want.bundleId);
+    expect(want.entitlements['application-identifier']).toBe(`${want.teamId}.${want.bundleId}`);
+  });
+
   it('says it uses encryption of its own, and ships a privacy manifest in the app', () => {
     expect(read('ios/App/App/Info.plist')).toMatch(/<key>ITSAppUsesNonExemptEncryption<\/key>\s*<true\/>/);
     expect(read('ios/App/App.xcodeproj/project.pbxproj')).toContain('PrivacyInfo.xcprivacy in Resources');
