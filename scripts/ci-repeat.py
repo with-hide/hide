@@ -36,6 +36,7 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -59,6 +60,91 @@ MODULE = re.compile(r"^(?:\*|[a-z0-9_]+(?:::[a-z0-9_]+)*)$")
 SPEC_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.spec\.ts$")
 
 RUNNERS = {"linux": "ubuntu-latest", "macos": "macos-15", "windows": "windows-latest"}
+REPORT_BYTES = 16 * 1024 * 1024
+REPORT_FILES = 128
+
+
+def count_value(value):
+    """A required nonnegative count; a missing output is never zero."""
+    if not re.fullmatch(r"[0-9]+", str(value)):
+        raise ValueError(f"missing or invalid test count: {value!r}")
+    return int(value)
+
+
+def choose(event, web, rust, named, web_count, rust_count):
+    """One explicit run decision for both hand runs and counted PR tests."""
+    selected = {"web": bool(web), "rust": bool(rust)}
+    if event == "workflow_dispatch":
+        times = count_value(named)
+        if not 1 <= times <= DISPATCH_MAX_REPEAT or not any(selected.values()):
+            raise ValueError("a hand run needs named tests and a repeat from 1 to 100")
+    else:
+        counts = {}
+        for kind, raw in (("web", web_count), ("rust", rust_count)):
+            counts[kind] = count_value(raw) if selected[kind] else 0
+            if selected[kind] and counts[kind] == 0:
+                raise ValueError(f"selected {kind} files listed no tests")
+        times = repeats(sum(counts.values()))
+    return {"run-web": str(selected["web"]).lower(), "run-rust": str(selected["rust"]).lower(), "repeat": times}
+
+
+def verdict(needs):
+    """A selected repeat leg must succeed and report completed test runs."""
+    if needs["count"]["result"] != "success":
+        raise ValueError("choosing the repeat did not succeed")
+    outputs = needs["count"]["outputs"]
+    times = count_value(outputs["repeat"])
+    for kind in ("web", "rust"):
+        selected = outputs[f"run-{kind}"]
+        if selected not in ("true", "false"):
+            raise ValueError(f"missing or invalid run-{kind} decision: {selected!r}")
+        job = needs[kind]
+        expected = "success" if selected == "true" else "skipped"
+        if job["result"] != expected:
+            raise ValueError(f"{kind}: expected {expected}, got {job['result']}")
+        if selected == "true":
+            completed = count_value(job["outputs"].get("completed", ""))
+            if times == 0 or completed == 0 or completed % times:
+                raise ValueError(f"{kind}: {completed} completed test runs do not prove {times} repeats")
+    if (times > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("web", "rust")):
+        raise ValueError("the repeat and run decisions disagree")
+
+
+def completed_runs(playwright, junit):
+    """Read actual passes, excluding skips, from the runners' own reports.
+
+    Nextest emits a suite per stress iteration, so each testcase is one run:
+    https://nexte.st/docs/features/stress-tests/#junit-output
+    """
+    paths = [Path(playwright)] if playwright else [Path(path) for path in junit]
+    if not paths or len(paths) > REPORT_FILES or sum(path.stat().st_size for path in paths) > REPORT_BYTES:
+        raise ValueError("test reports are missing or exceed 128 files / 16 MiB")
+    if playwright:
+        report = json.loads(paths[0].read_text(encoding="utf-8"))
+        if report.get("errors"):
+            raise ValueError("the Playwright report contains run errors")
+
+        def passed(suite):
+            return sum(
+                result["status"] == "passed"
+                for spec in suite.get("specs", [])
+                for test in spec["tests"] for result in test["results"]
+            ) + sum(passed(child) for child in suite.get("suites", []))
+
+        completed = passed(report)
+    else:
+        completed = 0
+        for path in paths:
+            report = ET.parse(path).getroot()
+            if report.tag != "testsuites":
+                raise ValueError(f"not a nextest JUnit report: {path}")
+            completed += sum(
+                not any(child.tag in ("skipped", "failure", "error") for child in case)
+                for case in report.iter("testcase")
+            )
+    if completed == 0:
+        raise ValueError("the repeat job completed zero tests")
+    return completed
 
 
 def repeats(total):
@@ -256,9 +342,6 @@ def main():
     resolve_parser.add_argument("--rust", default="")
     resolve_parser.add_argument("--repeat", default="")
     resolve_parser.add_argument("--runner", default="linux")
-    budget_parser = sub.add_parser("budget", help="the repeat for a pull request's changed tests")
-    budget_parser.add_argument("--web", type=int, required=True, help="Playwright tests, from `playwright test --list`")
-    budget_parser.add_argument("--rust", type=int, required=True, help="Rust tests, from `cargo nextest list`")
     sub.add_parser("count-listed", help="count the tests of `playwright test --list` output on stdin")
     pattern_parser = sub.add_parser("spec-patterns", help="one Playwright file filter per line for each spec")
     pattern_parser.add_argument("specs", nargs="+")
@@ -267,10 +350,34 @@ def main():
     plan_parser.add_argument("--rust", required=True, help="the JSON list of modules")
     lines_parser = sub.add_parser("plan-lines", help="one `package<TAB>filterset` line per package of a Rust plan")
     lines_parser.add_argument("--plan", required=True, help="the JSON plan")
+    choose_parser = sub.add_parser("choose", help="write an explicit run decision for every repeat leg")
+    choose_parser.add_argument("--event", required=True)
+    choose_parser.add_argument("--web", required=True)
+    choose_parser.add_argument("--rust", required=True)
+    choose_parser.add_argument("--repeat", default="")
+    choose_parser.add_argument("--web-count", default="")
+    choose_parser.add_argument("--rust-count", default="")
+    sub.add_parser("verdict", help="fail unless every chosen repeat leg completed tests (NEEDS JSON)")
+    report_parser = sub.add_parser("report", help="report completed runs from Playwright JSON or nextest JUnit")
+    reports = report_parser.add_mutually_exclusive_group(required=True)
+    reports.add_argument("--playwright")
+    reports.add_argument("--junit", nargs="+")
     args = parser.parse_args()
 
     try:
-        if args.command == "resolve":
+        if args.command == "choose":
+            decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, args.web_count, args.rust_count)
+            write_outputs(decision)
+            if os.environ.get("GITHUB_STEP_SUMMARY"):
+                with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                    summary.write(f"Tests counted: web={args.web_count or 'not counted'}, Rust={args.rust_count or 'not counted'}.\n")
+                    summary.write(f"Repeat decision: {json.dumps(decision)}\n")
+        elif args.command == "verdict":
+            verdict(json.loads(os.environ["NEEDS"]))
+            print("Every chosen repeat leg completed its tests.")
+        elif args.command == "report":
+            write_outputs({"completed": completed_runs(args.playwright, args.junit)})
+        elif args.command == "resolve":
             work = resolve(args.event, args.web, args.rust, args.repeat, args.runner)
             write_outputs({
                 "web": " ".join(work["web"]),
@@ -295,15 +402,12 @@ def main():
             print(nextest_listed(sys.stdin.read()))
         elif args.command == "count-listed":
             print(listed_tests(sys.stdin.read()))
-        elif args.command == "budget":
-            total = args.web + args.rust
-            write_outputs({"repeat": repeats(total), "total": total})
         elif args.command == "spec-patterns":
             for path in args.specs:
                 print(spec_pattern(path))
         else:
             raise ValueError(f"unknown command {args.command}")
-    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, KeyError, TypeError, OSError, ET.ParseError, subprocess.CalledProcessError) as error:
         print(f"ci-repeat: {error}" + (f"\n{error.stderr}" if isinstance(error, subprocess.CalledProcessError) and error.stderr else ""), file=sys.stderr)
         sys.exit(1)
 
