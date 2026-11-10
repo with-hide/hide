@@ -5,9 +5,9 @@ import type { DetailSlot } from "./snapshot";
 import { agentEntries, columnLanding, laneFrame, laneLanding, laneViewOf, NO_CALLS_SEEN, pageCalled, pageLaneWidth, readCalls, TOOLS, TOOL_SCOPES, type LaneColumn, type LaneInput, type LaneSizes } from "./workspace";
 
 const strip: StripTab[] = [
-  { id: "herdr:1", kind: "herdr", source_id: "t1", label: "1", preview: false },
+  { id: "engine:1", kind: "engine", source_id: "t1", label: "1", preview: false },
   { id: "file:a", kind: "file", source_id: "f-a", label: "a.md", preview: true },
-  { id: "herdr:2", kind: "herdr", source_id: "t2", label: "2", preview: false },
+  { id: "engine:2", kind: "engine", source_id: "t2", label: "2", preview: false },
   { id: "diff:b", kind: "diff", source_id: "d-b", label: "b.rs (working diff)", preview: false },
 ];
 

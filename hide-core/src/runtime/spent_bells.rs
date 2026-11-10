@@ -266,6 +266,13 @@ const NOT_TAKEN: &str = "hook_not_taken";
 /// pane, why in plain words with the doorbell's code (`delivery::doorbell`,
 /// `delivery::ladder`), and what to do now.
 fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str) -> String {
+    // A reason a build before the engine names recorded reads as its engine name.
+    let reason = match reason {
+        "herdr_call_failed" => "engine_call_failed",
+        "herdr_format" => "engine_format",
+        "herdr_parameters" => "engine_parameters",
+        other => other,
+    };
     let why = match reason {
         // Hide knows only what it read: an empty record and one it could
         // not read look the same from here.
@@ -277,16 +284,18 @@ fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str
         }
         "engine_refused" => "its pane refused the typing",
         "engine_unreachable" => "its machine could not be reached to type it",
-        "herdr_call_failed" => {
+        // `herdr_*` is the reason a build before the engine names wrote to
+        // the letters ledger; it stays readable beside the engine name.
+        "engine_call_failed" => {
             "Hide lost the answer to its typing and found none of it in the agent's session record, or could not read that record"
         }
         crate::delivery::doorbell::INTERRUPTED => {
             "Hide stopped while typing its last bell and found none of it in the agent's session record, or could not read that record"
         }
-        "herdr_format" => {
+        "engine_format" => {
             "the answer to its typing could not be read, and Hide found none of it in the agent's session record, or could not read that record"
         }
-        "herdr_parameters" => "the bell could not be put into the engine's terms",
+        "engine_parameters" => "the bell could not be put into the engine's terms",
         "doorbell_reservation_failed" | "doorbell_reservation_format" => {
             "the delivery store did not save its bell"
         }
@@ -304,4 +313,26 @@ fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str
     format!(
         "{recipient} did not get your {kind} letter {letter}: {why} ({reason}), and its {BELLS} bells are spent, so Hide does not ring it again.\n{next}"
     )
+}
+
+#[cfg(test)]
+mod reason_name_tests {
+    use super::note_body;
+
+    /// A letter recorded before the engine names carries the `herdr_*` reason;
+    /// it explains the same as the engine name it became.
+    #[test]
+    fn a_reason_recorded_under_the_herdr_name_explains_as_its_engine_name() {
+        for (old, new) in [
+            ("herdr_call_failed", "engine_call_failed"),
+            ("herdr_format", "engine_format"),
+            ("herdr_parameters", "engine_parameters"),
+        ] {
+            assert_eq!(
+                note_body("r", "p", "k", "l", old),
+                note_body("r", "p", "k", "l", new),
+                "{old} must read as {new}"
+            );
+        }
+    }
 }

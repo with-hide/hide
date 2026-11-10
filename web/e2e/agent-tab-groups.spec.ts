@@ -241,7 +241,7 @@ test("a saved Workspace still reopens when its initial catalog arrives after the
         // The engine is connected, but no confirmed catalog/View has arrived.
         frame.payload.rest.navigator.workspaces = [];
         frame.payload.rest.workspace_view = null;
-        frame.payload.rest.status.herdr.state = "connected";
+        frame.payload.rest.status.engine.state = "connected";
         socket.send(JSON.stringify(frame));
       });
     });

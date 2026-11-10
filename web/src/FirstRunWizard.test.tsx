@@ -293,7 +293,7 @@ it("reopened from Help, walks to Devices when the device list was cut short and 
   window.hideHost = { kind: "electron", platform: "darwin", notificationPermission: async () => "not_determined" } as never;
   for (const [truncated, after] of [[true, "devices"], [false, "notifications"]] as const) {
     const next = state(false, enabled);
-    Object.assign(next.rest.status, { herdr_profiles: { state: "ready", error: null, profiles: [], truncated } });
+    Object.assign(next.rest.status, { machine_profiles: { state: "ready", error: null, profiles: [], truncated } });
     const { unmount } = await mount(next);
     await act(async () => { useSetupWalk.getState().open(); });
     await act(async () => { continueButton().click(); });

@@ -400,7 +400,7 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
   const pane = (paneId: string) => {
     const row = model.panes.find((one) => one.id === paneId)!;
     return {
-      id: paneId, device_id: "local", device_pane_id: paneId, herdr_label: null, terminal_title: row.agent ? null : row.title, cwd: path, status_code: "idle" as const,
+      id: paneId, device_id: "local", device_pane_id: paneId, engine_label: null, terminal_title: row.agent ? null : row.title, cwd: path, status_code: "idle" as const,
       requires_close_confirmation: false, requires_close_status_check: false, identity_label: row.title,
     };
   };
@@ -436,7 +436,7 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
     tabs,
     active_tab_id: model.activeTab,
     // A tab holding only delegated children stays off the strip; the sidebar still reaches it.
-    strip: tabs.filter((tab) => !tab.delegated).map((tab) => ({ id: `strip:${tab.id}`, kind: "herdr", source_id: tab.id, label: tab.sidebar.manual_name ?? `Tab ${tab.sidebar.number}`, preview: false })),
+    strip: tabs.filter((tab) => !tab.delegated).map((tab) => ({ id: `strip:${tab.id}`, kind: "engine", source_id: tab.id, label: tab.sidebar.manual_name ?? `Tab ${tab.sidebar.number}`, preview: false })),
     next_tab_label: String(model.tabs.length + 1),
     agent_groups: { selected: model.selectedGroup, groups: model.groups, drafts: [] },
   };

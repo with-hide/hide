@@ -13,13 +13,14 @@ import { agentIn, closePane, focusTab, newTab, preparePaneInput, sendKeys, start
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
-export type AgentState = "working" | "blocked" | "idle";
+export type AgentState = "working" | "blocked" | "idle" | "question";
 
 /** Whether `row` reads as `state`: `idle` is a rest, seen or not (the idle and done states). */
 function reads(row: AgentRow | undefined, state: AgentState): boolean {
   if (!row) return false;
   if (state === "blocked") return row.blocked === true;
   if (state === "working") return row.activity === "working" && !row.blocked;
+  if (state === "question") return !row.blocked && row.activity !== "working" && row.demand === "question";
   // A turn that ended unseen with no label verdict reads `stopped` (status-marks D-03).
   return !row.blocked && row.activity !== "working" && (row.status_code === "idle" || row.status_code === "done" || row.status_code === "stopped");
 }
@@ -33,12 +34,16 @@ function reads(row: AgentRow | undefined, state: AgentState): boolean {
  */
 export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pane: string, state: AgentState): Promise<AgentRow> {
   return withControl(daemon, async (control) => {
-    await preparePaneInput(control, pane);
     const now = await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 20_000);
+    // A prepared transcript can already put the row in the requested state.
+    // Sending keys anyway would return on that old state before the node's
+    // input report takes the keyboard, racing the caller's next tab selection.
+    if (reads(now, state)) return now;
+    await preparePaneInput(control, pane);
     const clear = now.blocked ? "\x1b[2J\x1b[H" : "";
     const screen = state === "working"
       ? `${clear}\x1b]0;⠋ Working\x07`
-      : state === "idle"
+      : state === "idle" || state === "question"
         ? `${clear}\x1b]0;✳ Claude Code\x07`
         : "\x1b]0;Fixture\x07\x1b[2J\x1b[Hdo you want to proceed?\n" + "bash command\n❯ 1. Yes\n2. No\n";
     sendKeys(control, pane, screen);
@@ -201,18 +206,10 @@ export async function takeOverSession(fixture: AgentFixture, daemon: Pick<Daemon
  * Rests the stand-in in `pane` after a turn whose transcript ends in a
  * question (`continueFixtureTranscript` with `question: true`), and waits
  * until its row asks: a rest the operator is asked to answer reads
- * `question`, not `idle`, so `setAgentState` would never see it.
+ * `question`, not `idle`, which is a distinct requested state.
  */
 export async function setAgentAsking(daemon: Pick<Daemon, "origin" | "token">, pane: string): Promise<AgentRow> {
-  return withControl(daemon, async (control) => {
-    await preparePaneInput(control, pane);
-    await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 20_000);
-    sendKeys(control, pane, "\x1b]0;✳ Claude Code\x07");
-    return control.until((rest) => {
-      const row = agentIn(rest, pane);
-      return row && !row.blocked && row.activity !== "working" && (row as AgentRow & { demand?: string }).demand === "question" ? row : undefined;
-    }, `${pane} asking`, 20_000);
-  });
+  return setAgentState(daemon, pane, "question");
 }
 
 /**
