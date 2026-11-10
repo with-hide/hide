@@ -74,12 +74,13 @@ pub enum CommandKind {
         json: bool,
     },
     Stop,
-    /// `hide restart --daemon <pid>`: `stop`, then `connect`, for the daemon
-    /// with that pid only. A daemon runs it for itself when its pane holders
+    /// `hide restart --daemon <pid> --started <start>`: `stop`, then
+    /// `connect`, for the daemon with that pid and start time only. A daemon runs it for itself when its pane holders
     /// died without saying why (`holder_restart`), so the start finds and
     /// settles them; it is not listed, as `connect` is not.
     Restart {
         daemon: u32,
+        started: u64,
     },
     /// `hide runtime prepare`: the folder this package's runtime runs from,
     /// made first on Windows (`hide_kit::runtime`), as one JSON line for the
@@ -349,10 +350,14 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("restart") => match (
             iter.next().map(String::as_str),
             iter.next().and_then(|pid| pid.parse().ok()),
+            iter.next().map(String::as_str),
+            iter.next().and_then(|start| start.parse().ok()),
             iter.next(),
         ) {
-            (Some("--daemon"), Some(daemon), None) => Ok(CommandKind::Restart { daemon }),
-            _ => Err("usage: hide restart --daemon <pid>".to_owned()),
+            (Some("--daemon"), Some(daemon), Some("--started"), Some(started), None) => {
+                Ok(CommandKind::Restart { daemon, started })
+            }
+            _ => Err("usage: hide restart --daemon <pid> --started <start>".to_owned()),
         },
         Some("import") => match (
             iter.next().map(String::as_str),
@@ -949,7 +954,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
-        CommandKind::Restart { daemon } => restart(&env, daemon),
+        CommandKind::Restart { daemon, started } => restart(&env, daemon, started),
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
         CommandKind::Serve { keep_alive } => serve(env, keep_alive),
@@ -2723,8 +2728,8 @@ fn runtime_prepare(home: &Path) -> Result<(), String> {
 /// Ends the daemon `daemon` and starts the next, when `daemon` is still the
 /// one this state folder names. A daemon that was stopped or replaced since
 /// the request was made is never touched, and nothing is started for it.
-fn restart(env: &Env, daemon: u32) -> Result<(), String> {
-    if let Some(state) = daemon_to_restart(&env.state_dir, daemon)? {
+fn restart(env: &Env, daemon: u32, started: u64) -> Result<(), String> {
+    if let Some(state) = daemon_to_restart(&env.state_dir, daemon, started)? {
         stop_daemon(&env.state_dir, &state)?;
         connect_json(env)?;
     }
@@ -2732,11 +2737,18 @@ fn restart(env: &Env, daemon: u32) -> Result<(), String> {
 }
 
 /// The state of the daemon `hide restart` may end: the one this folder names
-/// now, when it is `daemon` and still that process.
-fn daemon_to_restart(state_dir: &Path, daemon: u32) -> Result<Option<DaemonState>, String> {
+/// now, when it is the process `daemon` started at `started`, and still that
+/// process: a successor that took the pid has another start time.
+fn daemon_to_restart(
+    state_dir: &Path,
+    daemon: u32,
+    started: u64,
+) -> Result<Option<DaemonState>, String> {
     Ok(state_file::read_state(state_dir)
         .map_err(|e| e.to_string())?
-        .filter(|state| state.pid == daemon && still_the_daemon(state)))
+        .filter(|state| {
+            state.pid == daemon && state.pid_started == Some(started) && still_the_daemon(state)
+        }))
 }
 
 fn stop(state_dir: &Path) -> Result<(), String> {
@@ -3428,28 +3440,37 @@ mod tests {
     #[test]
     fn a_restart_ends_only_the_daemon_that_asked() {
         let mut daemon = Command::new("sleep").arg("30").spawn().unwrap();
-        let started = process::start_time(daemon.id()).unwrap();
+        let pid = daemon.id();
+        let started = process::start_time(pid).unwrap();
         let dir = tempfile::tempdir().unwrap();
         assert!(
-            daemon_to_restart(dir.path(), daemon.id())
+            daemon_to_restart(dir.path(), pid, started)
                 .unwrap()
                 .is_none()
         );
-        state_file::write_state(dir.path(), &recorded(daemon.id(), Some(started))).unwrap();
+        state_file::write_state(dir.path(), &recorded(pid, Some(started))).unwrap();
         assert!(
-            daemon_to_restart(dir.path(), daemon.id())
+            daemon_to_restart(dir.path(), pid, started)
                 .unwrap()
                 .is_some()
         );
-        // Another daemon took the folder, or the pid is another process now.
+        // Another daemon took the folder.
         assert!(
-            daemon_to_restart(dir.path(), daemon.id() + 1)
+            daemon_to_restart(dir.path(), pid + 1, started)
                 .unwrap()
                 .is_none()
         );
-        state_file::write_state(dir.path(), &recorded(daemon.id(), Some(started + 1))).unwrap();
+        // A successor took the pid: its state is valid, the request's start
+        // is the one before it.
         assert!(
-            daemon_to_restart(dir.path(), daemon.id())
+            daemon_to_restart(dir.path(), pid, started - 1)
+                .unwrap()
+                .is_none()
+        );
+        // The state names a start the process no longer has.
+        state_file::write_state(dir.path(), &recorded(pid, Some(started + 1))).unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), pid, started)
                 .unwrap()
                 .is_none()
         );
@@ -3754,8 +3775,11 @@ mod tests {
         };
         assert_eq!(parse(&["hide", "connect"]), CommandKind::Connect);
         assert_eq!(
-            parse(&["hide", "restart", "--daemon", "4242"]),
-            CommandKind::Restart { daemon: 4242 }
+            parse(&["hide", "restart", "--daemon", "4242", "--started", "77"]),
+            CommandKind::Restart {
+                daemon: 4242,
+                started: 77
+            }
         );
         assert!(parse_args(&["hide", "restart"].map(String::from)).is_err());
         assert_eq!(
