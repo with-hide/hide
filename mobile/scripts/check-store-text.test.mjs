@@ -67,6 +67,16 @@ describe("other companies' marks", () => {
     expect(problems).toEqual(expect.arrayContaining([expect.stringContaining('en-US/subtitle.txt'), expect.stringContaining('ko/keywords.txt names 클로드')]));
   });
 
+  it.each(['ClaudeCode', 'claude-code', 'Open AI', 'git hub', 'Windsurf'])('sees %s whatever its spacing or case', async (name) => {
+    await set('en-US/keywords.txt', `terminal,${name}`);
+    expect(await check(copy)).toEqual([expect.stringContaining('keywords.txt names')]);
+  });
+
+  it.each(['앤스로픽', '커서', '클로 드'])('sees the Korean spelling %s', async (name) => {
+    await set('ko/keywords.txt', `터미널,${name}`);
+    expect(await check(copy)).toEqual([expect.stringContaining('ko/keywords.txt names')]);
+  });
+
   it('does not take a longer word for a name', async () => {
     await set('en-US/keywords.txt', 'terminal,cursory,codexes');
     expect(await check(copy)).toEqual([]);

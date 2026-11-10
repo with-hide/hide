@@ -4,7 +4,7 @@ Hide for iPhone works together with Hide on your Mac, Windows or Linux computer,
 Your coding agents keep working on your own computer. Hide on your phone shows which one needs you, lets you read the conversation and reply, and tells you the moment a question comes in.
 
 WHAT YOU CAN DO
-- See every agent in one list: needs you, working, done.
+- See every agent in one list: Needs You, Working, Unread and Seen.
 - Read an agent's conversation and reply from wherever you are.
 - Get a notification when an agent asks you something. Notifications are encrypted and opened on your phone, and you can reply right from the notification.
 - Follow a mission: its steps, its pull requests and the one decision that waits on you.
@@ -13,10 +13,10 @@ WHAT YOU CAN DO
 - Start a new agent on your computer.
 
 HOW IT CONNECTS
-In Hide on your computer, open Settings > Mobile and scan its QR code with this app. The connection goes through a relay and is end-to-end encrypted, so the relay cannot read it. There is no account to make, and the app has no ads. Your agents, code and files stay on your computer: the phone shows agents, conversations and results in its own screens and runs no code.
+In Hide on your computer, open Settings > Mobile and scan its QR code with this app. The connection goes through a relay and is end-to-end encrypted, so the relay cannot read it. There is no account to make, and the app has no ads. Your agents, code and files stay on your computer, and commands run there, not on your phone. The phone shows agents, conversations and results in its own screens.
 
 NO COMPUTER NEARBY?
-Tap "Try the demo" on the first screen to look around every screen with sample data. Nothing is sent or saved.
+Tap "Try the demo" on the first screen to look around every screen with sample data. Nothing goes to a computer and nothing from the demo is kept.
 
 WORKS WITH THE AGENTS YOU ALREADY USE
 Hide runs the coding agents installed on your computer, such as Claude Code, Codex and OpenCode, and this app shows them. Hide is an independent project and is not affiliated with, endorsed by or sponsored by the makers of these agents.
