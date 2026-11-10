@@ -110,6 +110,7 @@ export const ONBOARDING_STATES = [
   "settings-both",
   "settings-refused",
   "settings-update",
+  "settings-import",
   "import-offer",
   "import-start",
   "import-unreadable",
@@ -297,7 +298,7 @@ function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
   const found = (patch: Partial<HerdrImport>): HerdrImport => ({ kind: "import", stage: "offered", workspaces: 3, tabs: 5, agents: 4, waiting: 0, herdr_running: true, failure: null, reason: null, refused: [], ...patch });
   const none = { workspaces: 0, tabs: 0, agents: 0, herdr_running: false };
   switch (state) {
-    case "import-offer": case "import-start": return found({ kind: "import" });
+    case "import-offer": case "import-start": case "settings-import": return found({ kind: "import" });
     case "import-unreadable": return found({ kind: "import", stage: "failed", failure: "unreadable", reason: "it is format 4, newer than the format 3 this build reads", ...none });
     case "import-refused": return found({ kind: "result", stage: "moved", ...none, refused: [{ label: "api", reason: "its tab 2 does not lay out exactly the panes it holds" }, { label: "docs", reason: "its tab 1 holds more than 24 panes" }] });
     case "import-waiting": return found({ kind: "import", ...none, waiting: 2 });
