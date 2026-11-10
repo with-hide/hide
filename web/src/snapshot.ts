@@ -3680,15 +3680,3 @@ export function changesFor(changes: ChangesSnapshot | null, rootPath: string | n
   if (!changes || !rootPath || changes.root_path !== rootPath) return null;
   return changes;
 }
-
-export function paneIds(node: LayoutNode): string[] {
-  if (node.type === "pane") return [node.pane_id];
-  return [...paneIds(node.first), ...paneIds(node.second)];
-}
-
-/** The pane a divider between `first` and `second` names in `resize_pane`: the last pane of the first subtree. */
-export function dividerPaneId(first: LayoutNode): string {
-  const ids = paneIds(first);
-  return ids[ids.length - 1] ?? "";
-}
-

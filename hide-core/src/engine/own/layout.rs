@@ -1,5 +1,7 @@
 // Parts derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr, commit
 // 2ecf19a): `swap_leaves` from src/layout.rs (`swap_pane_ids`),
+// `resize_target`'s choice of edge from src/layout.rs (`resize_focused`,
+// `nearest_resize_split`), `ratio_at` from src/layout.rs (`get_ratio_at`),
 // `valid_ratio` from src/layout.rs (`valid_split_ratio`), and `check_layout`
 // with its limits from src/app/api/layouts.rs (`validate_layout_tree`,
 // `MAX_LAYOUT_PANES`, `MAX_LAYOUT_DEPTH`).
@@ -7,18 +9,20 @@
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: the rules work on Hide's own trees
 // (`PaneLayoutNodeSnapshot`, `ClosedLayoutNode`) instead of ratatui's
-// `Direction` and Herdr's `Node`; a check's message is Hide's; the rest of
-// this file (split, close, resize, laying out) is Hide's own.
+// `Direction` and Herdr's `Node`; a resize finds the edge's split on the
+// tree rather than by comparing laid-out rects; a check's message is Hide's;
+// the rest of this file (split, close, laying out) is Hide's own.
 
 //! A tab's pane tree and the rules that change it, the one place both the
 //! core's own engine and the drawing ahead of the engine read them (PRD
 //! engine-bundle-3-core-owns D-4): a split puts the new pane second at its
 //! ratio (0.5 unless asked), a close puts the closed pane's sibling in its
-//! parent's place, a resize moves the innermost split of its axis that holds
-//! the pane, a swap trades two leaves and keeps every split, every ratio is
-//! kept between [`RATIO_MIN`] and [`RATIO_MAX`], and a tree is laid out into
-//! the rects a session carries with the arithmetic the projection reads them
-//! back with (`live::split_areas`). A layout given to be applied holds at
+//! parent's place, a resize moves the split on the pane's edge toward its
+//! direction (the opposite edge at the tab's side), a swap trades two leaves
+//! and keeps every split, every ratio is kept between [`RATIO_MIN`] and
+//! [`RATIO_MAX`], and a tree is laid out into the rects a session carries
+//! with the arithmetic the projection reads them back with
+//! (`live::split_areas`). A layout given to be applied holds at
 //! most [`MAX_PANES`] panes and [`MAX_DEPTH`] levels.
 
 use crate::live::PaneResizeDirection;
@@ -167,83 +171,128 @@ pub(crate) fn swap_leaves(node: &mut PaneLayoutNodeSnapshot, one: &str, other: &
     }
 }
 
-/// The axis and the ratio moving `pane`'s edge by `amount` toward
-/// `direction` sets on the split [`nearest_split_ratio`] reads, clamped.
-/// None when no split of that axis holds the pane: a resize that changes
-/// nothing.
+/// The ratio moving `pane`'s edge by `amount` toward `direction` sets on the
+/// split [`resize_target`] names, clamped. None when no split of that axis
+/// holds the pane: a resize that changes nothing.
 pub(crate) fn resized(
     root: &PaneLayoutNodeSnapshot,
     pane: &str,
     direction: PaneResizeDirection,
     amount: f32,
-) -> Option<(PaneLayoutDirection, f32)> {
-    let (axis, sign) = match direction {
-        PaneResizeDirection::Left => (PaneLayoutDirection::Right, -1.0),
-        PaneResizeDirection::Right => (PaneLayoutDirection::Right, 1.0),
-        PaneResizeDirection::Up => (PaneLayoutDirection::Down, -1.0),
-        PaneResizeDirection::Down => (PaneLayoutDirection::Down, 1.0),
+) -> Option<f32> {
+    let sign = match direction {
+        PaneResizeDirection::Left | PaneResizeDirection::Up => -1.0,
+        PaneResizeDirection::Right | PaneResizeDirection::Down => 1.0,
     };
-    let current = nearest_split_ratio(root, pane, axis)?;
-    Some((axis, (current + sign * amount).clamp(RATIO_MIN, RATIO_MAX)))
+    let current = ratio_at(root, &resize_target(root, pane, direction)?)?;
+    Some((current + sign * amount).clamp(RATIO_MIN, RATIO_MAX))
 }
 
-/// The ratio of the innermost split of `axis` whose subtree holds `pane`.
-pub(crate) fn nearest_split_ratio(
+/// Sets the ratio of the split [`resize_target`] names. Returns whether it
+/// found one.
+pub(crate) fn set_resized_ratio(
+    root: &mut PaneLayoutNodeSnapshot,
+    pane: &str,
+    direction: PaneResizeDirection,
+    value: f32,
+) -> bool {
+    let Some(path) = resize_target(root, pane, direction) else {
+        return false;
+    };
+    match ratio_at_mut(root, &path) {
+        Some(ratio) => {
+            *ratio = value;
+            true
+        }
+        None => false,
+    }
+}
+
+/// The split a resize of `pane` toward `direction` moves, as the turns from
+/// the root (`true` for the second subtree): the one whose boundary is the
+/// pane's edge on that side, or its opposite edge when the pane touches the
+/// tab's side there, as Herdr's `resize_focused` chooses. So the last pane of
+/// a split's first subtree names that split toward right or down, and the
+/// first pane of its second subtree names it toward left or up, whatever
+/// splits nest inside either subtree.
+fn resize_target(
+    root: &PaneLayoutNodeSnapshot,
+    pane: &str,
+    direction: PaneResizeDirection,
+) -> Option<Vec<bool>> {
+    let (axis, trailing) = match direction {
+        PaneResizeDirection::Left => (PaneLayoutDirection::Right, false),
+        PaneResizeDirection::Right => (PaneLayoutDirection::Right, true),
+        PaneResizeDirection::Up => (PaneLayoutDirection::Down, false),
+        PaneResizeDirection::Down => (PaneLayoutDirection::Down, true),
+    };
+    edge_split(root, pane, axis, trailing).or_else(|| edge_split(root, pane, axis, !trailing))
+}
+
+/// The path to the split of `axis` on `pane`'s right or lower edge
+/// (`trailing`), or on its left or upper one: the innermost split of that
+/// axis holding the pane in its first subtree, or in its second.
+fn edge_split(
     node: &PaneLayoutNodeSnapshot,
     pane: &str,
     axis: PaneLayoutDirection,
-) -> Option<f32> {
+    trailing: bool,
+) -> Option<Vec<bool>> {
     let PaneLayoutNodeSnapshot::Split {
         direction,
-        ratio,
         first,
         second,
+        ..
     } = node
     else {
         return None;
     };
-    let inner = if contains(first, pane) {
-        nearest_split_ratio(first, pane, axis)
+    let (child, in_second) = if contains(first, pane) {
+        (first, false)
     } else if contains(second, pane) {
-        nearest_split_ratio(second, pane, axis)
+        (second, true)
     } else {
         return None;
     };
-    inner.or((*direction == axis).then_some(*ratio))
+    if let Some(mut path) = edge_split(child, pane, axis, trailing) {
+        path.insert(0, in_second);
+        return Some(path);
+    }
+    (*direction == axis && in_second != trailing).then(Vec::new)
 }
 
-/// Sets the ratio of the split [`nearest_split_ratio`] reads. Returns whether
-/// it found one.
-pub(crate) fn set_nearest_split_ratio(
-    node: &mut PaneLayoutNodeSnapshot,
-    pane: &str,
-    axis: PaneLayoutDirection,
-    value: f32,
-) -> bool {
+fn ratio_at(node: &PaneLayoutNodeSnapshot, path: &[bool]) -> Option<f32> {
     let PaneLayoutNodeSnapshot::Split {
-        direction,
         ratio,
         first,
         second,
+        ..
     } = node
     else {
-        return false;
+        return None;
     };
-    let inner = if contains(first, pane) {
-        set_nearest_split_ratio(first, pane, axis, value)
-    } else if contains(second, pane) {
-        set_nearest_split_ratio(second, pane, axis, value)
-    } else {
-        return false;
+    match path.split_first() {
+        None => Some(*ratio),
+        Some((false, rest)) => ratio_at(first, rest),
+        Some((true, rest)) => ratio_at(second, rest),
+    }
+}
+
+fn ratio_at_mut<'a>(node: &'a mut PaneLayoutNodeSnapshot, path: &[bool]) -> Option<&'a mut f32> {
+    let PaneLayoutNodeSnapshot::Split {
+        ratio,
+        first,
+        second,
+        ..
+    } = node
+    else {
+        return None;
     };
-    if inner {
-        return true;
+    match path.split_first() {
+        None => Some(ratio),
+        Some((false, rest)) => ratio_at_mut(first, rest),
+        Some((true, rest)) => ratio_at_mut(second, rest),
     }
-    if *direction == axis {
-        *ratio = value;
-        return true;
-    }
-    false
 }
 
 /// Whether a layout given to be applied can be: at most [`MAX_PANES`] panes
@@ -393,6 +442,128 @@ mod tests {
                 }),
             }
         );
+    }
+
+    fn pane(id: &str) -> PaneLayoutNodeSnapshot {
+        PaneLayoutNodeSnapshot::Pane {
+            pane_id: id.to_owned(),
+        }
+    }
+
+    fn split(
+        direction: PaneLayoutDirection,
+        first: PaneLayoutNodeSnapshot,
+        second: PaneLayoutNodeSnapshot,
+    ) -> PaneLayoutNodeSnapshot {
+        PaneLayoutNodeSnapshot::Split {
+            direction,
+            ratio: 0.5,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    /// Every split of `node` with its path from the root and the panes on
+    /// either side of its divider, read off the panes in order.
+    fn dividers(
+        node: &PaneLayoutNodeSnapshot,
+        path: &mut Vec<bool>,
+        out: &mut Vec<(Vec<bool>, PaneLayoutDirection, String, String)>,
+    ) {
+        fn leaves(node: &PaneLayoutNodeSnapshot) -> Vec<String> {
+            match node {
+                PaneLayoutNodeSnapshot::Pane { pane_id } => vec![pane_id.clone()],
+                PaneLayoutNodeSnapshot::Split { first, second, .. } => {
+                    [leaves(first), leaves(second)].concat()
+                }
+            }
+        }
+        let PaneLayoutNodeSnapshot::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = node
+        else {
+            return;
+        };
+        let before = leaves(first).pop().unwrap();
+        let after = leaves(second).remove(0);
+        out.push((path.clone(), *direction, before, after));
+        path.push(false);
+        dividers(first, path, out);
+        path.pop();
+        path.push(true);
+        dividers(second, path, out);
+        path.pop();
+    }
+
+    /// Issue 2346: the pane before a divider names it toward right or down
+    /// and the pane after it toward left or up, in left- and right-nested
+    /// tabs and with perpendicular splits on either side of the divider.
+    #[test]
+    fn every_divider_moves_when_the_pane_on_either_side_of_it_is_resized_across_it() {
+        use PaneLayoutDirection::{Down, Right};
+        let shapes = [
+            split(Right, split(Right, pane("a"), pane("b")), pane("c")),
+            split(
+                Right,
+                split(Right, split(Right, pane("a"), pane("b")), pane("c")),
+                pane("d"),
+            ),
+            split(
+                Right,
+                pane("a"),
+                split(Right, pane("b"), split(Right, pane("c"), pane("d"))),
+            ),
+            split(
+                Right,
+                split(Right, pane("a"), split(Down, pane("x"), pane("y"))),
+                split(Right, split(Down, pane("p"), pane("q")), pane("c")),
+            ),
+            split(
+                Down,
+                split(Down, pane("a"), split(Right, pane("x"), pane("y"))),
+                split(Down, split(Right, pane("p"), pane("q")), pane("c")),
+            ),
+        ];
+        for shape in shapes {
+            let mut found = Vec::new();
+            dividers(&shape, &mut Vec::new(), &mut found);
+            for (path, axis, before, after) in found {
+                let (toward_after, toward_before) = match axis {
+                    Right => (PaneResizeDirection::Right, PaneResizeDirection::Left),
+                    Down => (PaneResizeDirection::Down, PaneResizeDirection::Up),
+                };
+                for (pane, direction, moved) in
+                    [(&before, toward_after, 0.6), (&after, toward_before, 0.4)]
+                {
+                    let mut tree = shape.clone();
+                    let ratio = resized(&tree, pane, direction, 0.1).unwrap();
+                    assert!(set_resized_ratio(&mut tree, pane, direction, ratio));
+                    let mut expected = shape.clone();
+                    *ratio_at_mut(&mut expected, &path).unwrap() = moved;
+                    assert_eq!(tree, expected, "{pane} {direction:?} in {shape:?}");
+                }
+            }
+        }
+    }
+
+    /// Herdr's choice: a pane at the tab's side moves the split on its other
+    /// edge, and a pane with no split of the axis moves nothing.
+    #[test]
+    fn a_pane_at_the_tab_s_side_moves_the_split_on_its_other_edge() {
+        use PaneLayoutDirection::{Down, Right};
+        let tree = split(Right, pane("a"), split(Down, pane("b"), pane("c")));
+        assert_eq!(
+            resized(&tree, "b", PaneResizeDirection::Right, 0.1),
+            Some(0.6)
+        );
+        assert_eq!(
+            resized(&tree, "a", PaneResizeDirection::Left, 0.1),
+            Some(0.4)
+        );
+        assert_eq!(resized(&tree, "a", PaneResizeDirection::Up, 0.1), None);
     }
 
     #[test]

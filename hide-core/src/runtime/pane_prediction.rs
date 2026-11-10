@@ -10,7 +10,8 @@
 //! server): a split puts the new pane second at ratio 0.5 and focuses it; a
 //! close collapses the parent split into the sibling, focuses the sibling and
 //! ends a zoom on the closed pane; a zoom focuses its pane; a resize moves the
-//! nearest enclosing split of its axis by the amount, clamped to 0.1..0.9.
+//! split on the pane's edge toward its direction (the opposite edge at the
+//! tab's side) by the amount, clamped to 0.1..0.9.
 //! Where the prediction and the engine still differ (a focus the engine places
 //! elsewhere), the engine's layout replaces it when it arrives.
 //!
@@ -19,7 +20,7 @@
 //! ahead of that engine is exactly what it then confirms.
 
 use crate::engine::own::layout::{
-    contains, lay_out, remove_leaf, resized, set_nearest_split_ratio, split_leaf,
+    contains, lay_out, remove_leaf, resized, set_resized_ratio, split_leaf,
 };
 use crate::live::PaneResizeDirection;
 use crate::model::{PaneLayoutDirection, PaneLayoutNodeSnapshot, PaneLayoutSnapshot};
@@ -37,10 +38,10 @@ pub(super) enum Prediction {
     Close { pane: String },
     /// The tab zoomed onto `pane` or not zoomed, with `pane` focused.
     Zoom { pane: String, zoomed: bool },
-    /// The split of `axis` nearest `pane` at `ratio`.
+    /// The split a resize of `pane` toward `direction` moves, at `ratio`.
     Resize {
         pane: String,
-        axis: PaneLayoutDirection,
+        direction: PaneResizeDirection,
         ratio: f32,
     },
 }
@@ -67,10 +68,10 @@ pub(super) fn resize_prediction(
     direction: PaneResizeDirection,
     amount: f32,
 ) -> Option<Prediction> {
-    let (axis, ratio) = resized(&layout.root, pane, direction, amount)?;
+    let ratio = resized(&layout.root, pane, direction, amount)?;
     Some(Prediction::Resize {
         pane: pane.to_owned(),
-        axis,
+        direction,
         ratio,
     })
 }
@@ -142,8 +143,12 @@ fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
             layout.zoomed = *zoomed;
             layout.focused_pane_id = pane.clone();
         }
-        Prediction::Resize { pane, axis, ratio } => {
-            set_nearest_split_ratio(&mut layout.root, pane, *axis, *ratio);
+        Prediction::Resize {
+            pane,
+            direction,
+            ratio,
+        } => {
+            set_resized_ratio(&mut layout.root, pane, *direction, *ratio);
         }
     }
 }

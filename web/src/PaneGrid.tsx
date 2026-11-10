@@ -4,12 +4,11 @@ import { markTone } from "./agentRow";
 import { useInterfaceTranslation } from "./i18n/client";
 import { PaneView } from "./PaneView";
 import { contextAgents, frameStyle, type RemoteView } from "./remote";
-import { resizeStep } from "./resize";
+import { dividerPaneId, resizeStep } from "./resize";
 import { windowDeviceId } from "./screenMachine";
 import { cn } from "./lib/utils";
 import {
   type AgentRow,
-  dividerPaneId,
   focusedCheckout,
   layoutForTab,
   type LayoutNode,
@@ -244,8 +243,9 @@ function PaneBoundary({ vertical }: { vertical: boolean }) {
 
 /**
  * The handle on a split boundary. While dragging only the guide line moves;
- * releasing sends one `resize_pane` for the first subtree's last pane, or
- * nothing when the change falls outside the core's range (PRD S2 B6).
+ * releasing sends one `resize_pane` for the pane beside it on the side it
+ * moved away from (`dividerPaneId`), or nothing when the change falls
+ * outside the core's range (PRD S2 B6).
  */
 function Divider({ node, dispatch }: { node: Extract<LayoutNode, { type: "split" }>; dispatch: DispatchFn }) {
   const { t } = useInterfaceTranslation();
@@ -284,10 +284,10 @@ function Divider({ node, dispatch }: { node: Extract<LayoutNode, { type: "split"
       dispatch({
         schema_version: 2,
         kind: "resize_pane",
-        payload: { pane_id: dividerPaneId(node.first), direction: step.direction, amount: step.amount },
+        payload: { pane_id: dividerPaneId(node, step.direction), direction: step.direction, amount: step.amount },
       });
     },
-    [travel, vertical, dispatch, node.first],
+    [travel, vertical, dispatch, node],
   );
   const onPointerCancel = useCallback(() => setTravel(null), []);
 
@@ -307,7 +307,7 @@ function Divider({ node, dispatch }: { node: Extract<LayoutNode, { type: "split"
         role="separator"
         aria-orientation={vertical ? "vertical" : "horizontal"}
         aria-label={vertical ? t("panes.divider.width") : t("panes.divider.height")}
-        data-divider={dividerPaneId(node.first)}
+        data-divider={dividerPaneId(node, vertical ? "right" : "down")}
         className={`absolute z-20 ${vertical ? "cursor-col-resize" : "cursor-row-resize"}`}
         style={grab}
         onPointerDown={onPointerDown}

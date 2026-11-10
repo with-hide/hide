@@ -39,11 +39,12 @@ async function focusPane(page: Page, stack: LayoutStack, pane: string): Promise<
 }
 
 /**
- * The split chord on the second pane: a third pane running the fixture
- * shell, which the core focuses. Returns once it has its prompt and the keyboard.
+ * The split chord on the second pane, or on `target`: a third pane running
+ * the fixture shell, which the core focuses. Returns once it has its prompt
+ * and the keyboard.
  */
-async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
-  await focusPane(page, stack, stack.panes[1]!);
+async function splitShell(page: Page, { stack, sent }: Open, target = stack.panes[1]!): Promise<string> {
+  await focusPane(page, stack, target);
   const before = await paneIds(page);
   await page.keyboard.press(chord("split_right"));
   await expect(page.locator("[data-pane-view]")).toHaveCount(3);
@@ -73,11 +74,12 @@ async function programSize(page: Page, pane: string, shell: PaneShell, marker: s
   return { rows: Number(rows), cols: Number(cols) };
 }
 
-test("⌘D splits the focused pane, a divider drag sends one resize_pane, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: "@platform" }, async ({ page }) => {
+test("⌘D splits the focused pane, a divider drag moves the divider under the pointer, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
-    await splitShell(page, open);
+    // Splitting the first pane nests the new split inside the first side: ((A|B)|C).
+    await splitShell(page, open, open.stack.panes[0]!);
     await expect(page.locator("[data-split]")).toHaveCount(2);
     const boundaries = page.locator("[data-pane-boundary]");
     await expect(boundaries).toHaveCount(2);
@@ -87,20 +89,31 @@ test("⌘D splits the focused pane, a divider drag sends one resize_pane, and �
     }
     await screenshot(page, "layout-two-splits");
 
-    // A divider drag sends one resize_pane on release and the grid follows the engine.
+    // A drag of the divider between B and C sends one resize_pane on release
+    // and lands that divider where the pointer let go; the one between A and
+    // B keeps its share of the first side (issue 2346).
     const outer = page.locator("[data-split=right]").first();
+    const inner = outer.locator("[data-split=right]");
     const divider = outer.locator("> [data-divider]");
     const box = (await divider.boundingBox())!;
-    const before = await outer.evaluate((el) => (el as HTMLElement).style.gridTemplateColumns);
+    const columns = (split: typeof outer) => split.evaluate((el) => (el as HTMLElement).style.gridTemplateColumns);
+    const innerBefore = await columns(inner);
+    const release = box.x + box.width / 2 - 120;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.move(box.x + box.width / 2 - 60, box.y + box.height / 2, { steps: 6 });
     await expect(page.locator("[data-resize-guide]")).toHaveCount(1);
-    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.move(release, box.y + box.height / 2, { steps: 6 });
     await page.mouse.up();
     await expect(page.locator("[data-resize-guide]")).toHaveCount(0);
     await expect.poll(() => sent.get("resize_pane")).toBe(1);
-    await expect.poll(() => outer.evaluate((el) => (el as HTMLElement).style.gridTemplateColumns), { timeout: 10_000 }).not.toBe(before);
+    await expect
+      .poll(async () => {
+        const moved = (await divider.boundingBox())!;
+        return Math.abs(moved.x + moved.width / 2 - release);
+      }, { timeout: 10_000 })
+      .toBeLessThan(3);
+    expect(await columns(inner)).toBe(innerBefore);
 
     // ⌥⇧W closes the focused idle pane; the engine's new geometry redraws the
     // grid, and the closed pane's terminal is disposed, not parked (D-05).

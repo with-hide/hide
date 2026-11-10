@@ -23,7 +23,7 @@ use super::agents::{self, PaneAgent, PaneLive, Status};
 use super::attempt::{Attempt, Look, Outcome};
 use super::ids;
 use super::layout::{
-    contains, first_leaf, lay_out, remove_leaf, resized, set_nearest_split_ratio, split_leaf_at,
+    contains, first_leaf, lay_out, remove_leaf, resized, set_resized_ratio, split_leaf_at,
     swap_leaves,
 };
 use super::store::{
@@ -758,11 +758,11 @@ impl Topology {
     ) -> Result<bool, EngineError> {
         let (workspace, index) = self.position(pane)?;
         let tab = &mut self.workspaces[workspace].tabs[index];
-        let Some((axis, ratio)) = resized(&tab.root, pane, direction, amount) else {
+        let Some(ratio) = resized(&tab.root, pane, direction, amount) else {
             return Ok(false);
         };
         let before = tab.root.clone();
-        set_nearest_split_ratio(&mut tab.root, pane, axis, ratio);
+        set_resized_ratio(&mut tab.root, pane, direction, ratio);
         Ok(tab.root != before)
     }
 
@@ -2418,6 +2418,43 @@ mod tests {
                 .unwrap(),
             "no split of that axis holds the pane"
         );
+    }
+
+    /// Issue 2346: in a tab shaped `((A|B)|C)`, the divider between B and C
+    /// names B toward the right and C toward the left, and either moves that
+    /// divider, never the one between A and B.
+    #[test]
+    fn a_left_nested_tab_moves_the_divider_between_b_and_c_and_not_the_one_between_a_and_b() {
+        fn ratios(tree: &PaneLayoutNodeSnapshot) -> (f32, f32) {
+            let PaneLayoutNodeSnapshot::Split { ratio, first, .. } = tree else {
+                panic!("the tab stays split");
+            };
+            let PaneLayoutNodeSnapshot::Split { ratio: inner, .. } = &**first else {
+                panic!("the first subtree stays split");
+            };
+            (*ratio, *inner)
+        }
+        let mut topology = Topology::default();
+        let first = workspace(&mut topology);
+        let a = first.pane.clone();
+        let c = split(&mut topology, &a, PaneLayoutDirection::Right);
+        let b = split(&mut topology, &a, PaneLayoutDirection::Right);
+        assert_eq!(pane_ids(&topology), [a.clone(), b.clone(), c.clone()]);
+        assert_eq!(ratios(&tree(&topology, &a)), (0.5, 0.5));
+
+        assert!(topology.resize(&c, PaneResizeDirection::Left, 0.2).unwrap());
+        let (outer, inner) = ratios(&tree(&topology, &a));
+        assert!((outer - 0.3).abs() < 1e-3, "{outer}");
+        assert_eq!(inner, 0.5, "the divider between A and B keeps its place");
+
+        assert!(
+            topology
+                .resize(&b, PaneResizeDirection::Right, 0.4)
+                .unwrap()
+        );
+        let (outer, inner) = ratios(&tree(&topology, &a));
+        assert!((outer - 0.7).abs() < 1e-3, "{outer}");
+        assert_eq!(inner, 0.5, "the divider between A and B keeps its place");
     }
 
     #[test]
