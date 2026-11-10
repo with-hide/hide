@@ -17,6 +17,15 @@ body,
   padding-top: env(safe-area-inset-top);
 }
 
+/* A demo's bar takes the top inset, so the screen under it does not take it a second time. */
+.phone-demo-bar {
+  padding-top: env(safe-area-inset-top);
+}
+
+html[data-phone-demo] .phone-safe-top {
+  padding-top: 0;
+}
+
 .phone-safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }

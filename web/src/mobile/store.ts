@@ -105,6 +105,8 @@ export const CLOSED_SHEET: StartSheet = { open: false, text: "", choice: NO_CHOI
 export type PendingInput = { requestId: string; kind: "text" | "key" };
 
 type PhoneState = {
+  /** The sample host is open (demoSocket.ts): every host name is marked as sample data and nothing is stored. */
+  demo: boolean;
   screen: Screen;
   relayError: "storage" | "busy" | "qrError" | "loadError" | null;
   deviceProtocol: number | null;
@@ -184,6 +186,7 @@ type PhoneState = {
 };
 
 const initial: PhoneState = {
+  demo: false,
   screen: "unpaired",
   relayError: null,
   deviceProtocol: null,

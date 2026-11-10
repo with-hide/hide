@@ -11,6 +11,8 @@ import { ScanQr } from "./ScanQr";
 import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
+import { PHONE_PROTOCOL } from "./phoneVersion";
+import { PlayIcon } from "lucide-react";
 
 followPhoneTheme();
 // Take and clear secrets synchronously before any React effects or resource loading.
@@ -120,6 +122,12 @@ function Loader() {
     {adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
       <h2 className="text-title">{t("mobile.relay.devices")}</h2>
       <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
+      <div className="flex flex-col gap-xs">
+        <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={() => window.location.assign(`/p/${PHONE_PROTOCOL}/?demo=1`)}>
+          <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
+        </Button>
+        <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>
+      </div>
     </>}
     {error ? <p role="alert" className="text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </main>;
