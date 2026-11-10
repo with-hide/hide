@@ -675,17 +675,14 @@ impl EngineHandle {
         install: Option<String>,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
-        let hooks_records = hide_agent_hooks::route::records_of_state(
-            &home,
-            Some(&state_dir),
-            install.as_deref(),
-        )
-        .map_err(|error| {
-            format!(
-                "the hooks' records folder of {} could not be read: {error}",
-                state_dir.display()
-            )
-        })?;
+        let hooks_records =
+            hide_agent_hooks::route::records_of_state(&home, Some(&state_dir), install.as_deref())
+                .map_err(|error| {
+                    format!(
+                        "the hooks' records folder of {} could not be read: {error}",
+                        state_dir.display()
+                    )
+                })?;
         let home = hide_platform::path::to_wire(&home)
             .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
         // The choices this machine's agents were started with, which the
