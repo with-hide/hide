@@ -6,6 +6,9 @@
 #          and run the HideShell tests there; a failing test fails the command
 #   run    install the built app in a simulator of its own on the mini, launch it, wait, capture the screen
 #          (HIDE_IOS_PAIR_LINK=<link> makes the debug build follow that pairing link at launch;
+#           HIDE_IOS_TAPS='<css selector>;;<css selector>' presses those on the page, in order, once each is there;
+#           HIDE_IOS_APPEARANCE=light|dark sets the simulator's appearance; HIDE_IOS_HOME=1 captures the home screen with the
+#           icon; HIDE_IOS_LAUNCH_SCREEN=1 holds the app on its launch screen and captures that;
 #           HIDE_IOS_CAPTURE=<file.png> copies the capture back here; HIDE_IOS_SETTLE=<seconds>, default 15)
 #   clean  delete that simulator and this branch's whole folder on the mini
 #
@@ -55,8 +58,10 @@ esac
 # the script on the same standard input, so it is in no argument and in no file, and there is nothing to leave behind.
 {
     if [[ "$command" == run && -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then printf 'HIDE_PAIR_LINK=%q\n' "$HIDE_IOS_PAIR_LINK"; fi
+    if [[ "$command" == run && -n "${HIDE_IOS_TAPS:-}" ]]; then printf 'HIDE_TAPS=%q\n' "$HIDE_IOS_TAPS"; fi
     cat mobile/scripts/mini-ios.sh
 } | ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
+    HIDE_IOS_APPEARANCE="${HIDE_IOS_APPEARANCE:-}" HIDE_IOS_HOME="${HIDE_IOS_HOME:-}" HIDE_IOS_LAUNCH_SCREEN="${HIDE_IOS_LAUNCH_SCREEN:-}" \
     bash -s -- "$command" "$slug"
 if [[ "$command" == run && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_IOS_CAPTURE"

@@ -62,7 +62,7 @@ ensure_device() {
         id=${line%% *}
         [[ "${line#* }" == Booted ]] && was_booted=1
         # A simulator an earlier command was told to keep is this command's to end, unless this one is told to keep it too.
-        [[ -f "$kept_marker" && "${HIDE_IOS_KEEP_SIMULATOR:-}" != 1 ]] && created=1
+        if [[ -f "$kept_marker" && "${HIDE_IOS_KEEP_SIMULATOR:-}" != 1 ]]; then created=1; fi
     fi
 }
 
@@ -100,15 +100,24 @@ case "$command" in
         xcrun simctl bootstatus "$id" -b > /dev/null
         xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
-        # A pairing link for the simulator check (debug builds only), from the variable the script was sent with.
-        if [[ -n "${HIDE_PAIR_LINK:-}" ]]; then
-            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=$HIDE_PAIR_LINK xcrun simctl launch "$id" "$bundle_id"
-        else
-            xcrun simctl launch "$id" "$bundle_id"
-        fi
+        [[ -n "${HIDE_IOS_APPEARANCE:-}" ]] && xcrun simctl ui "$id" appearance "$HIDE_IOS_APPEARANCE"
         mkdir -p "$shots"
+        # The debug build's inputs (see ShellViewController): a pairing link and taps, from variables the script was
+        # sent with. `HIDE_IOS_HOME=1` shows the home screen with the icon, `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on
+        # its launch screen (it starts and waits for a debugger that never comes) and captures that.
+        if [[ "${HIDE_IOS_HOME:-}" == 1 ]]; then
+            xcrun simctl launch "$id" "$bundle_id" > /dev/null
+            sleep 2
+            xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+            xcrun simctl launch "$id" com.apple.springboard > /dev/null 2>&1 || true
+        elif [[ "${HIDE_IOS_LAUNCH_SCREEN:-}" == 1 ]]; then
+            xcrun simctl launch --wait-for-debugger "$id" "$bundle_id" > /dev/null
+        else
+            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=${HIDE_PAIR_LINK:-} SIMCTL_CHILD_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcrun simctl launch "$id" "$bundle_id"
+        fi
         sleep "$settle"
         xcrun simctl io "$id" screenshot "$shots/run.png" 2>&1 | tail -1
+        [[ "${HIDE_IOS_LAUNCH_SCREEN:-}" == 1 ]] && xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
         ;;
     clean)

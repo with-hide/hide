@@ -72,16 +72,35 @@ open class ShellViewController: CAPBridgeViewController {
     open override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
 
 #if DEBUG
-    /// The simulator check's input, in a debug build only: the simulator has no camera and nothing outside can open
-    /// a universal link, so a pairing link given as the launch value `HIDE_DEBUG_PAIR_LINK` is handed to the same inbox
-    /// a link opened from outside reaches, and Connect is pressed once the page shows it. A release build has no
-    /// such way in.
+    /// The simulator check's inputs, in a debug build only: the simulator has no camera, cannot open a universal link
+    /// and nothing outside can tap the web view. A pairing link given as the launch value `HIDE_DEBUG_PAIR_LINK` is
+    /// handed to the same inbox a link opened from outside reaches, and Connect is pressed once the page shows it.
+    /// `HIDE_DEBUG_TAPS` is selectors separated by `;;`, each pressed once the page has it, in order. A release build
+    /// has no such way in.
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        guard let link = ProcessInfo.processInfo.environment["HIDE_DEBUG_PAIR_LINK"], URL(string: link) != nil else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            PairLinkInbox.shared.offer(URL(string: link))
-            self?.pressConnect(attempt: 0)
+        let environment = ProcessInfo.processInfo.environment
+        if let link = environment["HIDE_DEBUG_PAIR_LINK"], URL(string: link) != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                PairLinkInbox.shared.offer(URL(string: link))
+                self?.pressConnect(attempt: 0)
+            }
+        }
+        if let taps = environment["HIDE_DEBUG_TAPS"], !taps.isEmpty {
+            let selectors = taps.components(separatedBy: ";;").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.tap(selectors, attempt: 0) }
+        }
+    }
+
+    private func tap(_ selectors: [String], attempt: Int) {
+        guard let selector = selectors.first, attempt < 120,
+              let literal = try? JSONEncoder().encode(selector), let source = String(data: literal, encoding: .utf8) else { return }
+        let script = "(() => { const found = document.querySelector(\(source)); if (!found) return false; found.click(); return true; })()"
+        webView?.evaluateJavaScript(script) { [weak self] result, _ in
+            let pressed = result as? Bool == true
+            DispatchQueue.main.asyncAfter(deadline: .now() + (pressed ? 1.5 : 0.5)) {
+                self?.tap(pressed ? Array(selectors.dropFirst()) : selectors, attempt: pressed ? 0 : attempt + 1)
+            }
         }
     }
 

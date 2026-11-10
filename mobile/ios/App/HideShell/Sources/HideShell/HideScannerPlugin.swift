@@ -22,7 +22,11 @@ open class HideScannerPlugin: CAPPlugin, CAPBridgedPlugin {
             self.scanning = true
             self.authorize { allowed in
                 guard allowed else { self.finish(call, code: "camera_denied"); return }
+#if DEBUG && targetEnvironment(simulator)
+                // A simulator has no camera: the debug build still shows the scanner's own chrome, for the capture.
+#else
                 guard AVCaptureDevice.default(for: .video) != nil else { self.finish(call, code: "camera_unavailable"); return }
+#endif
                 guard let presenter = self.bridge?.viewController else { self.finish(call, code: "camera_unavailable"); return }
                 let scanner = QRScannerViewController(hint: hint) { [weak self] value in
                     guard let self else { return }
@@ -68,18 +72,24 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-        guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input) else { return finish(nil) }
-        session.addInput(input)
-        let output = AVCaptureMetadataOutput()
-        guard session.canAddOutput(output) else { return finish(nil) }
-        session.addOutput(output)
-        output.setMetadataObjectsDelegate(self, queue: .main)
-        output.metadataObjectTypes = [.qr]
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(layer)
-        preview = layer
+        if let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input) {
+            session.addInput(input)
+            let output = AVCaptureMetadataOutput()
+            guard session.canAddOutput(output) else { return finish(nil) }
+            session.addOutput(output)
+            output.setMetadataObjectsDelegate(self, queue: .main)
+            output.metadataObjectTypes = [.qr]
+            let layer = AVCaptureVideoPreviewLayer(session: session)
+            layer.videoGravity = .resizeAspectFill
+            view.layer.addSublayer(layer)
+            preview = layer
+        } else {
+#if DEBUG && targetEnvironment(simulator)
+            // Nothing to read on a simulator: the chrome below is what the capture shows.
+#else
+            return finish(nil)
+#endif
+        }
 
         let label = UILabel()
         label.text = hint
