@@ -247,7 +247,6 @@ hide is built for the part after that: knowing which of them needs you, and why.
 | A parent agent is told when its child goes quiet | ✓ | | |
 | Decisions carried to the next agent, whichever vendor | ✓ | | |
 | Answer from your phone | ✓ | ✓ | |
-| License | FSL-1.1-ALv2, Apache 2.0 after two years | MIT | Apache 2.0 |
 
 <sub>The Orca and Herdr columns come from each project's README on 2026-11-10; an empty cell means its README does not describe the feature, not that it cannot be done. Something wrong? [Tell us](https://github.com/with-hide/hide/discussions). Parts of hide's terminal layer come from Herdr, and [NOTICE](NOTICE) names each file.</sub>
 
