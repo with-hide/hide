@@ -5,6 +5,8 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import { PROVIDER_KINDS } from "../agentPicker";
+import chartTemplate from "./demoChart.svg?raw";
+import guideTemplate from "./demoGuide.html?raw";
 import { card, pr, project } from "./prFixture";
 import type {
   AgentGroup, ConversationMessage, GroupRow, LookRow, PhoneAgent, PhoneDevice, PhoneMission, PhoneMissionNode, PhonePr, PhonePrFeedback, ServerFrame, StartCatalog,
@@ -133,16 +135,16 @@ export function looks(state: DemoState, pane: string): LookRow[] {
 
 const escapeText = (text: string): string => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** The one HTML result: a small page the phone draws in its sandboxed frame. */
+/** The one HTML result: a small page the phone draws in its sandboxed frame. Its markup is a file, not a style this module draws. */
 export function lookHtml(t: T): string {
   const steps = (["htmlStep1", "htmlStep2", "htmlStep3"] as const).map((key) => `<li>${escapeText(t(`mobile.demo.look.${key}`))}</li>`).join("");
-  const style = "body{font-family:-apple-system,system-ui,sans-serif;margin:0;padding:24px;background:#fbfaf7;color:#1c1b19}h1{font-size:22px;margin:0 0 16px}ol{padding:0;margin:0;list-style-position:inside}li{margin:0 0 12px;padding:12px 14px;background:#fff;border:1px solid #e6e2d9;border-radius:12px}";
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeText(t("mobile.demo.look.htmlTitle"))}</title><style>${style}</style></head><body><h1>${escapeText(t("mobile.demo.look.htmlTitle"))}</h1><ol>${steps}</ol></body></html>`;
+  const title = escapeText(t("mobile.demo.look.htmlTitle"));
+  return guideTemplate.replaceAll("{{title}}", () => title).replace("{{steps}}", () => steps);
 }
 
 /** The one image result: a chart drawn as SVG, which the phone's image reader accepts. */
 export function lookChart(t: T): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 240 140"><rect width="240" height="140" fill="white"/><text x="10" y="16" font-size="8" font-family="sans-serif" fill="black">${escapeText(t("mobile.demo.look.chartTitle"))}</text><g stroke="lightgray" stroke-width=".5"><path d="M10 40H230M10 70H230M10 100H230"/></g><path d="M10 100C60 70 120 66 230 36" fill="none" stroke="orangered" stroke-width="1.5"/><path d="M10 104C80 90 150 92 230 90" fill="none" stroke="royalblue" stroke-width="1.5"/></svg>`;
+  return chartTemplate.replace("{{title}}", () => escapeText(t("mobile.demo.look.chartTitle")));
 }
 
 /** UTF-8 text as the base64 a `look_chunk` carries. */

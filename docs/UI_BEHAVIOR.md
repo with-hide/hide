@@ -3109,6 +3109,7 @@ It is kept in that browser's storage (one key, `hide.phone.settings`), so it sur
 Nothing is sent to the Mac: the desktop's language and mode, the phone protocol and the core are unchanged, and a different Mac's phone settings never move this phone's choice.
 When the browser refuses the write, or its storage cannot be read, the page still works: a read failure shows the follow choices, a refused write keeps the choice for this visit and the sheet says `이 폰에 저장하지 못했어요. 앱을 닫으면 원래대로 돌아가요.`
 The notification words follow the language in effect, so an explicit language also changes the words of the next notification.
+The sheet ends with `개인정보 처리방침`, a link to `https://withhide.dev/privacy` that opens outside the app.
 The app follows the phone's light or dark choice, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 
 Directional terminal focus stays within the keyboard owner's drawn tab and Agent area, on local and remote devices.
@@ -3116,6 +3117,26 @@ It selects the pane sharing the requested edge, preferring the greatest shared e
 At the outside edge, in a single-pane or zoomed tab, or while a sheet, menu, find bar or dialog holds the keyboard, it does nothing.
 It never switches tabs or projects, and the destination receives the next terminal input through the existing pane-focus command.
 The four commands are listed in the shortcut sheet, Settings and the desktop Pane menu; each can be rebound or reset.
+
+### Phone demo mode
+
+Web owner: `web/src/mobile/demoSocket.ts` (the sample host), `demoData.ts` (its content), `Demo.tsx` (the marks and the host sheet's panel), `connection.ts` (`startDemo`, `leaveDemo`), `loader.tsx` (the entry); test owners: `web/src/mobile/demo.test.ts`, `web/src/mobile/demoScreens.test.tsx`.
+
+A person with no computer running Hide can look around every screen of the phone app with sample data.
+The start page that lists the paired devices ends with `체험해 보기` and one line under it, `샘플 데이터로 둘러보세요. 컴퓨터가 없어도 돼요.`; one tap opens the hosted phone at `/p/<protocol>/?demo=1`.
+The entry is a plain row of the page, not a hidden switch, and it is there whether or not a device is paired.
+Only the hosted phone takes `?demo`; the page the desktop serves at `/m/` does not.
+The sample host is a socket the phone's connection opens in place of the relay's, so the store and every screen read the frames a real host sends and no screen branches on it.
+It sends the lists, a conversation per agent, 볼 것 and the content of its Views, the start sheet's catalog and a card per pull request, and answers each request the way a Mac would, a moment later.
+The list shows 내 차례, 작업 중, 끝남 and 확인함 with a parent's children under it and a folded `더 보기`; an agent's detail shows its conversation, and a reply gets a sample answer in the same conversation.
+The start sheet and the pull request's `맡기기` sheet add a sample row to 작업 중, which opens as a started agent's detail does; an answer to the mission's decision clears it, and `머지` takes the pull request off the list.
+볼 것 holds one HTML page, drawn in the sandboxed frame, and one image.
+The sample text is the app's own and is worded in all four languages (`web/src/i18n/resources/mobileDemo.ts`), and it is worded again when the phone's language changes; pull request titles, branches and file names are code text and stay as written.
+The demo opens no WebSocket and makes no request, so it works offline.
+It writes no host entry, credential or notification subscription, offers no notification row, and a visit leaves only the phone's own language and theme choice, which the demo shares with the real app.
+A slim bar, `샘플 데이터로 체험 중` with `체험 끝내기`, sits over every screen of a demo.
+`샘플` marks the host's name in the list's header, and the host sheet holds only the sample host, a note that nothing is sent or saved, `내 컴퓨터 연결하기` and `체험 끝내기`.
+`내 컴퓨터 연결하기` opens the real QR scan and paste page (`/?add=1`, with the camera permission), and `체험 끝내기` opens the start page, which has no trace of the visit.
 
 ## Keyboard shortcuts per system
 
