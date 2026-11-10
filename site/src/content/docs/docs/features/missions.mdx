@@ -1,0 +1,107 @@
+---
+title: Missions
+description: One goal carried by a lead agent that splits it across workers and pull requests, and brings you only decisions.
+---
+
+## What it is
+
+You tell an agent: "Move the settings screen to the new layout, with tests." The agent sees that this needs planning, several pull requests and a second pair of eyes, and asks one line: `Shall I run this as a mission, or do it directly?` You answer `mission`.
+
+From there a lead agent, the Conductor, plans with you in the same conversation. It starts worker agents that each build one part on their own branch, and another agent checks each part. Hide draws all of it as a map. You come back for decisions, and the Conductor reports when it is done.
+
+A mission is not a task. A task is one agent finishing its steps in turn (see [Tasks and status](/docs/features/tasks-status/)). A mission is a Conductor sending work to several workers at once.
+
+To start one yourself, type `/hide-mission` in Claude Code or `$hide-mission` in Codex, from any agent terminal. The mission then shows up in the **Missions** screen.
+
+## How to read it
+
+<iframe src="/embed/docs-embed.html?part=mission-map&theme=dark" title="A mission map: the Conductor, workers side by side, a decision for you, checks, and main" height="460" loading="lazy"></iframe>
+
+The map is for looking. You change a mission by talking to the Conductor ("stop", "do this one first"), not by editing the map.
+
+### The head
+
+Each mission has a number, such as `M39`, shown on the map, on the Missions screen and on the chip on the Conductor's pane. The head also shows progress (`n / m done`) and the mission's verification strength: `Fast`, `Normal` or `Thorough`.
+
+A mission is in one of these states: `Planning`, `Running`, `Waiting to merge`, `Finished` or `Cancelled`.
+
+### A node
+
+Each node is one piece of the work.
+
+- **Kind:** `Change`, `Research`, `Verify together` or `External` (a pull request outside the mission).
+- **State:** `Waiting`, `In progress`, `Done` or `Dropped`.
+- **Done when:** the finish lines that must pass, such as a check command, CI, a review, a verification, or your own look.
+- **Worker and checkers:** each shows its agent, and its model and effort when Hide knows them.
+- **Pull request:** with its CI state.
+
+A node that waits on you has a thick border, a dot on its corner and `Your turn`. A node that waits on the Conductor is not your turn: it reads as in progress with `Conductor` and the reason.
+
+A worker that looks stuck (its review failed twice in a row, or it has not pushed for 90 minutes) gets a `⚠` on its card, and the Conductor is told. You are not.
+
+### What reaches you
+
+A mission adds no status of its own. The Conductor and its workers are ordinary rows. What waits on you reaches you in three ways:
+
+- **A decision.** The Conductor's row asks it as a question and the map shows a banner with the node, how long it has waited, and the options. Mark an option and press `Answer`, or write an answer. You can also answer in the Conductor's conversation. The Conductor may mark one option `Recommended`.
+- **A node's gate.** For a part you asked to look at yourself, the question reads `Check <what> and tell me`, with `Go on` and `Something to fix`.
+- **A mission that needs a look.** For example `Worker ended with work left`, `PR #N closed without a merge` or `Conductor recorded it as failed`. These stand in `Your turn` on the Missions screen.
+
+### The Missions screen
+
+Press the **Missions** row in the sidebar. It lists the missions of the device in front in four groups: `Your turn`, `In progress`, `Waiting to merge` and `Finished`. A mission in `Your turn` shows the action to take: `Answer`, `Read letters`, `See what's stuck`, `Take a look`, `Merge` or `Join`. A mission no Conductor holds shows `No Conductor` and a `Resume command` button, which takes it over.
+
+Pressing a mission opens its map. Anywhere else, such as the chip on a Conductor's pane, it opens as a card in the View slot of that pane.
+
+## Settings
+
+Settings > Mission holds the defaults for new missions. A change applies from the next mission; a running mission keeps its own.
+
+| Setting | What it does |
+| --- | --- |
+| **Concurrent agents** | How many agents one mission runs at once, from 1 to 16. Reviews and checks count; the Conductor does not. |
+| **Default scope** | `Stop before main` or `Through the merge`, when you do not say how far a mission goes. |
+| **Clean up a worktree once merged** | On by default. Removes the worktree and build cache of a branch whose pull request merged, unless it still holds files being changed or is in use. The branch is kept. This switch applies to every mission at once. |
+| **Worker candidates** | The agents the Conductor may choose workers from, up to 16, each with its model, effort and purpose. Left empty, the Conductor chooses among the agents installed on this machine. |
+| **Verification strength** | `Fast`, `Normal` (default) or `Thorough`: how much checking a mission does and how often it re-reviews. The Conductor proposes a strength in its plan and changes it when you say so. |
+
+The Conductor prefers a checker of a different kind of agent than the node's worker when the candidates include one.
+
+## Commands and keys
+
+The Conductor runs the mission commands from its own pane. You can read the same record:
+
+| Do | Run |
+| --- | --- |
+| Read the Conductor's guide | `hide mission help` |
+| List missions | `hide mission list` |
+| Read a mission, or one node | `hide mission show [<node>]` |
+| See your defaults | `hide mission settings` |
+| See the agents a mission can use | `hide agent catalog` |
+
+The Conductor's own commands, listed in `hide --help`: `hide mission create`, `plan`, `start`, `node`, `record`, `skip`, `defect`, `gate`, `decide`, `delay`, `close`, `reopen` and `take`. Every one prints one JSON line.
+
+| Do | macOS | Windows and Linux |
+| --- | --- | --- |
+| Open missions (command palette: `Open missions`) | no key until you bind one in Settings, Shortcuts | no key until you bind one in Settings, Shortcuts |
+| Open the Overview | `⇧⌘O` | `Alt+Shift+O` |
+| Search | `⌘K` | `Ctrl+Shift+K` |
+| Previous or next mission, in the open list | `↑` and `↓` | `↑` and `↓` |
+
+Mission design, planning rules and the Conductor's contract are owned by `docs/missions.md` in with-hide/hide-private, and where a mission stands in each list by `docs/tasks-and-pr-list.md` in the same repository. This page names them and does not restate them.
+
+## Known gaps by system
+
+Quoted from the rows named below in `docs/INSTALL.md`, "What each system supports".
+
+- **A Conductor's mission (`hide mission`, the map, the mission chip, Settings > Mission).** macOS: "supported: the core's mission tests, the web unit tests and the `mission-map` e2e on the core's own engine". Windows: "unverified: the same core and CLI code with its tests in the Windows lane ... no Conductor has run a mission on Windows". Linux: "supported in CI ... a real Conductor mission is unmeasured there and closes with one run".
+- **A mission's worker or checker on another connected device.** macOS: "supported with a Mac or Linux device". Windows: "not supported: no device runs the Windows `hided` ... so a Windows core has no device to start a worker on and a Windows machine is never the device". Linux: "supported in CI".
+- **Resume command (resuming the gone Conductor's conversation).** macOS: "supported for an agent whose adapter can resume a session ... another agent's Conductor is taken over by a new agent as before". Windows: "unverified ... no Conductor has been resumed on Windows". Linux: "supported in CI ... a real resume is unmeasured".
+- **A mission decision answered from the map's banner.** macOS: "supported for a Claude Code, Codex or Grok Conductor ... an OpenCode, Pi, omp or Antigravity Conductor is not supported: no bell types into those agents, so the banner sends the operator to the conversation". Windows and Linux: "unverified".
+- **A session's own plan (`hide task`, the map on a mission node).** See [Tasks and status](/docs/features/tasks-status/#known-gaps-by-system).
+
+import UsedIn from "@docs/UsedIn.astro";
+
+## Used in guides
+
+<UsedIn id="missions" />

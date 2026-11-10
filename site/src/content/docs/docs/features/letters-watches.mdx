@@ -1,0 +1,114 @@
+---
+title: Letters and watches
+description: How agents talk to each other through letters Hide keeps, and how a parent hears when a helper goes quiet.
+---
+
+## What it is
+
+You ask an agent to fix a bug and have the fix checked. It starts a helper in its own pane. The helper works, then sends its parent a letter: "Fix is ready, PR #12." If the helper goes quiet for twenty minutes, the parent gets a warning instead. Neither agent has to keep looking at the other's terminal.
+
+A **letter** is a message from one agent to another that Hide stores and delivers. It has an answer, a receipt and a retry that never sends the same letter twice. A **watch** is a parent's standing interest in one helper: Hide warns the parent when the helper stops making progress.
+
+You do not write letters. Agents do, with `hide` commands. You see their effects on rows, in the turn card and in a small pill on a pane.
+
+## How to read it
+
+<iframe src="/embed/docs-embed.html?part=letters&theme=dark" title="A letter sent between two agents and how it arrives" height="360" loading="lazy"></iframe>
+
+### Four kinds of letter
+
+| Kind | Meaning | Waits for an answer |
+| --- | --- | --- |
+| `request` | Asks the other agent to do or answer something. | Yes |
+| `block` | Says the sender cannot go on without a reply. | Yes |
+| `progress` | An interim report, such as a plan or a checkpoint. Ends nothing. | No |
+| `report` | Says the work is finished. Ends the parent's watch on its sender. | No |
+
+An answer wait ends when the recipient replies, the sender cancels, either agent ends, or 24 hours pass.
+
+### How a letter reaches an agent
+
+- **At rest.** Hide types one line into the agent's prompt: the owl `🦉`, the writer's name, the kind and the letter's first line, for example `🦉 label-end-fix report: label end fix opened PR #881`. The agent's hook then hands over the whole letter. Agents that Hide cannot type into take the letter on their next prompt.
+- **While it works.** A letter waits five minutes of unbroken work, then goes at the agent's next tool call or turn gap. A letter sent with `--now` skips the wait.
+- **Forced.** `--force` types the letter into the agent's input now, even while it works. Hide first reads the input: if someone is typing there, the send is refused with `composer_not_empty`.
+- **Asleep.** A `request` or `block` wakes a sleeping agent and resumes its conversation, at most four wakes at a time. A `report` or `progress` waits for the next wake. The time a letter waits does not run while the recipient sleeps.
+
+Hide never types over your own words. If you have text in an agent's prompt, the letter waits and a pill with an envelope appears in the pane header (with a count when two or more letters wait). Press **Deliver now** to release the hold: the letter goes in as soon as the prompt reads empty. The press never clears or submits your text.
+
+A letter that cannot be delivered ends as `undelivered` after its wake fails or its three bells are spent, or after 60 minutes of the recipient's machine being reachable. Hide's own letter then tells the sender whom, in which pane and why.
+
+The turn card of an agent lists the agents it worked with since your request, with the letters between them and a mark for what the last letter said.
+
+### Limits
+
+| What | Limit |
+| --- | --- |
+| Letter body | 16 KiB |
+| Open letters | 1024 |
+| Letters kept, finished ones included | 5000 |
+| Same `--intent` returns the same letter | for one day after it finishes |
+| Delivery deadline | 60 minutes of the recipient's machine being reachable |
+| Answer wait of a `request` or `block` | 24 hours |
+| Watches | 32 |
+
+Letters are kept in a file in Hide's state folder, so they survive a restart. A letter to an agent on a connected device waits at your computer, and the hours that device is away do not count against it.
+
+### Watches
+
+A parent that starts a helper with `hide agent spawn --parent here` gets a watch on it automatically. A helper started without `--parent` is handed to you and gets no watch.
+
+- After **20 minutes** without activity the parent gets a warning letter. A status change or a write to the helper's conversation counts as activity and starts a new episode.
+- After **60 more minutes** it gets a second warning. There are at most two warnings per episode.
+- If the helper stopped on a question, or sits at a blocked prompt, the parent hears after about **one minute**, so it can answer or ask you.
+- If the parent does not act, Hide tells you once, 60 minutes after the first warning.
+- A watch ends when the helper exits, when the parent stops it, or when the parent receives the helper's `report`.
+
+### A person's turn
+
+An agent at a step only a person can take, such as a sign-in or an app permission, says so with `hide agent ask-human`. Its row shows a key in a warning badge, `A person's turn`, with `Sign-in` or `Permission` and the place. Press **Done** when you finished the step. Hide sends the agent one `report` letter and wakes it if it sleeps. The place is shown only until Done, and it is never written to the log.
+
+## Settings
+
+Letters and watches have no setting of their own. Their clocks and limits above are fixed. What reaches you goes through a row's state (see [Tasks and status](/docs/features/tasks-status/)) and the notices in Settings > Notifications.
+
+## Commands and keys
+
+Agents run these in their own pane, on every system:
+
+| Do | Run |
+| --- | --- |
+| Send a letter | `hide request send <target> --intent <key> --body <text> [--kind request\|block\|report\|progress] [--now \| --force]` |
+| Answer a letter | `hide request reply <id> --intent <key> --body <text>` |
+| Acknowledge, cancel or read one | `hide request ack <id>`, `hide request cancel <id>`, `hide request show <id>` |
+| Read your letters | `hide inbox` |
+| Start, hand over, stop or list watches | `hide watch start <target>`, `hide watch assign <watch-or-target-id> --observer <id>`, `hide watch stop <id>`, `hide watch list` |
+| Start a helper that the parent watches | `hide agent spawn --parent here --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch>` |
+| Read or type into another agent's pane | `hide pane read <pane>`, `hide agent read <agent>`, `hide pane send <pane> <text>` (input, not a letter) |
+| Declare a step only a person can take | `hide agent ask-human auth\|permission <where>` |
+
+Use a new `--intent` for each new letter, and the same one only to retry that exact letter.
+
+A pane that holds an agent is named by its agent name, its registration id from `hide agent list`, or a pane id of its own machine. A pane of another machine is named by its full address, `remote:<device id>:pane:<id>`; `hide device list` shows the device ids.
+
+Letters have no keyboard shortcut. **Deliver now** and **Done** are buttons.
+
+## Known gaps by system
+
+Quoted from the rows named below in `docs/INSTALL.md`, "What each system supports". A letter's path depends on the agent, so the table has one row per agent.
+
+- **Letters and watches, agent registration and spawning, and agent sleep.** macOS and Linux: "supported: all seven measured agents pass spawning, letters, `sleep_wake`, same-session `resume` and independent-session `fork` on the fake model". Windows: the same, plus "a draft that prevents quitting on the agent's own keys still leaves the forced-termination wake gap unverified by this run".
+- **Letters to an agent while it works, per agent.**
+  - Claude Code and Codex: macOS "supported mid-turn"; Windows and Linux "supported at rest ... mid-turn reading is unverified".
+  - OpenCode and omp: macOS "supported mid-turn"; Windows and Linux "supported on the next prompt ... tool-result delivery is implemented and fixture-tested but unverified in a real mid-turn session".
+  - Pi and Antigravity: every system "supported on the next prompt"; mid-turn delivery is unverified.
+  - Grok: every system "supported at rest ... mid-turn `PreToolUse` delivery and picker safety are not measured by this journey".
+- **A letter held on a possible draft goes in once the composer reads empty.** macOS: "supported for Claude Code and Codex, the agents a bell rings ... narrow panes and the light theme are unverified".
+- **`hide pane read`, `hide pane send`, `hide pane open --beside` and `hide request send --force`.** Windows: "supported ... with the keys and the paste unmeasured live on Windows; `--paste` is refused `paste_unsupported` for Grok". Linux: "supported ... with the keys and the paste unmeasured live on Linux".
+
+The contract for letters and watches is `docs/delivery.md`, Commands and caller identity and Persistence, clocks and limits. The design of task identity and delegated escalation is owned by `docs/task-identity.md` in with-hide/hide-private.
+
+import UsedIn from "@docs/UsedIn.astro";
+
+## Used in guides
+
+<UsedIn id="letters-watches" />

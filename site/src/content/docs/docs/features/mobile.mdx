@@ -1,0 +1,117 @@
+---
+title: Mobile
+description: Read your agents and reply to them from your phone, with no account and no Tailscale.
+---
+
+## What it is
+
+You leave your desk with three agents running. Your phone buzzes: one agent needs you. You open the phone app, read the agent's last messages, type a one-line reply, and put the phone away. The agent keeps going on your computer.
+
+The phone is a window onto the computer that runs hide. The agents, files and Git stay on that computer. The phone and the computer encrypt the messages before they leave either device. Hide's relay passes them along and cannot read your conversations, commands or phone credentials. It can see routing identifiers, when connections happen and how much data passes through. The relay does not keep messages for later delivery.
+
+You need no hide account, no payment and no Tailscale installation.
+
+## Connect your phone
+
+1. On your computer, open **Settings > Mobile** and turn on **Open hide from your phone**. It is off at first.
+2. Wait until the connection row says `Connected · Hide relay (Tokyo)`.
+3. Under **Pair a phone**, press **Show QR**. The QR works for five minutes and shows a countdown (`Code expires in m:ss`). Pairing one phone uses it up.
+4. Scan it with the phone's camera. The phone opens `app.withhide.dev`. Press **Connect**.
+5. To keep it as an app and to get notifications, use **Share > Add to Home Screen** on the phone, then open hide from the Home Screen.
+
+If the QR expires, press **Show QR** again. Press **Hide QR** to remove it.
+
+Keep the computer running and connected. When it sleeps or goes offline, the phone shows that it cannot connect and retries when the computer returns.
+
+Each computer allows four paired phones. Under **Connected phones**, each row shows the phone's name, when it was last seen, whether notifications are on, and **Revoke**. A phone that has not been used for seven days is revoked automatically. Turning Mobile off closes the relay and every phone connection.
+
+## How to read it
+
+<iframe src="/embed/docs-embed.html?part=phone&theme=dark" title="The phone app: the agent list and an agent's detail" height="640" loading="lazy"></iframe>
+
+### The list
+
+Agents are in the same four groups as the sidebar: `Needs You`, `Unread`, `Working` and `Seen`, each with its count. A row shows its status mark and the line that leads it, the task name, project and branch, the device chip for an agent on another machine, the elapsed time, and the request or news line. The list updates live. Rows of this computer and of its connected devices are mixed and ordered by last activity, newest first. See [Tasks and status](/docs/features/tasks-status/) for what the marks mean.
+
+A helper hangs under its parent as an indented row. A parent shows its helpers' counts and opens expanded when a helper asks you for something.
+
+The bar at the foot has `Agents`, `Missions`, `PRs` and `Settings`. A count shows when something waits on you.
+
+### An agent's detail
+
+Press a row. The tabs are `Conversation`, `Terminal` and `To look at`:
+
+- **Conversation** shows the agent's own conversation, newest at the bottom. It loads the newest 30 messages and 30 more each time you pull, up to 300. Tool output is never shown.
+- **Terminal** shows the pane's recent rows, read-only.
+- **To look at** appears while the agent has a View open. It lists what the agent opened, such as changes, a document, an image or a web page. A change list shows how many files and lines changed, and no code. For the code itself the phone says to open it on your computer.
+
+At the foot is a one-line reply bar (`Reply…`, **Send**) and the quick keys `Enter`, `Escape`, `Up arrow`, `Down arrow` and `Ctrl-C`. A reply is one line of text, up to 2,000 characters. If hide cannot tell whether a reply arrived, the line says so and asks you to check the terminal before you send it again. A sleeping agent is not woken by a reply: the phone says nothing was sent.
+
+Opening an agent's detail reads it, on the phone and on the computer at once, so an unread result leaves `Unread`. Reading does not wake a sleeping agent.
+
+### Start an agent, answer a mission, merge a pull request
+
+- The `+` in the list header opens **Start agent**: a text box for the task, a **Target** (this computer's checkouts, then each device's), a **Kind**, a **Model**, and **Start**. The desktop does not follow a phone start: its tab and keyboard stay where you left them.
+- `Missions` lists missions in the groups `Your turn`, `In progress`, `Waiting to merge` and `Finished`. A decision stands first on a mission's page: mark an option, then press **Answer**. See [Missions](/docs/features/missions/).
+- `PRs` lists open pull requests. **Merge** is offered for your own pull requests and asks for a confirmation sheet first.
+
+### Try it without a computer
+
+The start page has **Try the demo**, which opens the phone app with sample data. Nothing is sent or saved.
+
+### Notifications
+
+Push to the phone is set on the computer, in **Settings > Notifications > Push to phone**:
+
+| Choice | What it does |
+| --- | --- |
+| `Off` | No push to your phone. This is the default. |
+| `Only when the app is closed` | Push only while desktop hide is not connected, when an agent needs you or finishes. |
+| `Always` | Push whenever an agent needs you or finishes. |
+
+On the phone, press **Turn on notifications** in the app added to the Home Screen. A notification's title is the row's task name and its body is the status, the agent's own sentence and the project. The sentence may show in a lock-screen preview, depending on the phone's setting. Pressing a notification opens that agent.
+
+## Settings
+
+| Where | Setting | What it does |
+| --- | --- | --- |
+| Computer: Settings > Mobile | **Open hide from your phone** | Turns the relay connection and every phone connection on or off. |
+| Computer: Settings > Mobile | **Show QR**, **Hide QR** | Pairs a phone. |
+| Computer: Settings > Mobile | **Connected phones** | Lists up to four phones, with **Revoke**. |
+| Computer: Settings > Mobile | **Advanced · Connect directly with Tailscale** | Keeps the direct option for people who already use it. Only the selected method's phones are shown. |
+| Computer: Settings > Notifications | **Push to phone** | `Off`, `Only when the app is closed` or `Always`. |
+| Phone: Settings tab | **Connected computers** | Switch computers, connect another (`Connect another device`) or `Remove device`. |
+| Phone: Settings tab | **Notifications**, **Display** | Turn on notifications; Language and Appearance (`Follow the system`, `Light`, `Dark`), kept on this phone only. |
+
+If the connection row shows `Relay unreachable · Retrying`, press **Retry now**. `This Hide is too old` has an **Update** button that opens Settings > About.
+
+## Commands and keys
+
+The phone has no command line. On the computer:
+
+| Do | Run |
+| --- | --- |
+| Check that Hide is running | `hide status` |
+
+| Do | macOS | Windows and Linux |
+| --- | --- | --- |
+| Open Settings (then Mobile) | `⌘,` | `Ctrl+Shift+,` |
+
+The phone has no keyboard shortcuts. Its quick keys are buttons.
+
+The wire contract (routing, device admission, encryption, QR format) is owned by `docs/RELAY_PROTOCOL.md`. Operating the production relay is owned by a private operations document in with-hide/hide-private. This page restates neither.
+
+## Known gaps by system
+
+Quoted from the rows named below in `docs/INSTALL.md`, "What each system supports".
+
+- **Phone through Hide's relay.** macOS: "supported by the shared relay transport and phone app; production hosting and physical-phone acceptance are deployment checks". Windows: "same connection, encryption and phone actions as macOS; production hosting and physical-phone acceptance are deployment checks". Linux: "same connection, encryption and phone actions as macOS; no Tailscale installation needed; production hosting and physical-phone acceptance are deployment checks".
+- **Advanced direct phone connection through Tailscale.** macOS and Windows: "supported with Tailscale installed and its HTTPS Serve setup". Linux: "not supported by the current Tailscale integration; closes with Linux CLI discovery, Serve lifecycle and phone connection verification; use the relay".
+- **The iOS app (pairing kept in the Keychain, a QR scan with the camera, a pairing link that opens the app).** Every system: "same on every computer, since the app runs on the iPhone and speaks the relay: verified on the iOS simulator ... not verified: a real iPhone's camera and a scanned or tapped pairing link opening the app by universal link ... closes with the first TestFlight build". In that app, notifications cannot be turned on yet: the Settings tab says `Notifications can't be turned on in this app yet`.
+- **Agent notifications.** See [Tasks and status](/docs/features/tasks-status/#known-gaps-by-system).
+
+import UsedIn from "@docs/UsedIn.astro";
+
+## Used in guides
+
+<UsedIn id="mobile" />
