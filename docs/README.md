@@ -8,6 +8,8 @@ A document's location or an old PRD citation does not make it current authority.
 
 Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `hide-core/src/product_analytics.rs`, the link worker's pane pass (`hide-core/src/links/`), the mission commands (`hide-core/src/runtime/missions.rs`), practice progress (`hide-core/src/runtime/detail.rs`), phone pairing (`hided/src/mobile/`), and `web/e2e/product-analytics.spec.ts`.
 
+The iOS app's release build, its signing, checks and TestFlight upload: [the release build](BUILD.md#the-release-build); owners are `mobile/scripts/{build-ios,mini-release}.sh`, `mobile/scripts/check-release-app.sh`, `mobile/scripts/{bundle-manifest,release-version}.mjs`, `mobile/release-{env,expect}.json` and their tests in `mobile/scripts/`.
+
 Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.
 
 Relay deployment code: owners are `deploy/relay/`, `scripts/relay-deploy.py`, `.github/workflows/relay-artifact.yml` and `.github/workflows/relay-deploy-check.yml`.
