@@ -8,6 +8,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { FakeTailscale } from "./fake-tailscale";
 import { chord } from "./chords";
 import { enterWorkspace, screenshot } from "./wire";
+import { withControl } from "./daemon-actions";
 import type { HideAnswer } from "./agent-pane";
 
 type Hide = (args: string[]) => Promise<HideAnswer>;
@@ -63,8 +64,11 @@ test("a planned review stays quiet until arrival and the phone's answer passes t
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const conductor = fixture.runAs(fixture.panes[0]);
-    // Project discovery is asynchronous at the first create.
-    await expect.poll(async () => (await conductor(["mission", "create", "--title", "화면 검토"])).out).toContain('"ok":true');
+    // Observe the catalog's readiness before issuing the single create.
+    await withControl(daemon, async (control) => {
+      await control.until((rest) => rest.git_worktrees_loading === false, "the project catalog read");
+    });
+    await mission(conductor, ["create", "--title", "화면 검토"]);
     await mission(conductor, ["plan", "--json", JSON.stringify({ scope: "pr", nodes: [
       { key: "screen", title: "화면 확인", kind: "research", criteria: ["화면이 준비됨"], gate: "계획과 결과 화면" },
     ] })]);
