@@ -249,6 +249,7 @@ The connection is made with the relay protocol library (`hide-relay-ios`, the sa
 `input` with a `turn` is answered `stale` unless the agent is still waiting on a question or an approval and its `changed_at_unix_ms` is that turn, so a Reply written for one question can never type into a later prompt.
 `input` without a `turn` is the phone screen's own and is unchanged.
 The request id is a hash of the notification's id and the action, so a repeat of the same action is the same request: hided's claim on the id answers a repeat `ok` without writing the reply again, and `uncertain` is told as such and never sent again.
+Known limitation: hided keeps its claims on request ids in memory only, so a repeat of an action that arrives right after hided restarted is no longer recognized and its `turn` is checked as new, usually answering `stale`.
 Delivery is proved only by `input_result {ok: true}`, the same proof the phone screen uses.
 A reply has three ends and one rule decides them (`ReplyRule`): not sent only when the failure is certain to have come before anything was handed to the connection; sent only when `input_result` says `ok: true`; and not confirmed for every other end, such as a peer that left after the send, an answer that could not be read, the deadline or a closed socket.
 The text goes back to the reply box only for an end that certainly wrote nothing (not sent, a refusal as unknown, `stale`, `gone`, another `ok: false`), never for a reply that most likely arrived.

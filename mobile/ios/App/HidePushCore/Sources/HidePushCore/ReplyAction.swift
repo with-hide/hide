@@ -221,14 +221,22 @@ public final class ReplySender {
         defer { timer.cancel(); link.close() }
         do {
             try await link.connect(room: target.room, noiseKey: secrets.noiseKey, credential: secrets.credential)
+        } catch let failure as LinkFailure {
+            return failure
+        } catch {
+            // Nothing has been handed to the connection yet.
+            return .notSent
+        }
+        do {
             let answer = try await link.request(
                 ["type": "input", "request_id": target.requestId, "device_id": target.deviceId, "pane_id": target.paneId,
                  "text": text, "turn": target.turn],
                 resultType: "input_result", requestId: target.requestId)
             if answer["ok"] as? Bool == true { return nil }
             return .answer(answer["reason"] as? String ?? "failed")
-        } catch let failure as LinkFailure {
-            return failure
-        } catch { return .notSent }
+        } catch {
+            // The message was handed over: whatever ended the wait, any error goes through the rule.
+            return ReplyRule.afterHandover(error)
+        }
     }
 }
