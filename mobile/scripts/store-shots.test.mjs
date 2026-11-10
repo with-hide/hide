@@ -67,7 +67,7 @@ describe('what is wrong with a shot list', () => {
 });
 
 describe('the frame', () => {
-  const tokens = { field: '#B7C9CC', ink: '#0F1A1C', muted: '#3F5357', accent: '#B9FF66', bezel: '#101112', inter: '/f/Inter.woff2', pretendard: '/f/Pretendard.woff2' };
+  const tokens = { field: '#B7C9CC', ink: '#0F1A1C', muted: '#3F5357', accent: '#B9FF66', wallpaper: '#E7EEF0', bezel: '#101112', inter: '/f/Inter.woff2', pretendard: '/f/Pretendard.woff2' };
 
   it('marks the accent word and carries the headline and support line', async () => {
     const shots = await loadShots(real);

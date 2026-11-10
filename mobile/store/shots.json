@@ -70,7 +70,7 @@
       "steps": [
         "[data-phone-demo-entry]",
         "[data-phone-tab=\"settings\"]",
-        "[data-phone-notifications=\"enable\"]"
+        "[data-phone-notifications=\"off\"] [role=\"switch\"]"
       ],
       "settleSeconds": 11,
       "text": {
@@ -86,13 +86,14 @@
         }
       },
       "crop": {
-        "x": 24,
-        "y": 100,
-        "width": 1158,
-        "height": 300,
+        "x": 28,
+        "y": 178,
+        "width": 1152,
+        "height": 194,
+        "radius": 92,
         "placeAt": {
-          "x": 24,
-          "y": 900
+          "x": 27,
+          "y": 1480
         }
       }
     },
@@ -160,7 +161,7 @@
         },
         "ko": {
           "headline": "에이전트가 만든 화면을 바로 봐요",
-          "accent": "만든 화면",
+          "accent": "화면",
           "support": "내 컴퓨터의 페이지와 이미지를 여기서 열어요."
         }
       }

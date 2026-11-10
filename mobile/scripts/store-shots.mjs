@@ -34,7 +34,7 @@ export function shotProblems(shots) {
     files.add(shot.file);
     if (!['screen', 'banner'].includes(shot.capture)) problems.push(`${shot.id}: capture is "${shot.capture}"`);
     if (!shot.steps.length) problems.push(`${shot.id}: no steps`);
-    if (shot.capture === 'banner' && !['x', 'y', 'width', 'height'].every((key) => Number.isInteger(shot.crop?.[key])) || (shot.capture === 'banner' && !shot.crop.placeAt)) problems.push(`${shot.id}: a banner shot names the banner's crop and where it sits`);
+    if (shot.capture === 'banner' && !['x', 'y', 'width', 'height', 'radius'].every((key) => Number.isInteger(shot.crop?.[key])) || (shot.capture === 'banner' && !shot.crop.placeAt)) problems.push(`${shot.id}: a banner shot names the banner's crop and where it sits`);
     for (const language of languages) {
       const text = shot.text[language];
       if (!text?.headline || !text.support || !text.accent) { problems.push(`${shot.id}: ${language} has no headline, accent and support`); continue; }
@@ -148,6 +148,7 @@ export async function frameTokens(repo = REPO) {
     ink: tokens['--foreground'].hide.light,
     muted: tokens['--subtle-foreground'].hide.light,
     accent: tokens['--accent-choice-lime'].value,
+    wallpaper: tokens['--card'].hide.light,
     bezel: '#101112',
     inter: join(repo, 'web/src/assets/fonts/InterVariable.woff2'),
     pretendard: join(repo, 'web/src/assets/fonts/PretendardVariable.woff2'),
@@ -174,7 +175,7 @@ function lockScreenHtml(shot, language, bannerUrl, scale, canvas) {
   return `<div class="lock">
     <div class="date">${words.date}</div>
     <div class="time">9:41</div>
-    <div class="banner" style="left:${crop.placeAt.x * scale}px;top:${crop.placeAt.y * scale}px;width:${crop.width * scale}px;height:${crop.height * scale}px;background:url('${bannerUrl}') -${crop.x * scale}px -${crop.y * scale}px / ${canvas.width * scale}px auto no-repeat"></div>
+    <div class="banner" style="left:${crop.placeAt.x * scale}px;top:${crop.placeAt.y * scale}px;width:${crop.width * scale}px;height:${crop.height * scale}px;border-radius:${crop.radius * scale}px;background:url('${bannerUrl}') -${crop.x * scale}px -${crop.y * scale}px / ${canvas.width * scale}px auto no-repeat"></div>
   </div>`;
 }
 
@@ -202,10 +203,10 @@ p { margin-top: 36px; font-size: 48px; line-height: 1.3; font-weight: 500; color
 .phone { position: absolute; left: ${(canvas.width - PHONE_WIDTH) / 2}px; top: ${canvas.height - screenHeight - BEZEL * 2 - 45}px; width: ${PHONE_WIDTH}px; height: ${screenHeight + BEZEL * 2}px; background: ${tokens.bezel}; border-radius: ${radius + BEZEL}px; padding: ${BEZEL}px; box-shadow: 0 30px 80px rgba(16, 17, 18, 0.28); }
 .screen { position: relative; width: ${screenWidth}px; height: ${screenHeight}px; border-radius: ${radius}px; overflow: hidden; background: #fff; }
 .capture { display: block; width: 100%; height: 100%; }
-.lock { position: absolute; inset: 0; background: #0D191B; color: #fff; text-align: center; }
+.lock { position: absolute; inset: 0; background: ${tokens.wallpaper}; color: ${tokens.ink}; text-align: center; }
 .lock .date { position: absolute; top: ${380 * scale}px; left: 0; right: 0; font-size: ${54 * scale}px; font-weight: 600; opacity: .9; }
 .lock .time { position: absolute; top: ${440 * scale}px; left: 0; right: 0; font-size: ${290 * scale}px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
-.lock .banner { position: absolute; border-radius: ${44 * scale}px; }
+.lock .banner { position: absolute; }
 </style><body>
 <div class="words"><h1>${headlineHtml(text)}</h1><p>${escapeHtml(text.support)}</p></div>
 <div class="phone"><div class="screen">${inner}</div></div>
