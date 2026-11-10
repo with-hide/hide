@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -200,17 +200,38 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
 }
 
 /** The Conductor pane's chip (PRD mission-pane-chip B2): the state it reads as, its word and its count. */
-export type PaneChipState = "planning" | "running" | "decision" | "merge_wait" | "done" | "cancelled";
+export type PaneChipState = "planning" | "running" | "turn" | "merge_wait" | "done" | "cancelled";
+
+/**
+ * Whether an open mission is the operator's turn, which its chips mark `!`
+ * in 내 차례's colour while keeping their progress: its decision first, else
+ * a node whose raise reached the operator. Null otherwise, and for a mission
+ * that ended.
+ */
+export function missionTurn(mission: Mission): MissionTurn | null {
+  if (missionDeciding(mission)) return "decision";
+  if (!missionOpen(mission)) return null;
+  return mission.nodes.some((node) => openAttention(mission, node)?.to === "operator") ? "attention" : null;
+}
+
+/** The words a chip's name says for its `!`. */
+export const TURN_WORDS: Record<MissionTurn, MessageKey> = { decision: "mission.askDecision", attention: "mission.attention" };
+
+/** The delay an open mission is held by, which its chips and its list row mark with a grey pause; none while it runs or once it ended. */
+export function missionDelay(mission: Mission): string | null {
+  return missionOpen(mission) ? (mission.delay ?? null) : null;
+}
 
 /** Whether an open mission waits on the operator's decision: its chips keep their progress and add `!` in the decision colour (needs-you-cleanup D-02). */
 export function missionDeciding(mission: Mission): boolean {
   return Boolean(mission.decision) && missionOpen(mission);
 }
 
-/** The pane chip's words, its progress kept while a decision waits; the decision only colours it (`decision`) and marks it `!` (needs-you-cleanup B6). */
-export function paneChipWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
+/** The pane chip's words, its progress kept while the operator's turn waits; the turn only colours it (`turn`) and marks it `!` (needs-you-cleanup B6). */
+export function paneChipWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null; turn: MissionTurn | null } {
   const words = paneStateWords(mission);
-  return missionDeciding(mission) ? { ...words, state: "decision" } : words;
+  const turn = missionTurn(mission);
+  return turn ? { ...words, state: "turn", turn } : { ...words, turn };
 }
 
 function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
@@ -288,14 +309,14 @@ export function missionHeadCells(mission: Mission): HeadCell[] {
   });
 }
 
-/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
+/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): the operator's turn, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  return missionToneOf(mission.status, missionDeciding(mission));
+  return missionToneOf(mission.status, missionTurn(mission) !== null);
 }
 
-/** A mission chip's colour from its status and whether a decision waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
-export function missionToneOf(status: Mission["status"], deciding: boolean): CellTone {
-  if (deciding) return "hold";
+/** A mission chip's colour from its status and whether the operator's turn waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
+export function missionToneOf(status: Mission["status"], turn: boolean): CellTone {
+  if (turn) return "hold";
   switch (status) {
     case "planning":
       return "waiting";

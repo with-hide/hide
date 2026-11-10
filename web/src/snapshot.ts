@@ -3061,7 +3061,10 @@ export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thum
 /** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
 export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
-export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; deciding: boolean };
+/** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
+export type MissionTurn = "decision" | "attention";
+
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null };
 /** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
 export type DeskJob = {
   id: string;

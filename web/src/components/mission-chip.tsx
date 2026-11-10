@@ -1,6 +1,7 @@
-import { CheckIcon, WaypointsIcon } from "lucide-react";
+import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/client";
-import { chipWords, conductedBy, missionDeciding, missionTone, type CellTone, type ConductorOwner } from "../missions";
+import { chipWords, conductedBy, missionDelay, missionTone, missionTurn, TURN_WORDS, type CellTone, type ConductorOwner } from "../missions";
+import type { MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
 import { TONE_TEXT } from "./mission-tone";
 import { useShellStore } from "../store";
@@ -11,8 +12,9 @@ import { Hint } from "./ui/tooltip";
  * mission it conducts as `미션 n/m`, its plan or its merge wait; pressing it
  * opens the map in the lane's 보기 slot. Its face is the mission icon and,
  * while it runs, `n/m`; its words move to its hint and name. Its colour is the
- * map's state colour (PRD mission-plan-visibility B35, D-23), and a decision
- * waiting adds `!` before it (needs-you-cleanup B5). A row that
+ * map's state colour (PRD mission-plan-visibility B35, D-23); the operator's
+ * turn, a decision or a node raised to them, adds `!` before it
+ * (needs-you-cleanup B5), and a mission delay a grey pause. A row that
  * conducts nothing draws nothing, so no other row moves.
  */
 export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: (missionId: string) => void }) {
@@ -20,7 +22,7 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
   const mission = useShellStore((s) => conductedBy(s.rest, agent));
   if (!mission) return null;
   const { key, counts } = chipWords(mission);
-  return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={missionTone(mission)} deciding={missionDeciding(mission)} status={mission.status} onOpen={onOpen} />;
+  return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={missionTone(mission)} turn={missionTurn(mission)} delay={missionDelay(mission)} status={mission.status} onOpen={onOpen} />;
 }
 
 /**
@@ -28,7 +30,7 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
  * mission they were handed, not one the store holds (PRD
  * session-docs-and-assistant B34), in this same shape.
  */
-export function MissionChipView({ id, title, words, counts, tone, deciding, status, onOpen }: {
+export function MissionChipView({ id, title, words, counts, tone, turn, delay, status, onOpen }: {
   id: string;
   title: string;
   /** The chip's words, such as `미션`, said by its hint and name. */
@@ -36,12 +38,15 @@ export function MissionChipView({ id, title, words, counts, tone, deciding, stat
   /** `k/n`, or nothing while the mission plans or waits. */
   counts: string | null;
   tone: CellTone;
-  deciding: boolean;
+  /** The operator's turn, marked `!`. */
+  turn: MissionTurn | null;
+  /** The mission delay holding it, marked by a grey pause. */
+  delay: string | null;
   status?: string;
   onOpen: (missionId: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const label = [t("mission.chip.open"), title, words, counts, deciding ? t("mission.askDecision") : null].filter(Boolean).join(" · ");
+  const label = [t("mission.chip.open"), title, words, counts, turn ? t(TURN_WORDS[turn]) : null, delay ? t("mission.delay", { line: delay }) : null].filter(Boolean).join(" · ");
   const Mark = status === "done" ? CheckIcon : WaypointsIcon;
   return (
     <Hint label={label}>
@@ -51,14 +56,16 @@ export function MissionChipView({ id, title, words, counts, tone, deciding, stat
         data-mission-chip={id}
         data-mission-chip-status={status}
         data-mission-chip-tone={tone}
-        data-mission-chip-decision={deciding ? "true" : undefined}
+        data-mission-chip-turn={turn ?? undefined}
+        data-mission-chip-delay={delay ? "true" : undefined}
         className={cn("relative z-10 flex shrink-0 items-center gap-xxs rounded-xs bg-secondary px-xs text-micro outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", TONE_TEXT[tone])}
         onClick={(event) => {
           event.stopPropagation();
           onOpen(id);
         }}
       >
-        {deciding ? <span aria-hidden="true" className="font-semibold">!</span> : null}
+        {turn ? <span aria-hidden="true" className="font-semibold">!</span> : null}
+        {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : null}
         <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
         {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
       </button>

@@ -216,7 +216,7 @@ const MISSION_WORDS: Record<DeskMission["status"], MessageKey> = {
 /** A Conductor's `미션 k/n` chip (B34), drawn from the mission the job carries. */
 export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
-  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={missionToneOf(mission.status, mission.deciding)} deciding={mission.deciding} status={mission.status} onOpen={onOpen} />;
+  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={missionToneOf(mission.status, mission.turn !== null)} turn={mission.turn} delay={mission.delay} status={mission.status} onOpen={onOpen} />;
 }
 
 /** A job's plan as the pane head's plan chip draws it (B24): its cells, `n/m`, and `검토` while it waits for review. */

@@ -36,7 +36,7 @@ import {
   type MissionGroup,
   type MissionProject,
 } from "./missionList";
-import { heldNodes, missionCells, missionCounts, type TurnItem } from "./missions";
+import { heldNodes, missionCells, missionCounts, missionDelay, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
@@ -352,18 +352,21 @@ function Steps({ mission }: { mission: Mission }) {
 }
 
 /**
- * How many nodes its Conductor holds back, a quiet grey pause mark and number
- * at the row's end with `보류한 노드 N개` as its name; never in 내 차례's
- * colour or count. None when no node is held.
+ * What holds the mission back, a quiet grey pause mark at the row's end: the
+ * mission's delay, named by its reason, and how many nodes its Conductor
+ * holds back as a number (`보류한 노드 N개`); never in 내 차례's colour or
+ * count. None when nothing is held.
  */
 function HoldCount({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
   const held = heldNodes(mission);
-  if (held === 0) return null;
+  const delay = missionDelay(mission);
+  if (held === 0 && !delay) return null;
+  const name = [delay ? t("mission.delay", { line: delay }) : null, held > 0 ? t("mission.holdCount", { count: held }) : null].filter(Boolean).join(" · ");
   return (
-    <span className="flex shrink-0 items-center gap-xxs" role="img" aria-label={t("mission.holdCount", { count: held })} title={t("mission.holdCount", { count: held })} data-mission-row-held={held}>
+    <span className="flex shrink-0 items-center gap-xxs" role="img" aria-label={name} title={name} data-mission-row-held={held} data-mission-row-delay={delay ? "true" : undefined}>
       <PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-      <span className="font-mono tabular-nums">{held}</span>
+      {held > 0 ? <span className="font-mono tabular-nums">{held}</span> : null}
     </span>
   );
 }

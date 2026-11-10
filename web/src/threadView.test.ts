@@ -97,7 +97,7 @@ describe("a thread's screen", () => {
       p1: "tool",
       p2: { kind: "plan", plan },
       d: "tool",
-      m: { kind: "mission", mission: { id: "mission-3", title: "Desk 1차", status: "running", done: 1, total: 2, deciding: false } },
+      m: { kind: "mission", mission: { id: "mission-3", title: "Desk 1차", status: "running", done: 1, total: 2, turn: null, delay: null } },
       gone: "tool",
       f: { kind: "view", output: { id: "shots/dark.png", kind: "image", label: "dark.png", thumb: null, seen: true, pr_state: null } },
     });
