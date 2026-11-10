@@ -115,7 +115,74 @@ fn a_push_request_is_bounded_in_every_field_it_carries() {
             Err(Error::InvalidMessage),
             "{case:?}"
         );
+        // The relay's reader refuses the same table, under the request's id.
+        match decode_push(&text) {
+            PushAttempt::Push { id, request } => {
+                assert_eq!(id, case.id);
+                assert!(request.is_err(), "{case:?}");
+            }
+            PushAttempt::Unaddressable(_) => assert_eq!(case.id, 0),
+            PushAttempt::NotPush => panic!("{case:?} read as another message"),
+        }
     }
+    // Fields the relay fixes itself, an unknown environment and a missing
+    // field are each a wrong request, answered and never sent.
+    let good: serde_json::Value = serde_json::to_value(ClientMessage::Push(request())).unwrap();
+    for (name, value, field) in [
+        (
+            "topic",
+            serde_json::json!("com.example.other"),
+            PushField::Shape,
+        ),
+        (
+            "apns-push-type",
+            serde_json::json!("background"),
+            PushField::Shape,
+        ),
+        (
+            "environment",
+            serde_json::json!("staging"),
+            PushField::Environment,
+        ),
+        (
+            "environment",
+            serde_json::Value::Null,
+            PushField::Environment,
+        ),
+        ("token", serde_json::json!(7), PushField::Shape),
+    ] {
+        let mut wrong = good.clone();
+        wrong[name] = value;
+        assert_eq!(
+            decode_push(&wrong.to_string()),
+            PushAttempt::Push {
+                id: 7,
+                request: Err(field)
+            },
+            "{name}"
+        );
+        // Past the control budget only a valid push request is a message.
+        assert!(ClientMessage::decode(&wrong.to_string()).is_err());
+    }
+    let mut missing = good.clone();
+    missing.as_object_mut().unwrap().remove("collapse");
+    assert_eq!(
+        decode_push(&missing.to_string()),
+        PushAttempt::Push {
+            id: 7,
+            request: Err(PushField::Shape)
+        }
+    );
+    assert_eq!(
+        decode_push(&ClientMessage::Push(request()).encode().unwrap()),
+        PushAttempt::Push {
+            id: 7,
+            request: Ok(request())
+        }
+    );
+    // Neither the token nor the ciphertext is printed.
+    let printed = format!("{:?}", request());
+    assert!(!printed.contains(&request().token) && !printed.contains(&request().payload[..16]));
     // A body past the control budget is the push message's own bound, and a
     // message of any other kind that large is still refused at MAX_CONTROL.
     assert!(ClientMessage::Push(request()).encode().unwrap().len() > MAX_CONTROL);

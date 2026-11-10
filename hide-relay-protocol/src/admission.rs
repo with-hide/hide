@@ -13,7 +13,7 @@ pub const MAX_CONTROL: usize = 2048;
 /// (`docs/RELAY_PROTOCOL.md`, Push relay).
 pub const MAX_PUSH_CONTROL: usize = 6144;
 pub const ADMISSION_TIMEOUT_MS: u64 = 10_000;
-/// A device token is lowercase hex; 32 characters covers the shortest a
+/// A device token is hex, in either case; 32 characters covers the shortest a
 /// simulator issues and 200 the longest a device has been seen with.
 pub const MIN_TOKEN: usize = 32;
 pub const MAX_TOKEN: usize = 200;
@@ -182,19 +182,30 @@ pub enum PushEnvironment {
     Production,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PushRequest {
     /// The device's own request id, carried back in the result. Never 0.
     pub id: u32,
     pub environment: PushEnvironment,
-    /// The APNs device token, lowercase hex.
+    /// The APNs device token, hex (`token_valid`).
     pub token: String,
     /// Apple's plaintext collapse header. The sender makes it opaque with a
     /// per-phone key; it never carries an agent key or a tag.
     pub collapse: String,
     /// The RFC 8291 body, base64url: the only part that holds content.
     pub payload: String,
+}
+
+/// Printed without the token, the collapse value or the ciphertext, so a
+/// `Debug` of a request names no install and carries no content.
+impl std::fmt::Debug for PushRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushRequest")
+            .field("id", &self.id)
+            .field("environment", &self.environment)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PushRequest {
@@ -273,7 +284,9 @@ pub enum PushAttempt {
     },
 }
 
-/// Reads the push message in `text` before its fields are checked.
+/// Reads the push message in `text`: its id first, so a request whose fields
+/// are wrong is still answered under it, then the whole message through the
+/// one reader `ClientMessage::decode` uses (serde, then `PushRequest::check`).
 pub fn decode_push(text: &str) -> PushAttempt {
     if text.len() > MAX_PUSH_CONTROL {
         return PushAttempt::Unaddressable(Error::SizeLimit);
@@ -281,13 +294,10 @@ pub fn decode_push(text: &str) -> PushAttempt {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return PushAttempt::NotPush;
     };
-    let Some(object) = value.as_object() else {
-        return PushAttempt::NotPush;
-    };
-    if object.get("type").and_then(|value| value.as_str()) != Some("push_request") {
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("push_request") {
         return PushAttempt::NotPush;
     }
-    let id = object
+    let id = value
         .get("id")
         .and_then(serde_json::Value::as_u64)
         .and_then(|id| u32::try_from(id).ok())
@@ -295,37 +305,18 @@ pub fn decode_push(text: &str) -> PushAttempt {
     let Some(id) = id else {
         return PushAttempt::Unaddressable(Error::InvalidMessage);
     };
-    PushAttempt::Push {
-        id,
-        request: push_of(object),
-    }
-}
-
-fn push_of(object: &serde_json::Map<String, serde_json::Value>) -> Result<PushRequest, PushField> {
-    // Exactly the six keys: an extra one is a shape the relay does not read,
-    // and a missing one is the same.
-    if object.len() != 6 {
-        return Err(PushField::Shape);
-    }
-    let text = |name: &str| object.get(name).and_then(serde_json::Value::as_str);
-    let environment = match text("environment") {
-        Some("sandbox") => PushEnvironment::Sandbox,
-        Some("production") => PushEnvironment::Production,
-        _ => return Err(PushField::Environment),
+    let environment_known = matches!(
+        value.get("environment").and_then(serde_json::Value::as_str),
+        Some("sandbox" | "production")
+    );
+    let request = match serde_json::from_value::<ClientMessage>(value) {
+        Ok(ClientMessage::Push(request)) => request.check().map(|()| request),
+        // A missing, extra or mistyped field; the environment is named
+        // because the relay records it under its own event.
+        _ if !environment_known => Err(PushField::Environment),
+        _ => Err(PushField::Shape),
     };
-    let request = PushRequest {
-        id: object
-            .get("id")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|id| u32::try_from(id).ok())
-            .ok_or(PushField::Shape)?,
-        environment,
-        token: text("token").ok_or(PushField::Shape)?.to_owned(),
-        collapse: text("collapse").ok_or(PushField::Shape)?.to_owned(),
-        payload: text("payload").ok_or(PushField::Shape)?.to_owned(),
-    };
-    request.check()?;
-    Ok(request)
+    PushAttempt::Push { id, request }
 }
 
 /// base64url without padding, as APNs' collapse ids are carried here.
