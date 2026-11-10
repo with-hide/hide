@@ -25,7 +25,7 @@ digest() {
     local path text=""
     while IFS= read -r path; do
         text+="$(git hash-object -- "$path") $path"$'\n'
-    done < <(git ls-files -- hide-relay-protocol hide-relay-ios Cargo.lock rust-toolchain.toml | LC_ALL=C sort)
+    done < <(git ls-files -- hide-relay-protocol hide-relay-ios workspace-hack Cargo.toml Cargo.lock rust-toolchain.toml | LC_ALL=C sort)
     printf '%s' "$text" | shasum -a 256 | cut -d' ' -f1
 }
 
