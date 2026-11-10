@@ -232,7 +232,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       children: [entry({ type: "new_tab", area_id: area.id }, t("menus.paneMove.newTab")), ...[...area.displays, ...(layout.canvases[area.id] && !area.displays.some(item => item.id === layout.canvases[area.id]) ? [{ id: layout.canvases[area.id]! }] : [])].flatMap(item => {
         const tab = checkout.tabs.find(tab => tab.id === item.id);
         if (!tab) return [];
-        return [{ id: `pane_move_tab:${item.id}`, label: agentEntries(checkout).find(entry => entry.source_id === item.id)?.label ?? tab.label ?? item.id, unavailable: movingTab(operations, item.id) ? t("menus.paneMove.busy") : null, children: tab.panes.filter(pane => pane.id !== paneId).map(pane => ({ id: `pane_move_pane:${pane.id}`, label: pane.identity_label ?? pane.terminal_title ?? pane.herdr_label ?? pane.id, unavailable: reasonText(movePaneReason(pane, item.id, useShellStore.getState().rest?.terminal?.panes ?? [], operations)), children: MOVE_EDGES.map(edge => entry({ type: "pane", tab_id: item.id, pane_id: pane.id, area_id: area.id, edge }, t(`menus.${edge}`))) })) }];
+        return [{ id: `pane_move_tab:${item.id}`, label: agentEntries(checkout).find(entry => entry.source_id === item.id)?.label ?? tab.label ?? item.id, unavailable: movingTab(operations, item.id) ? t("menus.paneMove.busy") : null, children: tab.panes.filter(pane => pane.id !== paneId).map(pane => ({ id: `pane_move_pane:${pane.id}`, label: pane.identity_label ?? pane.terminal_title ?? pane.engine_label ?? pane.id, unavailable: reasonText(movePaneReason(pane, item.id, useShellStore.getState().rest?.terminal?.panes ?? [], operations)), children: MOVE_EDGES.map(edge => entry({ type: "pane", tab_id: item.id, pane_id: pane.id, area_id: area.id, edge }, t(`menus.${edge}`))) })) }];
       })],
     })) }];
   };
@@ -290,7 +290,7 @@ function PreviewTerminal({ pane }: { pane: PaneRow }) {
     return () => { node.replaceChildren(); };
   }, [pane.id]);
   return <section className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-pane-move-preview-pane={pane.id}>
-    <div className="flex h-(--size-pane-header) shrink-0 items-center truncate bg-card px-sm text-caption text-muted-foreground">{pane.identity_label ?? pane.terminal_title ?? pane.herdr_label}</div>
+    <div className="flex h-(--size-pane-header) shrink-0 items-center truncate bg-card px-sm text-caption text-muted-foreground">{pane.identity_label ?? pane.terminal_title ?? pane.engine_label}</div>
     <div ref={host} className="pointer-events-none relative min-h-0 flex-1 overflow-hidden" aria-hidden="true" />
     {!available ? text !== undefined ? <pre className="pointer-events-none absolute inset-x-0 bottom-0 top-(--size-pane-header) overflow-hidden whitespace-pre px-xs py-xs font-mono text-terminal text-foreground" aria-hidden="true">{text}</pre> : <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-sm text-caption text-muted-foreground">{t("menus.paneMove.previewUnavailable")}</div> : null}
   </section>;

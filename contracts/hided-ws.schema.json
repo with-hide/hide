@@ -186,10 +186,10 @@
       }
     },
     "daemonInfo": {
-      "description": "Payload of the daemon frame, sent once after a valid handshake and before the first snapshot: what the Settings General tab shows about the daemon. It never carries the token or environment values other than the paths named here; herdr_bin_path and herdr_socket_path are null when the daemon has none. host_id names this daemon host across restarts (`host-` and 32 hex digits, kept in the state directory's `host-id` file); the web shell files unsaved drafts under it, so a draft written against one Hide host is never opened by another that serves the same browser origin. host_name is the name of the machine the daemon runs on, which Settings names as the owner of every value the daemon stores; null when the system does not report one. The daemon also owns the core's one Settings observation flag: a client's `ai_settings` event with `observing` records only that connection's demand, the flag follows the first observer in and the last one out, and a connection that closes releases its demand.",
+      "description": "Payload of the daemon frame, sent once after a valid handshake and before the first snapshot: what the Settings General tab shows about the daemon. It never carries the token or environment values other than the paths named here; host_id names this daemon host across restarts (`host-` and 32 hex digits, kept in the state directory's `host-id` file); the web shell files unsaved drafts under it, so a draft written against one Hide host is never opened by another that serves the same browser origin. host_name is the name of the machine the daemon runs on, which Settings names as the owner of every value the daemon stores; null when the system does not report one. The daemon also owns the core's one Settings observation flag: a client's `ai_settings` event with `observing` records only that connection's demand, the flag follows the first observer in and the last one out, and a connection that closes releases its demand.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "schema_version", "pid", "host_id", "host_name", "started_at_unix", "state_dir", "core_state_path", "herdr_bin_path", "herdr_socket_path", "keep_alive", "idle_secs", "core_instance"],
+      "required": ["version", "schema_version", "pid", "host_id", "host_name", "started_at_unix", "state_dir", "core_state_path", "keep_alive", "idle_secs", "core_instance"],
       "properties": {
         "version": { "type": "string" },
         "schema_version": { "type": "integer", "const": 2 },
@@ -199,8 +199,6 @@
         "started_at_unix": { "type": "string" },
         "state_dir": { "type": "string" },
         "core_state_path": { "type": "string" },
-        "herdr_bin_path": { "type": ["string", "null"] },
-        "herdr_socket_path": { "type": ["string", "null"] },
         "keep_alive": { "type": "boolean" },
         "idle_secs": { "type": "integer" },
         "core_instance": {

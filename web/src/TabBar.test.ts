@@ -42,7 +42,7 @@ describe("tab composition", () => {
     const render = async (focused: string) => {
       const checkout = {
         id: "c1", next_tab_label: "Tab 2",
-        strip: [{ id: "herdr:t1", kind: "herdr", source_id: "t1", label: "Same title", preview: false }],
+        strip: [{ id: "engine:t1", kind: "engine", source_id: "t1", label: "Same title", preview: false }],
         tabs: [{ id: "t1", agent: null, sidebar: { focused_pane_id: focused }, panes: agents.map(({ pane_id, identity_label }) => ({ id: pane_id, identity_label })) }],
       } as unknown as import("./snapshot").Checkout;
       await act(async () => root.render(createElement(TooltipProvider, { children: createElement(AgentTab, { checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit: "titled", areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming: false, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) })));
@@ -67,7 +67,7 @@ describe("tab composition", () => {
     const { TooltipProvider } = await import("./components/ui/tooltip");
     const checkout = {
       id: "c1", next_tab_label: "Tab 2",
-      strip: [{ id: "herdr:t1", kind: "herdr", source_id: "t1", label: "작업 제목", preview: false }],
+      strip: [{ id: "engine:t1", kind: "engine", source_id: "t1", label: "작업 제목", preview: false }],
       tabs: [{ id: "t1", panes: [], agent: { state: { mark_tone: { kind: "warning", read: false } }, agent_kind: "claude", mark: "turn", demand: "approval", activity: "stopped", emphasized: true, status_code: "approval" } }],
     } as unknown as import("./snapshot").Checkout;
     const markup = renderToStaticMarkup(createElement(TooltipProvider, { children: createElement(AgentTab, { checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit: "titled", areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming: false, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) }));
@@ -92,7 +92,7 @@ async function renderCount(identities: (string | null)[], fit: TabFit = "titled"
   await clientI18n.changeLanguage("en");
   const checkout = {
     id: "c1", next_tab_label: "Tab 2",
-    strip: [{ id: "herdr:t1", kind: "herdr", source_id: "t1", label: "작업 제목", preview: false }],
+    strip: [{ id: "engine:t1", kind: "engine", source_id: "t1", label: "작업 제목", preview: false }],
     tabs: [
       { id: "t1", agent: null, panes: identities.map((identity_label, index) => ({ id: `device:p${index}`, identity_label, status_code: "unknown", children: identity_label === null ? null : { instrumented: true, uninstrumented_reason: null, uninstrumented_label: null, chips: [{ tone: { kind: "working", read: false }, pane_id: "another-tab:child", label: "Child elsewhere", detail: null, status_word_visible: false, agent_kind: "codex", demand: "none", activity: "working", emphasized: false, mark: "going", status_code: "working", delegated: true }] } })) },
       { id: "other-tab", agent: null, panes: [{ identity_label: "Other tab's agent" }] },

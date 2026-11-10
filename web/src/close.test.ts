@@ -11,7 +11,7 @@ function pane(id: string, extra: Partial<PaneRow> = {}): PaneRow {
     id,
     device_id: "local",
     device_pane_id: id,
-    herdr_label: id,
+    engine_label: id,
     terminal_title: null,
     cwd: "/",
     status_code: "idle",
@@ -49,7 +49,7 @@ describe("closeDecision", () => {
   });
 
   it("refuses to close while any pane's status is unknown", () => {
-    const decision = closeDecision([pane("p1"), pane("p2", { requires_close_status_check: true, herdr_label: "worker" })], []);
+    const decision = closeDecision([pane("p1"), pane("p2", { requires_close_status_check: true, engine_label: "worker" })], []);
     expect(decision).toEqual({ action: "status_unknown", label: "worker" });
   });
 });

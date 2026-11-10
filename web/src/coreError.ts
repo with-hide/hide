@@ -63,6 +63,8 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_start.shell_starting", "coreError.agent.shellStarting"],
   ["agent_start.shell_unreadable", "coreError.agent.shellUnreadable"],
   ["agent_start.line_unchecked", "coreError.agent.lineUnchecked"],
+  ["agent_start.refused_by_engine", "coreError.agent.refusedByHerdr"],
+  // Kept for a launch record stored before the engine name.
   ["agent_start.refused_by_herdr", "coreError.agent.refusedByHerdr"],
   ["agent_start.unconfirmed", "coreError.agent.unconfirmed"],
   ["agent_start.prompt_not_typed", "coreError.agent.promptNotTyped"],
@@ -162,7 +164,7 @@ const ENGINE_STATES = new Map<string, MessageKey>([
   ["unconfigured", "coreError.herdr.unconfigured"],
 ]);
 
-/** Why this machine's engine does not answer, from `status.herdr.state`; its `message` is the About tab's and the log's. */
+/** Why this machine's engine does not answer, from `status.engine.state`; its `message` is the About tab's and the log's. */
 export function engineStateText(state: string, t: TFunction<"translation">): string {
   return t(ENGINE_STATES.get(state) ?? "coreError.herdr.other");
 }

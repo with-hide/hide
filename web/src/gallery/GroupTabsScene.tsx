@@ -43,7 +43,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     // The second tab has one physical agent inside a named collection.
     // Its row stands alone, as the ungrouped fourth tab already does.
     if (state === "single") checkout.tabs[1]!.sidebar = { number: 2, manual_name: null, named_by_operator: false };
-    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "herdr", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? `탭 ${tab.sidebar?.number}`, preview: false }));
+    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "engine", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? `탭 ${tab.sidebar?.number}`, preview: false }));
     if (!plain) groups.push({ id: "login", name: content === "long" ? "로그인 개편과 여러 작업의 진행 상황을 함께 확인하는 긴 그룹 이름" : "로그인 개편", tabs: checkout.tabs.slice(0, 3).map(tabId) }, { id: "release", name: "릴리스 준비", tabs: [] });
     const selected = plain ? null : empty ? "release" : "login";
     const selectedGroup = groups.find(group => group.id === selected)!;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentReference, mentionCandidates, referenceLands, referenceText } from "./agentReference";
 import type { SnapshotRest } from "./snapshot";
 
-const reviewer = { pane_id: "w9J:p52", herdr_name: "reviewer", agent_kind: "codex", identity_label: "가입 페이지 문구 수정" };
+const reviewer = { pane_id: "w9J:p52", given_name: "reviewer", agent_kind: "codex", identity_label: "가입 페이지 문구 수정" };
 
 describe("an agent reference", () => {
   it("names the agent, its pane id and its task on one line", () => {
@@ -10,7 +10,7 @@ describe("an agent reference", () => {
   });
 
   it("falls back to the agent's kind when Herdr knows it by no name", () => {
-    expect(agentReference({ ...reviewer, herdr_name: undefined })).toBe("@codex (pane w9J:p52 · 가입 페이지 문구 수정)");
+    expect(agentReference({ ...reviewer, given_name: undefined })).toBe("@codex (pane w9J:p52 · 가입 페이지 문구 수정)");
   });
 
   it("writes a device pane's full address, so a reader on another machine finds that pane", () => {

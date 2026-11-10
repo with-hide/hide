@@ -199,7 +199,7 @@ function agentStatus(agent: Pick<AgentRow, "state" | "status_code">, t: TFunctio
  */
 export function agentEntry(scope: SearchDevice, agent: AgentRow, place: string | null, front: string, t: TFunction<"translation">): SearchEntry {
   const sentence = agent.detail || (agent.ask_subject ? askSubjectText(t, agent.ask_subject) : statusText(t, agent.status_code));
-  const name = agent.herdr_name && agent.herdr_name.toLowerCase() !== agent.identity_label.toLowerCase() ? agent.herdr_name : null;
+  const name = agent.given_name && agent.given_name.toLowerCase() !== agent.identity_label.toLowerCase() ? agent.given_name : null;
   return {
     id: `agent:${agent.pane_id}`,
     title: agent.identity_label,
