@@ -298,25 +298,22 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
     }
     assert!(!MISSION_SKILL.text().contains("hide task help"));
     assert!(MISSION_SKILL.text().contains("<!-- hide-skill@3:"));
-    // The issue stub is the whole procedure for a bug in Hide itself: where
-    // it goes, what it collects, what stays out and who says yes first.
+    // The issue stub names the bug and sends the agent to the help that owns
+    // the procedure and the template.
     assert!(ISSUE_SKILL.text().starts_with("---\nname: hide-issue\n"));
-    for rule in [
-        "gh issue list --repo with-hide/hide",
-        "### What happened",
-        "### Steps to reproduce",
-        "### Diagnostics",
-        "Logs/core.jsonl",
-        "Do not add a root cause, a proposed fix or a patch",
-        "wait for their yes",
-        "gh issue create --repo with-hide/hide",
-        "issues/new?template=bug.yml",
-    ] {
-        assert!(ISSUE_SKILL.text().contains(rule), "{rule}");
-    }
+    assert!(
+        ISSUE_SKILL
+            .text()
+            .contains("description: \"Report a bug in Hide itself")
+    );
+    assert!(ISSUE_SKILL.text().contains("run `hide issue help`"));
     assert!(ISSUE_SKILL.text().contains("<!-- hide-skill@1:"));
     // The session-start table sends the agent to it.
-    assert!(GUIDE_SKILL.text().contains("the `hide-issue` skill"));
+    assert!(
+        GUIDE_SKILL
+            .text()
+            .contains("`hide issue help`, which the `hide-issue` skill")
+    );
 }
 
 /// The retired entry must match the file shipped before the merge exactly.

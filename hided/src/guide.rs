@@ -29,7 +29,7 @@ mod tests {
         assert!(!guide.contains("hide task help"));
         assert!(guide.contains("run `hide mission help`"));
         assert!(guide.contains("A worker or reviewer of a mission node"));
-        assert!(guide.contains("use the `hide-issue` skill"));
+        assert!(guide.contains("run `hide issue help` and follow it"));
         for rule in [
             "explicitly asks for, invokes with `/hide-mission`",
             "without asking which way to work again",
@@ -97,6 +97,7 @@ mod tests {
             ),
             ("hide guide", text()),
             ("hide mission help", crate::mission_cli::HELP.to_owned()),
+            ("hide issue help", crate::issue_cli::HELP.to_owned()),
         ]
     }
 
