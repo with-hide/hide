@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide` and `hide-mission`;
+//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-mission` and `hide-issue`;
 //!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stubs stay while any of them is on;
@@ -239,11 +239,12 @@ pub const GUIDE_SKILL: Skill = Skill {
     // (PRD agent-profiles D-33, D-34). Version 8 routes complex work,
     // planning and review requests to missions (PRD hide-task-skill-merge B7, B8).
     // Version 9 proposes a mission before starting complex work.
+    // Version 10 adds the row that sends a bug in Hide itself to `hide-issue`.
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 9,
+    version: 10,
 };
 
 /// Routes work that needs a Conductor to `hide mission help`, leaving
@@ -258,10 +259,41 @@ pub const MISSION_SKILL: Skill = Skill {
     version: 3,
 };
 
+/// Files a bug in Hide itself on the public repository, in the shape of its
+/// bug form. The stub carries the whole procedure: unlike a mission there is
+/// no `hide` command behind it, so the template lives here.
+pub const ISSUE_SKILL: Skill = Skill {
+    name: "hide-issue",
+    description: "Report a bug in Hide itself to Hide's GitHub issues, with the exact error, versions, steps and log lines. Use when a hide command, pane, tab or screen fails in a way you or the operator saw and the cause is Hide, not the project's own code.",
+    body: concat!(
+        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply.\n\n",
+        "Use it only for a bug in Hide itself that you or the operator actually saw: a crash, a `hide` command that fails or answers wrongly for no reason of yours, a pane, tab or screen that behaves wrongly. A question, a feature wish, a bug in the project's own code, or something you only suspect is not a report.\n\n",
+        "1. Search first: `gh issue list --repo with-hide/hide --state open --search \"<the symptom>\"`. When one matches, add what you saw to it with `gh issue comment` and stop.\n",
+        "2. Collect the raw facts, not a diagnosis. The more exact the error, the better:\n",
+        "   - the exact command you ran and its whole output, a `{\"ok\":false,...}` line with its `reason` and `next_action` included;\n",
+        "   - `hide --version`, the operating system and its version, and for an agent involved its name and `--version`;\n",
+        "   - `hide workspace info` and `hide ps --here`;\n",
+        "   - the lines around the failure, with their timestamps, from `Logs/core.jsonl` in Hide's state folder (`$HIDE_STATE_DIR`, else the `state` folder under `~/.hide`) and, for the desktop app, from its `desktop.log` (`Copy diagnostics` names it);\n",
+        "   - the shortest steps that show it, and whether it happens every time, sometimes or once.\n",
+        "3. Write the report in this template and keep it under 6,000 characters (longer reports are closed automatically), pasting raw lines and cutting a log to the lines around the failure:\n\n",
+        "   ### What happened\n   What was done, what was expected, what came instead. What was seen, never a guessed cause.\n",
+        "   ### Steps to reproduce\n   1. ...\n",
+        "   ### How often\n   Every time | Sometimes | Once so far\n",
+        "   ### Where\n   Desktop app | hide in a browser tab | hide CLI | Phone | A connected device (SSH) | Install or update | Other\n",
+        "   ### hide version\n   the `hide --version` line\n",
+        "   ### Operating system\n   macOS | Windows | Linux, with its version\n",
+        "   ### Agent involved\n   Not agent-related, or the agent and its version\n",
+        "   ### Diagnostics\n   the raw command output and log lines in a fenced `text` block\n\n",
+        "4. Remove what is private before it leaves the machine: the home folder name in paths, tokens, keys and the operator's file contents. Do not add a root cause, a proposed fix or a patch.\n",
+        "5. Show the operator the title and body in one message and wait for their yes; a report is public and cannot be fully taken back. Then run `gh issue create --repo with-hide/hide --title \"<plain symptom>\" --body-file <file>` and give them the issue's link. When `gh` is missing or not signed in, give the operator the text and `https://github.com/with-hide/hide/issues/new?template=bug.yml` instead.",
+    ),
+    version: 1,
+};
+
 /// Every stub Hide writes; each skill folder holds all of them. A new stub
 /// is one more entry here and nothing else: the observe, write and remove
 /// passes read the array.
-pub const SKILLS: [Skill; 2] = [GUIDE_SKILL, MISSION_SKILL];
+pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, MISSION_SKILL, ISSUE_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.

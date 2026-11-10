@@ -29,6 +29,7 @@ mod tests {
         assert!(!guide.contains("hide task help"));
         assert!(guide.contains("run `hide mission help`"));
         assert!(guide.contains("A worker or reviewer of a mission node"));
+        assert!(guide.contains("use the `hide-issue` skill"));
         for rule in [
             "explicitly asks for, invokes with `/hide-mission`",
             "without asking which way to work again",
