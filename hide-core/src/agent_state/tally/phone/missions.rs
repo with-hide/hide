@@ -205,10 +205,10 @@ pub struct PhoneDecisionView {
     pub by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
-    /// What became of the last press that asked it to open again
-    /// (`DecisionView::reopen`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reopen: Option<PhoneDecisionReopen>,
+    /// What became of each kept press that asked it to open again
+    /// (`DecisionView::reopens`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reopens: Vec<PhoneDecisionReopen>,
 }
 
 /// A press's request id, and whether nothing will open for it; open again

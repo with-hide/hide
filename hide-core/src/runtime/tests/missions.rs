@@ -9274,11 +9274,11 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     let row = row_of(&mut runtime, DisplayKind::Browser).unwrap();
     assert!(!row.closed);
     assert_eq!(
-        row.reopen,
-        Some(super::mission_views::DecisionReopen {
+        row.reopens,
+        [super::mission_views::DecisionReopen {
             request_id: "r1".into(),
             refused: false
-        })
+        }]
     );
     // Pressed again, the open page is only brought forward.
     press(&mut runtime, question, &page_view, "r2");
@@ -9292,16 +9292,38 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     assert_eq!(runtime.front_workspace_key(), Some(key.clone()));
     assert!(!row_of(&mut runtime, DisplayKind::Diff).unwrap().closed);
 
-    // A file that cannot be read opens nothing, and its press ends refused.
+    // A file that cannot be read opens nothing, and two phones pressing it
+    // at once each find their own press refused on the row.
+    let refused = |request: &str| super::mission_views::DecisionReopen {
+        request_id: request.into(),
+        refused: true,
+    };
     press(&mut runtime, question, &file_view, "r4");
+    press(&mut runtime, question, &file_view, "r4b");
     let row = row_of(&mut runtime, DisplayKind::File).unwrap();
     assert!(row.closed);
+    assert_eq!(row.reopens, [refused("r4"), refused("r4b")]);
+    // A press whose View never comes ends refused once its wait is over.
+    runtime.hold_reopen("r4c", "mission-1", question, &file_view);
+    let waiting = super::mission_views::DecisionReopen {
+        request_id: "r4c".into(),
+        refused: false,
+    };
     assert_eq!(
-        row.reopen,
-        Some(super::mission_views::DecisionReopen {
-            request_id: "r4".into(),
-            refused: true
-        })
+        row_of(&mut runtime, DisplayKind::File)
+            .unwrap()
+            .reopens
+            .last(),
+        Some(&waiting)
+    );
+    let later = crate::runtime::memory::now_ms() + super::mission_views::REOPEN_WAIT_MS + 1;
+    assert!(runtime.expire_mission_view_reopens(later));
+    assert_eq!(
+        row_of(&mut runtime, DisplayKind::File)
+            .unwrap()
+            .reopens
+            .last(),
+        Some(&refused("r4c"))
     );
 
     // A question that changed, a link that kept nothing, and a checkout that
@@ -9346,11 +9368,11 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     press(&mut runtime, question, &gone_view, "r7");
     assert!(shown(&runtime, DisplayKind::Diff, diff_path).is_empty());
     assert_eq!(
-        row_of(&mut runtime, DisplayKind::Diff).unwrap().reopen,
-        Some(super::mission_views::DecisionReopen {
-            request_id: "r7".into(),
-            refused: true
-        })
+        row_of(&mut runtime, DisplayKind::Diff)
+            .unwrap()
+            .reopens
+            .last(),
+        Some(&refused("r7"))
     );
 }
 

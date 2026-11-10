@@ -638,6 +638,15 @@ impl Runtime {
         true
     }
 
+    /// Whether a press's reveal waits for `device`'s front to land
+    /// (`reveal_when_in_front`).
+    pub(super) fn reveal_waits_on(&self, device: &str) -> bool {
+        self.workspace_views
+            .as_ref()
+            .and_then(|store| store.pending_choice.as_ref())
+            .is_some_and(|pending| pending.device_id == device && pending.reveal.is_some())
+    }
+
     /// The device accepted the request that made the choice: the front
     /// landing gets its own stage, and a Memory visit may now go ahead.
     pub(super) fn acknowledge_choice(&mut self, device: &str, request: &str) {

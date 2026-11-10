@@ -114,7 +114,7 @@ export type PhoneMissionNode = MissionNodeBrief & {
 };
 
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */
-export type PhoneDecisionView = { device_id: string; display_id: string; view: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string; reopen?: DecisionReopen };
+export type PhoneDecisionView = { device_id: string; display_id: string; view: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string; reopens?: DecisionReopen[] };
 
 /** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
 export type PhoneMission = MissionBrief<PhoneMissionNode> & {
@@ -332,7 +332,7 @@ export type PhoneMessage =
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
   | { type: "ask_mission_material"; request_id: string; mission: string; key: number }
-  /** A closed View of the decision opened again on the Mac first; the row's `reopen` says what became of it. */
+  /** A closed View of the decision opened again on the Mac first; the row's `reopens` says what became of it. */
   | { type: "reopen_mission_view"; request_id: string; mission: string; key: number; view: string }
   /** The PR tab's own requests: `pr` is the list's key (`PhonePr.key`), `head` the card's head commit the merge was confirmed for. */
   | { type: "read_pr"; request_id: string; pr: string; look_again?: boolean }

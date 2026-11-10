@@ -36,13 +36,15 @@ use crate::view_layout::{Display, DisplayKind};
 
 /// How deep an opener's parents are walked to find the node's worker.
 const LINEAGE_LIMIT: usize = 32;
-/// The reopen requests whose outcome is kept for the press that sent them;
-/// the oldest goes first.
-const REOPENS_KEPT: usize = 8;
+/// The reopen requests whose outcome is kept for the press that sent them:
+/// four times the phones a Mac pairs (hided's `MAX_PHONES`), each sending one
+/// press at a time, and the oldest that ended goes first, so a press still
+/// waiting keeps its outcome while others come and go.
+const REOPENS_KEPT: usize = 16;
 /// How long a reopen waits for its View before it reads as not opened: a
 /// device answers within a stage and its front lands within
 /// `CHOICE_LANDING_TIMEOUT_MS` after, as a reveal there does.
-const REOPEN_WAIT_MS: u64 =
+pub(super) const REOPEN_WAIT_MS: u64 =
     super::CLOSE_STAGE_TIMEOUT_MS + super::workspace_view::CHOICE_LANDING_TIMEOUT_MS;
 
 /// The reopen requests a press named (`mission_view_reopen` with a request
@@ -52,6 +54,35 @@ pub(crate) struct Reopens {
     asked: std::collections::VecDeque<Reopen>,
     /// Counts the outcomes' changes, which a decision card compares.
     pub(super) edit: u64,
+}
+
+impl Reopens {
+    /// Whether a press `request_id` can be kept: one already kept is, and
+    /// otherwise the list has room or a press that ended to make room.
+    fn has_room(&self, request_id: &str) -> bool {
+        self.asked.len() < REOPENS_KEPT
+            || self
+                .asked
+                .iter()
+                .any(|asked| asked.request_id == request_id || asked.state != ReopenState::Waiting)
+    }
+
+    /// Keeps `reopen`, replacing a press of the same id, and at the cap the
+    /// oldest press that ended (`has_room` said there is one).
+    fn record(&mut self, reopen: Reopen) {
+        self.asked
+            .retain(|asked| asked.request_id != reopen.request_id);
+        if self.asked.len() >= REOPENS_KEPT
+            && let Some(ended) = self
+                .asked
+                .iter()
+                .position(|asked| asked.state != ReopenState::Waiting)
+        {
+            self.asked.remove(ended);
+        }
+        self.asked.push_back(reopen);
+        self.edit = self.edit.wrapping_add(1);
+    }
 }
 
 struct Reopen {
@@ -78,9 +109,9 @@ enum ReopenState {
     Refused,
 }
 
-/// What became of the last press that asked a row's View to open again, by
-/// its request id: open again when the row is no longer closed, refused
-/// when nothing will open, still waiting otherwise.
+/// What became of a press that asked a row's View to open again, by its
+/// request id: open again when the row is no longer closed, refused when
+/// nothing will open, still waiting otherwise.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DecisionReopen {
     pub request_id: String,
@@ -124,8 +155,10 @@ pub struct DecisionView {
     /// agent is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reopen: Option<DecisionReopen>,
+    /// Every kept press that asked it to open again, oldest first, so two
+    /// phones pressing it at once each find their own outcome.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reopens: Vec<DecisionReopen>,
 }
 
 impl Runtime {
@@ -342,13 +375,12 @@ impl Runtime {
                     DecisionViewBy::Conductor
                 };
                 let view = link.token();
-                let reopen = self
+                let reopens: Vec<DecisionReopen> = self
                     .missions
                     .reopens
                     .asked
                     .iter()
-                    .rev()
-                    .find(|asked| {
+                    .filter(|asked| {
                         asked.mission == mission.id
                             && asked.key == question.key
                             && asked.view == view
@@ -356,7 +388,8 @@ impl Runtime {
                     .map(|asked| DecisionReopen {
                         request_id: asked.request_id.clone(),
                         refused: asked.state == ReopenState::Refused,
-                    });
+                    })
+                    .collect();
                 let pane_of = |opener: Option<&crate::view_feedback::Opener>| {
                     opener.and_then(|opener| self.view_opener_snapshot(opener).pane_id)
                 };
@@ -373,7 +406,7 @@ impl Runtime {
                         closed: true,
                         by,
                         pane_id: pane_of(kept.opener.as_ref()),
-                        reopen,
+                        reopens: reopens.clone(),
                     });
                 };
                 Some(DecisionView {
@@ -387,7 +420,7 @@ impl Runtime {
                     closed: false,
                     by,
                     pane_id: pane_of(display.opener.as_ref()),
-                    reopen,
+                    reopens,
                 })
             })
             .collect()
@@ -446,15 +479,12 @@ impl Runtime {
             return Ok((link, true));
         }
         let kept = link.kept.clone().ok_or("mission_view_not_kept")?;
-        // A reveal refused as it was asked (a display cap, a checkout it
-        // cannot read from) says so in the error it sets.
-        let error_before = self.snapshot.status.last_error.clone();
         match kept.kind {
             DisplayKind::File => {
                 self.reveal_path(super::events::RevealPathPayload {
-                    path: kept.address,
-                    workspace_id,
-                    checkout_id,
+                    path: kept.address.clone(),
+                    workspace_id: workspace_id.clone(),
+                    checkout_id: checkout_id.clone(),
                     is_directory: false,
                     opener_pane: None,
                     kept_opener: kept.opener,
@@ -472,19 +502,26 @@ impl Runtime {
             }
             DisplayKind::Diff => {
                 self.reveal_in_checkout(super::session::FrontReveal::Diff {
-                    workspace_id,
-                    checkout_id,
-                    path: kept.address,
+                    workspace_id: workspace_id.clone(),
+                    checkout_id: checkout_id.clone(),
+                    path: kept.address.clone(),
                     committed: kept.committed,
                     opener: kept.opener,
                 });
             }
             DisplayKind::External => return Err("mission_view_not_kept"),
         }
-        if self.snapshot.status.last_error != error_before {
+        // Not open now, it opens only while its file's read or its device's
+        // front is still to come; otherwise the reveal was refused as it was
+        // asked (a display cap, a checkout it cannot read from, a file that
+        // could not be read).
+        let open = self.linked_display(&link).is_some();
+        let waits = self.reveal_waits_on(&link.device_id)
+            || (kept.kind == DisplayKind::File
+                && self.document_open_pending(&workspace_id, &checkout_id, &kept.address));
+        if !open && !waits {
             return Err("mission_view_open_refused");
         }
-        let open = self.linked_display(&link).is_some();
         Ok((link, open))
     }
 
@@ -498,6 +535,19 @@ impl Runtime {
             view,
             request_id,
         } = payload;
+        // A press is kept until it ends, never pushed out while it waits:
+        // with every kept press waiting, a new one opens nothing, and the
+        // phone that sent it ends its own wait.
+        if let Some(request_id) = &request_id
+            && !self.missions.reopens.has_room(request_id)
+        {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.view_reopen_refused",
+                "mission": mission, "question": key, "view": view,
+                "code": "mission_view_reopens_full",
+            }));
+            return false;
+        }
         let outcome = self.reopen_decision_view(&mission, key, &view);
         if let Err(code) = outcome {
             crate::diagnostic!(json!({
@@ -532,12 +582,7 @@ impl Runtime {
                 ReopenState::Refused,
             ),
         };
-        let reopens = &mut self.missions.reopens;
-        reopens.asked.retain(|asked| asked.request_id != request_id);
-        if reopens.asked.len() >= REOPENS_KEPT {
-            reopens.asked.pop_front();
-        }
-        reopens.asked.push_back(Reopen {
+        self.missions.reopens.record(Reopen {
             request_id,
             mission,
             key,
@@ -548,8 +593,24 @@ impl Runtime {
             state,
             until: super::memory::now_ms().saturating_add(REOPEN_WAIT_MS),
         });
-        reopens.edit = reopens.edit.wrapping_add(1);
         true
+    }
+
+    /// A press on row `view` whose View has not come yet, as a device's
+    /// checkout behind keeps one until its front lands.
+    #[cfg(test)]
+    pub(super) fn hold_reopen(&mut self, request_id: &str, mission: &str, key: u64, view: &str) {
+        self.missions.reopens.record(Reopen {
+            request_id: request_id.into(),
+            mission: mission.into(),
+            key,
+            view: view.into(),
+            place: Default::default(),
+            kind: DisplayKind::File,
+            address: String::new(),
+            state: ReopenState::Waiting,
+            until: super::memory::now_ms().saturating_add(REOPEN_WAIT_MS),
+        });
     }
 
     /// A file a waiting reopen asked for could not be read: nothing will
@@ -703,4 +764,47 @@ impl Runtime {
 /// says it and its address.
 fn kept_of(display: &Display) -> Option<KeptView> {
     KeptView::of(display, super::view_areas::display_label(display))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(request_id: &str, state: ReopenState) -> Reopen {
+        Reopen {
+            request_id: request_id.into(),
+            mission: "mission-1".into(),
+            key: 1,
+            view: "v1".into(),
+            place: ("local".into(), "/repo".into()),
+            kind: DisplayKind::File,
+            address: "/repo/notes.md".into(),
+            state,
+            until: 0,
+        }
+    }
+
+    /// A press is never pushed out while it waits: at the cap the oldest
+    /// press that ended goes, and with every kept press waiting a new one
+    /// is not kept (and so not run), while one already kept still is.
+    #[test]
+    fn a_waiting_reopen_is_kept_until_it_ends() {
+        let mut reopens = Reopens::default();
+        reopens.record(press("ended", ReopenState::Refused));
+        for index in 1..REOPENS_KEPT {
+            reopens.record(press(&format!("w{index}"), ReopenState::Waiting));
+        }
+        assert!(reopens.has_room("new"));
+        reopens.record(press("new", ReopenState::Waiting));
+        let kept: Vec<&str> = reopens
+            .asked
+            .iter()
+            .map(|asked| asked.request_id.as_str())
+            .collect();
+        assert_eq!(kept.len(), REOPENS_KEPT);
+        assert!(!kept.contains(&"ended"));
+        assert!(kept.contains(&"w1") && kept.contains(&"new"));
+        assert!(!reopens.has_room("later"));
+        assert!(reopens.has_room("w1"));
+    }
 }

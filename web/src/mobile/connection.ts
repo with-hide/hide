@@ -614,14 +614,16 @@ export function reopenMissionView(mission: PhoneMission, view: PhoneDecisionView
   patch(sent
     ? { missionReopen: { requestId, mission: mission.id, key, view: view.view }, missionAnswerError: null }
     : { missionAnswerError: { mission: mission.id, notice: missionReopenFailure("offline") } });
+  if (sent) watchMissionReopen(requestId);
   return sent;
 }
 
 /**
  * The press ends on what the core did, as the missions frame carries it: the row open again opens the
- * agent's 볼 것 (or, with that agent gone, leaves the open row as it is), a refusal or a question that
- * moved on says so, and a device that stopped answering says it is out of reach. The core ends a press
- * that never opens anything after its wait, so none of these waits for ever.
+ * agent's 볼 것 (or, with that agent gone, leaves the open row as it is), its own press refused among the
+ * row's kept presses, or a question that moved on, says so, and a device that stopped answering says it is
+ * out of reach. The core ends a press that never opens anything after its wait, and the phone gives up on
+ * one the core never kept after that wait and a margin, so none of these waits for ever.
  */
 function settleMissionReopen(): void {
   const { missionReopen: asked, missions } = usePhone.getState();
@@ -636,7 +638,20 @@ function settleMissionReopen(): void {
     if (row.pane_id) openDetail({ device_id: row.device_id, pane_id: row.pane_id }, "looks");
     return;
   }
-  if (row.reopen?.request_id === asked.requestId && row.reopen.refused) fail("refused");
+  if (row.reopens?.some((press) => press.request_id === asked.requestId && press.refused)) fail("refused");
+}
+
+/** Past the core's own wait (20 s) and a margin, a press the core never kept or never answered for ends as not opened. */
+const REOPEN_GIVE_UP_MS = 30_000;
+let reopenGiveUp: ReturnType<typeof setTimeout> | null = null;
+
+function watchMissionReopen(requestId: string): void {
+  if (reopenGiveUp) clearTimeout(reopenGiveUp);
+  reopenGiveUp = setTimeout(() => {
+    reopenGiveUp = null;
+    const asked = usePhone.getState().missionReopen;
+    if (asked?.requestId === requestId) patch({ missionReopen: null, missionAnswerError: { mission: asked.mission, notice: missionReopenFailure("failed") } });
+  }, REOPEN_GIVE_UP_MS);
 }
 
 function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>): void {

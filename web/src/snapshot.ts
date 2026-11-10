@@ -1504,8 +1504,8 @@ export type DecisionView = {
   by: "conductor" | "worker";
   /** The pane of the agent that opened it, while that agent is open. */
   pane_id?: string;
-  /** The last press that asked it to open again, by request id: refused when nothing will open; open again is `closed` gone. */
-  reopen?: DecisionReopen;
+  /** Each kept press that asked it to open again, by request id: refused when nothing will open; open again is `closed` gone. */
+  reopens?: DecisionReopen[];
 };
 
 /** What became of a press that asked a decision's View to open again (`DecisionReopen`). */
