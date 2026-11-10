@@ -1,266 +1,44 @@
-# The `@platform` web tests on macOS and Windows, the desktop suite whole on
-# macOS and its `@platform` tests on Linux and Windows, package checks and the
-# performance lane (perf.yml) nightly, and `verify` (pr.yml) with every lane on main. A push to main runs every lane
-# too, but a lane it fails opens no issue; here it opens a nightly-failure
-# issue, and a lane that breaks with no merge (a runner image, a service a test
-# reaches) is found within a day. The Rust toolchain is not one of those: its version is
-# the one `rust-toolchain.toml` names, so a new image cannot change it.
-# A test fails this run only when it fails its retry too (CI retries a failed
-# test once; .config/nextest.toml); a test that passes the retry is flaky, and
-# scripts/ci-flaky-report.py files it as an issue, as in pr.yml. A test that
-# fails its retry too is written as a `Failed test` annotation on its job.
-# Runner windows and Linux Xvfb exercise automation, not physical IME/device QA.
-# PRs run the whole web suite on Linux and its `@platform` tests on Windows (see pr.yml); macOS runs only here.
-# The `report` job, the one writer of `nightly-failure` issues, opens one per
-# annotated test, or per lane and failed step for a failed job that annotated
-# none (`infra` when that step only prepares the runner), with the candidate
-# pull requests merged since the lane's last green nightly and a two-day
-# expiry; it comments once per run attempt on an issue already open for the
-# same failure, opens at most 10 per run and lists the rest in one, and
-# closes a lane's issues when a scheduled run (or a hand run of `all`) passes
-# it. A run of any other branch writes no issue.
-# docs/TESTING.md, "Nightly failures", owns the policy.
-# Run it by hand from the Actions tab (workflow_dispatch); actual queue load
-# and completed jobs must be measured separately from this configured matrix.
-# A hand run picks `lane`: `all`, or one system's web and desktop suites, so
-# checking Windows does not occupy the macOS runners (one full dispatch used 7
-# macOS jobs for 65 minutes); `macos` also runs the performance lane. `verify`
-# and `package` run for `all` only. `agy` runs only the agent contracts on all
-# three systems, agy's and the folder trust contract of Claude Code and
-# Codex, so a branch can check them by hand
-# (`gh workflow run nightly.yml --ref <branch> -f lane=agy`).
-# The schedule runs everything. A lane left out is skipped, and the failure
-# report ignores a skipped job. The report job first checks that selected
-# jobs succeeded and all others skipped, on branches too; only its issue
-# reporting step is restricted to main, and it runs even if that check fails.
-#
-# The schedule is at 17 past the hour: GitHub delays runs scheduled on the
-# hour, when every repository's are due, and the 18:00 UTC run started
-# between 22:30 and 23:50 UTC.
-#
-# This repository is public, so GitHub disables a scheduled workflow after 60
-# days with no repository activity. If this run stops appearing, re-enable it in
-# the Actions tab rather than looking for a bug here.
-name: nightly
-
+# Temporary mission verification; reverted before delivery.
+name: shell draw repetition
 on:
-  schedule:
-    - cron: "17 17 * * *"
   workflow_dispatch:
     inputs:
       lane:
-        description: Which system's suites to run by hand
         type: choice
-        options: [all, linux, macos, windows, agy]
+        options: [all]
         default: all
-
 permissions:
   contents: read
-
-concurrency:
-  group: nightly
-  cancel-in-progress: false
-
 jobs:
-  # macOS and Windows run the web tests tagged `@platform`, as the pull
-  # request's platform lanes do: what differs by system is checked there, and
-  # the rest of the suite is the same code on every system, which the pull
-  # request and the `verify` job below already run whole on
-  # Linux, so Linux has no web job here. What this run adds is the desktop app
-  # on Linux, the packages, and a runner image that changed. `verify` owns
-  # Windows web/desktop and macOS desktop on a scheduled or `all` run; the
-  # direct calls below retain OS-only dispatch without running those twice.
-  web-e2e-macos:
-    name: web e2e (macOS @platform)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
-    uses: ./.github/workflows/web-e2e.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    permissions:
-      contents: read
-    with:
-      lane: nightly-macos
-      runner: macos-15
-      shards: 1
-      grep: "@platform"
-
-  web-e2e-windows:
-    name: web e2e (Windows @platform)
-    if: ${{ inputs.lane == 'windows' }}
-    uses: ./.github/workflows/web-e2e.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    permissions:
-      contents: read
-    with:
-      lane: nightly-windows
-      runner: windows-latest
-      shards: 1
-      grep: "@platform"
-
-  # The remote mailbox lane on macOS, the system of the usual remote device;
-  # a pull request runs it on Linux. The OS contract's three legs run in
-  # `verify` below, which plans every lane.
-  remote-mailbox-macos:
-    name: remote mailbox (macOS)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
-    uses: ./.github/workflows/remote-mailbox.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    permissions:
-      contents: read
-    with:
-      runner: macos-15
-
-  # The agy contract on all three systems (one system's on that system's hand
-  # run); a pull request runs only its Windows leg.
-  agy-contract-all:
-    name: agy contract
-    uses: ./.github/workflows/agy-contract.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    permissions:
-      contents: read
-    with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
-
-  # The agent journey: the stand-ins on Linux and macOS, the Windows forms
-  # and the pinned CLIs against the fake model on all three systems (one
-  # system's on that system's hand run); docs/VERIFICATION.md, Agent journey.
-  agent-journey:
-    name: agent journey
-    if: ${{ inputs.lane != 'agy' }}
-    uses: ./.github/workflows/agent-journey.yml
-    permissions:
-      contents: read
-    with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
-      fake: true
-
-  # Every pinned agent CLI in a pane holder across a node restart
-  # (holder-restart.yml), on all three systems (one system's on that
-  # system's hand run).
-  holder-restart:
-    name: holder restart
-    if: ${{ inputs.lane != 'agy' }}
-    uses: ./.github/workflows/holder-restart.yml
-    permissions:
-      contents: read
-    with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
-
-  # The real Claude Code and Codex read the folder trust Hide records for a
-  # worktree it made, on all three systems (one system's on that system's
-  # hand run, all three on `agy`'s, the other agent contract); a pull request
-  # runs only the format tests, in `rust` and `windows check`.
-  agent-trust-contract-all:
-    name: agent trust contract
-    uses: ./.github/workflows/agent-trust-contract.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    permissions:
-      contents: read
-    with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
-
-  # The whole desktop suite runs on macOS, the system the desktop app is written
-  # against. Linux and Windows run only the tests tagged `@platform`: what the
-  # desktop host does differently on that system (its processes and local
-  # stream, whether closing the last window ends the app, the CLI's name and
-  # places, the path it hands the wire, the file manager's reveal, its
-  # accelerators). A test that checks no such difference stays on macOS.
-  desktop-e2e:
-    name: desktop e2e (${{ matrix.system }} ${{ matrix.system == 'macos' && 'full' || '@platform' }})
-    if: ${{ inputs.lane != 'agy' }}
+  web:
     strategy:
       fail-fast: false
       matrix:
-        # Only Linux here for a full run: `verify` already runs the whole
-        # macOS suite and Windows @platform, with its screenshots. An OS-only
-        # dispatch still runs its one system directly, without `verify`.
-        system: ${{ fromJSON(inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux"]') }}
+        include:
+          - {lane: shell-draw-linux, runner: ubuntu-24.04}
+          - {lane: shell-draw-macos, runner: macos-15}
+          - {lane: shell-draw-windows, runner: windows-latest}
+    uses: ./.github/workflows/web-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+    with:
+      lane: ${{ matrix.lane }}
+      runner: ${{ matrix.runner }}
+      shards: 1
+      grep: "a checkout's pull request:|expand takes the whole body|a right-click focuses its pane|Overview restores its exact current session|test browser startup preserves defaults"
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {lane: shell-draw-macos, runner: macos-15}
+          - {lane: shell-draw-windows, runner: windows-latest}
     uses: ./.github/workflows/desktop-e2e.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    permissions:
-      contents: read
     with:
-      lane: nightly-${{ matrix.system }}
-      runner: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-      # The whole suite on macOS, in the two shards `pr.yml` gives it, the
-      # @platform tests elsewhere, in one.
-      shards: ${{ matrix.system == 'macos' && 2 || 1 }}
-      grep: ${{ matrix.system != 'macos' && '@platform' || '' }}
-      keep-screenshots: ${{ matrix.system != 'macos' }}
-
-  # One fixed fixture measured against the release hided on macOS
-  # (docs/PERFORMANCE_TESTING.md, "The nightly performance lane"). A failed
-  # check is annotated as a failed measurement, which the report files.
-  perf:
-    name: performance (macOS)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
-    uses: ./.github/workflows/perf.yml
-
-  verify:
-    name: verify
-    if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
-    uses: ./.github/workflows/pr.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    # Direct agy and journey calls above own every OS, including the fake
-    # model. The internal Windows agy, Linux stand-in and Windows forms skip.
-    with:
-      nightly-agent-checks: true
-    # pr.yml's `plan` reads the earlier runs it may reuse; a called workflow
-    # gets no permission its caller does not grant, and GitHub refuses to
-    # start the whole nightly without it. Its jobs file a flaky test with the
-    # development issues App's token, not this one.
-    permissions:
-      contents: read
-      actions: read
-  package:
-    name: package
-    if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
-    uses: ./.github/workflows/package.yml
-    secrets:
-      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-    with:
-      version: 0.0.0-nightly.${{ github.run_number }}
-      include-macos: true
-
-  report:
-    name: nightly report
-    needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, holder-restart, desktop-e2e, perf, verify, package]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # The issue step reads this run with the development issues App's token
-    # and files in with-hide/hide-private (docs/TESTING.md, Nightly failures),
-    # so this job's own token reads only the checkout.
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - name: Require every selected job to succeed and every other job to skip
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-          LANE_INPUT: ${{ inputs.lane }}
-        run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"
-      # Unlike a lane's, a token this job cannot mint is its red: the run's
-      # failures would otherwise go unfiled in silence.
-      - name: Mint the development issues token
-        id: issues-token
-        if: ${{ always() && github.ref == 'refs/heads/main' }}
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
-          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-          owner: with-hide
-          repositories: hide,hide-private
-      - name: Open, comment on and close the nightly-failure issues
-        if: ${{ always() && github.ref == 'refs/heads/main' }}
-        env:
-          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-          LANE_INPUT: ${{ inputs.lane }}
-        run: python3 scripts/ci-flaky-report.py --nightly --lane-input "$LANE_INPUT"
+      lane: ${{ matrix.lane }}
+      runner: ${{ matrix.runner }}
+      shards: 1
+      grep: "failure: a missing CLI|lifetime: a second launch"
+      keep-screenshots: true
