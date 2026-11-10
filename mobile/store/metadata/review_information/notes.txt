@@ -1,7 +1,7 @@
 Hide for iPhone is the phone side of Hide, a free desktop program that people run on their own Mac, Windows or Linux computer (withhide.dev). The app has no account and no sign-in, so there is no demo account. It has a built-in demo with sample data instead. The demo opens every screen of the app and shows the app's full feature set, and we ask that it be the way this app is reviewed (guideline 2.1(a)).
 
 HOW TO TRY THE APP WITHOUT A COMPUTER
-1. Open the app. On the first screen tap "Try the demo" (the Korean interface says "체험해 보기"). No computer, account or network is needed.
+1. Open the app. On the first screen tap "Try the demo" (the Korean interface says "체험해 보기").
 2. A slim bar, "Demo - sample data", stays on top of every screen. Nothing is sent or saved in the demo.
 3. Agents tab: the sample computer's agents, grouped Needs You, Working, Unread and Seen. Open one to read its conversation and type a reply: the demo answers with a sample reply. The start button adds a sample agent.
 4. Missions tab: a mission with its steps, a pull request per step and one decision waiting. Tap an option to answer it.
@@ -21,10 +21,13 @@ WHY THIS IS MORE THAN A WEB PAGE (4.2)
 The phone is not a screen mirror and no code runs on it. The computer runs Hide and the agents; the phone shows agents, conversations, missions, pull requests and results in its own native-hosted interface and sends the user's typed input back. The connection goes through a relay and is end-to-end encrypted (Noise), and there is no account. Hide on the computer is free and is downloaded by the user from withhide.dev.
 
 "TO LOOK AT" (agent-made HTML)
-The "To look at" tab can show a page that the user's own agent made on the user's own computer, drawn in a sandboxed frame with a content security policy. It is the user's own content from the user's own computer, not an app store or third-party software, and it does not change the app's features (2.5.2; 4.7 does not apply).
+The "To look at" tab can show a page that the user's own agent made on the user's own computer, drawn in a sandboxed frame with a content security policy. It is the user's own content from the user's own computer, not third-party software, and it does not change the app's features (2.5.2; 4.7 does not apply).
+
+THE STORE SCREENSHOTS
+Each screenshot is the app running in the iOS Simulator in demo mode, framed with a headline. The lock-screen screenshot shows the notification banner the app's own demo posts, captured from the Simulator; the lock screen's wallpaper, date and clock around it are composed, because the Simulator cannot be locked from a script.
 
 ENCRYPTION
 The app uses only standard encryption algorithms (Noise_NK with X25519, ChaCha20-Poly1305 and BLAKE2b for the connection; Ed25519 signatures; RFC 8291 Web Push encryption with P-256 and AES-128-GCM and HMAC-SHA-256 for notifications) for its own connection and notifications, so it qualifies for the exemption. This release is not distributed in France or the European Union.
 
 CONTACT
-hello@withhide.dev. We do not list a phone number or address here: the account holder enters them in App Store Connect.
+hello@withhide.dev. The account holder enters a phone number and address in App Store Connect.
