@@ -17,8 +17,6 @@
 name: repeat changed tests
 
 on:
-  push:
-    branches: [ci/repeat-changed-tests]
   workflow_call:
     inputs:
       web:
