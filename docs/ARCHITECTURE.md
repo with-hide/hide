@@ -2533,6 +2533,7 @@ Schema 2 clients that request `snapshot_format: "semantic-rest-v1"` receive `res
 Omission retains a value, `null` clears an optional value and an empty array or map clears a collection; `workspace_view` is explicitly null when absent in this format.
 Without the capability, schema 2 keeps the supported complete-rest delta, including the omitted absent `workspace_view`; an unknown format is refused with `schema_mismatch` before snapshot delivery.
 A mismatched token, Origin, or schema version, or a ninth concurrent client, is closed with a reason code (`invalid_token`, `origin_not_allowed`, `schema_mismatch`, `client_limit`) and a diagnostic log line.
+The web shell follows a new token in its address by retiring the previous socket's pending file reads with `socket_closed` and clearing its browser-comment state before opening the successor; the previous socket's late close cannot reject the successor's reads.
 After a valid handshake the daemon reads from the revision the client sent (`have_revision`, the cursor `Core::snapshot_delta_payload` takes), and then one delta frame per core notification burst.
 A client with cursor 0 gets a self-contained `snapshot`; a reconnecting client resumes with a `delta` that carries only what changed while it was away.
 When the core cannot serve the cursor, because the client's revision is ahead of the core's after a daemon restart, the daemon re-reads from zero and sends a `snapshot` (`server::classify_frame` owns that rule).

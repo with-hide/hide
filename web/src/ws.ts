@@ -132,6 +132,11 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     return connection === "moving" || (coreMove !== null && moveUnderWay(coreMove.state));
   };
 
+  const clearSocketState = () => {
+    clearPending("socket_closed");
+    resetBrowserComments();
+  };
+
   const open = () => {
     if (closed) return;
     const token = tokenFromLocation();
@@ -276,8 +281,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       // Only the socket that died fails its own reads; a stale socket's close
       // must not reject a read in flight on its successor.
       if (socket === ws) {
-        clearPending("socket_closed");
-        resetBrowserComments();
+        clearSocketState();
       }
       // A socket a newer one replaced (a new token in the address) ends
       // without a say in the window's state: its refusal is the old token's.
@@ -321,6 +325,9 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     backoff = BACKOFF_START_MS;
     healthFails = 0;
     const replaced = socket;
+    // Retire reads owned by the old socket before a successor can start
+    // any. Its eventual close must leave the successor's reads alone.
+    clearSocketState();
     open();
     replaced?.close();
   };

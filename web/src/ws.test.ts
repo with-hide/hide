@@ -345,18 +345,26 @@ it("a new token in the address draws a page the old token's refusal left gone", 
   shell.close();
 });
 
-it("a refusal that reaches a socket the new token replaced does not end the window", async () => {
+it("a token replacement fails its old reads and a late refusal leaves the new reads alone", async () => {
   const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  configureFileBytes(shell.dispatch);
   const old = made(0);
   old.open();
+  const outcome = (read: Promise<Uint8Array>) => read.then(() => "answered", (error: Error) => error.message);
+  const oldRead = outcome(requestFileBytes("/repo/old.bin"));
   addressNowCarries("t2");
+  expect(await oldRead).toBe("socket_closed");
   const again = made(1);
   again.open();
   again.frame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+  const newRead = outcome(requestFileBytes("/repo/new.bin"));
+  const request = JSON.parse(again.sent.at(-1)!) as { payload: { request_id: string } };
   old.closeWith(4001, "invalid_token");
   await vi.advanceTimersByTimeAsync(nextBackoff(BACKOFF_START_MS));
   expect(useShellStore.getState().connection).toBe("live");
   expect(FakeSocket.made).toHaveLength(2);
+  again.frame({ type: "file_bytes_error", payload: { request_id: request.payload.request_id, reason: "read_failed" } });
+  expect(await newRead).toBe("read_failed");
   shell.close();
 });
 
