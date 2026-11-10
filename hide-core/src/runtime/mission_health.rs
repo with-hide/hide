@@ -758,6 +758,26 @@ impl Runtime {
                     changed = true;
                 }
             }
+            // A node's hold ends by itself too.
+            let mut lifted = false;
+            for node in &mut mission.nodes {
+                if node
+                    .hold
+                    .as_ref()
+                    .is_some_and(|hold| now >= hold.until_unix_ms)
+                {
+                    crate::diagnostic!(json!({
+                        "component": "missions", "kind": "mission.node_hold_ended",
+                        "mission": mission.id, "node": node.key,
+                    }));
+                    node.hold = None;
+                    lifted = true;
+                }
+            }
+            if lifted {
+                mission.updated_at_unix_ms = now;
+                changed = true;
+            }
             let mission = &self.missions.book.missions[index];
             if self.mission_stale(mission) {
                 continue;

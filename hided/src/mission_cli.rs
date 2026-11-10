@@ -5,8 +5,8 @@
 
 use crate::env::Env;
 use hide_core::missions::{
-    Checks, MissionCommand, MissionEnd, MissionScope, NodePatch, NodeStatus, PlanInput, Verdict,
-    next_action,
+    Checks, HoldInput, MissionCommand, MissionEnd, MissionScope, NodePatch, NodeStatus, PlanInput,
+    Verdict, next_action,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks] [--hold <why> --for <30m|2h> | --no-hold]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -75,8 +75,11 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
             "--checks",
             "--reviewer",
             "--verifier",
+            "--hold",
+            "--for",
         ],
         &[
+            "--no-hold",
             "--no-agent-id",
             "--no-pr",
             "--no-base-pr",
@@ -375,6 +378,21 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 checks: one(&values, &set, "--checks", "--no-checks")?
                     .map(|value| value.map(checks).transpose())
                     .transpose()?,
+                hold: match (
+                    one(&values, &set, "--hold", "--no-hold")?,
+                    values.get("--for"),
+                ) {
+                    (Some(Some(why)), Some(span)) => Some(Some(HoldInput {
+                        why: why.to_owned(),
+                        for_minutes: minutes("--for", span)?,
+                    })),
+                    (Some(Some(_)), None) => {
+                        return Err("--hold needs --for <30m|2h>: a hold always ends".to_owned());
+                    }
+                    (_, Some(_)) => return Err("--for goes with --hold".to_owned()),
+                    (Some(None), None) => Some(None),
+                    (None, None) => None,
+                },
                 reviewer: values.get("--reviewer").map(|id| key(id)).transpose()?,
                 verifier: values.get("--verifier").map(|id| key(id)).transpose()?,
             };
@@ -1178,5 +1196,33 @@ mod tests {
             panic!("a delay command");
         };
         assert_eq!((line, for_minutes), (None, None));
+    }
+
+    /// A node is held with why and for how long, and lifted with
+    /// `--no-hold`; a hold with no end is refused.
+    #[test]
+    fn a_node_is_held_for_a_while() {
+        let node = |line: &[&str]| parse(words(line).iter());
+        let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) =
+            node(&["node", "a", "--hold", "tonight", "--for", "9h"])
+        else {
+            panic!("a node command");
+        };
+        assert_eq!(
+            patch.hold,
+            Some(Some(HoldInput {
+                why: "tonight".into(),
+                for_minutes: 540,
+            }))
+        );
+        let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) =
+            node(&["node", "a", "--no-hold"])
+        else {
+            panic!("a node command");
+        };
+        assert_eq!(patch.hold, Some(None));
+        assert!(node(&["node", "a", "--hold", "tonight"]).is_err());
+        assert!(node(&["node", "a", "--for", "1h"]).is_err());
+        assert!(node(&["node", "a", "--no-hold", "--for", "1h"]).is_err());
     }
 }

@@ -10485,3 +10485,64 @@ fn a_node_not_started_is_raised_twenty_minutes_after_it_was_first_seen() {
         "{again:?} then {third:?}"
     );
 }
+
+/// A node not yet started is held for a while: it raises no stall, it
+/// cannot start, and its hold ends by itself; a node at work is not held.
+#[test]
+fn a_held_node_raises_no_stall_cannot_start_and_ends_by_itself() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"hold": {"why": "tonight", "for_minutes": 30}}}),
+    )
+    .unwrap();
+    let node = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().nodes[0].clone();
+    let until = node(&runtime).hold.expect("held").until_unix_ms;
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_node_held"), "{refused}");
+    // Held, it raises nothing however long it waits.
+    runtime.stall_missions(until - 25 * minute);
+    runtime.stall_missions(until - 1);
+    assert_eq!(node(&runtime).attention, None);
+    // Its end lifts it, and it is counted from then.
+    assert!(runtime.stall_missions(until));
+    assert_eq!(node(&runtime).hold, None);
+    runtime.stall_missions(until + 20 * minute - 1);
+    assert_eq!(node(&runtime).attention, None);
+    runtime.stall_missions(until + 20 * minute);
+    assert_eq!(
+        node(&runtime).attention.map(|attention| attention.reason),
+        Some(AttentionReason::NotStarted)
+    );
+    // A node at work cannot be held.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"hold": {"why": "later", "for_minutes": 30}}}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_node_started"), "{refused}");
+}

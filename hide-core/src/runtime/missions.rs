@@ -261,6 +261,8 @@ pub struct NodeView {
     pub asks_push: bool,
     /// The warnings it carries, its Conductor's alone: the card's `⚠`.
     pub warnings: Vec<crate::missions::NodeWarning>,
+    /// Why and until when its Conductor holds it (`MissionNode::hold`).
+    pub hold: Option<crate::missions::NodeHold>,
     /// Who or what it waits on now (`waiting_on`), which `hide mission show`
     /// prints; none for a node that waits on nothing.
     pub waiting_on: Option<WaitingOn>,
@@ -3671,6 +3673,7 @@ impl Runtime {
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
                     asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
+                    hold: node.hold.clone(),
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),

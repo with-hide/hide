@@ -445,7 +445,11 @@ fn still_holds(
         AttentionReason::NotStarted
         | AttentionReason::WarningStood
         | AttentionReason::WaitStood
-            if stall_excused(mission, fact.unmet == [crate::mission_criteria::GATE_KEY]) =>
+            if stall_excused(
+                mission,
+                node,
+                fact.unmet == [crate::mission_criteria::GATE_KEY],
+            ) =>
         {
             false
         }
@@ -676,7 +680,7 @@ pub(crate) fn stalls(
     }
     let mut out = Vec::new();
     for (at, node) in mission.nodes.iter().enumerate() {
-        if node.attention.is_some() || stall_excused(mission, operator_waits[at]) {
+        if node.attention.is_some() || stall_excused(mission, node, operator_waits[at]) {
             continue;
         }
         let stall = |reason, pr| Stall {
@@ -706,12 +710,12 @@ pub(crate) fn stalls(
     out
 }
 
-/// Whether no move is owed now: a delay holds the mission, a decision waits
-/// on the operator, or the node waits on the operator's answer to its gate
-/// or to a question about it. The one rule raising and settling a stall
-/// read.
-fn stall_excused(mission: &Mission, operator_waits: bool) -> bool {
-    mission.delay.is_some() || mission.decision.is_some() || operator_waits
+/// Whether no move is owed now: a delay holds the mission or the node, a
+/// decision waits on the operator, or the node waits on the operator's
+/// answer to its gate or to a question about it. The one rule raising and
+/// settling a stall read.
+fn stall_excused(mission: &Mission, node: &MissionNode, operator_waits: bool) -> bool {
+    mission.delay.is_some() || node.hold.is_some() || mission.decision.is_some() || operator_waits
 }
 
 /// Whether `node` could start and was not: not started (`started`), the

@@ -325,6 +325,7 @@ fn mission(
             pushed_at_unix_ms: None,
             asks_push: false,
             warnings: Vec::new(),
+            hold: None,
             waiting_on: None,
             work: None,
             gate: None,

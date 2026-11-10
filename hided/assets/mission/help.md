@@ -14,6 +14,7 @@ hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base
                         [--commit <sha>] [--verdict pass|fail] [--checks <passed>/<total>]
                         [--no-agent-id] [--no-pr] [--no-base-pr] [--no-branch] [--no-line] [--no-change] [--no-review]
                         [--no-commit] [--no-verdict] [--no-checks] [--reviewer <agent-id>] [--verifier <agent-id>]
+                        [--hold <why> --for <30m|2h>] [--no-hold]
 hide mission record <node> <line> (--pass | --fail) --evidence <text> [--summary <text>] [--commit <sha>] [--rerun]
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
@@ -294,7 +295,7 @@ No move is owed while a delay holds the mission, a decision waits on the operato
 A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
 Each clock starts when Hide first sees the node stand there, so lifting a delay, freeing a place, answering a decision or restarting Hide starts it again, and an update raises nothing at once.
 Each stall is raised once while it stands and goes when its move comes or none is owed; if it stands again later, that is a new one.
-To hold a node on purpose, depend on an `external` node or set a delay; there is no silent wait.
+To hold on purpose: a node that waits on a pull request outside the mission depends on an `external` node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started, at most 24h; it cannot start until `--no-hold` or its end, and no stall is raised on it); the whole mission is held with `hide mission delay`. There is no silent wait.
 
 ### Finish lines
 

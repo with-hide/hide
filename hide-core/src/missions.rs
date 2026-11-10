@@ -1102,6 +1102,27 @@ pub struct MissionNode {
     /// The warnings the node carries now, at most one of each kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<NodeWarning>,
+    /// The Conductor holds this node, not yet started, on purpose: why and
+    /// until when, at most `DELAY_LIMIT_MINUTES` (`hide mission node --hold
+    /// --for`). No stall is raised on it, it cannot start, and it ends by
+    /// itself (`Runtime::stall_missions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<NodeHold>,
+}
+
+/// Why and until when a node is held (`MissionNode::hold`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeHold {
+    pub why: String,
+    pub until_unix_ms: u64,
+}
+
+/// A hold as a command asks for it: why, and for how many minutes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoldInput {
+    pub why: String,
+    pub for_minutes: u32,
 }
 
 /// The agent item, model and effort Hide started a node's worker with,
@@ -2371,6 +2392,13 @@ pub struct NodePatch {
     pub reviewer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifier: Option<String>,
+    /// Holds the node, not yet started (`MissionNode::hold`); `null` lifts it.
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold: Option<Option<HoldInput>>,
 }
 
 impl NodePatch {
@@ -2395,8 +2423,10 @@ impl NodePatch {
             checks,
             reviewer,
             verifier,
+            hold,
         } = self;
-        status.is_none()
+        hold.is_none()
+            && status.is_none()
             && agent_id.is_none()
             && base_pr.is_none()
             && attempts.is_none()
@@ -2644,6 +2674,7 @@ pub(crate) fn apply_plan(
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
                 warnings: Vec::new(),
+                hold: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -2885,7 +2916,30 @@ pub(crate) fn apply_patch(
             &node.key,
         ));
     }
+    if let Some(Some(hold)) = &patch.hold {
+        if !valid_line(&Some(hold.why.clone()), LINE_LIMIT)
+            || !(1..=DELAY_LIMIT_MINUTES).contains(&hold.for_minutes)
+        {
+            return Err("mission_text_invalid".into());
+        }
+        if node.started() {
+            return Err(crate::coordination::refusal(
+                "mission_node_started",
+                &node.key,
+            ));
+        }
+    }
     let mut next = node.clone();
+    match &patch.hold {
+        Some(Some(hold)) => {
+            next.hold = Some(NodeHold {
+                why: hold.why.trim().to_owned(),
+                until_unix_ms: now + u64::from(hold.for_minutes) * 60_000,
+            });
+        }
+        Some(None) => next.hold = None,
+        None => {}
+    }
     if let Some(status) = patch.status {
         if status == NodeStatus::Working && next.started_at_unix_ms.is_none() {
             next.started_at_unix_ms = Some(now);
@@ -2940,6 +2994,10 @@ pub(crate) fn apply_patch(
     // judged against its folder, and a fresh check.
     if next.status != NodeStatus::Done {
         next.done_head = None;
+    }
+    // A held node starts only once its hold is lifted.
+    if next.hold.is_some() && next.started() {
+        return Err(crate::coordination::refusal("mission_node_held", &node.key));
     }
     Ok(next)
 }
@@ -3149,6 +3207,12 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_checkers_invalid" => {
             "Name each of review and verify at most once per node, each with one to five agents in \"by\""
+        }
+        "mission_node_held" => {
+            "The node is held: lift it with `hide mission node <key> --no-hold` before you start it"
+        }
+        "mission_node_started" => {
+            "Only a node not yet started can be held; a node at work that waits on something says so in its line"
         }
         "mission_external_invalid" => {
             "An external node names one pull request (\"external\": {\"pr\": <n>}) or branch (\"external\": {\"branch\": \"<name>\"}) and no worker, delivery, criteria or checks; Hide marks it done when it reaches main, and you can only drop it"

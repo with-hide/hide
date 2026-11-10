@@ -5853,9 +5853,45 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "conflicts": [
+                        "--no-hold"
+                    ],
+                    "name": "--hold",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-hold"
+                    ],
+                    "name": "--for",
+                    "required": false,
+                    "requires": [
+                        "--hold"
+                    ],
+                    "value": {
+                        "type": "span"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--hold",
+                        "--for"
+                    ],
+                    "name": "--no-hold",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
             ],
             "refusals": [
+                "mission_node_held",
+                "mission_node_started",
                 "mission_node_unknown",
                 "mission_not_conductor",
                 "mission_ambiguous",
@@ -6625,7 +6661,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:95315d95fb5d7613f4c69540f5db16cce84315bdec2478229972d211e93082b8",
+    "digest": "sha256:e78ac08e0ed728fcac8ac9bd891dc603d87032b43cace592107cb21212c79d39",
     "envelopes": {
         "agent": {
             "answer": "value",
