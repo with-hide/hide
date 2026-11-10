@@ -10102,3 +10102,180 @@ fn a_gate_with_no_conductor_is_raised_to_the_operator_until_one_comes_back() {
     assert_eq!(view.gate.unwrap().state, GateState::Ahead);
     assert!(view.attention.is_none_or(|attention| !attention.item));
 }
+
+/// `criteria_plan` with a gate on both nodes, `fix`'s and `docs`'s as given
+/// (`null` takes it away).
+fn two_gates(fix: Value, docs: Value) -> Value {
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][0]["gate"] = fix;
+    plan["plan"]["nodes"][1]["gate"] = docs;
+    plan
+}
+
+/// The look the mission's open decision asks about, and its node.
+fn asked_gate(runtime: &Runtime) -> Option<(String, Option<String>)> {
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    mission
+        .question
+        .as_ref()
+        .zip(mission.decision.clone())
+        .map(|(question, line)| (line, question.node.clone()))
+}
+
+/// PRD mission-human-gate D-15, B14, B24 (review F1): a replan that changes
+/// or takes away the gate whose question stands takes that question with
+/// it, so the gate waiting behind it asks, and the changed gate asks with
+/// its new words; a question of the Conductor's own stays through a replan
+/// of a gate.
+#[test]
+fn a_replan_of_an_asked_gate_takes_its_question_and_the_next_gate_asks() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(json!("the parser on a v1 file"), json!("the guide page")),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    met_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some((
+            "Check the parser on a v1 file and tell me".into(),
+            Some("fix".into())
+        ))
+    );
+
+    // Taken away: its question goes, and the gate behind it asks.
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(Value::Null, json!("the guide page")),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.question.is_none() && mission.decision.is_none());
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some((
+            "Check the guide page and tell me".into(),
+            Some("docs".into())
+        ))
+    );
+
+    // Changed: it asks again with its new words.
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(Value::Null, json!("the guide's first page")),
+    )
+    .unwrap();
+    assert!(asked_gate(&runtime).is_none());
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some((
+            "Check the guide's first page and tell me".into(),
+            Some("docs".into())
+        ))
+    );
+
+    // The Conductor's own question stays through a replan of the gate.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which name should the guide use?"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(Value::Null, json!("the guide's last page")),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some(("Which name should the guide use?".into(), None))
+    );
+}
+
+/// PRD mission-human-gate D-21, mission-node-simple D-15 (review F2): the
+/// operator's `끝으로` on a raise goes past the node's open lines and passes
+/// its gate through the gate's one entry, as their answer from the card
+/// with its words, and the Conductor is told the gate passed.
+#[test]
+fn the_operators_done_passes_a_gate_through_its_one_entry() {
+    use crate::mission_criteria::{CriterionState, GateVia};
+    use crate::missions::WakeEvent;
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    assert!(node_view(&runtime, "fix").attention.is_some());
+
+    operator_chose(&mut runtime, "fix", "done");
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    let gate = fix.gate.unwrap();
+    assert_eq!(
+        (gate.state, gate.via, gate.said.as_deref()),
+        (GateState::Passed, Some(GateVia::Card), Some("운영자 판단"))
+    );
+    assert!(
+        fix.criteria
+            .iter()
+            .filter(|line| line.key != "human")
+            .all(|line| line.state != CriterionState::Open)
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::GatePassed && wake.node == "fix")
+    );
+}

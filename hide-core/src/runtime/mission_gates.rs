@@ -23,7 +23,7 @@ use crate::mission_criteria::{CriterionKind, CriterionState, GATE_KEY, GateVia};
 use crate::mission_events::{AnswerSource, EventKind, MissionEvent};
 use crate::missions::{
     AttentionReason, Mission, MissionNode, MissionStatus, NodePatch, NodeStatus, PendingWake,
-    Question, WakeEvent, answer_text,
+    Question, WakeEvent, answer_text, asks_gate as asks, gate_asked,
 };
 use crate::model::InterfaceLanguage;
 
@@ -39,6 +39,20 @@ pub(crate) enum GateAnswer {
     /// `고칠 점 있음` or a written answer: the words go to the node's worker
     /// as a defect and the gate stays open.
     Fix,
+    /// `끝으로` on a raise (PRD mission-node-simple D-15): the operator goes
+    /// past every line the node left open, its gate with them, so it
+    /// passes whether or not it was reached yet.
+    Past,
+}
+
+impl GateAnswer {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fix => "fix",
+            Self::Past => "past",
+        }
+    }
 }
 
 /// Where a node's gate stands, derived from its line and the open decision
@@ -94,23 +108,6 @@ fn gate_question(look: &str, language: InterfaceLanguage) -> String {
         InterfaceLanguage::SimplifiedChinese => format!("请查看{look}后告诉我"),
         InterfaceLanguage::English => format!("Check {look} and tell me"),
     }
-}
-
-/// Whether `question` is the one `node`'s gate is asked by.
-fn asks(question: Option<&Question>, node: &MissionNode) -> bool {
-    let Some(line) = crate::mission_criteria::gate(&node.criteria) else {
-        return false;
-    };
-    question.is_some_and(|question| {
-        line.asked == Some(question.key) && question.node.as_deref() == Some(node.key.as_str())
-    })
-}
-
-/// The node whose gate the mission's open decision asks, if it asks one.
-pub(super) fn gate_asked(mission: &Mission) -> Option<&MissionNode> {
-    let question = mission.question.as_ref()?;
-    mission.decision.as_ref()?;
-    mission.nodes.iter().find(|node| asks(Some(question), node))
 }
 
 impl Runtime {
@@ -184,10 +181,12 @@ impl Runtime {
     /// the Conductor relaying their words from its pane: `Pass` passes the
     /// line with the words and where they came from; `Fix` leaves it open
     /// and sends the words to the node's worker as a defect, so the node
-    /// works again and its gate is raised anew once its lines are met. The
-    /// gate's decision and its raise go with either, and the Conductor is
-    /// told. A gate not waiting on the operator, or an answer with no
-    /// words, is refused with its reason and passes nothing.
+    /// works again and its gate is raised anew once its lines are met;
+    /// `Past`, the operator's `끝으로` on a raise, passes it as `Pass` does
+    /// whether or not it waits yet. The gate's decision and its raise go
+    /// with any of them, and the Conductor is told. A gate not waiting on
+    /// the operator, or an answer with no words, is refused with its reason
+    /// and passes nothing.
     pub(super) fn settle_gate(
         &mut self,
         id: &str,
@@ -219,11 +218,11 @@ impl Runtime {
         // The same pass again changes nothing (engineering principle 11).
         if line.state == CriterionState::Pass {
             return match answer {
-                GateAnswer::Pass => Ok(false),
+                GateAnswer::Pass | GateAnswer::Past => Ok(false),
                 GateAnswer::Fix => Err(crate::coordination::refusal("mission_gate_not_open", key)),
             };
         }
-        if !self.gate_open(mission, node) {
+        if answer != GateAnswer::Past && !self.gate_open(mission, node) {
             return Err(crate::coordination::refusal("mission_gate_not_open", key));
         }
         let asked = asks(mission.question.as_ref(), node)
@@ -241,7 +240,7 @@ impl Runtime {
         answered.criterion = Some(GATE_KEY.to_owned());
         events.push(answered);
         let defect = match answer {
-            GateAnswer::Pass => {
+            GateAnswer::Pass | GateAnswer::Past => {
                 let line = next
                     .criteria
                     .iter_mut()
@@ -292,8 +291,15 @@ impl Runtime {
             }
         };
         // Its raise goes with the answer, and is raised again by the next
-        // arrival rather than held back as one already handled.
-        super::mission_health::settle(id, &mut next, "operator");
+        // arrival rather than held back as one already handled; a raise of
+        // another cause on the node is not the gate's to settle.
+        if next
+            .attention
+            .as_ref()
+            .is_some_and(|attention| attention.reason == AttentionReason::HumanGate)
+        {
+            super::mission_health::settle(id, &mut next, "operator");
+        }
         let cause = crate::missions::cause_key(AttentionReason::HumanGate, None, None);
         next.handled.retain(|handled| *handled != cause);
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
@@ -303,6 +309,7 @@ impl Runtime {
             target.question = None;
             target.answer = None;
             target.answer_failed = None;
+            self.missions.answers_held.remove(id);
         }
         let worker = next.agent_id.clone();
         target.nodes[at] = next;
@@ -312,7 +319,7 @@ impl Runtime {
             node: key.to_owned(),
             pr: None,
             event: match answer {
-                GateAnswer::Pass => WakeEvent::GatePassed,
+                GateAnswer::Pass | GateAnswer::Past => WakeEvent::GatePassed,
                 GateAnswer::Fix => WakeEvent::GateFix,
             },
             head: None,
@@ -324,10 +331,7 @@ impl Runtime {
             ci: None,
             key: Some(format!(
                 "gate:{key}:{}:{}:{now}",
-                match answer {
-                    GateAnswer::Pass => "pass",
-                    GateAnswer::Fix => "fix",
-                },
+                answer.as_str(),
                 via.as_str()
             )),
         };
@@ -344,11 +348,10 @@ impl Runtime {
             wake.seq = target.wake_seq;
             super::missions::push_wake(target, wake);
         }
-        self.missions.answers_held.remove(id);
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.gate_settled",
             "mission": id, "node": key, "via": via.as_str(), "defect": defect,
-            "answer": match answer { GateAnswer::Pass => "pass", GateAnswer::Fix => "fix" },
+            "answer": answer.as_str(),
         }));
         self.record_mission_events(id, events);
         self.flush_mission_wakes();

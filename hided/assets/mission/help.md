@@ -114,6 +114,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Hide adds it as the node's `human` line, which only the operator's answer passes; it asks once the node's other lines are met (below).
   Propose one only for what a person must see with their own eyes (a screen) or a large step that cannot be undone; never for the merge, which the mission's scope already decides, and never for routine work.
   When the operator says where they want to check ("여기는 내가 확인하고 싶어"), put a gate on those nodes, and take one away the same way; a later plan that leaves `gate` out keeps it, and `"gate": null` takes it away.
+  A gate you change or take away while it asks takes its question off the map with it, and the next gate asks.
   A done node keeps the gate it has (`mission_gate_node_done`), an outside node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.

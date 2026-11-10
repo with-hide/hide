@@ -300,7 +300,7 @@ impl Runtime {
         // mission-human-gate D-12): the Conductor's clear would read as their
         // answer, so it is refused; a question of its own takes the decision,
         // and the gate asks again once it is free.
-        let gate = super::mission_gates::gate_asked(mission).map(|node| node.key.clone());
+        let gate = crate::missions::gate_asked(mission).map(|node| node.key.clone());
         if line.is_none()
             && let Some(node) = &gate
         {
@@ -474,7 +474,7 @@ impl Runtime {
         if current != key {
             return Err("mission_decision_changed".into());
         }
-        if let Some(node) = super::mission_gates::gate_asked(mission).map(|node| node.key.clone()) {
+        if let Some(node) = crate::missions::gate_asked(mission).map(|node| node.key.clone()) {
             if resend {
                 return Ok(false);
             }

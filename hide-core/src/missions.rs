@@ -2408,6 +2408,28 @@ fn valid_line(value: &Option<String>, limit: usize) -> bool {
         .is_none_or(|value| valid_text(value, limit))
 }
 
+/// Whether `question` is the one `node`'s gate is asked by (PRD
+/// mission-human-gate D-09): the question names the node, and the node's
+/// gate line names the question.
+pub(crate) fn asks_gate(question: Option<&Question>, node: &MissionNode) -> bool {
+    let Some(line) = crate::mission_criteria::gate(&node.criteria) else {
+        return false;
+    };
+    question.is_some_and(|question| {
+        line.asked == Some(question.key) && question.node.as_deref() == Some(node.key.as_str())
+    })
+}
+
+/// The node whose gate the mission's open decision asks, if it asks one.
+pub(crate) fn gate_asked(mission: &Mission) -> Option<&MissionNode> {
+    let question = mission.question.as_ref()?;
+    mission.decision.as_ref()?;
+    mission
+        .nodes
+        .iter()
+        .find(|node| asks_gate(Some(question), node))
+}
+
 /// The plan `input` would make of `mission`, or why it is refused.
 pub(crate) fn apply_plan(
     mission: &Mission,
@@ -2579,11 +2601,21 @@ pub(crate) fn apply_plan(
                 with_check && input.kind == NodeKind::Change,
                 same_check,
             );
-            if let Some(gate) = &input.gate {
-                crate::mission_criteria::set_gate(
+            // A gate changed or taken away takes its raise with it, so the
+            // gate the plan names now is raised anew when it waits.
+            if let Some(gate) = &input.gate
+                && crate::mission_criteria::set_gate(
                     &mut node.criteria,
                     gate.first().map(|text| text.trim()),
-                );
+                )
+                && node
+                    .attention
+                    .as_ref()
+                    .is_some_and(|attention| attention.reason == AttentionReason::HumanGate)
+            {
+                node.attention = None;
+                let cause = cause_key(AttentionReason::HumanGate, None, None);
+                node.handled.retain(|handled| *handled != cause);
             }
             if let Some(steps) = &input.steps {
                 node.steps = steps.iter().map(|step| step.trim().to_owned()).collect();
@@ -2597,6 +2629,19 @@ pub(crate) fn apply_plan(
             node
         })
         .collect();
+    // The question a gate asked goes with that gate when the plan changes
+    // or takes it away, so the next gate can ask; a question of the
+    // Conductor's own stays (PRD mission-human-gate D-15, B14).
+    if let Some(owner) = gate_asked(mission)
+        && next
+            .node(&owner.key)
+            .is_none_or(|node| !asks_gate(next.question.as_ref(), node))
+    {
+        next.decision = None;
+        next.question = None;
+        next.answer = None;
+        next.answer_failed = None;
+    }
     next.merge_order.clone_from(&input.merge_order);
     if let Some(title) = &input.title {
         next.title.clone_from(title);
