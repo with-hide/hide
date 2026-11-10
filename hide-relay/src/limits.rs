@@ -21,6 +21,60 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 // This also covers a session write followed by its final close write.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(16);
 
+/// Push relay budgets (`docs/RELAY_PROTOCOL.md`, Push relay). Each room and
+/// the whole relay are capped, and every request that reaches the cap check is
+/// counted, a refused one included, so a room cannot spend the relay's CPU
+/// without a ceiling of its own.
+pub const PUSHES_PER_ROOM_PER_MINUTE: usize = 20;
+pub const PUSHES_PER_ROOM_PER_DAY: usize = 1_000;
+pub const PUSHES_PER_SECOND: usize = 50;
+pub const PUSH_MINUTE: Duration = Duration::from_secs(60);
+/// Streams one HTTP/2 connection may carry at once.
+pub const MAX_CONCURRENT_PUSHES: usize = 32;
+pub const PUSH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// One shared provider token, replaced at this age: inside Apple's hour, and
+/// past its 20-minute floor (TooManyProviderTokenUpdates).
+pub const PROVIDER_TOKEN_REFRESH: Duration = Duration::from_secs(50 * 60);
+/// The youngest token the relay replaces when Apple calls it expired; a
+/// younger one is answered `unavailable` instead of re-signed.
+pub const PROVIDER_TOKEN_MIN_AGE: Duration = Duration::from_secs(20 * 60);
+
+/// A push budget set lower than production for a test; an embedding may
+/// lower these, never remove or raise them.
+#[derive(Clone, Copy)]
+pub struct PushLimits {
+    pub per_room_per_minute: usize,
+    pub per_room_per_day: usize,
+    pub per_second: usize,
+    pub concurrent: usize,
+    pub request_timeout: Duration,
+}
+impl Default for PushLimits {
+    fn default() -> Self {
+        Self {
+            per_room_per_minute: PUSHES_PER_ROOM_PER_MINUTE,
+            per_room_per_day: PUSHES_PER_ROOM_PER_DAY,
+            per_second: PUSHES_PER_SECOND,
+            concurrent: MAX_CONCURRENT_PUSHES,
+            request_timeout: PUSH_REQUEST_TIMEOUT,
+        }
+    }
+}
+impl PushLimits {
+    pub(crate) fn valid(self) -> bool {
+        self.per_room_per_minute > 0
+            && self.per_room_per_minute <= PUSHES_PER_ROOM_PER_MINUTE
+            && self.per_room_per_day > 0
+            && self.per_room_per_day <= PUSHES_PER_ROOM_PER_DAY
+            && self.per_second > 0
+            && self.per_second <= PUSHES_PER_SECOND
+            && self.concurrent > 0
+            && self.concurrent <= MAX_CONCURRENT_PUSHES
+            && !self.request_timeout.is_zero()
+            && self.request_timeout <= PUSH_REQUEST_TIMEOUT
+    }
+}
+
 /// An embedding may lower the production budgets, never remove or raise them.
 #[derive(Clone, Copy)]
 pub struct Limits {

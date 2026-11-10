@@ -95,8 +95,14 @@ async fn pairs_multiple_phones_and_forwards_opaque_messages_in_both_directions()
     .await;
     fixture.stop().await;
     let logs = serde_json::to_string(&*fixture.events.lock().unwrap()).unwrap();
-    for secret in ["private pairing credential", "192.0.2.", &hello.device_key] {
-        assert!(!logs.contains(secret));
+    // Nothing names the computer or a phone: no room hash, key or address.
+    for secret in [
+        "private pairing credential",
+        "192.0.2.",
+        &hello.device_key,
+        &hello.room,
+    ] {
+        assert!(!logs.contains(secret), "the event log carries {secret}");
     }
     for event in fixture.events.lock().unwrap().iter() {
         let value = serde_json::to_value(event).unwrap();
@@ -105,9 +111,18 @@ async fn pairs_multiple_phones_and_forwards_opaque_messages_in_both_directions()
                 .as_object()
                 .unwrap()
                 .keys()
-                .all(|k| ["event", "room", "size", "cap"].contains(&k.as_str()))
+                .all(|k| ["event", "size", "cap"].contains(&k.as_str()))
         );
     }
+    // Byte counts stay: each closed socket says how much it forwarded.
+    assert!(
+        fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.event == "peer_closed" && event.size.is_some_and(|size| size > 0))
+    );
 }
 
 #[tokio::test]
@@ -784,7 +799,10 @@ async fn control_size_and_unexpected_or_replayed_proof_have_specific_refusals() 
         },
     )
     .await;
-    assert_eq!(control(&mut device).await, ServerMessage::Registered);
+    assert_eq!(
+        control(&mut device).await,
+        ServerMessage::Registered { push: false }
+    );
     send(
         &mut device,
         ClientMessage::Proof {

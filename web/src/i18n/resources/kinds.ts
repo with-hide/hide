@@ -1,7 +1,7 @@
 import type { Catalog, Catalogs } from "../schema";
 
 // What kind of work a page shows: the `미션` and `태스크` marks in the head of a
-// mission's page, a plan's page and Settings › Mission, and the `?` window
+// mission's page and a plan's page, and the `?` window
 // that tells the two apart with a moving picture of each.
 export const kindsEnglish = {
   "kind.mission": "Mission",
