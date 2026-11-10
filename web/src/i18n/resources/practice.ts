@@ -60,7 +60,7 @@ export const practiceEnglish = {
   "practice.zone.work": "② Where work happens",
   "practice.zone.workSub": "Agent terminals",
   "practice.zone.project": "③ The project and its work",
-  "practice.zone.projectSub": "Status · To do · Files",
+  "practice.zone.projectSub": "Project · Hide AI · Files",
 };
 
 const ko = {
@@ -118,7 +118,7 @@ const ko = {
   "practice.zone.work": "② 일하는 곳",
   "practice.zone.workSub": "에이전트 터미널",
   "practice.zone.project": "③ 프로젝트와 그 작업",
-  "practice.zone.projectSub": "현황 · 할 일 · 파일",
+  "practice.zone.projectSub": "프로젝트 · Hide AI · 파일",
 } satisfies Catalog<typeof practiceEnglish>;
 
 const zhCN = {
@@ -176,7 +176,7 @@ const zhCN = {
   "practice.zone.work": "② 工作区",
   "practice.zone.workSub": "智能体终端",
   "practice.zone.project": "③ 项目与工作",
-  "practice.zone.projectSub": "概况 · 待办 · 文件",
+  "practice.zone.projectSub": "项目 · Hide AI · 文件",
 } satisfies Catalog<typeof practiceEnglish>;
 
 const ja = {
@@ -234,7 +234,7 @@ const ja = {
   "practice.zone.work": "② 作業するところ",
   "practice.zone.workSub": "エージェントのターミナル",
   "practice.zone.project": "③ プロジェクトとその作業",
-  "practice.zone.projectSub": "状況 · やること · ファイル",
+  "practice.zone.projectSub": "プロジェクト · Hide AI · ファイル",
 } satisfies Catalog<typeof practiceEnglish>;
 
 export const practiceCatalogs = { en: practiceEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof practiceEnglish>;
