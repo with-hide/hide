@@ -96,9 +96,28 @@ class Detection(unittest.TestCase):
         found = repeat.select(entries("hided/tests/it/remote_delivery/mod.rs", "hided/tests/it/remote_delivery/mail.rs"), CRATE_DIRS)
         self.assertEqual([module["module"] for module in found["rust"]], ["remote_delivery"])
 
-    def test_the_helpers_every_module_shares_and_the_module_list_are_no_test(self):
-        found = repeat.select(entries("hided/tests/it/support/mod.rs", "hided/tests/it/support/run.rs", "hided/tests/it/main.rs"), CRATE_DIRS)
-        self.assertEqual(found["rust"], [])
+    def test_the_helpers_every_module_shares_select_the_crates_whole_it_binary(self):
+        found = repeat.select(entries("hided/tests/it/support/mod.rs", "hided/tests/it/support/run.rs", "hided/tests/it/main.rs", "hided/tests/it/seat.rs"), CRATE_DIRS)
+        self.assertEqual(found["rust"], [{"package": "hided", "module": "*"}])
+
+    def test_a_module_that_lists_no_test_runs_its_crates_whole_binary_and_n_is_what_lists(self):
+        asked = []
+
+        def lister(package, expression):
+            asked.append((package, expression))
+            return 0 if expression else 293
+
+        plan = repeat.rust_plan([{"package": "hide-platform", "module": "stand_ins"}], lister)
+        self.assertEqual(plan, [{"package": "hide-platform", "filter": "", "tests": 293}])
+        self.assertEqual(asked, [("hide-platform", "test(/^(stand_ins)::/)"), ("hide-platform", "")])
+        # A module that lists tests keeps its filter, and a helper adds nothing to 20 web tests: N = 20 + 5.
+        plan = repeat.rust_plan([{"package": "hide-relay-protocol", "module": "admission"}], lambda package, expression: 5)
+        self.assertEqual(plan, [{"package": "hide-relay-protocol", "filter": "test(/^(admission)::/)", "tests": 5}])
+
+    def test_a_hand_run_module_that_does_not_exist_is_refused_before_anything_runs(self):
+        for item in ("hided:no_such_module", "no-such-crate:seat", "hided:"):
+            with self.subTest(item=item), self.assertRaises(ValueError):
+                repeat.rust_entry(item)
 
     def test_product_code_other_files_and_unknown_directories_are_no_test(self):
         found = repeat.select(entries(
@@ -220,9 +239,9 @@ class Resolve(unittest.TestCase):
             repeat.resolve("pull_request", "[]", json.dumps([{"package": "hided", "module": "x y"}]), "", "linux")
 
     def test_a_hand_run_names_specs_and_modules_in_words_and_the_repeat_it_wants(self):
-        work = repeat.resolve("workflow_dispatch", "s3.spec.ts  web/e2e/s7.spec.ts", "hided:handshake hide-core:seat", "7", "windows")
+        work = repeat.resolve("workflow_dispatch", "s3.spec.ts  web/e2e/s7.spec.ts", "hided:handshake hided:seat", "7", "windows")
         self.assertEqual(work["web"], ["web/e2e/s3.spec.ts", "web/e2e/s7.spec.ts"])
-        self.assertEqual([(m["package"], m["module"]) for m in work["rust"]], [("hide-core", "seat"), ("hided", "handshake")])
+        self.assertEqual([(m["package"], m["module"]) for m in work["rust"]], [("hided", "handshake"), ("hided", "seat")])
         self.assertEqual((work["runner"], work["repeat"], work["counted"]), ("windows", 7, False))
 
     def test_a_hand_run_with_a_bad_repeat_runner_or_name_is_refused(self):
@@ -284,8 +303,9 @@ class Command(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "3")
         result, _ = self.run_script("spec-patterns", "web/e2e/s3.spec.ts")
         self.assertEqual(result.stdout.strip(), r"web/e2e/s3\.spec\.ts$")
-        result, _ = self.run_script("nextest-filters", "--rust", json.dumps([{"package": "hided", "module": "seat"}]))
-        self.assertEqual(result.stdout, "hided\ttest(/^(seat)::/)\n")
+        plan = json.dumps([{"package": "hided", "filter": "test(/^(seat)::/)", "tests": 1}, {"package": "hide-platform", "filter": "", "tests": 9}])
+        result, _ = self.run_script("plan-lines", "--plan", plan)
+        self.assertEqual(result.stdout, "hided\ttest(/^(seat)::/)\nhide-platform\t\n")
 
 
 if __name__ == "__main__":

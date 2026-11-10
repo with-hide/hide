@@ -9,7 +9,7 @@
 #
 #   gh workflow run repeat.yml --ref <branch> -f runner=windows \
 #     -f web='s3.spec.ts' -f repeat=10
-#   gh workflow run repeat.yml --ref <branch> -f rust='hided:handshake hide-core:seat'
+#   gh workflow run repeat.yml --ref <branch> -f rust='hided:handshake hided:seat'
 #
 # The web specs run through `web-e2e.yml` (the same build, fixtures and runner
 # setup as the suite), the Rust modules under nextest on the same dependency
@@ -69,6 +69,7 @@ jobs:
       repeat: ${{ steps.repeat.outputs.repeat }}
       web-tests: ${{ steps.repeat.outputs.web-tests }}
       rust-tests: ${{ steps.repeat.outputs.rust-tests }}
+      rust-plan: ${{ steps.rust-count.outputs.rust-plan || steps.resolve.outputs.rust-plan }}
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -129,24 +130,19 @@ jobs:
         with:
           save: false
       - name: Count the Rust tests
-        # What nextest would run for the same filtersets, ignored tests
-        # excluded, so N is the tests that run. This builds the changed
-        # crates' tests once, and the Rust job builds them again on its own
-        # runner. A listing that fails fails the lane.
+        # What nextest lists for the changed modules' filtersets, ignored tests
+        # excluded, so N is the tests that run. A package whose modules list
+        # none (a helper file) runs its whole `it` binary instead, and a
+        # change to `support` or `main.rs` selects that whole binary; the
+        # decision is `rust_plan` in scripts/ci-repeat.py. This builds the
+        # changed crates' tests once, and the Rust job builds them again on its
+        # own runner. A listing that fails fails the lane.
         id: rust-count
         if: steps.resolve.outputs.rust-count-needed == 'true'
         timeout-minutes: 25
         env:
           RUST: ${{ steps.resolve.outputs.rust }}
-        run: |
-          set -euo pipefail
-          python3 scripts/ci-repeat.py nextest-filters --rust "$RUST" > "$RUNNER_TEMP/filters.txt"
-          total=0
-          while IFS=$'\t' read -r package expression; do
-            bash scripts/verify-cargo.sh nextest-list --profile ci -p "$package" --test it -E "$expression" --message-format json > "$RUNNER_TEMP/list.json"
-            total=$((total + $(python3 scripts/ci-repeat.py count-nextest < "$RUNNER_TEMP/list.json")))
-          done < "$RUNNER_TEMP/filters.txt"
-          echo "rust-count=$total" >> "$GITHUB_OUTPUT"
+        run: python3 scripts/ci-repeat.py rust-plan --rust "$RUST"
       - name: Choose the repeat
         id: repeat
         timeout-minutes: 2
@@ -249,15 +245,17 @@ jobs:
         # run that names a module with no test fails.
         timeout-minutes: 75
         env:
-          RUST: ${{ needs.count.outputs.rust }}
+          PLAN: ${{ needs.count.outputs.rust-plan }}
           REPEAT: ${{ needs.count.outputs.repeat }}
           NO_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'fail' || 'warn' }}
         run: |
           set -euo pipefail
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
-          python3 scripts/ci-repeat.py nextest-filters --rust "$RUST" > "$RUNNER_TEMP/filters.txt"
+          python3 scripts/ci-repeat.py plan-lines --plan "$PLAN" > "$RUNNER_TEMP/filters.txt"
           while IFS=$'\t' read -r package expression; do
-            echo "::group::$package $expression x $REPEAT"
-            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests="$NO_TESTS" -p "$package" --test it -E "$expression"
+            echo "::group::$package ${expression:-the whole it binary} x $REPEAT"
+            filter=()
+            if [ -n "$expression" ]; then filter=(-E "$expression"); fi
+            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests="$NO_TESTS" -p "$package" --test it ${filter[@]+"${filter[@]}"}
             echo "::endgroup::"
           done < "$RUNNER_TEMP/filters.txt"
