@@ -2,6 +2,7 @@
   "name": "hide-site",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.34.9",
   "description": "withhide.dev: the landing page (public/) and the user docs (src/content/docs/docs/), one Astro project",
   "scripts": {
     "predev": "node ../scripts/docs/check-features.mjs src/content/docs/docs --write src/generated/used-in.json",
