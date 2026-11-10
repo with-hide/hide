@@ -212,7 +212,7 @@ jobs:
           bash scripts/check-no-workstation-identity.sh
           bash scripts/check-worktree-removal-boundary.sh
           python3 scripts/check-core-touches-no-machine.py
-          python3 scripts/check-timed-waits.py
+          python3 scripts/check-timed-waits.py --base HEAD^1
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
           python3 scripts/check-device-kits-single-source.py

@@ -7,7 +7,7 @@ Two kinds of wait are counted, per file, against `scripts/timed-waits-baseline.j
   helper. A longer limit does not make a wait correct; it hides a state the test
   does not name.
 - `rust_sleeps`: `thread::sleep`, `tokio::time::sleep` (also imported, as
-  `use tokio::time::{sleep}`) in test code: a file under `tests/`, a `tests.rs` or
+  `use tokio::time::{sleep}` and then `sleep(d)`, also as an alias) in test code: a file under `tests/`, a `tests.rs` or
   `*_tests.rs` file, a module its parent declares behind `#[cfg(test)]`, or an
   item behind `#[cfg(test)]`. Clippy refuses `std::thread::sleep` already; this
   also counts the async sleep and the one an `#[allow]` lets through.
@@ -17,7 +17,13 @@ edit that moves a line, or another change that removes a wait, cannot fail
 this check. A file fails only when it has more unannotated waits than its
 baseline (0 for a file the baseline does not list). The baseline only ever goes
 down: `--lower` rewrites it to the smaller of the recorded and the current
-count. A renamed file carries its baseline entry by hand, in the diff.
+count.
+
+Editing a number up would let a new wait through, so CI also runs
+`--base HEAD^1`: no file's number in the baseline may be higher than the
+baseline of the base commit holds for that file (0 for a file it does not list).
+A file `git` shows as renamed from the base may carry its old file's number, so
+a renamed spec moves its baseline key by hand and the ratchet follows the move.
 
 A wait that waits for a named state says so on its own line:
 
@@ -27,9 +33,11 @@ A wait that waits for a named state says so on its own line:
 The text after `wait-ok:` names the state, is not empty, and is read by the
 reviewer. An annotated wait is not counted.
 """
+import argparse
 import json
 import pathlib
 import re
+import subprocess
 import sys
 from collections import Counter
 
@@ -44,7 +52,12 @@ E2E_SUFFIXES = (".ts", ".mts", ".mjs")
 SKIPPED_DIRS = {"target", "node_modules", "vendor", ".git", "agents", "dist", "out"}
 
 E2E_WAIT = re.compile(r"\btimeout\s*:")
-RUST_WAIT = re.compile(r"\bthread::sleep\b|\btime::sleep\b|\b(?:thread|time)::\{[^}]*\bsleep\b")
+RUST_WAIT = re.compile(r"\bthread::sleep\b|\btime::sleep\b")
+RUST_USE = re.compile(r"\buse\b[^;]*;")
+RUST_USE_GLOB = re.compile(r"\b(?:thread|time)::(?:\*|\{[^}]*\*[^}]*\})")
+RUST_USE_NAME = re.compile(r"\b(?:thread|time)::sleep\b(?:\s+as\s+(\w+))?")
+RUST_USE_GROUP = re.compile(r"\b(?:thread|time)::\{([^}]*)\}")
+RUST_USE_MEMBER = re.compile(r"\s*sleep(?:\s+as\s+(\w+))?\s*")
 ANNOTATION = re.compile(r"//\s*wait-ok:[ \t]*(\S[^\n]*)")
 
 KINDS = {
@@ -83,16 +96,51 @@ def test_part(text: str) -> str:
     )
 
 
-def unannotated(raw: str, code: str, pattern: re.Pattern) -> list:
-    """The 1-based lines of `code` that match `pattern` and carry no `// wait-ok: <state>` after the match."""
+def pattern_matches(code: str, pattern: re.Pattern) -> list:
+    """(1-based line, column after the match) of every match of `pattern` in `code`."""
+    return [
+        (number, match.end())
+        for number, line in enumerate(code.split("\n"), 1)
+        for match in pattern.finditer(line)
+    ]
+
+
+def unannotated(raw: str, matches: list) -> list:
+    """The 1-based lines of `matches` that carry no `// wait-ok: <state>` after the match."""
     raw_lines = raw.split("\n")
-    lines = []
-    for number, line in enumerate(code.split("\n"), 1):
-        for match in pattern.finditer(line):
-            note = ANNOTATION.search(raw_lines[number - 1], match.end())
-            if not note:
-                lines.append(number)
-    return lines
+    return [number for number, end in matches if not ANNOTATION.search(raw_lines[number - 1], end)]
+
+
+def sleep_names(code: str) -> set:
+    """The names a Rust file's `use` items bring a sleep in as: `sleep`, an `as` alias, or `sleep` for a glob of `thread` or `time`."""
+    names = set()
+    for statement in RUST_USE.findall(code):
+        if RUST_USE_GLOB.search(statement):
+            names.add("sleep")
+        for match in RUST_USE_NAME.finditer(statement):
+            names.add(match.group(1) or "sleep")
+        for group in RUST_USE_GROUP.finditer(statement):
+            for member in group.group(1).split(","):
+                named = RUST_USE_MEMBER.fullmatch(member)
+                if named:
+                    names.add(named.group(1) or "sleep")
+    return names
+
+
+def rust_waits(whole: str, tested: str) -> list:
+    """The sleeps in `tested`, the file's test code: qualified (`thread::sleep`) and, where the file's `use` items
+    bring one in by name, the calls of that name. The `use` items themselves are not waits."""
+    code = RUST_USE.sub(lambda match: _blank(match.group(0)), tested)
+    found = pattern_matches(code, RUST_WAIT)
+    names = sleep_names(whole)
+    if names:
+        call = re.compile(r"(?<![\w:.])(?:" + "|".join(sorted(map(re.escape, names))) + r")\s*\(")
+        for number, line in enumerate(code.split("\n"), 1):
+            for match in call.finditer(line):
+                # A function the file defines with that name is not an import.
+                if not re.search(r"\bfn\s+$", line[: match.start()]):
+                    found.append((number, match.end()))
+    return sorted(found)
 
 
 def e2e_files() -> list:
@@ -127,7 +175,7 @@ def measure() -> dict:
     found = {kind: {} for kind in KINDS}
     for path in e2e_files():
         raw = path.read_text()
-        lines = unannotated(raw, strip_ts(raw), E2E_WAIT)
+        lines = unannotated(raw, pattern_matches(strip_ts(raw), E2E_WAIT))
         if lines:
             found["e2e_timeouts"][path.relative_to(ROOT).as_posix()] = lines
     trees = rust_trees()
@@ -135,11 +183,9 @@ def measure() -> dict:
     for path in rust_files(trees):
         relative = path.relative_to(ROOT).as_posix()
         raw = path.read_text()
-        if rust_scan.test_file(relative) or relative in test_modules:
-            code = rust_scan.strip(raw)
-        else:
-            code = test_part(raw)
-        lines = unannotated(raw, code, RUST_WAIT)
+        whole = rust_scan.strip(raw)
+        tested = whole if rust_scan.test_file(relative) or relative in test_modules else test_part(raw)
+        lines = unannotated(raw, rust_waits(whole, tested))
         if lines:
             found["rust_sleeps"][relative] = lines
     return found
@@ -182,20 +228,68 @@ def write(baseline: dict) -> None:
     BASELINE.write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n")
 
 
+def git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+
+
+def base_baseline(ref: str):
+    """The baseline file as `ref` holds it, or None where `ref` has none yet (the change that introduces it)."""
+    if git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode != 0:
+        raise SystemExit(f"--base {ref}: not a commit this checkout has (CI checks out two commits for it)")
+    shown = git("show", f"{ref}:{BASELINE.relative_to(ROOT).as_posix()}")
+    if shown.returncode != 0:
+        return None
+    data = json.loads(shown.stdout)
+    return {kind: dict(data.get(kind, {})) for kind in KINDS}
+
+
+def renamed_since(ref: str) -> dict:
+    """New path -> old path for every file `git` shows renamed between `ref` and the working tree."""
+    out = git("diff", "-M", "--name-status", "--diff-filter=R", ref).stdout
+    renames = {}
+    for line in out.splitlines():
+        status, *paths = line.split("\t")
+        if len(paths) == 2:
+            renames[paths[1]] = paths[0]
+    return renames
+
+
+def raised(baseline: dict, base: dict, renames: dict) -> list:
+    """The baseline entries higher than the base commit's baseline allows: a file's number may only stay or fall,
+    and a file the base does not list starts at 0 unless `git` shows it renamed from one the base lists."""
+    out = []
+    for kind in KINDS:
+        for relative, count in sorted(baseline[kind].items()):
+            allowed = base[kind].get(relative, base[kind].get(renames.get(relative, ""), 0))
+            if count > allowed:
+                out.append(
+                    f"{BASELINE.name}: {kind} {relative} is {count}, up from {allowed}; "
+                    "the baseline only goes down, so remove the wait or end its line with `// wait-ok: <state>`"
+                )
+    return out
+
+
 def main(argv: list) -> int:
+    parser = argparse.ArgumentParser(description="Refuse new time-based waits in tests.")
+    parser.add_argument("--lower", action="store_true", help="bring the baseline down to the waits there are now")
+    parser.add_argument("--base", metavar="REF", help="also refuse a baseline number higher than REF's (CI: HEAD^1)")
+    args = parser.parse_args(argv)
     found = measure()
     baseline = load_baseline()
-    if argv == ["--lower"]:
+    if args.lower:
         write(lowered(found, baseline))
         print(f"{BASELINE.relative_to(ROOT)} lowered")
         return 0
-    if argv:
-        print("usage: check-timed-waits.py [--lower]", file=sys.stderr)
-        return 2
     failures = violations(found, baseline)
+    if args.base:
+        base = base_baseline(args.base)
+        if base is None:
+            print(f"{args.base} has no {BASELINE.name}: nothing to compare the baseline with")
+        else:
+            failures += raised(baseline, base, renamed_since(args.base))
     if failures:
         print("\n".join(failures), file=sys.stderr)
-        print(f"{len(failures)} file(s) with a new time-based wait\n\n{ADVICE}", file=sys.stderr)
+        print(f"{len(failures)} finding(s) of a new time-based wait\n\n{ADVICE}", file=sys.stderr)
         return 1
     slack = Counter()
     for kind in KINDS:

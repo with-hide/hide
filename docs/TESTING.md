@@ -69,7 +69,8 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   Wait for the state the next step needs: a diagnostic `kind` with its subject ID, a snapshot field, an engine answer, the bytes in a pane's input log.
 - No new timed wait enters a test unannounced: `scripts/check-timed-waits.py` (the `policy` lane, `python3 scripts/check-timed-waits.py` locally) counts a `timeout:` override in `web/e2e` and `desktop/e2e`, and a `thread::sleep` or `tokio::time::sleep` in Rust test code, per file against `scripts/timed-waits-baseline.json`.
   A file with more of them than its baseline fails, and a file the baseline does not list may have none.
-  The baseline holds counts and never line numbers, so moving a line, or a change that removes waits, cannot fail it; after removing waits, `python3 scripts/check-timed-waits.py --lower` brings the numbers down, and nothing raises them.
+  The baseline holds counts and never line numbers, so moving a line, or a change that removes waits, cannot fail it; after removing waits, `python3 scripts/check-timed-waits.py --lower` brings the numbers down, and nothing raises them: CI runs the check with `--base HEAD^1` and fails a baseline number higher than the base commit's for that file (0 for a file it does not list, the old file's number for one `git` shows renamed, whose key you move by hand).
+  A sleep imported by name (`use tokio::time::sleep;` then `sleep(d)`, also as an alias or through a glob) is counted at its calls.
   A wait that waits for a named state ends its line with `// wait-ok: <the state it waits for>` (a long first start on a cold runner, the next poll of a pid file); the reason is read in review, and an annotated wait is not counted.
   The check does not see a wait spelled another way (a hand-written `setTimeout` promise, `Atomics.wait`), which is the same mistake and is not allowed either.
 - Wait for the readiness the next step actually depends on.

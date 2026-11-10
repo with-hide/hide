@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,15 +64,57 @@ class TimedWaits(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("hide-x/tests/it/wait.rs: 1 unannotated", err)
 
-    def test_every_form_of_sleep_in_a_test_is_found(self):
+    def test_every_qualified_form_of_sleep_in_a_test_is_found(self):
         body = (
-            "use tokio::time::{Instant, sleep};\n"
             "fn a() { thread::sleep(d); }\n"
             "async fn b() { tokio::time::sleep(d).await; }\n"
             "async fn c() { time::sleep(d).await; }\n"
         )
         root, check = self.tree(self.rust(body))
-        self.assertEqual(check.measure()["rust_sleeps"]["hide-x/tests/it/wait.rs"], [1, 2, 3, 4])
+        self.assertEqual(check.measure()["rust_sleeps"]["hide-x/tests/it/wait.rs"], [1, 2, 3])
+
+    def test_a_sleep_imported_by_name_is_counted_at_its_calls_and_not_at_the_import(self):
+        body = (
+            "use tokio::time::{Instant, sleep};\n"
+            "async fn a() { sleep(d).await; }\n"
+            "async fn b() { let x = 1; sleep(d).await; }\n"
+        )
+        root, check = self.tree(self.rust(body))
+        self.assertEqual(check.measure()["rust_sleeps"]["hide-x/tests/it/wait.rs"], [2, 3])
+
+    def test_the_other_ways_to_import_a_sleep_are_counted_at_their_calls(self):
+        cases = {
+            "use std::thread::sleep;\nfn a() { sleep(d); }\n": [2],
+            "use std::{thread::sleep, time::Duration};\nfn a() { sleep(d); }\n": [2],
+            "use tokio::time::sleep as nap;\nasync fn a() { nap(d).await; sleep(d); }\n": [2],
+            "use tokio::time::{self, sleep as nap};\nasync fn a() { nap(d).await; }\n": [2],
+            "use std::thread::*;\nfn a() { sleep(d); }\n": [2],
+            "use tokio::{time::{sleep}};\nasync fn a() { sleep(d).await; }\n": [2],
+            "use std::thread::{\n    sleep,\n};\nfn a() { sleep(d); }\n": [4],
+        }
+        for body, lines in cases.items():
+            with self.subTest(body=body):
+                _, check = self.tree(self.rust(body))
+                self.assertEqual(check.measure()["rust_sleeps"].get("hide-x/tests/it/wait.rs"), lines)
+
+    def test_a_function_named_sleep_that_is_not_imported_is_not_a_sleep(self):
+        body = "fn sleep(runtime: &mut Runtime) {}\nfn t() { sleep(&mut r); }\n"
+        _, check = self.tree(self.rust(body))
+        self.assertEqual(check.measure()["rust_sleeps"], {})
+
+    def test_an_imported_sleep_called_in_a_cfg_test_module_counts_and_in_production_does_not(self):
+        body = (
+            "use std::thread::sleep;\n"
+            "fn production() { sleep(d); }\n"
+            "#[cfg(test)]\nmod tests {\n    use super::*;\n    fn t() { sleep(d); }\n}\n"
+        )
+        _, check = self.tree({"hide-x/Cargo.toml": "[package]\n", "hide-x/src/lib.rs": body})
+        self.assertEqual(check.measure()["rust_sleeps"], {"hide-x/src/lib.rs": [6]})
+
+    def test_an_annotated_call_of_an_imported_sleep_is_accepted(self):
+        body = "use std::thread::sleep;\nfn t() { sleep(d); } // wait-ok: the next poll of the pid file\n"
+        _, check = self.tree(self.rust(body))
+        self.assertEqual(self.run_check(check)[0], 0)
 
     def test_a_sleep_in_a_cfg_test_module_of_a_source_file_fails_and_in_production_does_not(self):
         body = (
@@ -165,6 +208,66 @@ class TimedWaits(unittest.TestCase):
         }
         _, check = self.tree(files)
         self.assertEqual(self.run_check(check)[0], 0)
+
+    def repo(self, files, baseline):
+        """A git repository whose one commit holds `files` and `baseline`."""
+        root, check = self.tree(files, baseline)
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "base")
+        return root, check
+
+    def git(self, root, *args):
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+            check=True, capture_output=True,
+        )
+
+    def edit_baseline(self, root, check, baseline):
+        check.BASELINE.write_text(json.dumps(baseline))
+
+    def test_a_baseline_number_raised_by_hand_fails_against_the_base(self):
+        old = {"e2e_timeouts": {"web/e2e/old.spec.ts": 1}}
+        root, check = self.repo({"web/e2e/old.spec.ts": SPEC}, old)
+        (root / "web/e2e/old.spec.ts").write_text(SPEC * 2)
+        self.edit_baseline(root, check, {"e2e_timeouts": {"web/e2e/old.spec.ts": 2}})
+        self.assertEqual(self.run_check(check)[0], 0)
+        code, err = self.run_check(check, "--base", "HEAD")
+        self.assertEqual(code, 1)
+        self.assertIn("web/e2e/old.spec.ts is 2, up from 1", err)
+
+    def test_a_file_new_to_the_baseline_starts_at_zero_against_the_base(self):
+        root, check = self.repo({"web/e2e/old.spec.ts": SPEC}, {"e2e_timeouts": {"web/e2e/old.spec.ts": 1}})
+        (root / "web/e2e/new.spec.ts").write_text(SPEC)
+        self.edit_baseline(root, check, {"e2e_timeouts": {"web/e2e/old.spec.ts": 1, "web/e2e/new.spec.ts": 1}})
+        code, err = self.run_check(check, "--base", "HEAD")
+        self.assertEqual(code, 1)
+        self.assertIn("web/e2e/new.spec.ts is 1, up from 0", err)
+
+    def test_the_same_or_a_lower_baseline_passes_against_the_base(self):
+        old = {"e2e_timeouts": {"web/e2e/a.spec.ts": 2, "web/e2e/b.spec.ts": 3}}
+        root, check = self.repo({"web/e2e/a.spec.ts": SPEC * 2, "web/e2e/b.spec.ts": SPEC * 3}, old)
+        self.assertEqual(self.run_check(check, "--base", "HEAD")[0], 0)
+        (root / "web/e2e/b.spec.ts").write_text(SPEC)
+        self.edit_baseline(root, check, {"e2e_timeouts": {"web/e2e/a.spec.ts": 2, "web/e2e/b.spec.ts": 1}})
+        self.assertEqual(self.run_check(check, "--base", "HEAD")[0], 0)
+
+    def test_a_renamed_file_carries_its_old_baseline_number_against_the_base(self):
+        root, check = self.repo({"web/e2e/old.spec.ts": SPEC * 2 + "more();\n"}, {"e2e_timeouts": {"web/e2e/old.spec.ts": 2}})
+        self.git(root, "mv", "web/e2e/old.spec.ts", "web/e2e/renamed.spec.ts")
+        self.edit_baseline(root, check, {"e2e_timeouts": {"web/e2e/renamed.spec.ts": 2}})
+        self.assertEqual(self.run_check(check, "--base", "HEAD")[0], 0)
+        self.edit_baseline(root, check, {"e2e_timeouts": {"web/e2e/renamed.spec.ts": 3}})
+        (root / "web/e2e/renamed.spec.ts").write_text(SPEC * 3)
+        self.assertEqual(self.run_check(check, "--base", "HEAD")[0], 1)
+
+    def test_a_base_without_a_baseline_is_nothing_to_compare_and_an_unknown_base_is_refused(self):
+        root, check = self.repo({"README": "x\n"}, None)
+        self.git(root, "rm", "-q", "--cached", "scripts/timed-waits-baseline.json")
+        self.git(root, "commit", "-q", "-m", "drop it")
+        self.assertEqual(self.run_check(check, "--base", "HEAD")[0], 0)
+        with self.assertRaises(SystemExit):
+            self.run_check(check, "--base", "no-such-ref")
 
     def test_the_checked_in_baseline_passes_on_this_tree(self):
         check = load(ROOT)
