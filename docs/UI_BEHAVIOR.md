@@ -1987,7 +1987,7 @@ The agents step is the first-run agent choice (Settings: each machine's install 
 Returning to Agents shows the saved choice, or the machine's enabled agents when no draft exists; installed agents start enabled only for the unanswered initial choice.
 An old installation or discovery answer can settle its own operation but cannot advance a different step.
 Devices lists the Host entries of this computer's `~/.ssh/config`, the same list and filter as Add device (no wildcard or negated Host); reading them contacts no machine (`ssh -G` resolves an address without connecting).
-It reads no Herdr configuration: Hide runs no Herdr, and the work an earlier Herdr held comes in through [the import](#moving-a-herdr-session-into-hide).
+It reads no Herdr configuration: Hide runs no Herdr, and the work an earlier Herdr held comes in through [the import](#importing-a-herdr-session-into-hide).
 Hosts that lead to the same `user@host:port` are one row however many aliases name it, named by the config's first, while a different user or port is its own row; rows follow the config's order.
 Each row names the machine over its address (`user@host:port`, or its alias when `ssh -G` could not resolve it).
 The step is titled `다른 기기에서도 에이전트를 돌리나요?`, and says the machines come from the ssh config and that nothing is contacted or installed before Connect; under the list one line says a machine not listed is added later in Settings › Devices.
@@ -2318,20 +2318,18 @@ Nothing else of an update reaches the sidebar or this menu: looking, downloading
 With the sidebar hidden none of the three shows, as Help does not.
 A browser tab and the phone have no button, card, dot or update line.
 
-## Moving a Herdr session into Hide
+## Importing a Herdr session into Hide
 
-Core owner: `hide-core/src/runtime/herdr_import.rs` (`status.herdr_import`, `status.herdr_import_devices`, the `herdr_import` event), `hided/src/herdr_transition.rs` (what is found and what a move or an import does on this machine), `hide-core/src/herdr_import/device.rs` (on a device). Web owner: `web/src/HerdrImport.tsx`, `web/src/herdrImportRules.ts`, `web/src/i18n/resources/herdrImport.ts`.
+Core owner: `hide-core/src/runtime/herdr_import.rs` (`status.herdr_import`, `status.herdr_import_devices`, the `herdr_import` event), `hided/src/herdr_transition.rs` (what is found and what an import does on this machine), `hide-core/src/herdr_import/device.rs` (on a device). Web owner: `web/src/HerdrImport.tsx`, `web/src/herdrImportRules.ts`, `web/src/i18n/resources/herdrImport.ts`.
 
-PRD engine-bundle-4-herdr-removal D-6 to D-8, D-10, B2 to B5, B11, B14 to B18; [ARCHITECTURE.md](ARCHITECTURE.md#moving-a-herdr-session-into-the-cores-own-engine) owns what a move and an import do.
-While Hide's own Herdr runs with something to move, a dialog asks `Herdr is running <n> tabs and <n> agents` (or `Herdr is running <n> tabs` with no agent), says `Moving ends the commands running in them, and the agents reopen where their conversations left off.`, and offers `Later` and a destructive `Move <n> agents` (or `Move <n> tabs`), with neither chosen beforehand, so Enter presses nothing; Escape and a press outside do not close it.
-Pressing Move shows `Moving…` with a spinner in place of the buttons until Hide starts again with the moved workspaces; a Herdr that could not be stopped leaves the dialog with `Couldn't stop Herdr. Stop Herdr yourself, then move again.` and the same two buttons.
-`Later` puts the question off on this page only, so the next launch of the app asks again: the sidebar shows one quiet row above the footer, `<n> Herdr agents not moved` (or tabs) with `Move`, which asks the question again.
+PRD engine-bundle-4-herdr-removal D-7, D-8, D-10, B11, B14 to B18; [ARCHITECTURE.md](ARCHITECTURE.md#importing-a-herdr-session-into-the-cores-own-engine) owns what an import does.
+Hide never stops or changes a Herdr, including one an earlier Hide started: its saved work is offered read only.
 A save no Hide Herdr runs is offered read only: the sidebar's row says `Herdr has <n> tabs` with `Import`, adding `Conversations open in Herdr open here as shells` while that Herdr runs, and Settings > General shows `Import Herdr work` with the same note and an `Import` button.
-A save Hide could not read shows `Couldn't read the Herdr session` with the reason under it and `Try again`; once a move or an import has left workspaces out, the row lists each as `<workspace>: <reason>` with `OK`, which clears it.
+A save Hide could not read shows `Couldn't read the Herdr session` with the reason under it and `Try again`; once an import has left workspaces out, the row lists each as `<workspace>: <reason>` with `OK`, which clears it.
 Conversations an import left open in a Herdr that has closed since show `Herdr closed: <n> conversations can resume here` with `Resume`, which resumes each in its pane, or in a new tab of the same workspace, named for the agent, when that pane runs something else.
-A dialed device asks the same, under its name, once its link is up: `Herdr on <device> is running <n> tabs and <n> agents`, one dialog at a time after this machine's; its sidebar row starts with the device's name, Settings names it in `Import Herdr work from <device>`, and `Later` puts off that machine's question only.
-With nothing to move, import or read, no dialog, row or Settings group shows.
-`hide import herdr` prints what would move or be imported and what ends, and moves or imports only with `--yes`.
+A dialed device's save is offered the same way, under its name, once its link is up: its sidebar row starts with the device's name, and Settings names it in `Import Herdr work from <device>`.
+With nothing to import or read, no row or Settings group shows.
+`hide import herdr` prints what would be imported and imports only with `--yes`.
 
 ## Practice window
 

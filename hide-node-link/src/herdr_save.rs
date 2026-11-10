@@ -1,8 +1,7 @@
-//! What a machine's node answers of its Herdr save and the Herdr server on
-//! its default socket (`Call::HerdrSave`, `Call::HerdrStop`), for moving its
-//! session into the core's own engine (PRD engine-bundle-4-herdr-removal
-//! D-10). The node reads and stops them with `hide_host::herdr_save`, the
-//! code the core's own machine uses. Bundle 4 PR B deletes it with Herdr.
+//! What a machine's node answers of its Herdr save and whether a Herdr server
+//! runs on its default socket (`Call::HerdrSave`), for the read-only import
+//! of an earlier Hide's Herdr session. The node reads them with
+//! `hide_host::herdr_save`, the code the core's own machine uses.
 
 use serde::{Deserialize, Serialize};
 
@@ -33,25 +32,17 @@ pub enum Fetched {
     Unreadable { reason: String },
 }
 
-/// Who runs the Herdr server on a machine's default socket.
+/// Whether a Herdr server runs on a machine's default socket. Nothing is
+/// stopped from Hide; the import only reads.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Server {
     Stopped,
-    /// Hide's Herdr runs it, by the file it runs (D-5): a Hide package's
-    /// (also one renamed aside or in the Trash), a runtime copy's, or the
-    /// copy a device's helper pins, as the process `pid` that started at
-    /// `started`.
-    Hide {
-        pid: u32,
-        started: u64,
-    },
-    /// Someone else's Herdr, or one whose program the system will not name:
-    /// read only, never stopped (D-8).
+    /// A server answers on the socket.
     Other,
 }
 
-/// A node's answer to `Call::HerdrSave`: its save, who runs the server on
+/// A node's answer to `Call::HerdrSave`: its save, whether a server runs on
 /// its default socket, and that socket, in the wire spelling, which the
 /// core's records of the machine's Herdr panes are scoped by.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -486,14 +486,12 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
-      - name: A device's Herdr copy a server runs is kept, and its kit follows the device's home
-        # The kit judges a copy's use by the files a process holds in it on
-        # Windows, never by the image paths it could read, and finds its home
-        # in USERPROFILE, never in the HOME OpenSSH sets beside it
-        # (hide-host/src/kit.rs).
+      - name: Every kit location follows the home the platform names
+        # The kit finds its home in USERPROFILE, never in the HOME OpenSSH sets
+        # beside it (hide-host/src/kit.rs).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & (test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does) | test(=kit::tests::every_kit_location_follows_the_home_the_platform_names))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=kit::tests::every_kit_location_follows_the_home_the_platform_names)'
       - name: Each agent's account folders, from its definition's [account]
         # `resolve`'s contract (hide-agent-adapter/tests/it/account.rs): a
         # folder is absolute only in Windows' forms, variable names compare

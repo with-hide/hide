@@ -7422,7 +7422,7 @@ pub struct StatusSnapshot {
     pub tab_rename: Option<TabRenameSnapshot>,
     #[serde(rename = "herdr")]
     pub engine: ProviderStatusSnapshot,
-    /// What this machine's Herdr save offers to move into the core's own
+    /// What this machine's Herdr save offers to import into the core's own
     /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
     /// nothing to show.
     pub herdr_import: Option<HerdrImportSnapshot>,
@@ -7954,19 +7954,18 @@ pub struct ProviderStatusSnapshot {
     pub message: Option<String>,
 }
 
-/// What this machine's Herdr save offers to move into the core's own engine,
-/// and what the last move came to (PRD engine-bundle-4-herdr-removal D-6 to
-/// D-8, B2 to B5, B11, B14 to B17).
+/// What this machine's Herdr save offers to import into the core's own engine,
+/// and what the last import came to (PRD engine-bundle-4-herdr-removal D-7,
+/// D-8, B11, B14 to B17).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrImportSnapshot {
-    /// `move` while Hide's own Herdr runs, which moving stops (the question,
-    /// D-6); `import` for any other save, read only (D-8); `result` when
-    /// nothing is left to offer and the last move's result waits to be read.
+    /// `import` for a save, read only (D-8); `result` when nothing is left to
+    /// offer and the last import's result waits to be read.
     pub kind: String,
-    /// `offered`, `moving` while the move is asked for and the core starts
+    /// `offered`, `moving` while the import is asked for and the core starts
     /// again with it, `failed`, or `moved` for a `result`.
     pub stage: String,
-    /// What moving offers: workspaces, tabs and agents not moved yet.
+    /// What importing offers: workspaces, tabs and agents not imported yet.
     pub workspaces: usize,
     pub tabs: usize,
     pub agents: usize,
@@ -7976,12 +7975,11 @@ pub struct HerdrImportSnapshot {
     /// A Herdr runs on with the save's conversations open, so an import
     /// opens their panes as shells (B15).
     pub herdr_running: bool,
-    /// `not_stopped` (Hide's Herdr could not be stopped, B4) or `unreadable`
-    /// (the save could not be read, B11) while `stage` is `failed`.
+    /// `unreadable` (the save could not be read, B11) while `stage` is `failed`.
     pub failure: Option<String>,
     /// Why the save could not be read, in one line.
     pub reason: Option<String>,
-    /// The workspaces the last move left out, with why (B11).
+    /// The workspaces the last import left out, with why (B11).
     pub refused: Vec<HerdrImportRefusedSnapshot>,
     /// The device whose save this is; absent for this machine's (B18).
     #[serde(skip_serializing_if = "Option::is_none")]
