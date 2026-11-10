@@ -29,6 +29,7 @@
 		A1B2C3D40000000000000032 /* QRScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000031 /* QRScannerTests.swift */; };
 		A1B2C3D4000000000000011B /* PushKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000011C /* PushKeychainTests.swift */; };
 		A1B2C3D40000000000000027 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000024 /* InfoPlist.strings */; };
+		A1B2C3D4000000000000020D /* AllowNotificationsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +60,8 @@
 		A1B2C3D40000000000000023 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		A1B2C3D40000000000000025 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A1B2C3D40000000000000028 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllowNotificationsUITests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000020C /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -101,6 +104,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D40000000000000205 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXContainerItemProxy section */
@@ -118,6 +128,13 @@
 			remoteGlobalIDString = 504EC3031FED79650016851F;
 			remoteInfo = App;
 		};
+		A1B2C3D40000000000000207 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 504EC3031FED79650016851F;
+			remoteInfo = App;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXGroup section */
@@ -128,6 +145,7 @@
 				504EC3061FED79650016851F /* App */,
 				A1B2C3D40000000000000013 /* AppTests */,
 				A1B2C3D40000000000000113 /* HideNotification */,
+				A1B2C3D40000000000000208 /* AppUITests */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -138,6 +156,7 @@
 				504EC3041FED79650016851F /* App.app */,
 				A1B2C3D40000000000000010 /* AppTests.xctest */,
 				A1B2C3D40000000000000106 /* HideNotification.appex */,
+				A1B2C3D4000000000000020C /* AppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -182,6 +201,14 @@
 				A1B2C3D4000000000000011C /* PushKeychainTests.swift */,
 			);
 			path = AppTests;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40000000000000208 /* AppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */,
+			);
+			path = AppUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -250,6 +277,23 @@
 			productReference = A1B2C3D40000000000000106 /* HideNotification.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		A1B2C3D40000000000000200 /* AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40000000000000209 /* Build configuration list for PBXNativeTarget "AppUITests" */;
+			buildPhases = (
+				A1B2C3D40000000000000203 /* Sources */,
+				A1B2C3D40000000000000205 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1B2C3D40000000000000206 /* PBXTargetDependency */,
+			);
+			name = AppUITests;
+			productName = AppUITests;
+			productReference = A1B2C3D4000000000000020C /* AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -294,6 +338,7 @@
 				504EC3031FED79650016851F /* App */,
 				A1B2C3D40000000000000016 /* AppTests */,
 				A1B2C3D40000000000000111 /* HideNotification */,
+				A1B2C3D40000000000000200 /* AppUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -354,6 +399,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D40000000000000203 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4000000000000020D /* AllowNotificationsUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -366,6 +419,11 @@
 			isa = PBXTargetDependency;
 			target = A1B2C3D40000000000000111 /* HideNotification */;
 			targetProxy = A1B2C3D40000000000000110 /* PBXContainerItemProxy */;
+		};
+		A1B2C3D40000000000000206 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 504EC3031FED79650016851F /* App */;
+			targetProxy = A1B2C3D40000000000000207 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -658,6 +716,36 @@
 			};
 			name = Release;
 		};
+		A1B2C3D4000000000000020A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = GH6F6ZA497;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.grab.hide.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = App;
+			};
+			name = Debug;
+		};
+		A1B2C3D4000000000000020B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = GH6F6ZA497;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.grab.hide.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = App;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -693,6 +781,15 @@
 			buildConfigurations = (
 				A1B2C3D40000000000000119 /* Debug */,
 				A1B2C3D4000000000000011A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D40000000000000209 /* Build configuration list for PBXNativeTarget "AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4000000000000020A /* Debug */,
+				A1B2C3D4000000000000020B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

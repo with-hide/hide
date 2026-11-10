@@ -113,8 +113,21 @@ case "$command" in
         xcodebuild test -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppTests \
             "${signing[@]}"
+        # The UI test bundle that answers the notification question is built here too, so `allow` needs no build of its own.
+        xcodebuild build-for-testing -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
+            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppUITests ARCHS=arm64 "${signing[@]}"
         printf 'built: %s\n' "$derived/Build/Products/Debug-iphonesimulator/App.app"
         df -h / | tail -1 | awk '{printf "build machine free disk: %s of %s\n", $4, $2}'
+        ;;
+    allow)
+        # Answers the system's notification question for the built app on this branch's simulator: SpringBoard shows it,
+        # `simctl` cannot press it, so a UI test does (AppUITests). It launches the app with the debug taps it was sent
+        # (the same ones `run` takes), so the page asks the question itself. The grant stays in the simulator.
+        ensure_device
+        xcrun simctl bootstatus "$id" -b > /dev/null
+        TEST_RUNNER_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcodebuild test-without-building -project "$project/App.xcodeproj" -scheme App \
+            -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+            -only-testing:AppUITests "${signing[@]}"
         ;;
     run)
         ensure_device
