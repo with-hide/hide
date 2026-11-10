@@ -35,7 +35,10 @@ project=$base/ios/App
 packages=$base/SourcePackages
 registry=$inputs/release-env.json
 expect=$inputs/release-expect.json
-min_free_gb=15
+# A whole run used about 1 GB of the disk (24 GB to 23 GB free on 2026-11-10: the branch folder's 0.66 GB of build state
+# and the release work folder); the floor is a few times that, only so a run cannot fill the disk under the machine's
+# other work. A run that runs out of space anyway fails at the step that ran out.
+min_free_gb=5
 # Machine-wide, because what they guard is: the account's temporary folder, the disk floor, the Apple account and the
 # build numbers. Neither is ever deleted (deleting a lock file others may open would let two runs hold two locks).
 lock=$root/.release.lock
@@ -339,7 +342,7 @@ if [[ -s "$records" && "$again" != 1 ]]; then
 fi
 
 free_gb=$(df -g / | awk 'NR==2 {print $4}')
-(( free_gb >= min_free_gb )) || die "this machine has ${free_gb} GB free and a release build needs it to stay above $min_free_gb GB"
+(( free_gb >= min_free_gb )) || die "this machine has ${free_gb} GB free and a release build needs at least $min_free_gb GB"
 
 load_secrets
 team=$(jq -r .teamId "$expect")

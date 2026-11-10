@@ -61,7 +61,7 @@ describe('the release command on the build machine', { timeout: 120000 }, () => 
 
     // The macOS commands the script asks questions of.
     stub('stat', 'f=${@: -1}; case "$*" in *%Lp*) cat "$f.mode" 2>/dev/null || echo 600;; *%u*) id -u;; esac');
-    stub('df', 'echo "Filesystem 1G-blocks Used Available Capacity iused ifree %iused Mounted"; echo "/dev/x 500 100 400 20% 1 1 1% /"');
+    stub('df', 'echo "Filesystem 1G-blocks Used Available Capacity iused ifree %iused Mounted"; echo "/dev/x 500 100 ${STUB_FREE_GB:-400} 20% 1 1 1% /"');
     stub('getconf', `[ "$1" = DARWIN_USER_TEMP_DIR ] && echo "${accountTmp}/"`);
     // sed and grep record their arguments, which is what `ps` would show of them.
     for (const name of ['sed', 'grep']) stub(name, `printf '%s\\n' "$*" >> "${home}/argv.log"; exec ${real(name)} "$@"`);
@@ -278,6 +278,15 @@ exit 0`);
       expect(records().at(-1)).toMatch(/ - started branch$/);
       const grandchild = await pidIn('grandchild');
       await until('the upload\'s grandchild to end', () => !alive(grandchild), 5000);
+      leftNothing();
+    });
+
+    it('starts with 5 GB free and refuses below that, before it builds anything', () => {
+      expect(run({ STUB_FREE_GB: '5', HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
+      const low = run({ STUB_FREE_GB: '4', HIDE_IOS_NO_UPLOAD: '1' });
+      expect(low.status).toBe(1);
+      expect(low.stderr).toContain('4 GB free and a release build needs at least 5 GB');
+      expect(low.stdout).not.toContain('== archive');
       leftNothing();
     });
 

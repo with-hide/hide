@@ -730,7 +730,8 @@ It refuses a working tree with tracked changes, `HIDE_IOS_SKIP_PHONE_BUILD` (a r
 
 It exits non-zero with the reason at the first failure (a step outside the tools names itself), prints the end of the log once the log has been searched for a secret, and ends each long step that outlives its bound (archive 20 minutes, export and validate 15, upload 30; a whole run took about 6).
 Each step runs in a process group of its own, so a bound or a signal ends it with everything it started.
-The command stops before it starts when the mini has less than 15 GB free; a whole run took about 6 minutes and the mini's free disk fell by about 1 GB (2026-11-10: 24 GB to 23 GB), most of the time in the Swift tests, Apple's validation and the upload.
+A whole run took about 6 minutes and the mini's free disk fell by about 1 GB (2026-11-10: 24 GB to 23 GB), most of the time in the Swift tests, Apple's validation and the upload.
+The command stops before it starts only when the mini has less than 5 GB free, a few times what a run uses, so a run cannot fill the disk under the mini's other work; a run that runs out of space anyway fails at the step that ran out.
 
 **Version and build number.**
 The version is the numeric part of the repository's own (`HIDE_VERSION`, else the newest `v<version>` tag, as `desktop/scripts/build-identity.mjs` resolves it for the desktop app), so `0.4.0-rc.1` and `0.4.0-main.<commit>` are both `0.4.0`.
