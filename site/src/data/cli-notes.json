@@ -91,11 +91,11 @@
     "example": "hide agent archive agent-7"
   },
   "agent catalog": {
-    "line": "Lists the agent kinds and profiles you can start here, with the models and efforts each one takes.",
+    "line": "Lists the agent kinds and profiles Hide can start, with whether each is installed and the models and efforts each one takes.",
     "example": "hide agent catalog"
   },
   "agent profile list": {
-    "line": "Lists the profiles on this machine: each one is a way to start an agent, with its own account folder.",
+    "line": "Lists this machine's agent profiles, each one a way to start an agent, with its account, program, environment variable names and installation state.",
     "example": "hide agent profile list"
   },
   "agent profile add": {
@@ -405,13 +405,13 @@
     "line": "Records that a Project Memory card has been written into a document at a path, for the agent that moves cards into documents."
   },
   "memory building": {
-    "line": "Records that a Project Memory card is being written into a document on a branch, for the agent that moves cards into documents."
+    "line": "Records the branch that implements a Project Memory card's decision and the file there that already documents it, for the agent that moves cards into documents."
   },
   "memory unbuilt": {
     "line": "Records why a Project Memory card cannot be written into a document yet, for the agent that moves cards into documents."
   },
   "memory outdated": {
-    "line": "Records that a document is newer than what the operator said, so the Project Memory card for it is outdated."
+    "line": "Records why a Project Memory card is outdated and marks it for another check, for the agent that moves cards into documents."
   },
   "memory skipped": {
     "line": "Records why a Project Memory card was skipped when moving cards into documents."
