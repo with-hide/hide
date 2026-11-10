@@ -45,7 +45,10 @@ target/debug/examples/export_journey_contract > contracts/agent-journey.json
 omp's binary is checked against its release's `SHA256SUMS.txt`, and Grok's vendor installer publishes no checksum, so only the version it answers is checked.
 agy's installer serves only its latest release, so agy's row also records, for each system CI installs it on (`darwin-arm64`, `linux-x64`, `windows-x64`), the `url` and `sha512` of that release's file from agy's manifest, and the install downloads that file and checks it; a test refuses a row without both for each system.
 Every file the install downloads - omp's and agy's release files and Grok's installer - comes through one helper that runs curl to the file it is wanted at.
-curl is what knows which failures are worth another ask: it asks again on a 408, a 429, a 5xx and a connection that dropped, refused or timed out, never on a 403 or a 404, bounds each attempt with `--max-time`, bounds the whole download with its waits with `--retry-max-time`, and fails a body shorter than the length its answer declares.
+curl is what knows which failures are worth another ask: it asks again on a 408, a 429, a 5xx and a timeout, never on a 403 or a 404.
+A body that ended short of its declared length (exit 18), an empty reply (52) and a reset mid-transfer (56) are not among those, so the helper asks again itself for those three exits; `--retry-all-errors` is not used, because it would also ask again on a 403, a 404 and a certificate that will answer the same way.
+One deadline in Python bounds the whole download: no curl run starts without time left, each is given `--max-time` of the time left, and Python kills it at that same second.
+`--retry-max-time` is not used, since curl's manual says a request started before it ends may run on past it.
 A failed download ends the step with curl's exit code and its last error, and what the file must be is still checked in Python: a file that does not match its pin is refused there, since no retry can repair it.
 Grok's installer is downloaded to a file and run from that file, so a failed download ends the step with the download's own error rather than as a missing program later.
 Move agy's pin by copying agy's row from the table `python3 scripts/agent-cli-latest.py <out.json>` writes: it reads the same manifests the daily agent canary installs agy's latest release from.
