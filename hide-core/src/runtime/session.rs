@@ -2063,17 +2063,10 @@ impl Runtime {
             self.overlay_remote_pane_moves(target_id, session);
             // A node that dials this core sleeps as the core's own machine
             // does (PRD core-host-node-remote-core B13).
-            let live_pane_ids = session
-                .workspaces
-                .iter()
-                .flat_map(|workspace| workspace.checkouts.iter())
-                .flat_map(|checkout| checkout.tabs.iter())
-                .flat_map(|tab| tab.panes.iter())
-                .map(|pane| pane.id.clone())
-                .collect::<HashSet<_>>();
+            let live_pane_ids = remote_live_pane_ids(session);
             self.stamp_node_agent_sleep(target_id, &mut session.agents, &live_pane_ids);
             self.lay_plan_reviews(target_id, &mut session.agents);
-            read_changed = self.apply_remote_read_state(target_id, session);
+            read_changed = self.apply_remote_read_state(target_id, session, &live_pane_ids);
             for workspace in &mut session.workspaces {
                 for checkout in &mut workspace.checkouts {
                     for tab in &mut checkout.tabs {

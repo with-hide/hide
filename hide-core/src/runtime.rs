@@ -1028,6 +1028,18 @@ fn prune_pane_text_scales(
     scales.len() != before
 }
 
+/// Every pane the remote topology holds, independent of agent detection or focus.
+fn remote_live_pane_ids(session: &RemoteSessionSnapshot) -> HashSet<String> {
+    session
+        .workspaces
+        .iter()
+        .flat_map(|workspace| workspace.checkouts.iter())
+        .flat_map(|checkout| checkout.tabs.iter())
+        .flat_map(|tab| tab.panes.iter())
+        .map(|pane| pane.id.clone())
+        .collect()
+}
+
 /// Every pane `session` lists, and the panes on screen: while its machine
 /// is in front, exactly the tabs its selected group shows. Without a core
 /// layout, the legacy engine-focused tab supplies the initial canvas.
@@ -1036,14 +1048,7 @@ fn remote_terminal_pane_sets(
     target_is_active: bool,
     shown_tabs: Option<&[String]>,
 ) -> (HashSet<String>, HashSet<String>) {
-    let live_pane_ids = session
-        .workspaces
-        .iter()
-        .flat_map(|workspace| workspace.checkouts.iter())
-        .flat_map(|checkout| checkout.tabs.iter())
-        .flat_map(|tab| tab.panes.iter())
-        .map(|pane| pane.id.clone())
-        .collect::<HashSet<_>>();
+    let live_pane_ids = remote_live_pane_ids(session);
     if !target_is_active {
         return (live_pane_ids, HashSet::new());
     }

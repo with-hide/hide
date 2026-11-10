@@ -1711,16 +1711,9 @@ impl Runtime {
         &mut self,
         target_id: &str,
         session: &mut RemoteSessionSnapshot,
+        live_pane_ids: &HashSet<String>,
     ) -> bool {
         let look = self.reading_device_look(target_id, session);
-        let live_pane_ids = session
-            .workspaces
-            .iter()
-            .flat_map(|workspace| workspace.checkouts.iter())
-            .flat_map(|checkout| checkout.tabs.iter())
-            .flat_map(|tab| tab.panes.iter())
-            .map(|pane| pane.id.clone())
-            .collect::<HashSet<_>>();
         // The lineage comes first because the read fingerprint carries what
         // each row's descendants are doing, and that is only known once the
         // tree is built (PRD B5).
@@ -1737,17 +1730,17 @@ impl Runtime {
             &mut session.agents,
             Some(target_id),
             ReadRecordScope::Remote(target_id),
-            Some(&live_pane_ids),
+            Some(live_pane_ids),
         );
         self.apply_pane_launches(
             &mut session.agents,
             ReadRecordScope::Remote(target_id),
-            Some(&live_pane_ids),
+            Some(live_pane_ids),
         );
         self.lay_start_prompts(
             &mut session.agents,
             ReadRecordScope::Remote(target_id),
-            Some(&live_pane_ids),
+            Some(live_pane_ids),
         );
         self.lay_unseen_views(&mut session.agents);
         self.lay_human_turns(&mut session.agents);
@@ -1759,7 +1752,7 @@ impl Runtime {
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut changes = crate::agent_state::prune_read_records(
             &mut records,
-            &live_pane_ids,
+            live_pane_ids,
             ReadRecordScope::Remote(target_id),
         );
         let connection = self.read_connection(Some(target_id));
