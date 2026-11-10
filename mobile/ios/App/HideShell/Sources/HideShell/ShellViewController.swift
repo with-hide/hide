@@ -10,6 +10,14 @@ open class ShellViewController: CAPBridgeViewController {
     /// The plugins a script of the app may call. A test names its own.
     open var exposedPlugins: Set<String> { BridgeGate.appPlugins }
 
+    /// The app's own plugins, the ones `BridgeGate.appPlugins` names besides Capacitor's console. A test names its own.
+    open func appPlugins() -> [CAPPlugin] {
+        [HideKeychainPlugin(), HideScannerPlugin(), HideAppPlugin()]
+    }
+
+    /// The height the keyboard covers, which the web view gives up so the page's last line stays above it.
+    private var keyboardOverlap: CGFloat = 0
+
     /// The phone site is several pages (the loader and one bundle per protocol), not one page.
     public override func router() -> Router {
         PhoneRouter()
@@ -26,20 +34,53 @@ open class ShellViewController: CAPBridgeViewController {
         navigationPolicy = policy
         webView.navigationDelegate = policy
         webView.uiDelegate = policy
+        for plugin in appPlugins() { bridge?.registerPluginInstance(plugin) }
+        feelNative(webView)
     }
 
+    /// What makes the page stop feeling like a page: the whole page does not rubber-band or zoom (the lists inside it
+    /// scroll as they do), and the web view ends where the keyboard begins so the reply field is never under it.
+    private func feelNative(_ webView: WKWebView) {
+        let scroll = webView.scrollView
+        scroll.bounces = false
+        scroll.alwaysBounceVertical = false
+        scroll.alwaysBounceHorizontal = false
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 1
+        scroll.pinchGestureRecognizer?.isEnabled = false
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)),
+                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)),
+                                               name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    @objc private func keyboardWillChange(_ note: Notification) {
+        guard let webView, let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        let hiding = note.name == UIResponder.keyboardWillHideNotification
+        keyboardOverlap = hiding ? 0 : max(0, view.bounds.maxY - view.convert(end, from: nil).minY)
+        let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        UIView.animate(withDuration: duration) {
+            webView.frame = CGRect(x: 0, y: 0, width: self.view.bounds.width, height: self.view.bounds.height - self.keyboardOverlap)
+        }
+    }
+
+    open override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        webView?.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: view.bounds.height - keyboardOverlap)
+    }
+
+    open override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+
 #if DEBUG
-    /// The simulator check's input, in a debug build only: the simulator has no camera and nothing outside can
-    /// type into the web view, so a pairing link given as the launch value `HIDE_DEBUG_PAIR_LINK` is followed as
-    /// the loader follows a link opened on the page, and Connect is pressed once the page shows it. A release
-    /// build has no such way in.
+    /// The simulator check's input, in a debug build only: the simulator has no camera and nothing outside can open
+    /// a universal link, so a pairing link given as the launch value `HIDE_DEBUG_PAIR_LINK` is handed to the same inbox
+    /// a link opened from outside reaches, and Connect is pressed once the page shows it. A release build has no
+    /// such way in.
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        guard let link = ProcessInfo.processInfo.environment["HIDE_DEBUG_PAIR_LINK"],
-              let fragment = URL(string: link)?.fragment, fragment.hasPrefix("pair="),
-              let literal = try? JSONEncoder().encode("#" + fragment), let source = String(data: literal, encoding: .utf8) else { return }
+        guard let link = ProcessInfo.processInfo.environment["HIDE_DEBUG_PAIR_LINK"], URL(string: link) != nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            self?.webView?.evaluateJavaScript("location.hash = \(source)")
+            PairLinkInbox.shared.offer(URL(string: link))
             self?.pressConnect(attempt: 0)
         }
     }

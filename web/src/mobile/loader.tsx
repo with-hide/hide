@@ -8,13 +8,15 @@ import { Button } from "../components/ui/button";
 import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr } from "./ScanQr";
-import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
-import { appHost, serviceWorkerAllowed } from "./appHost";
+import { bundlePath, hostStore, MAX_HOSTS, type PairedHost } from "./hosts";
+import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
+import { followNativeLinks } from "./nativeLink";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 import { PlayIcon } from "lucide-react";
 
+markAppHost();
 followPhoneTheme();
 // Take and clear secrets synchronously before any React effects or resource loading.
 const pairing = takePairing();
@@ -54,8 +56,7 @@ function Loader() {
     void pairing.then((qr) => {
       if (qr) { setPair(qr); return; }
       const host = new URLSearchParams(location.search).get("host");
-      try { if (host) setTarget(readHosts(localStorage).find((candidate) => candidate.room === host) ?? null); }
-      catch { setError("storage"); }
+      if (host) void hostStore().list().then((hosts) => setTarget(hosts.find((candidate) => candidate.room === host) ?? null)).catch(() => setError("storage"));
     }).catch(() => setError("qrError"));
     const followQr = () => {
       void takePairing().then((qr) => {
@@ -64,8 +65,10 @@ function Loader() {
       }).catch(() => setError("qrError"));
     };
     window.addEventListener("hashchange", followQr);
+    // A link that opened the app lands on the same pairing screen a scanned QR does, and waits for the person's tap.
+    const stopLinks = followNativeLinks((qr) => { setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
     if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
-    return () => window.removeEventListener("hashchange", followQr);
+    return () => { window.removeEventListener("hashchange", followQr); stopLinks(); };
   }, []);
   useEffect(() => {
     if (!target) return;
@@ -74,7 +77,7 @@ function Loader() {
     const open = async () => {
       try {
         if ("code" in target) {
-          const hosts = readHosts(localStorage);
+          const hosts = await hostStore().list();
           if (hosts.length >= MAX_HOSTS && !hosts.some((host) => host.room === target.room)) { setError("limit"); return; }
         }
         await relayReady();

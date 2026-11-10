@@ -29,6 +29,7 @@ final class TestShell: ShellViewController {
     var folder: URL!
 
     override var exposedPlugins: Set<String> { ["Probe"] }
+    override func appPlugins() -> [CAPPlugin] { [probe] }
 
     override func instanceDescriptor() -> InstanceDescriptor {
         let descriptor = super.instanceDescriptor()
@@ -36,9 +37,34 @@ final class TestShell: ShellViewController {
         return descriptor
     }
 
-    override func capacitorDidLoad() {
-        super.capacitorDidLoad()
-        bridge?.registerPluginInstance(probe)
+}
+
+/// The app's real Keychain plugin over a service of its own, recording each call that reaches it.
+@objc(RecordingKeychain)
+final class RecordingKeychain: HideKeychainPlugin {
+    private let lock = NSLock()
+    private var ids: [String] = []
+    var onRead: ((String) -> Void)?
+    var calls: [String] { lock.lock(); defer { lock.unlock() }; return ids }
+
+    @objc override func read(_ call: CAPPluginCall) {
+        lock.lock(); ids.append(call.callbackId); lock.unlock()
+        onRead?(call.callbackId)
+        super.read(call)
+    }
+}
+
+/// The app's own controller with its real exposed list (`BridgeGate.appPlugins`) and the real Keychain plugin.
+final class KeychainShell: ShellViewController {
+    let keychain = RecordingKeychain(keychain: PairingKeychain(service: "me.grab.hide.ios.tests.\(UUID().uuidString)"))
+    var folder: URL!
+
+    override func appPlugins() -> [CAPPlugin] { [keychain] }
+
+    override func instanceDescriptor() -> InstanceDescriptor {
+        let descriptor = super.instanceDescriptor()
+        descriptor.appLocation = folder
+        return descriptor
     }
 }
 
@@ -88,5 +114,39 @@ final class ShellViewControllerTests: XCTestCase {
         shell.probe.onPing = { if $0 == "main-final" { finished.fulfill() } }
         wait(for: [finished], timeout: 30)
         XCTAssertEqual(shell.probe.calls.sorted(), ["main", "main-final"])
+    }
+
+    /// The phone's secret is only for the app's own main frame: a sandboxed frame, which is what agent-made HTML runs
+    /// in, and a frame of the app's own origin both ask the Keychain plugin for an item and are never heard; the main
+    /// frame is. Take the gate out of `ShellViewController` and the frames' calls arrive, and this fails.
+    func testTheKeychainPluginIsReachableFromTheMainFrameOnly() throws {
+        func read(_ id: String) -> String {
+            "webkit.messageHandlers.bridge.postMessage({type:'message',pluginId:'HideKeychain',methodName:'read',callbackId:'\(id)',options:{room:'\(String(repeating: "a", count: 43))'}})"
+        }
+        let pages = [
+            "index.html": """
+            <!doctype html><body><script>
+            \(read("main"))
+            let done = 0;
+            addEventListener('message', () => { if (++done === 2) setTimeout(() => { \(read("main-final")) }, 400); });
+            </script>
+            <iframe sandbox="allow-scripts" src="/sandboxed.html"></iframe>
+            <iframe src="/plain.html"></iframe></body>
+            """,
+            "sandboxed.html": "<!doctype html><script>\(read("sandboxed-frame")); parent.postMessage('done', '*')</script>",
+            "plain.html": "<!doctype html><script>\(read("same-origin-frame")); parent.postMessage('done', '*')</script>",
+        ]
+        for (name, text) in pages { try text.write(to: folder.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        let shell = KeychainShell()
+        shell.folder = folder
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        window.rootViewController = shell
+        window.makeKeyAndVisible()
+        retained = [shell, window]
+        let finished = expectation(description: "page ran to its last call")
+        shell.keychain.onRead = { if $0 == "main-final" { finished.fulfill() } }
+        wait(for: [finished], timeout: 30)
+        XCTAssertEqual(shell.keychain.calls.sorted(), ["main", "main-final"])
+        XCTAssertTrue(BridgeGate.appPlugins.isSuperset(of: ["HideKeychain", "HideScanner", "HideApp"]))
     }
 }
