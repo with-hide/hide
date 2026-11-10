@@ -3134,7 +3134,7 @@ The start sheet and the pull request's `맡기기` sheet add a sample row to 작
 The sample text is the app's own and is worded in all four languages (`web/src/i18n/resources/mobileDemo.ts`), and it is worded again when the phone's language changes; pull request titles, branches and file names are code text and stay as written.
 The demo opens no WebSocket and makes no request, so it works offline.
 It writes no host entry, credential or notification subscription, offers no notification row, and a visit leaves only the phone's own language and theme choice, which the demo shares with the real app.
-A slim bar, `샘플 데이터로 체험 중` with `체험 끝내기`, sits over every screen of a demo.
+A slim bar, `체험 중 · 샘플 데이터` with `체험 끝내기`, sits over every screen of a demo.
 `샘플` marks the host's name in the list's header, and the host sheet holds only the sample host, a note that nothing is sent or saved, `내 컴퓨터 연결하기` and `체험 끝내기`.
 `내 컴퓨터 연결하기` opens the real QR scan and paste page (`/?add=1`, with the camera permission), and `체험 끝내기` opens the start page, which has no trace of the visit.
 

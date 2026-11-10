@@ -215,7 +215,8 @@ function open(number: number, title: string, branch: string, over: Partial<Phone
 }
 
 function work(over: Partial<NonNullable<PhonePr["work"]>>): NonNullable<PhonePr["work"]> {
-  return { ...pr(1).work!, ...over };
+  // The fixture's reviewer is a real login; the sample names a generic one.
+  return { ...pr(1).work!, reviewers: [{ login: "reviewer", team: false, state: "approved", at_unix_ms: null }], ...over };
 }
 
 /** The pull request that fails a check, which the hand-over sheet opens on. */
@@ -266,17 +267,24 @@ export function prsFrame(t: T, state: DemoState): ServerFrame {
       review: null,
       reason: { kind: "failed", name: "web-e2e", count: 1 },
       work: work({ merge_state: "blocked", failed_checks: [{ name: "web-e2e", url: `${SAMPLE_URL}/runs/${FAILED_PR_NUMBER}` }], check_counts: counts(22, 21, 0, 1), reviewers: [], required_approvals: 1 }),
+      card: card({
+        head: HEAD,
+        files: [{ path: "src/list.tsx", additions: 34, deletions: 6, generated: false }, { path: "tests/list.test.tsx", additions: 18, deletions: 0, generated: false }],
+        files_total: 2,
+        merge: { methods: ["squash", "merge"], queue: false, can_merge: false },
+      }),
     }),
   ].filter((item) => !state.merged.includes(item.number));
   return { type: "prs", projects: [project({ label: "demo/app" })], items, feedback, omitted: 0 };
 }
 
-/** What the start sheet lists: the sample checkout, and the agent kinds the app knows. */
+/** What the start sheet lists: the sample checkout, and the agents the sample Mac has. */
 export function startCatalog(): StartCatalog {
   return {
     targets: [{ id: "demo-main", device_id: DEMO_DEVICE, place: "demo · main", device_label: null, connected: true }],
     core_platform: "macos aarch64",
-    kinds: PROVIDER_KINDS.map((id) => ({ id, models: [] })),
+    // The sample Mac has two of the agents the app knows, and Claude lists its model aliases.
+    kinds: PROVIDER_KINDS.filter((id) => id === "claude" || id === "codex").map((id) => ({ id, models: id === "claude" ? ["opus", "sonnet", "haiku"] : [] })),
     remembered: { kind: null, models: {} },
   };
 }

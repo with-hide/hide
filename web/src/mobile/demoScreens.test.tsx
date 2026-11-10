@@ -40,7 +40,7 @@ describe("the sample host's screens", () => {
   it("say on every screen that the data is a sample, with a way out", () => {
     expect(usePhone.getState().demo).toBe(true);
     const bar = document.querySelector("[data-phone-demo-bar]");
-    expect(bar?.textContent).toContain("Demo with sample data");
+    expect(bar?.textContent).toContain("Demo · sample data");
     expect(bar?.querySelector("[data-phone-demo-exit]")?.textContent).toBe("Leave demo");
     // The host's name carries the pill that marks it as a sample.
     const name = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Demo Mac"));

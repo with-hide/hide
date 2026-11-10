@@ -21,7 +21,7 @@ export function DemoBar() {
   const { t } = useInterfaceTranslation();
   return (
     <div role="status" className="phone-demo-bar flex shrink-0 items-center justify-between gap-md border-b border-border bg-secondary px-xl" data-phone-demo-bar="true">
-      <span className="min-w-0 truncate text-body text-subtle-foreground">{t("mobile.demo.bar")}</span>
+      <span className="min-w-0 break-keep text-body text-subtle-foreground wrap-anywhere">{t("mobile.demo.bar")}</span>
       <Button variant="text" className="min-h-(--size-touch-target) shrink-0 px-none text-body" data-phone-demo-exit="true" onClick={() => leaveDemo()}>
         {t("mobile.demo.exit")}
       </Button>
