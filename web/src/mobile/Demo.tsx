@@ -11,7 +11,7 @@ import { leaveDemo } from "./connection";
 export function SamplePill() {
   const { t } = useInterfaceTranslation();
   return (
-    <Badge variant="outline" className="rounded-full px-sm" data-phone-demo-sample="true">
+    <Badge variant="secondary" className="rounded-full border border-border px-sm" data-phone-demo-sample="true">
       {t("mobile.demo.sample")}
     </Badge>
   );
