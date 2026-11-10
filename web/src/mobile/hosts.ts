@@ -89,7 +89,9 @@ export function browserStore(storage: Storage): HostStore {
 /**
  * The app's store: the host list (name, room, protocol, last seen) in the web view's storage, where no secret is, and
  * each computer's credential and key in one Keychain item under its room. A row without its item cannot connect and a
- * item without its row belongs to nothing a person can see, so a list read drops both.
+ * item without its row belongs to nothing a person can see, so a list read drops both. Every operation runs on one
+ * queue, in the order it was asked: a read that ran between a save's Keychain write and its row write would take the new
+ * item for an orphan and delete it.
  */
 export function appStore(storage: Storage): HostStore {
   const rows = () => parse(storage, APP_HOSTS_KEY, false) as Row[];
@@ -97,6 +99,12 @@ export function appStore(storage: Storage): HostStore {
     const encoded = JSON.stringify(hosts.map(({ room, name, protocol, lastSeen }) => ({ room, name, protocol, lastSeen })));
     checked(JSON.parse(encoded), false);
     storage.setItem(APP_HOSTS_KEY, encoded);
+  };
+  let tail: Promise<unknown> = Promise.resolve();
+  const serial = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = tail.then(operation, operation);
+    tail = run.catch(() => undefined);
+    return run;
   };
   const list = async (): Promise<PairedHost[]> => {
     const listed = rows();
@@ -120,16 +128,16 @@ export function appStore(storage: Storage): HostStore {
     write(listed);
   };
   return {
-    list,
-    save,
-    forget: async (room) => {
+    list: () => serial(list),
+    save: (host) => serial(() => save(host)),
+    forget: (room) => serial(async () => {
       await keychain.remove(room);
       write(rows().filter((h) => h.room !== room));
-    },
-    revoke: async (room) => {
+    }),
+    revoke: (room) => serial(async () => {
       const host = (await list()).find((h) => h.room === room);
       if (host?.credential) await save({ ...host, credential: null });
-    },
+    }),
   };
 }
 

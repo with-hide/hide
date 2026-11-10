@@ -3,15 +3,18 @@ import { APP_HOSTS_KEY, appStore, browserStore, bundlePath, HOSTS_KEY, MAX_HOSTS
 
 // The Keychain the app's plugin keeps, as a map: what a call returns is what the native side would.
 const held = vi.hoisted(() => new Map<string, { noiseKey: string; credential: string | null }>());
+// How long a native call takes, so a test can interleave two operations the way a slow Keychain does.
+const delay = vi.hoisted(() => ({ save: 0, list: 0 }));
+const later = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 vi.mock("./appBridge", () => ({
   keychain: {
-    save: async (room: string, item: { noiseKey: string; credential: string | null }) => { held.set(room, item); },
+    save: async (room: string, item: { noiseKey: string; credential: string | null }) => { await later(delay.save); held.set(room, item); },
     read: async (room: string) => held.get(room) ?? null,
     remove: async (room: string) => { held.delete(room); },
-    list: async () => [...held.keys()],
+    list: async () => { const rooms = [...held.keys()]; await later(delay.list); return rooms.concat([...held.keys()].filter((room) => !rooms.includes(room))); },
   },
 }));
-beforeEach(() => held.clear());
+beforeEach(() => { held.clear(); delay.save = 0; delay.list = 0; });
 
 function storage() {
   const entries = new Map<string, string>();
@@ -92,4 +95,27 @@ it("refuses a seventeenth computer in the app before it writes a secret", async 
   for (let n = 0; n < MAX_HOSTS; n++) await hosts.save({ ...host, room: String.fromCharCode(65 + n).repeat(43) });
   await expect(hosts.save(host)).rejects.toThrow("host_limit");
   expect(held.size).toBe(MAX_HOSTS);
+});
+
+it("runs a list that was asked while a computer is being saved after the save, so the new item is not taken for an orphan", async () => {
+  const store = storage();
+  const hosts = appStore(store);
+  delay.save = 20;
+  delay.list = 30;
+  const saving = hosts.save(host);
+  // Asked while the Keychain write is in flight: its answer is read after the item exists, its row list before the row does.
+  const listing = hosts.list();
+  await saving;
+  expect((await listing).map((entry) => entry.room)).toEqual([host.room]);
+  expect([...held.keys()]).toEqual([host.room]);
+  expect(JSON.parse(store.getItem(APP_HOSTS_KEY) ?? "[]").map((row: PairedHost) => row.room)).toEqual([host.room]);
+});
+
+it("keeps answering in order after an operation was refused", async () => {
+  const hosts = appStore(storage());
+  for (let n = 0; n < MAX_HOSTS; n++) await hosts.save({ ...host, room: String.fromCharCode(65 + n).repeat(43) });
+  const refused = hosts.save(host);
+  const listing = hosts.list();
+  await expect(refused).rejects.toThrow("host_limit");
+  expect(await listing).toHaveLength(MAX_HOSTS);
 });

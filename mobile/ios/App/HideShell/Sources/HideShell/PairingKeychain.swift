@@ -45,10 +45,25 @@ public final class PairingKeychain {
     public static let defaultService = "me.grab.hide.ios.pairing"
 
     private let service: String
+    /// The Keychain group every item lives in; nil only where there is no app bundle to name it (the package's own tests).
+    public let accessGroup: String?
     private let lock = NSLock()
 
-    public init(service: String = PairingKeychain.defaultService) {
+    /// `accessGroup` names the Keychain group every item is written to and read from. The app passes its own
+    /// (`ownAccessGroup`), so a shared group added to the entitlements later for another extension cannot become the
+    /// default group the pairing secret lands in; a test that has no app bundle passes none.
+    public init(service: String = PairingKeychain.defaultService, accessGroup: String? = nil) {
         self.service = service
+        self.accessGroup = accessGroup
+    }
+
+    /// The app's own Keychain group, `<team prefix>.<bundle id>`: the build writes the team prefix into the Info.plist
+    /// (`AppIdentifierPrefix`, which ends with a dot), so the name needs no entitlement read and cannot drift from the
+    /// signing. Nil when the running bundle carries no prefix, which is the package tests' bundle and nothing else.
+    public static func ownAccessGroup(bundle: Bundle = .main) -> String? {
+        guard let prefix = bundle.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String, prefix.hasSuffix("."), prefix.count > 1,
+              let id = bundle.bundleIdentifier else { return nil }
+        return prefix + id
     }
 
     private static let key = try! NSRegularExpression(pattern: "^[A-Za-z0-9_-]{43}$")
@@ -64,6 +79,7 @@ public final class PairingKeychain {
             // Items made before this call existed cannot be synchronized; the query asks for the local ones only.
             kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
         ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         if let room { query[kSecAttrAccount as String] = room }
         return query
     }

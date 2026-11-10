@@ -18,7 +18,7 @@ open class HideKeychainPlugin: CAPPlugin, CAPBridgedPlugin {
     public let keychain: PairingKeychain
 
     public override init() {
-        keychain = PairingKeychain()
+        keychain = PairingKeychain(accessGroup: PairingKeychain.ownAccessGroup())
         super.init()
     }
 

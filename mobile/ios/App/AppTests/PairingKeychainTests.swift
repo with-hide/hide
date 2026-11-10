@@ -1,4 +1,5 @@
 import Security
+import UIKit
 import XCTest
 @testable import HideShell
 
@@ -70,5 +71,43 @@ final class PairingKeychainTests: XCTestCase {
         try keychain.save(PairingItem(room: room, noiseKey: key, credential: "new"))
         try keychain.clearLeftoverFromEarlierInstall(defaults: defaults, marker: "first-run")
         XCTAssertEqual(try keychain.read(room: room)?.credential, "new")
+    }
+}
+
+/// The group the pairing secret is written to is named by the code, not by whatever the entitlements list first.
+final class PairingKeychainGroupTests: XCTestCase {
+    private let room = String(repeating: "g", count: 43)
+    private let key = String(repeating: "k", count: 43)
+
+    private func group(of keychain: PairingKeychain, service: String) throws -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &result), errSecSuccess)
+        return (result as? [String: Any])?[kSecAttrAccessGroup as String] as? String
+    }
+
+    /// The app's own group is `<team prefix>.<bundle id>`, read from the Info.plist the build fills in.
+    func testTheAppNamesItsOwnGroup() throws {
+        let own = try XCTUnwrap(PairingKeychain.ownAccessGroup())
+        XCTAssertTrue(own.hasSuffix(".me.grab.hide.ios"), own)
+        XCTAssertNil(PairingKeychain.ownAccessGroup(bundle: Bundle(for: UIView.self)), "a bundle with no prefix names no group")
+    }
+
+    /// The plugin the web app reaches writes to that group: an item carries it as its `kSecAttrAccessGroup`, so a shared group
+    /// listed first in the entitlements later cannot become the group a pairing secret lands in.
+    func testThePluginsItemsCarryTheAppsOwnGroup() throws {
+        let plugin = HideKeychainPlugin()
+        let own = try XCTUnwrap(PairingKeychain.ownAccessGroup())
+        XCTAssertEqual(plugin.keychain.accessGroup, own)
+        try plugin.keychain.removeAll()
+        defer { try? plugin.keychain.removeAll() }
+        try plugin.keychain.save(PairingItem(room: room, noiseKey: key, credential: "secret"))
+        XCTAssertEqual(try group(of: plugin.keychain, service: PairingKeychain.defaultService), own)
+        XCTAssertEqual(try plugin.keychain.read(room: room)?.credential, "secret")
     }
 }
