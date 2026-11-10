@@ -95,7 +95,7 @@ function useAppVersion(): string | null {
 }
 
 /** Language and appearance as one-line values that open a sheet; a choice applies at once and stays on this phone. */
-export function DisplaySection({ t, openSheet = null }: { t: TFunction; /** The gallery's: the sheet already open. */ openSheet?: "language" | "theme" | null }) {
+export function DisplaySection({ t, openSheet = null, follows = "mac" }: { t: TFunction; /** The gallery's: the sheet already open. */ openSheet?: "language" | "theme" | null; /** What an unchosen language follows: the Mac while one is connected, the phone on the start page where none is. */ follows?: "mac" | "phone" }) {
   const language = usePhoneSettings((state) => state.language);
   const theme = usePhoneSettings((state) => state.theme);
   const kept = usePhoneSettings((state) => state.kept);
@@ -103,11 +103,12 @@ export function DisplaySection({ t, openSheet = null }: { t: TFunction; /** The 
   const languageRow = useRef<HTMLElement | null>(null);
   const themeRow = useRef<HTMLElement | null>(null);
   const chosenLanguage = language ?? FOLLOW;
+  const followWords = t(follows === "phone" ? "mobile.settings.followPhone" : "mobile.settings.followMac");
   return (
     <>
       <Section title={t("mobile.settings.display")} data-phone-settings-section="display">
         <div ref={(node) => { languageRow.current = node; }}>
-          <ValueRow label={t("common.language")} marker="language" value={language ? LANGUAGE_NAMES[language] : t("mobile.settings.followMac")} onPress={() => setSheet("language")} />
+          <ValueRow label={t("common.language")} marker="language" value={language ? LANGUAGE_NAMES[language] : followWords} onPress={() => setSheet("language")} />
         </div>
         <div ref={(node) => { themeRow.current = node; }}>
           <ValueRow label={t("mobile.settings.appearance")} marker="theme" value={t(`mobile.settings.${theme}`)} onPress={() => setSheet("theme")} />
@@ -128,7 +129,7 @@ export function DisplaySection({ t, openSheet = null }: { t: TFunction; /** The 
           setSheet(null);
         }}
       >
-        <ChoiceRow name="language" value={FOLLOW} data-phone-language-option={FOLLOW}>{t("mobile.settings.followMac")}</ChoiceRow>
+        <ChoiceRow name="language" value={FOLLOW} data-phone-language-option={FOLLOW}>{followWords}</ChoiceRow>
         {INTERFACE_LANGUAGES.map((code) => (
           <ChoiceRow key={code} name="language" value={code} lang={code} data-phone-language-option={code}>{LANGUAGE_NAMES[code]}</ChoiceRow>
         ))}

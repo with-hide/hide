@@ -137,7 +137,7 @@ There is no new HTTP entrance: a request arrives only on an admitted device sock
 | --- | --- | --- |
 | relay → device | `registered {push}` | `push` is true only when this relay was given Apple's key; absent reads as false |
 | device → relay | `push_request {id, environment, token, collapse, payload}` | `id` nonzero u32, the device's own and echoed back; `environment` `sandbox` or `production`, no default; `token` hex, 32 to 200 characters, even length (`MIN_TOKEN`, `MAX_TOKEN`); `collapse` base64url, 1 to 64 characters (`MAX_COLLAPSE`); `payload` base64url of 1 to 3,000 bytes of ciphertext (`MAX_CIPHERTEXT`); the whole message at most 6,144 bytes (`MAX_PUSH_CONTROL`) |
-| relay → device | `push_result {id, result}` | `result` is one of `delivered`, `token_gone`, `rate_limited`, `unavailable`, `failed` |
+| relay → device | `push_result {id, result}` | `result` is one of `delivered`, `token_gone`, `token_rejected`, `rate_limited`, `unavailable`, `failed` |
 
 A device sends `push_request` only after a `registered` whose `push` is true.
 A `push_request` from a phone socket, or before admission, is an `invalid_message` refusal like any other message in the wrong place.
@@ -176,7 +176,8 @@ Volume to Apple stays bounded by the relay-wide cap and each room's daily cap, a
 | Apple answers | `result` |
 | --- | --- |
 | 2xx | `delivered` |
-| 410, or 400 `BadDeviceToken` or `DeviceTokenNotForTopic` | `token_gone`: the token names no install of this app, and the sender deletes it |
+| 410 | `token_gone`: the token names no install of this app, and the sender deletes it |
+| 400 `BadDeviceToken` or `DeviceTokenNotForTopic` | `token_rejected`: Apple refuses the token itself, which is what a token made for the other environment or for another app, or a malformed one, looks like; it does not say the install is gone, so the sender keeps the registration and writes a configuration diagnostic (`registration.rejected`, with the environment), because deleting it would only make the app register the same token again on its next connection |
 | 403 `ExpiredProviderToken` | the provider token is signed again and the request sent once more, the only retry, inside the same 10 seconds; if the token is younger than 20 minutes, the retry finds the token expired again or it gets no answer, `unavailable`; any other answer to the retry is mapped by this table |
 | 429, 5xx, no answer within the deadline | `unavailable` |
 | anything else | `failed` |
@@ -201,6 +202,9 @@ Every base64url value in this section, `payload` and `collapse` included, is unp
 `hide-notification` is a localization key the app must carry; it is the only text Apple and a phone without the key can show, so it names nothing.
 No title, state, project, badge count or tag is in plain text.
 The extension tries each computer's key in turn and shows the decrypted notice; a body no key opens keeps the fixed text.
+It shows a notice only when the `room` the notice names is the room of the key that opened it, so a key exists only for a computer the phone is still connected to, and a notice that names another room keeps the fixed text.
+In every case it does not show, it also clears the notification's own data, so a tap on the fixed text opens the app and no agent.
+The extension has no network and no web view: it words the notice from a small table of its own, in the language of the phone's system (the in-app language choice is not readable from the extension), and a notice whose reason has a templated sentence shows the plain sentence the computer sent (`detail`).
 The largest body is 4,079 bytes, inside Apple's 4,096.
 
 `collapse` is Apple's plaintext `apns-collapse-id`, so it never carries an agent key, tag or title: hided sends the first 24 bytes of HMAC-SHA-256 keyed with the phone's 16-byte authentication secret over `hide-collapse\0` and the agent's tag, base64url (32 characters).
@@ -219,9 +223,41 @@ DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vC
 
 Inside its encrypted session the app sends `apns_registration {token, environment, key: {p256dh, auth}}`: the device token as hex, either case (`admission::token_valid`), its environment, and a per-computer P-256 public key (65 bytes uncompressed) and 16-byte secret, base64url, the same shape as a Web Push subscription's keys.
 hided answers `push_state {notifications: "on" | "refused"}` and keeps it in the phone's record in `phones.json` (0600), where it replaces a Web Push subscription and the reverse.
-`push_permission {state: "denied"}` removes it, unpairing removes it with the phone, and a `token_gone` answer removes it.
+`push_permission {state: "denied"}` removes it, unpairing removes it with the phone, and a `token_gone` answer removes it; a `token_rejected` answer does not.
+The `token_rejected` result is new with the first release that sends push, which the relay is deployed ahead of (below): no released hided has read a `push_result` before.
+The `auth` secret is part of this message, so it crosses the bridge from the page to the app's plugin (`HidePush`), as does the token the plugin hands back; the private key never does.
+Only the app's main frame can call the plugin (`BridgeGate`), and the secret opens nothing without the private key, which stays in the Keychain's shared group.
 An older hided answers the message `refused_request` and keeps the session, so the addition keeps `PHONE_PROTOCOL` at 5.
-hided sends only while its relay link is up and said `push: true`; otherwise the notice is dropped with a diagnostic, never queued.
+hided sends only while its relay link is up and said `push: true`.
+A notice that finds no link is held for that phone, replaced by a newer notice for the same agent tag, at most 8 per phone and at most 60 seconds, and sent once when the link comes up; past those limits, or when the phone is gone, it is dropped with a diagnostic.
+Notices about the person's own letters (`letter_undelivered`) are not held.
+
+The app registers once per computer it is connected to, and again on every connect, because Apple may change the token and a computer only holds what it was last told.
+Turning notifications off sends `push_permission {state: "denied"}` to the connected computer and deletes every computer's key on the phone; a computer that was not connected is told on its next connect.
+Removing a computer on the phone sends the same message first when that computer is connected, then deletes its key.
+When no key is left the app also unregisters from Apple (`unregisterForRemoteNotifications`), so Apple answers `token_gone` to every computer that still sends, and a computer removed while it was off stops sending at its next notice.
+A computer removed while it is offline keeps sending until Apple reports the token gone or someone unpairs the phone on the computer; the phone has no key for it by then, so only the fixed text appears.
+Hiding even that would need Apple's notification-filtering entitlement, which the app does not ask for.
+
+### Replying from a notification
+
+A question notice (`ask.kind` is `question`) carries a Reply action, which asks for Face ID or the passcode first (`authenticationRequired`): the pairing credential is readable only while the phone is unlocked, and that class is never lowered for this.
+The notice's encrypted JSON carries `ask {kind, turn}` for a notice that sends the person to an agent waiting on a question or an approval: `turn` is the agent's last change of state in Unix milliseconds, as a decimal string.
+An approval notice has no action: a tap opens the agent, and the person approves there.
+The action runs in the app's own process (launched in the background if it was gone), over a relay connection of its own: join the room, the Noise handshake, `{client_kind: "phone", token}`, wait for `hello`, send `input {request_id, device_id, pane_id, text, turn}`, wait for `input_result`.
+The connection is made with the relay protocol library (`hide-relay-ios`, the same Rust code as the web app's WebAssembly, behind a C interface), and the app refuses a computer whose `phone_protocol` is not the one it speaks.
+`input` with a `turn` is answered `stale` unless the agent is still waiting on a question or an approval and its `changed_at_unix_ms` is that turn, so a Reply written for one question can never type into a later prompt.
+`input` without a `turn` is the phone screen's own and is unchanged.
+The request id is a hash of the notification's id and the action, so a repeat of the same action is the same request: hided's claim on the id answers a repeat `ok` without writing the reply again, and `uncertain` is told as such and never sent again.
+Known limitation: hided keeps its claims on request ids in memory only, so a repeat of an action that arrives right after hided restarted is no longer recognized and its `turn` is checked as new, usually answering `stale`.
+Delivery is proved only by `input_result {ok: true}`, the same proof the phone screen uses.
+A reply has three ends and one rule decides them (`ReplyRule`): not sent only when the failure is certain to have come before anything was handed to the connection; sent only when `input_result` says `ok: true`; and not confirmed for every other end, such as a peer that left after the send, an answer that could not be read, the deadline or a closed socket.
+The text goes back to the reply box only for an end that certainly wrote nothing (not sent, a refusal as unknown, `stale`, `gone`, another `ok: false`), never for a reply that most likely arrived.
+hided answers a request id it already holds before it judges the agent, the ask or the text again, so a written reply that is sent again after the agent moved on, or its pane closed, is answered `ok` and written once.
+Before sending, the app schedules a local notice for about 40 seconds later (`Could not confirm your reply reached the computer`), which a definitive answer cancels or replaces by the exact outcome: not sent, no longer waiting (`stale`), update Hide on the computer (`refused_request`), or could not confirm.
+It fires even when the app was ended in the middle of the send.
+The text of a reply that did not arrive is kept for one hour in the app's own Keychain group and put back in the reply box when the notice of that agent is opened; it is never logged.
+iOS gives an action only a short time (about 30 seconds in practice, not stated in Apple's documents); what a real phone allows is measured on a phone, not on the simulator.
 
 ### Compatibility and deploy order
 

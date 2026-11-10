@@ -60,6 +60,10 @@ describe('what the project builds for the store', () => {
     expect(config.ios.webContentsDebuggingEnabled).toBe(false);
   });
 
+  it('leaves the notification center to the app, because Capacitor would otherwise replace the delegate that opens an agent and sends a reply', () => {
+    expect(JSON.parse(read('capacitor.config.json')).ios.handleApplicationNotifications).toBe(false);
+  });
+
   it('names the same app and team as the list the signed app is held to', () => {
     const want = JSON.parse(read('release-expect.json'));
     const project = read('ios/App/App.xcodeproj/project.pbxproj');

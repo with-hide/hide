@@ -1736,6 +1736,15 @@ fn sleep_action<'a>(
     }
 }
 
+/// What a request id's claim answers: written is `ok`, the others say the write may still land or may have.
+fn claim_answer(answer: &impl Fn(bool, Option<&str>) -> Value, state: InputState) -> Value {
+    match state {
+        InputState::Written => answer(true, None),
+        InputState::InFlight => answer(false, Some("in_flight")),
+        InputState::Uncertain => answer(false, Some("uncertain")),
+    }
+}
+
 async fn input(
     mobile: &Arc<Mobile>,
     phone_id: &str,
@@ -1746,10 +1755,33 @@ async fn input(
         return json!({"type": "input_result", "ok": false, "reason": "invalid_request"});
     };
     let answer = |ok: bool, reason: Option<&str>| json!({"type": "input_result", "request_id": request_id, "ok": ok, "reason": reason});
-    let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
+    // One decision per request id: an id this phone already sent is answered from its claim before the agent, the
+    // ask or the text are judged again (B27), so a written reply's repeat is `ok` and never `stale` or `gone`.
+    if let Some(state) = mobile.claimed_input(phone_id, request_id) {
+        return claim_answer(&answer, state);
+    }
+    let Some((key, agent)) =
+        key_of(message).and_then(|key| projection.find(&key).map(|agent| (key, agent)))
+    else {
         refusal_logged("scope.refused", Some(phone_id), "input_not_an_agent");
         return answer(false, Some("gone"));
     };
+    // An input that was written for one ask (a notification's Reply) lands only while the agent is still in that
+    // ask: `turn` is the `ask.turn` of the notice, the agent's last change of state. Without it the input is the
+    // phone screen's own, made while looking at the agent.
+    match message.get("turn") {
+        None => {}
+        Some(Value::String(turn)) => {
+            let asking = matches!(agent.demand.as_str(), "question" | "approval");
+            if !asking
+                || agent.changed_at_unix_ms.map(|at| at.to_string()).as_deref()
+                    != Some(turn.as_str())
+            {
+                return answer(false, Some("stale"));
+            }
+        }
+        Some(_) => return answer(false, Some("invalid_request")),
+    }
     let text = message.get("text").and_then(Value::as_str);
     let engine_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, engine_key) {
@@ -1765,9 +1797,7 @@ async fn input(
     // lost, is answered from the claim and never written again (B27).
     match mobile.reserve_input(phone_id, request_id) {
         Reservation::Write => {}
-        Reservation::Seen(InputState::Written) => return answer(true, None),
-        Reservation::Seen(InputState::InFlight) => return answer(false, Some("in_flight")),
-        Reservation::Seen(InputState::Uncertain) => return answer(false, Some("uncertain")),
+        Reservation::Seen(state) => return claim_answer(&answer, state),
     }
     let pane_id = key.engine_pane_id().to_owned();
     let core_pane_id = key.pane_id.clone();
@@ -1954,6 +1984,114 @@ mod tests {
             });
         }
         super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
+    }
+
+    fn asking_projection(demand: &str, changed_at: u64) -> Projection {
+        let agent = json!({
+            "pane_id": "w1:p1", "group": "needs_you", "mark": "turn", "identity_label": "Review parser",
+            "agent_kind": "claude", "status_code": demand, "demand": demand, "changed_at_unix_ms": changed_at,
+        });
+        super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
+    }
+
+    /// A reply written for one ask never lands in another: a notice's Reply, answered after the agent has asked
+    /// something else or moved on, is refused as stale and writes nothing.
+    #[tokio::test]
+    async fn an_input_written_for_an_ask_is_refused_once_the_agent_is_in_another() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let ask = |request: &str, turn: Value| {
+            input_message(request, json!({"text": "yes", "turn": turn}))
+        };
+        let waiting = asking_projection("question", 5);
+        for (request, turn, listed) in [
+            ("older", json!("4"), &waiting),
+            ("later", json!("5"), &asking_projection("approval", 6)),
+            ("moved-on", json!("5"), &sleeping_projection(None)),
+        ] {
+            let answer = input(&mobile, "phone-a", &ask(request, turn), listed).await;
+            assert_eq!(
+                (answer["ok"].as_bool(), reason(&answer)),
+                (Some(false), Some("stale")),
+                "{request}"
+            );
+        }
+        let wrong_type = input(&mobile, "phone-a", &ask("number", json!(5)), &waiting).await;
+        assert_eq!(reason(&wrong_type), Some("invalid_request"));
+        // The matching turn passes the check and goes on to the write, which these tests do not wire.
+        let matching = input(&mobile, "phone-a", &ask("same", json!("5")), &waiting).await;
+        assert_ne!(reason(&matching), Some("stale"));
+        // The phone screen's own input carries no turn and is not held to one.
+        let own = input(
+            &mobile,
+            "phone-a",
+            &input_message("own", json!({"text": "yes"})),
+            &waiting,
+        )
+        .await;
+        assert_ne!(reason(&own), Some("stale"));
+    }
+
+    /// A notice's Reply that was written and is sent again with the same request id (a retry after a lost answer or a
+    /// crash) is answered `ok` and written nothing, even though the agent has left the ask the reply was made for.
+    #[tokio::test]
+    async fn a_written_replys_repeat_is_ok_after_the_agent_moved_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let ask = |request: &str| input_message(request, json!({"text": "yes", "turn": "5"}));
+        // The first send was written while the ask matched (the write itself is not wired in these tests).
+        assert_eq!(mobile.reserve_input("phone-a", "sent"), Reservation::Write);
+        mobile.settle_input("phone-a", "sent", Some(InputState::Written));
+        // Afterwards the agent is in another ask, asleep, or its pane is gone: the repeat is still `ok`.
+        for listed in [
+            asking_projection("approval", 6),
+            sleeping_projection(None),
+            asking_projection("none", 7),
+        ] {
+            let again = input(&mobile, "phone-a", &ask("sent"), &listed).await;
+            assert_eq!((again["ok"].as_bool(), reason(&again)), (Some(true), None));
+        }
+        let gone = input(
+            &mobile,
+            "phone-a",
+            &ask("sent"),
+            &super::super::projection::project(&json!({"navigator": {"agents": []}}), "test-node"),
+        )
+        .await;
+        assert_eq!(
+            gone["ok"], true,
+            "a closed pane does not undo a written reply"
+        );
+        // A claim does not turn a new id into `ok`: the same ask moved on is still `stale`.
+        let other = input(
+            &mobile,
+            "phone-a",
+            &ask("new"),
+            &asking_projection("approval", 6),
+        )
+        .await;
+        assert_eq!(reason(&other), Some("stale"));
+        // The states a claim answers with, by the one mapping.
+        for (id, state, expected) in [
+            ("flying", InputState::InFlight, Some("in_flight")),
+            ("unsure", InputState::Uncertain, Some("uncertain")),
+        ] {
+            assert_eq!(mobile.reserve_input("phone-a", id), Reservation::Write);
+            mobile.settle_input("phone-a", id, Some(state));
+            let answer = input(
+                &mobile,
+                "phone-a",
+                &ask(id),
+                &asking_projection("approval", 6),
+            )
+            .await;
+            assert_eq!(
+                (answer["ok"].as_bool(), reason(&answer)),
+                (Some(false), expected)
+            );
+        }
     }
 
     fn pane() -> AgentKey {

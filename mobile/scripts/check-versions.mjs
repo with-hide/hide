@@ -33,10 +33,15 @@ export async function check(root = ROOT) {
   const dependencies = Object.keys(manifest.dependencies).sort();
   if (JSON.stringify(dependencies) !== JSON.stringify(LINKED_PACKAGES)) problems.push(`mobile/package.json links ${dependencies.join(', ')}; the app links only ${LINKED_PACKAGES.join(', ')}`);
 
+  // The app's own local packages are the only other thing HideShell links: the push core the notification extension
+  // shares (no Capacitor, no network, no plugin), named here so a new one is a change to this list.
+  const LOCAL_PACKAGES = { 'CapApp-SPM': [], HideShell: ['../HidePushCore'] };
   for (const [name, text] of [['CapApp-SPM', capApp], ['HideShell', shell]]) {
     const packages = [...text.matchAll(/\.package\(url:\s*"([^"]+)"/g)].map((match) => match[1]);
     if (packages.length !== 1 || !packages[0].endsWith('/capacitor-swift-pm.git')) problems.push(`${name} depends on ${packages.join(', ') || 'nothing'}; the app depends on capacitor-swift-pm alone`);
-    const products = [...new Set([...text.matchAll(/\.product\(name:\s*"([^"]+)"/g)].map((match) => match[1]))].sort();
+    const local = [...text.matchAll(/\.package\(path:\s*"([^"]+)"/g)].map((match) => match[1]);
+    if (JSON.stringify(local) !== JSON.stringify(LOCAL_PACKAGES[name])) problems.push(`${name} links the local packages ${local.join(', ') || 'none'}; it may link ${LOCAL_PACKAGES[name].join(', ') || 'none'}`);
+    const products = [...new Set([...text.matchAll(/\.product\(name:\s*"([^"]+)",\s*package:\s*"capacitor-swift-pm"/g)].map((match) => match[1]))].sort();
     if (JSON.stringify(products) !== JSON.stringify(LINKED_SWIFT_PRODUCTS)) problems.push(`${name} links ${products.join(', ')}; the app links only ${LINKED_SWIFT_PRODUCTS.join(', ')}`);
   }
 

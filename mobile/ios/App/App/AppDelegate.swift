@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import HideShell
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -7,8 +8,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // The notification center's delegate and the categories (and so the actions) a notification may carry are in
+        // place before any notification is delivered, including the one that launches the app in the background.
+        PushCenter.shared.install()
+        // A Reply typed on a notification is sent from here, with the app closed or in the background.
+        PushCenter.shared.actions = PushActions.live()
         return true
+    }
+
+    // Apple's answers to `registerForRemoteNotifications`, asked for only when the person turned notifications on.
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushToken.shared.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        PushToken.shared.didFail()
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

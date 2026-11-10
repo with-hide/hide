@@ -244,6 +244,7 @@ fn a_push_result_names_one_outcome_and_keeps_its_request_id() {
     for (text, result) in [
         ("delivered", PushOutcome::Delivered),
         ("token_gone", PushOutcome::TokenGone),
+        ("token_rejected", PushOutcome::TokenRejected),
         ("rate_limited", PushOutcome::RateLimited),
         ("unavailable", PushOutcome::Unavailable),
         ("failed", PushOutcome::Failed),
