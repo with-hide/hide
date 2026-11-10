@@ -128,8 +128,8 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 - The turn is at rest; or it works, the adapter declares no tool-letter intake and the letter's wait is over, counted from when the turn began to work ([Letters while the agent works](#letters-while-the-agent-works)).
 - The engine knows the agent's state (`idle`, `done`, `working` or `blocked`, with a state sequence), and does not hold it at its blocked prompt, where its prompt operation refuses (`agent_blocked`): a pane the engine reads `blocked` under a turn whose hook reported no prompt is held `not_ready`.
   A kind that takes letters at its tools is not rung while the engine reads it `working`, whatever the turn says, since the engine reads Grok's plan review as work.
-- Neither the engine's state nor the turn changed in the last 10 seconds.
-- Hide has routed no key to the pane for 10 seconds.
+- Neither the engine's state nor the turn changed in the last 30 seconds.
+- Hide has routed no key to the pane for 30 seconds.
 - No input hide routed is newer than the later of the pane's last submission and the last time it entered `working`.
   Typed keys, a pasted attachment, a phone key and the keys of an agent's own find box all count as input, and none of them, Enter included, counts as a submission.
   A submission is a prompt hook that ran with the pane's own native session id, which the hook passes to `hide inbox --hook --session`, or a phone reply.
@@ -192,7 +192,7 @@ How it reaches the agent follows the kind, and one letter takes one path and is 
 
 - Claude Code and Codex, the bell targets, take the line the doorbell submits through the engine's prompt operation while they work: both read a line submitted during a turn after the current tool call, and the line's prompt hook takes the letters as it does at rest.
   A turn its hook reported ended while the engine still reads the screen as working is at rest for the bell as on the row; the draft and quiet gates, read from the engine's and Hide's own clocks, still hold it, and a turn the agent runs without a prompt hook (a background task's wake) takes the line after its current tool call as any mid-turn line.
-  Every other guard of a bell holds as it does at rest: a draft typed since the work began, a key or a status change in the last 10 seconds, a menu, a session not read, and a `working` state the engine has not yet confirmed (`state_change_seq`), so the composer is never typed over the operator's own words (D-09).
+  Every other guard of a bell holds as it does at rest: a draft typed since the work began, a key or a status change in the last 30 seconds, a menu, a session not read, and a `working` state the engine has not yet confirmed (`state_change_seq`), so the composer is never typed over the operator's own words (D-09).
   A pane belled while working is not belled again for a later letter until the letter it rang for has left `pending`: submitting a bell to a working pane moves nothing Hide can see, so the second ring would otherwise follow at once (`doorbell::Rung`).
 - OpenCode, Pi and omp take them at a tool result: Hide's plugin (`tool.execute.after`) and extension (`tool_result`) ask the helper's `letters` operation, which asks for them as `hide inbox --hook --session <id> --tool` does, and append the bodies to the tool's output inside `<system-reminder>`, so the model reads them before its next step; they are confirmed as a prompt's letters are: OpenCode's once it stored the completed tool part of that session with the letters still in its output (OpenCode 2's once `session.tool.success` reports the result stored with them), Pi's and omp's once the host finished the result with Hide's text still in its content and the reply after it has ended (a `message_end` handler may still replace the result itself); a result stored or finished without the text never reached the model, and its letters stay pending in Hide for the next ask.
   While letters a script handed over wait for their receipt, the host's write and then Hide's confirmation, the script asks nothing, so a letter is never written twice; a write that never comes is forgotten after ten minutes, and the letter then rides the next ask.
@@ -434,7 +434,7 @@ Hide routes every key to a pane but cannot see the composer, so any key not foll
 Counting keys cannot tell a draft from an erased one: Claude Code folds a paste into `[Pasted text #1 +11 lines]`, and one Backspace removes it whole.
 So the screen decides, and only when it says the composer is empty.
 
-When the doorbell's verdict for a pending letter, or for the operator's answer to a mission's decision, is `draft` and input is quiet (the engine reports it `idle`, `done` or `working` and current, with no key and no change of status for the 10-second quiet period), the doorbell asks the engine once for the pane's visible screen with its styling (`Engine::read_screen`).
+When the doorbell's verdict for a pending letter, or for the operator's answer to a mission's decision, is `draft` and input is quiet (the engine reports it `idle`, `done` or `working` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks the engine once for the pane's visible screen with its styling (`Engine::read_screen`).
 The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per observed draft and state generation (`delivery/composer.rs`), and counts against the doorbell's eight engine calls a pass; a cut screen is a failed read.
 The screen is judged by the agent's composer declaration (below).
 Only a positive `empty` releases the draft, as [Deliver now](#delivering-a-held-letter-now) does: the input up to the read is no draft (`released_input_at_unix_ms`), the composer mark goes, and the doorbell's next pass rings with every guard it always applies.
@@ -759,7 +759,7 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 | Resource or clock | Bound |
 | --- | --- |
 | Pending delivery deadline | 60 minutes of the recipient's machine being reachable (wall time on the core's own machine), not counting the time the recipient sleeps or wakes, then `undelivered`; visible through CLI |
-| Quiet period | 10 seconds since hide last routed a key and since the engine last changed the pane's status |
+| Quiet period | 30 seconds since hide last routed a key and since the engine last changed the pane's status |
 | Doorbell reservations per letter | Three total, persisted across restart |
 | First inactivity warning | 20 minutes without activity (30 for a code-owned observer); one minute (one tick) when the target stopped on a question or is held at an engine-blocked prompt and the observer is a pane |
 | Second inactivity warning | First-warning time plus 60 minutes, at most two warnings per episode |
