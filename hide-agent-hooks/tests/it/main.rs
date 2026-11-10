@@ -46,6 +46,27 @@ fn hook_target(helper: &std::path::Path) -> hide_agent_hooks::route::HookTarget<
     hide_agent_hooks::route::HookTarget::new(helper, std::path::Path::new(HOOK_STATE)).unwrap()
 }
 
+/// A validated route naming `state`: the route a kit writes for the daemon
+/// that reads it. A hook whose route names a folder nothing made writes
+/// nothing anywhere, so a test that runs its hook must name the state folder
+/// the hook's own home reads, as the kit does
+/// (`hide_agent_hooks::route::records_folder_of`).
+#[cfg(windows)]
+fn hook_target_at<'a>(
+    helper: &'a std::path::Path,
+    state: &'a std::path::Path,
+) -> hide_agent_hooks::route::HookTarget<'a> {
+    hide_agent_hooks::route::HookTarget::new(helper, state).unwrap()
+}
+
+/// The state folder a home's own daemon uses when nothing moves it, which a
+/// route may name before the daemon has made it: its records folder is then
+/// the account's own.
+#[cfg(windows)]
+fn state_of(home: &std::path::Path) -> std::path::PathBuf {
+    hide_agent_hooks::state_folder::default_state_dir(home)
+}
+
 const HOOK_STATE: &str = if cfg!(windows) {
     r"C:\captured-state"
 } else {

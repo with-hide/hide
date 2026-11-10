@@ -118,7 +118,7 @@ fn run_against_state(
         .stderr(Stdio::piped());
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if ["HERDR_", "HIDE_", "HCOORD_", "CURSOR_", "OPENCODE", "GROK_"]
+        if ["HIDE_", "HCOORD_", "CURSOR_", "OPENCODE", "GROK_"]
             .iter()
             .any(|prefix| name.starts_with(prefix))
         {
