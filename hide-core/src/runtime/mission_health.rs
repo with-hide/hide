@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::Runtime;
+use crate::mission_criteria::GATE_KEY;
 use crate::mission_events::{EventKind, MissionEvent};
 use crate::mission_health::{Act, Facts, NodeFacts, WarnAct, WorkerLife, evaluate, warn_acts};
 use crate::missions::{
@@ -270,16 +271,20 @@ pub(super) fn settle(mission: &str, node: &mut MissionNode, by: &str) {
     }
 }
 
+/// The words a gate is passed with when the operator's `끝으로` goes past
+/// it with the node's other open lines, as each skipped line's reason is.
+const OPERATOR_DECISION: &str = "운영자 판단";
+
 /// Goes past each of `node`'s lines named in `keys`, as the operator's own
-/// decision, with the time it was made (D-15).
+/// decision, with the time it was made (D-15). A gate among them is left
+/// to its one entry (`settle_gate`, PRD mission-human-gate D-21), which the
+/// caller goes through once the node is in the book.
 fn skip_lines(node: &mut MissionNode, keys: &[String], now: u64) {
-    for line in node
-        .criteria
-        .iter_mut()
-        .filter(|line| keys.contains(&line.key))
-    {
+    for line in node.criteria.iter_mut().filter(|line| {
+        keys.contains(&line.key) && line.kind != crate::mission_criteria::CriterionKind::Human
+    }) {
         line.skip(
-            "운영자 판단".to_owned(),
+            OPERATOR_DECISION.to_owned(),
             None,
             crate::mission_criteria::Recorded {
                 role: crate::mission_criteria::Role::Operator,
@@ -511,6 +516,7 @@ impl Runtime {
         let mut changed = false;
         for id in ids {
             changed |= self.mission_health(&id, now);
+            changed |= self.raise_gates(&id, now);
         }
         // A review's failure or a push moves a node's warnings now; the
         // quiet that only time makes is the minute decision's.
@@ -1289,6 +1295,9 @@ impl Runtime {
         }
         let mut events = Vec::new();
         let mut next = node.clone();
+        // The nodes whose gate the choice goes past, passed through the
+        // gate's own entry once the nodes are in the book.
+        let mut gated = Vec::new();
         // 완료로 닫기 on a refused close passes the empty lines of every
         // finished node, as this node's own are, and closes the mission.
         let closes = payload.action == OperatorAction::Done
@@ -1315,6 +1324,9 @@ impl Runtime {
                 let mut done = next.clone();
                 done.status = NodeStatus::Done;
                 let unmet = self.node_unmet(mission, &done);
+                if unmet.iter().any(|line| line == GATE_KEY) {
+                    gated.push(next.key.clone());
+                }
                 skip_lines(&mut next, &unmet, now);
                 next.status = NodeStatus::Done;
                 next.finished_at_unix_ms = Some(now);
@@ -1376,6 +1388,9 @@ impl Runtime {
         mission.nodes[at] = next;
         for (index, unmet) in &others {
             let other = &mut mission.nodes[*index];
+            if unmet.iter().any(|line| line == GATE_KEY) {
+                gated.push(other.key.clone());
+            }
             skip_lines(other, unmet, now);
             let skipped = unmet.join(", ");
             let mut event = MissionEvent::new(now, EventKind::Resolved)
@@ -1408,6 +1423,24 @@ impl Runtime {
             );
         }
         self.record_mission_events(&payload.mission, events);
+        // A gate gone past is the operator's answer from the card, passed
+        // through the one entry every gate answer takes (PRD
+        // mission-human-gate D-21), which records it and tells the Conductor.
+        for key in gated {
+            if let Err(code) = self.settle_gate(
+                &payload.mission,
+                &key,
+                super::mission_gates::GateAnswer::Past,
+                crate::mission_criteria::GateVia::Card,
+                OPERATOR_DECISION,
+                now,
+            ) {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.gate_past_refused",
+                    "mission": payload.mission, "node": key, "code": code,
+                }));
+            }
+        }
         // The lines are passed, so the close that was refused is made now
         // rather than at the next pass; a refusal again is logged and
         // raised as before.

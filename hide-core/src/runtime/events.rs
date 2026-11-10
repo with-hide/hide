@@ -1051,6 +1051,10 @@ pub(super) struct MissionAnswerPayload {
     /// reads empty (`지금 보내기`).
     #[serde(default)]
     pub(super) now: bool,
+    /// Sent from a phone (`hided`'s phone path), which a gate's record
+    /// names as where the answer came from (PRD mission-human-gate D-21).
+    #[serde(default)]
+    pub(super) phone: bool,
 }
 
 /// `mission_material`: the operator's `자료 요청` on the question with `key`:
@@ -4177,12 +4181,15 @@ impl Runtime {
             Event::MissionAnswer(payload) if payload.now => {
                 self.mission_answer_now(&payload.mission, payload.key)
             }
-            Event::MissionAnswer(payload) => self.mission_answer_event(
+            Event::MissionAnswer(payload) => self.mission_answer_event_from(
                 &payload.mission,
                 payload.key,
-                payload.option,
-                payload.text,
-                payload.resend,
+                (payload.option, payload.text, payload.resend),
+                if payload.phone {
+                    crate::mission_criteria::GateVia::Phone
+                } else {
+                    crate::mission_criteria::GateVia::Card
+                },
             ),
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionMaterial(payload) => {

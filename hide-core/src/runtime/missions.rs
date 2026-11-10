@@ -266,6 +266,10 @@ pub struct NodeView {
     /// for a node not in progress, an outside one, or one whose worker's
     /// row Hide cannot see.
     pub work: Option<NodeWork>,
+    /// The place the operator looks before the node is done, and where it
+    /// stands (PRD mission-human-gate D-09); absent for a node without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<super::mission_gates::GateView>,
 }
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
@@ -356,11 +360,19 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             {
                 return Some(WaitingOn::Worker);
             }
+            // A gate waits after every other line, on the operator.
             let open = view
                 .criteria
                 .iter()
-                .find(|line| !matches!(line.state, CriterionState::Pass | CriterionState::Skipped));
+                .filter(|line| line.kind != CriterionKind::Human)
+                .find(|line| !matches!(line.state, CriterionState::Pass | CriterionState::Skipped))
+                .or_else(|| {
+                    view.criteria.iter().find(|line| {
+                        line.kind == CriterionKind::Human && line.state != CriterionState::Pass
+                    })
+                });
             Some(match open.map(|line| line.kind) {
+                Some(CriterionKind::Human) => WaitingOn::Decision,
                 Some(CriterionKind::Review) => WaitingOn::Review,
                 Some(CriterionKind::Verify) => WaitingOn::Verify,
                 Some(CriterionKind::Ci) => WaitingOn::Ci,
@@ -813,6 +825,34 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             mission.title,
             mission.decision.as_deref().unwrap_or("-")
         ),
+        WakeEvent::GatePassed => {
+            let line = node.and_then(|node| crate::mission_criteria::gate(&node.criteria));
+            format!(
+                "The operator passed the gate on node {} of mission {} \"{}\" ({}): \"{}\".\nGo on with the node as its lines say, and start the nodes that waited on it.",
+                wake.node,
+                mission.id,
+                mission.title,
+                line.and_then(|line| line.via)
+                    .map_or("-", crate::mission_criteria::GateVia::as_str),
+                line.and_then(|line| line.evidence.as_deref())
+                    .unwrap_or("-"),
+            )
+        }
+        WakeEvent::GateFix => {
+            let (defect, words) = node
+                .and_then(super::mission_gates::operator_defect)
+                .unwrap_or(("-", "-"));
+            match &wake.to {
+                Some(_) => format!(
+                    "The operator looked at your node {} of mission {} \"{}\" and asked for a fix: \"{words}\".\nIt is line {defect} of your node: fix it, record it with `hide mission record {} {defect} --pass --evidence <what shows it>`, and report to your Conductor as before.",
+                    wake.node, mission.id, mission.title, wake.node
+                ),
+                None => format!(
+                    "The operator answered the gate on node {} of mission {} \"{}\" with a fix: \"{words}\".\nHide added it as line {defect}, set the node to work and sent the words to its worker; the gate asks again once its lines are met. Read `hide mission show {} --mission {}`, and brief a worker if the node has none.",
+                    wake.node, mission.id, mission.title, wake.node, mission.id
+                ),
+            }
+        }
         WakeEvent::Attention => {
             let (what, act) = attention_words(wake.reason, &pr);
             news(format!("Node {} needs you to look: {what}", wake.node), act)
@@ -920,6 +960,10 @@ fn attention_words(
         Some(Reason::CloseRefused) => (
             "Hide could not close the mission with every node finished".to_owned(),
             "check the node's lines and close the mission",
+        ),
+        Some(Reason::HumanGate) => (
+            "its gate waits on the operator".to_owned(),
+            "nothing: the operator answers on the decision card",
         ),
         Some(Reason::ConductorFailed) | None => (
             "the operator is asked to look".to_owned(),
@@ -1868,6 +1912,12 @@ impl Runtime {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 self.add_mission_defect(&actor, &id, &node, (found_by, line), now)
             }
+            MissionCommand::Gate {
+                mission,
+                node,
+                pass,
+                said,
+            } => self.relay_gate(&actor, mission.as_deref(), &node, (pass, said), now),
             MissionCommand::Take { mission, handover } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
                 if target.status == MissionStatus::Cancelled {
@@ -3601,6 +3651,7 @@ impl Runtime {
                     warnings: node.warnings.clone(),
                     waiting_on: None,
                     work: None,
+                    gate: self.gate_view(mission, node),
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));

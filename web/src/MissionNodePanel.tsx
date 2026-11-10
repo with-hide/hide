@@ -395,6 +395,7 @@ const TAG: Record<MissionCriterion["kind"], MessageKey> = {
   ci: "mission.criteria.tag.ci",
   review: "mission.criteria.tag.review",
   verify: "mission.criteria.tag.verify",
+  human: "mission.criteria.tag.human",
 };
 
 /**

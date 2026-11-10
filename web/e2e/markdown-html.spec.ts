@@ -100,7 +100,7 @@ test("the repository README opens as drawn HTML and shows a block source under t
     await expect(page.locator('.cm-md-html img[alt="macOS, Windows and Linux"]')).toHaveJSProperty("complete", true);
     expect(await page.locator(".cm-scroller").first().evaluate((element) => element.scrollTop)).toBe(0);
     await expect(logo).toBeInViewport();
-    await expect(page.locator(".cm-content")).toContainText("Run more agents. Hold less.");
+    await expect(page.locator(".cm-content")).toContainText("The ADE for humans.");
     await expect(page.locator(".cm-content")).not.toContainText('<p align="center">');
     // Nothing was fetched from the app's own address for a relative image.
     expect(appRequests.filter((pathname) => pathname.includes("/design/") || pathname.includes("/site/"))).toEqual([]);
