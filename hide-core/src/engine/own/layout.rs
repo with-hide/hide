@@ -212,7 +212,7 @@ pub(crate) fn set_resized_ratio(
 /// The split a resize of `pane` toward `direction` moves, as the turns from
 /// the root (`true` for the second subtree): the one whose boundary is the
 /// pane's edge on that side, or its opposite edge when the pane touches the
-/// tab's side there, as Herdr's `resize_focused` chooses. So the last pane of
+/// tab's side there. So the last pane of
 /// a split's first subtree names that split toward right or down, and the
 /// first pane of its second subtree names it toward left or up, whatever
 /// splits nest inside either subtree.

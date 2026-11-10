@@ -307,9 +307,8 @@ pub(super) struct Live {
     /// When the engine typed its start, until the start settled
     /// ([`PaneAgent::launch_pending`]): the start's deadline runs from here
     /// and nothing moves it, so a program that keeps restarting its settle
-    /// still ends its start at [`START_DEADLINE`], as Herdr's
-    /// `ManagedAgentPhase::Pending` keeps its `deadline` apart from its
-    /// `ready_after`.
+    /// still ends its start at [`START_DEADLINE`]: the deadline is kept apart from
+    /// the settle, so a restarting settle cannot hold a start open.
     pub(super) started: Option<Instant>,
     /// When the start's settle began ([`START_SETTLE`]): at the start, and
     /// again when its program takes the terminal's keys or its screen's

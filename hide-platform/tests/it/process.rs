@@ -3263,6 +3263,19 @@ fn a_pipe_holder_outside_the_tree_does_not_hold_the_answer() {
     );
 }
 
+/// The seven variables of the operator's Herdr pane identity that a Hide pane must
+/// never be given. Each is pinned by its own assertion below and in the login
+/// child test, so one leaking name fails a test by its name.
+const FOREIGN_PANE_NAMES: [&str; 7] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_BIN_PATH",
+    "HERDR_SOCKET_PATH",
+    "HERDR_SESSION",
+];
+
 /// The one rule that withholds the operator's Herdr pane identity from a Hide
 /// pane: every copy (the holder's pane environment, the desk process, the
 /// node's ssh command) calls `is_foreign_pane_identity`, so the prefix and its
@@ -3270,13 +3283,14 @@ fn a_pipe_holder_outside_the_tree_does_not_hold_the_answer() {
 #[test]
 fn the_foreign_pane_identity_is_the_herdr_prefix_whatever_the_case() {
     assert_eq!(FOREIGN_PANE_IDENTITY, "HERDR_");
-    for name in [
-        "HERDR_PANE_ID",
-        "HERDR_SOCKET_PATH",
-        "herdr_env",
-        "Herdr_Session",
-    ] {
+    for name in FOREIGN_PANE_NAMES {
         assert!(is_foreign_pane_identity(name), "{name} is withheld");
+    }
+    for name in ["herdr_env", "Herdr_Session"] {
+        assert!(
+            is_foreign_pane_identity(name),
+            "{name} is withheld whatever its case"
+        );
     }
     for name in ["HIDE_PANE_ID", "HERDRX", "HERD", "PATH", "CLAUDECODE"] {
         assert!(!is_foreign_pane_identity(name), "{name} is kept");
@@ -3292,8 +3306,10 @@ fn the_foreign_pane_identity_is_the_herdr_prefix_whatever_the_case() {
 fn a_login_child_gets_the_account_variables_and_nothing_else() {
     let _serial = serial();
     let mut command = role_command("login_env_parent");
+    for name in FOREIGN_PANE_NAMES {
+        command.env(name, "1");
+    }
     command
-        .env("HERDR_ENV", "1")
         .env("CLAUDECODE", "1")
         .env("HIDE_PLATFORM_PROC_UNLISTED", "1");
     let output = command.output().unwrap();
@@ -3303,10 +3319,13 @@ fn a_login_child_gets_the_account_variables_and_nothing_else() {
         .collect();
     assert!(!keys.is_empty(), "the child reported no environment");
 
-    for withheld in ["HERDR_ENV", "CLAUDECODE", "HIDE_PLATFORM_PROC_UNLISTED"] {
+    for withheld in FOREIGN_PANE_NAMES
+        .into_iter()
+        .chain(["CLAUDECODE", "HIDE_PLATFORM_PROC_UNLISTED"])
+    {
         assert!(
             !keys.iter().any(|key| key == withheld),
-            "{withheld} {keys:?}"
+            "{withheld} leaked into the login child: {keys:?}"
         );
     }
     let expected: &[&str] = if cfg!(windows) {

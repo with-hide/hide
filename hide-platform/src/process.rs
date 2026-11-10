@@ -252,6 +252,8 @@ pub fn hand_over(mut command: Command, spawned: impl FnOnce(u32)) -> io::Result<
 /// job name; the receiver verifies its own membership and closes the query
 /// handle before returning. Neither key is a security authority for callers
 /// that control this account's launch environment.
+pub const OWNER_LAUNCH_KEYS: &[&str] = &["HIDE_PROCESS_OWNER_FD", "HIDE_PROCESS_OWNER_JOB"];
+
 /// The prefix of the operator's own Herdr pane identity (`HERDR_PANE_ID`,
 /// `HERDR_SOCKET_PATH` and the rest). A Hide pane is no Herdr pane, and a
 /// program that read one would act on the Herdr the operator runs, so every
@@ -265,8 +267,6 @@ pub const FOREIGN_PANE_IDENTITY: &str = "HERDR_";
 pub fn is_foreign_pane_identity(name: &str) -> bool {
     name.to_ascii_uppercase().starts_with(FOREIGN_PANE_IDENTITY)
 }
-
-pub const OWNER_LAUNCH_KEYS: &[&str] = &["HIDE_PROCESS_OWNER_FD", "HIDE_PROCESS_OWNER_JOB"];
 
 /// The variables a child that has to find the account's own login receives
 /// from this process, and nothing else: what locates the account (its home
