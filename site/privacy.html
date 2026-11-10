@@ -96,7 +96,7 @@
           <p>The following never enters that stream: prompts, replies, conversation content, code, file names, paths, session identifiers, mission titles or plans, pull requests, the model or provider used, project names, token counts, account identity, device or phone names, and your usage totals.</p>
           <p>The installation identifier is a random value hide creates and keeps in its own state folder. It is derived from neither your account nor your hardware, it stays the same across restarts, and it moves with that folder.</p>
           <p>Events go to PostHog, Inc. in the United States, over TLS, at <code>us.i.posthog.com</code>. Each event is flagged as carrying no person profile and no location enrichment and with an empty IP address, and the project is also set to discard client IP data. A server necessarily learns the address a connection comes from, so PostHog still sees the IP address of the connection that carries the events.</p>
-          <p>PostHog keeps events for its project's retention window: one year on its free plan, and two years by default on its paid plans.</p>
+          <p>PostHog keeps events for its project's retention window: one year on its free plan, which is also that plan's maximum, and two years by default on its paid plans. A project may set a shorter or longer window within its plan's limit.</p>
           <p>Turning the switch off drops the events that are waiting and stops new ones. A request already on its way may finish. Turning it back on never sends what was dropped, and nothing observed while it was off is kept.</p>
 
           <h4>1.2 What stays on your computer</h4>
@@ -110,9 +110,9 @@
           <h3>2. This website</h3>
           <p>withhide.dev has no account and sets no cookie of its own. It uses Vercel Web Analytics for aggregate page counts.</p>
           <ul>
-            <li>What it records per page view: the time, the path, the referring page, filtered query parameters, a coarse location (country and city), the operating system and version, the browser and version, the device type, and the script version.</li>
+            <li>What it records per page view: the time, the page's address, the referring page, filtered query parameters, a coarse location (country, region and city), the operating system and version, the browser and version, the device type, and the analytics script's version.</li>
             <li>Visitors are told apart by a hash made from the incoming request rather than a cookie. That session identity is discarded after 24 hours, and Vercel reports aggregate figures only.</li>
-            <li>How long the figures are kept follows the hosting plan's reporting window, one month on the free plan and twelve months on the Pro plan.</li>
+            <li>How long the figures stay viewable follows the hosting plan's reporting window, the length Vercel guarantees: one month on the free Hobby plan, twelve months on Pro, and twenty-four months on Enterprise. Vercel says it may keep data longer, for example so a plan upgrade does not lose history.</li>
             <li>The fonts, images and scripts the page draws are served from this site. No font service and no other company's script is loaded.</li>
           </ul>
           <p>The download area asks GitHub's public releases API for the latest release. That request carries no hide data, and GitHub sees your IP address when it is made. Links to GitHub, Discord and Herdr leave this site and follow those sites' own policies.</p>
@@ -227,7 +227,7 @@
           <p>다음은 그 전송에 절대 들어가지 않습니다. 프롬프트, 응답, 대화 내용, 코드, 파일 이름, 경로, 세션 식별자, 미션 제목과 계획, 풀 리퀘스트, 쓴 모델이나 공급자, 프로젝트 이름, 토큰 수, 계정 신원, 기기나 폰 이름, 사용량 합계.</p>
           <p>설치 식별자는 hide가 만들어 자기 상태 폴더에 두는 무작위 값입니다. 계정에서도 하드웨어에서도 만들지 않으며, 다시 시작해도 그대로이고 상태 폴더를 옮기면 함께 갑니다.</p>
           <p>이벤트는 TLS로 미국의 PostHog, Inc.에 <code>us.i.posthog.com</code> 주소로 갑니다. 각 이벤트에는 개인 프로필을 만들지 않고 위치를 보강하지 않으며 IP 주소를 비운다는 표시가 붙고, 프로젝트도 클라이언트 IP 주소를 버리도록 설정해 두었습니다. 다만 서버는 접속이 어디서 왔는지 알 수밖에 없으므로, 이벤트를 전하는 접속의 IP 주소는 PostHog에 보입니다.</p>
-          <p>PostHog는 해당 프로젝트의 보관 기간 동안 이벤트를 보관합니다. 무료 요금제는 1년, 유료 요금제는 기본 2년입니다.</p>
+          <p>PostHog는 해당 프로젝트의 보관 기간 동안 이벤트를 보관합니다. 무료 요금제는 1년이며 그것이 이 요금제의 최대값이고, 유료 요금제는 기본 2년입니다. 프로젝트는 요금제가 정한 한도 안에서 더 짧거나 긴 기간을 정할 수 있습니다.</p>
           <p>스위치를 끄면 기다리던 이벤트는 버려지고 새 이벤트는 만들어지지 않습니다. 이미 떠난 요청은 끝날 수 있습니다. 다시 켜도 버려진 이벤트를 뒤늦게 보내지 않고, 꺼져 있던 동안 본 것은 아무것도 남기지 않습니다.</p>
 
           <h4>1.2 컴퓨터에 남는 것</h4>
@@ -241,9 +241,9 @@
           <h3>2. 이 웹사이트</h3>
           <p>withhide.dev에는 계정이 없고 사이트가 직접 두는 쿠키도 없습니다. 방문 수를 모으는 데 Vercel Web Analytics를 씁니다.</p>
           <ul>
-            <li>페이지 열람마다 기록하는 것: 시각, 경로, 이전 페이지, 걸러낸 쿼리 값, 대략적인 위치(국가와 도시), 운영체제와 버전, 브라우저와 버전, 기기 종류, 스크립트 버전.</li>
+            <li>페이지 열람마다 기록하는 것: 시각, 페이지 주소, 이전 페이지, 걸러낸 쿼리 값, 대략적인 위치(국가, 지역, 도시), 운영체제와 버전, 브라우저와 버전, 기기 종류, 분석 스크립트 버전.</li>
             <li>방문자는 쿠키가 아니라 들어온 요청으로 만든 해시로 구분합니다. 그 세션 식별자는 24시간 뒤 버려지고, Vercel은 합계만 보여 줍니다.</li>
-            <li>합계를 보관하는 기간은 호스팅 요금제의 보고 기간을 따릅니다. 무료 요금제는 1개월, Pro 요금제는 12개월입니다.</li>
+            <li>합계를 볼 수 있는 기간은 호스팅 요금제의 보고 기간, 곧 Vercel이 보장하는 기간을 따릅니다. 무료 Hobby 요금제는 1개월, Pro는 12개월, Enterprise는 24개월입니다. Vercel은 요금제를 올릴 때 기록을 잃지 않도록 그보다 오래 보관할 수 있다고 밝히고 있습니다.</li>
             <li>페이지가 쓰는 글꼴과 그림, 스크립트는 이 사이트에서 직접 내려받습니다. 글꼴 서비스나 다른 회사의 스크립트를 부르지 않습니다.</li>
           </ul>
           <p>내려받기 영역은 최신 릴리스를 GitHub의 공개 API에 물어봅니다. 이 요청에도 hide의 데이터가 실리지 않고, 그때 GitHub가 사용자의 IP 주소를 봅니다. GitHub, Discord, Herdr로 가는 링크는 이 사이트를 떠나며 그 사이트의 방침을 따릅니다.</p>
