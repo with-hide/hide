@@ -825,7 +825,8 @@ export interface AgentNotice {
             | "unplanned_pr"
             | "conductor_failed"
             | "wake_refused"
-            | "close_refused";
+            | "close_refused"
+            | "human_gate";
           unmet?: number;
         }
       | {

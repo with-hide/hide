@@ -262,8 +262,10 @@ fn node_acts(
         if !resumed(node) {
             acts.push(Act::Done { node: at });
         }
-    } else if merged {
-        // Merged, but a line is missing or failed (B6, B13).
+    } else if merged && fact.unmet != [crate::mission_criteria::GATE_KEY] {
+        // Merged, but a line is missing or failed (B6, B13); a node whose
+        // gate alone is left waits on the operator's answer to it instead
+        // (PRD mission-human-gate D-10).
         raise(
             acts,
             node,
@@ -429,6 +431,9 @@ fn still_holds(
                 })
         }
         AttentionReason::ConductorFailed => true,
+        // Its gate and the Conductor's presence decide it, which the
+        // runtime reads (`Runtime::raise_gates`).
+        AttentionReason::HumanGate => true,
         // A refused close is about a mission every node of which is
         // finished: once any node works again there is nothing to close and
         // the question goes, with its choices.
@@ -775,6 +780,31 @@ mod tests {
         );
         assert!(m.nodes[0].note_handled(cause_key(AttentionReason::MergedUnproven, Some(7), None)));
         assert!(evaluate(&m, &facts(Some(&pulls), vec![unmet])).is_empty());
+    }
+
+    /// PRD mission-human-gate D-10, D-24: a merged node whose gate alone is
+    /// left waits on the operator's answer to it and raises nothing, while
+    /// a line left beside the gate still raises the merge as unproven.
+    #[test]
+    fn a_merge_with_only_its_gate_left_raises_nothing() {
+        let mut m = running(&["a"]);
+        m.nodes[0].prs = vec![7];
+        let pulls = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
+        let gate = |unmet: &[&str]| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            unmet: unmet.iter().map(|key| (*key).to_owned()).collect(),
+            ..Default::default()
+        };
+        assert!(evaluate(&m, &facts(Some(&pulls), vec![gate(&["human"])])).is_empty());
+        assert_eq!(
+            evaluate(&m, &facts(Some(&pulls), vec![gate(&["ci", "human"])])),
+            [Act::Raise {
+                node: 0,
+                reason: AttentionReason::MergedUnproven,
+                pr: Some(7),
+                agent: None,
+            }]
+        );
     }
 
     /// B8: an open pull request of the node's own branch that no node

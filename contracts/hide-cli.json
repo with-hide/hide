@@ -6072,6 +6072,66 @@
             "answers": [
                 "mission"
             ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission gate",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--fix"
+                    ],
+                    "name": "--pass",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--pass"
+                    ],
+                    "name": "--fix",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--said",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_not_conductor",
+                "mission_node_unknown",
+                "mission_gate_none",
+                "mission_gate_not_open",
+                "mission_gate_words_missing",
+                "mission_closed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
             "arguments": [],
             "command": "mission start",
             "options": [
@@ -6553,7 +6613,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:8a0371cf481e2fd740f3556a7c349b3cd347bbc23c9af1aa41dfff2a7ad5cb56",
+    "digest": "sha256:976d0ed4f0b6636b350b41294335d4294acf00c7bffdf76ca0f70fabe5917d58",
     "envelopes": {
         "agent": {
             "answer": "value",
