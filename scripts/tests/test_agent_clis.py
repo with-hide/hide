@@ -1,5 +1,6 @@
-"""The CLI pin table every CI install reads: a row the installer cannot
-install fails here, not on a runner."""
+"""The CLI pin table every CI install reads, and the one download helper every
+pinned released file comes through: a row the installer cannot install and a
+download it should not retry fail here, not on a runner."""
 
 from pathlib import Path
 import contextlib
@@ -29,9 +30,8 @@ URL = "https://example.invalid/releases/v1.2.3/omp-linux-x64"
 
 
 class Clock:
-    """The clock a download runs on: it moves only when the code sleeps or
-    when the test says an answer took time, so a budget is checked without
-    waiting for it."""
+    """The clock a download runs on: it moves only when the code sleeps, so a
+    retry's waits and its budget are checked without waiting for them."""
 
     def __init__(self):
         self.now = 100.0
