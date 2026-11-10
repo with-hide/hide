@@ -48,7 +48,7 @@ async function pair(browser: Browser, daemon: Daemon): Promise<{ context: Browse
 
 // The two registered stand-ins, daemon and paired browser each need to finish
 // their real startup; all waits below name observable state, not elapsed time.
-test.describe.configure({ timeout: 120_000 });
+test.describe.configure({ timeout: 120_000 }); // wait-ok: two registered stand-ins, daemon startup and a paired phone answer reaching the same core
 
 test("a planned review stays quiet until arrival and the phone's answer passes the desktop gate", async ({ page, browser }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
