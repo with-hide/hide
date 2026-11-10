@@ -184,7 +184,8 @@ plutil -convert json -o "$facts/profile.json" "$work/profile.plist"
 
 step "verify the signature"
 codesign --verify --strict --deep "$app"
-codesign -dvv "$app" 2>&1 | grep -q '^Authority=Apple Distribution: ' || die "the app is not signed with an Apple Distribution certificate"
+signature=$(codesign -dvv "$app" 2>&1)
+grep -q '^Authority=Apple Distribution: ' <<< "$signature" || die "the app is not signed with an Apple Distribution certificate (authorities: $(grep '^Authority=' <<< "$signature" | tr '\n' ';'))"
 
 step "release checks"
 bash "$inputs/check-release-app.sh" "$app" "$facts" "$expect" "$inputs/bundle-manifest.json" "$version" "$build"
