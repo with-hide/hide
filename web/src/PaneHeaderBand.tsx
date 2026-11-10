@@ -31,6 +31,7 @@ import { Button } from "./components/ui/button";
 import { RowOverlayButton } from "./components/ui/row-button";
 import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
 import { HumanTurnCopy } from "./components/human-turn-copy";
+import { OpenAsksMark } from "./components/open-asks";
 
 /** The View menu's turn row mode; absent reads as one line. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
@@ -255,6 +256,36 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
       <span className={cn("font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{verb}</span>
       <Elapsed since={band.since_unix_ms} className="font-mono text-muted-foreground pane-head-narrow:hidden" />
     </button>
+  )} />;
+}
+
+/**
+ * The pane's `?N` after its title: how many questions the agent put to the
+ * operator still wait (status-model.md, A question still waiting), at every
+ * turn row mode and while the agent works, since the second row then keeps its
+ * progress. A press opens the turn card, which lists them with 무시하기.
+ */
+export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const count = useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === paneId)?.open_asks?.items.length ?? 0);
+  if (count === 0) return null;
+  return <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => (
+    <Button
+      variant="ghost"
+      size="inline"
+      aria-label={t("openAsks.mark", { count })}
+      aria-expanded={state.open}
+      data-pane-open-asks={paneId}
+      data-state={state.open ? "open" : "closed"}
+      className="shrink-0 rounded-xs data-[state=open]:bg-secondary"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={state.onToggle}
+      onFocus={state.onFocus}
+      onBlur={state.onBlur}
+      onKeyDown={state.onKeyDown}
+    >
+      <OpenAsksMark count={count} />
+    </Button>
   )} />;
 }
 

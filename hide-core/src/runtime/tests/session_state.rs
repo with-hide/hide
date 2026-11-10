@@ -401,7 +401,6 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
         pull_requests: Vec::new(),
         answer: None,
         letters: None,
-        asked: Vec::new(),
     });
     let summary = Some(header::TurnRequest {
         text: Some("제안대로 진행".into()),
@@ -835,6 +834,7 @@ fn a_summary_lays_an_ended_childs_pull_request_on_its_parents_row() {
         open_missed: 0,
         subtree_open_missed: 0,
         missed: Vec::new(),
+        asks: Vec::new(),
         last_line: None,
         committed_at_unix_ms: None,
         parent: Some(session("s-lead")),
@@ -902,6 +902,7 @@ fn a_lineage_past_the_walk_is_logged_when_its_only_pull_request_lies_beyond() {
                 open_missed: 0,
                 subtree_open_missed: 0,
                 missed: Vec::new(),
+                asks: Vec::new(),
                 last_line: None,
                 committed_at_unix_ms: None,
                 parent: Some(session(index - 1)),

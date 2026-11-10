@@ -21,7 +21,7 @@ use super::Runtime;
 use crate::coordination::{PlanAdmission, PlanLink, refusal};
 use crate::delivery::Actor;
 use crate::links::ledger::{LedgerAnswer, LedgerCall, LedgerUpdate, SessionIdentity};
-use crate::model::{AskSubject, SidebarAgentSnapshot};
+use crate::model::{AskSubject, OpenAskSnapshot, OpenAsksSnapshot, SidebarAgentSnapshot};
 use crate::plans::{
     self, ChildPlace, Delegation, DelegationState, Evidence, PLAN_LIMIT, Plan, PlanCommand,
     PlanProof, PlanTurn, PlanView, Proofs, Review, StepStatus,
@@ -58,14 +58,17 @@ pub(crate) struct PlanRuntime {
     /// None once a sync laid rows from other questions, so the next
     /// refresh relays every row set whatever it reads.
     asked: Option<Vec<CoreAsk>>,
-    /// The plan book's, the mission book's and the typed inputs' edit
-    /// `asked` was read at.
-    made_asks_at: (u64, u64, u64),
+    /// The plan book's, the mission book's, the typed inputs' and the open
+    /// questions' edit `asked` was read at.
+    made_asks_at: (u64, u64, u64, u64),
     /// Typed input shown to the operator on its pane's row
     /// (`typed_input::input_asks`), as the doorbell's last pass found it,
     /// and an edit that moves whenever it changes.
     pub(crate) input_asks: Vec<super::typed_input::InputAsk>,
     pub(crate) input_edit: u64,
+    /// Moves whenever the link summaries the sessions' open questions are
+    /// read from change (`Runtime::open_asks`).
+    pub(crate) asks_edit: u64,
     /// Typed input whose agent's composer was last read still showing it,
     /// by input id, with the typing it was read after: the proof that it
     /// was not taken (`AskSubject::InputUnconfirmed::held`). Bounded by the
@@ -131,8 +134,18 @@ struct Laid {
 /// one raise: a plan put up for review again, a mission's next question or
 /// next raise, is another.
 mod ask_id {
+    use crate::links::ledger::SessionIdentity;
     use crate::missions::{Attention, Mission, MissionNode};
     use crate::plans::Plan;
+
+    /// A question the session put to the operator, by the session and the
+    /// record's id for the line.
+    pub(super) fn open_ask(session: &SessionIdentity, id: &str) -> String {
+        format!(
+            "ask:{}/{}/{}#{id}",
+            session.device_id, session.agent, session.session_id
+        )
+    }
 
     /// A plan put up for review, by its session, its instance and when it
     /// was put up; a plan proposed before that was kept is named by its
@@ -188,6 +201,23 @@ fn row_session(device: &str, agent: &SidebarAgentSnapshot) -> Option<SessionIden
             .to_owned(),
         session_id: agent.session_id.clone()?,
     })
+}
+
+/// Whether a core question still stands on `agent`'s row: a question the
+/// session put to the operator stands only on a row the operator owns (a
+/// delegated row's questions are its parent's to answer) and only until the
+/// operator sends the agent something, which Hide AI then reads again at the
+/// turn's end (docs/status-model.md, A question still waiting).
+fn open_ask_stands(agent: &SidebarAgentSnapshot, subject: &AskSubject, since: u64) -> bool {
+    if !matches!(subject, AskSubject::OpenAsk { .. }) {
+        return true;
+    }
+    !agent.delegated
+        && agent
+            .row_facts
+            .as_ref()
+            .and_then(|facts| facts.operator_request.as_ref())
+            .is_none_or(|request| request.at_unix_ms < since)
 }
 
 /// What a plan that waits for the operator's review asks on its row; the
@@ -880,6 +910,7 @@ impl Runtime {
         if self.plans.edit == self.plans.made_asks_at.0
             && self.missions.book_edit == self.plans.made_asks_at.1
             && self.plans.input_edit == self.plans.made_asks_at.2
+            && self.plans.asks_edit == self.plans.made_asks_at.3
         {
             return false;
         }
@@ -887,6 +918,7 @@ impl Runtime {
             self.plans.edit,
             self.missions.book_edit,
             self.plans.input_edit,
+            self.plans.asks_edit,
         );
         let asks = self.core_asks();
         if self.plans.asked.as_ref() == Some(&asks) {
@@ -956,6 +988,7 @@ impl Runtime {
     ) -> bool {
         let before = agents.to_vec();
         for agent in agents.iter_mut() {
+            agent.open_asks = None;
             let Some(laid) = self.plans.laid.remove(&agent.pane_id) else {
                 continue;
             };
@@ -977,9 +1010,11 @@ impl Runtime {
     }
 
     /// Lays on each resting row the core's questions for its session: its
-    /// plan waiting for review, and the open decision of the mission it
-    /// conducts (needs-you-cleanup D-12). One question holds the row, the
-    /// one asked first; the others are counted behind it (D-13).
+    /// plan waiting for review, the open decision of the mission it
+    /// conducts (needs-you-cleanup D-12) and the questions it put to the
+    /// operator that still wait. One question holds the row, the one asked
+    /// first; the others are counted behind it (D-13). The open questions
+    /// are also carried on the row whatever it does, for its `?N`.
     fn lay_reviews_on(
         &mut self,
         device: &str,
@@ -990,12 +1025,6 @@ impl Runtime {
             return;
         }
         for agent in agents.iter_mut() {
-            if agent.user_turn.is_some()
-                || agent.activity == "working"
-                || crate::agent_state::demand_of(agent) != crate::agent_state::AgentDemand::None
-            {
-                continue;
-            }
             let session = row_session(device, agent);
             // Oldest first, as `core_asks` sorts them.
             let mine: Vec<&CoreAsk> = asks
@@ -1004,7 +1033,31 @@ impl Runtime {
                     Asked::Session(asked) => session.as_ref() == Some(asked),
                     Asked::Pane(pane) => *pane == agent.pane_id,
                 })
+                .filter(|(_, since, subject, _)| open_ask_stands(agent, subject, *since))
                 .collect();
+            agent.open_asks = session.as_ref().and_then(|session| {
+                let items: Vec<OpenAskSnapshot> = mine
+                    .iter()
+                    .filter_map(|(_, since, subject, _)| match subject {
+                        AskSubject::OpenAsk { id, line } => Some(OpenAskSnapshot {
+                            id: id.clone(),
+                            text: line.clone(),
+                            at_unix_ms: *since,
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+                (!items.is_empty()).then(|| OpenAsksSnapshot {
+                    session: session.clone(),
+                    items,
+                })
+            });
+            if agent.user_turn.is_some()
+                || agent.activity == "working"
+                || crate::agent_state::demand_of(agent) != crate::agent_state::AgentDemand::None
+            {
+                continue;
+            }
             let Some((asked, since, subject, _)) = mine.first() else {
                 continue;
             };
@@ -1105,13 +1158,49 @@ impl Runtime {
                 )
             });
         let attentions = self.mission_attention_asks();
+        let open = self.open_asks();
         let mut asks: Vec<_> = reviews
             .chain(decisions)
             .chain(inputs)
             .chain(attentions)
+            .chain(open)
             .collect();
         asks.sort_by_key(|(_, since, ..)| *since);
         asks
+    }
+
+    /// The questions each session put to the operator that still wait, as
+    /// its record's `나를 기다리는 것` lists them (the link summaries' `asks`),
+    /// while Hide AI reads the sessions' turns: with summaries off nothing
+    /// keeps the list, so none is asked (docs/status-model.md, A question
+    /// still waiting).
+    fn open_asks(&self) -> Vec<CoreAsk> {
+        if !super::backlog::summaries_on(self.ai_settings.as_ref()) {
+            return Vec::new();
+        }
+        let Some(summaries) = self.snapshot.link_summaries.as_ref() else {
+            return Vec::new();
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        summaries
+            .projects
+            .values()
+            .flat_map(|project| &project.work)
+            .filter(|work| !work.asks.is_empty() && seen.insert(&work.session))
+            .flat_map(|work| {
+                work.asks.iter().map(|ask| {
+                    (
+                        Asked::Session(work.session.clone()),
+                        ask.at_unix_ms,
+                        AskSubject::OpenAsk {
+                            id: ask.id.clone(),
+                            line: ask.text.clone(),
+                        },
+                        ask_id::open_ask(&work.session, &ask.id),
+                    )
+                })
+            })
+            .collect()
     }
 
     /// The mission nodes that wait on the operator (PRD mission-node-simple
