@@ -1,12 +1,11 @@
-//! What the screen offers for moving a machine's Herdr save into the core's
-//! own engine, and the move itself (PRD engine-bundle-4-herdr-removal D-6 to
-//! D-8, D-10, B2 to B5, B11, B14 to B18).
+//! What the screen offers for importing a machine's Herdr save into the
+//! core's own engine, and the import itself (PRD engine-bundle-4-herdr-removal
+//! D-7, D-8, B11, B15 to B18). An import stops no Herdr.
 //!
 //! `hided` installs the [`Machine`] that reads this machine's save and the
-//! server on its socket and makes the move, only on a core that runs its own
-//! engine; a device of that engine gets one of its own on each link its
-//! engine opens on (`herdr_import::device`), whose node reads and stops for
-//! it. The core asks each on a worker of its own, one call at a time per
+//! server on its socket, only on a core that runs its own engine; a device of
+//! that engine gets one of its own on each link its engine opens on
+//! (`herdr_import::device`), whose node reads it for the core. The core asks each on a worker of its own, one call at a time per
 //! machine, never under the runtime lock. What each last saw decides
 //! `status.herdr_import` and `status.herdr_import_devices`. A move that is
 //! asked for has the core role start again (D-7), so the step shows it
@@ -68,9 +67,11 @@ struct Worker {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ImportAction {
-    /// Stop Hide's Herdr and move its session (D-6).
+    /// An earlier build's move question. This build moves nothing: the press
+    /// is refused, and the save is only imported.
     Move,
-    /// Import a save no Hide Herdr runs, read only (D-8).
+    /// Import the save, read only: a Herdr that runs on is left untouched and
+    /// its conversations wait (D-8).
     Import,
     /// Read the save again: the retry of a save that could not be read.
     Look,
@@ -237,25 +238,20 @@ impl Runtime {
                 }
                 self.show_herdr_import()
             }
-            ImportAction::Move | ImportAction::Import => {
+            ImportAction::Move => refused(action, &device, "a Herdr save is imported, not moved"),
+            ImportAction::Import => {
                 if entry.taking {
                     return false;
                 }
-                let (kind, take) = match action {
-                    ImportAction::Move => (KIND_MOVE, Take::Move),
-                    _ => (KIND_IMPORT, Take::Import),
-                };
                 let offered = entry
                     .seen
                     .as_ref()
                     .and_then(|seen| shown(seen, false))
-                    .is_some_and(|shown| {
-                        shown.kind == kind && (shown.workspaces > 0 || shown.waiting > 0)
-                    });
+                    .is_some_and(|shown| shown.workspaces > 0 || shown.waiting > 0);
                 if !offered {
-                    return refused(action, &device, "no such move is offered");
+                    return refused(action, &device, "no such import is offered");
                 }
-                self.take_herdr_save(&device, take)
+                self.take_herdr_save(&device, Take::Import)
             }
         }
     }
@@ -304,7 +300,6 @@ impl Runtime {
     ) -> bool {
         let outcome = match &taken {
             Taken::Restarting => "restarting",
-            Taken::NotStopped => "not_stopped",
             Taken::Failed(_) => "failed",
         };
         crate::diagnostic!(serde_json::json!({
@@ -374,37 +369,13 @@ impl Runtime {
         let machine = Arc::clone(&self.herdr_import.places[&None].machine);
         self.ingest_herdr_save_of(&None, &machine, seen)
     }
-
-    /// This machine's move answered.
-    pub(super) fn ingest_herdr_take(&mut self, take: Take, taken: Taken) -> bool {
-        let machine = Arc::clone(&self.herdr_import.places[&None].machine);
-        self.ingest_herdr_take_of(&None, &machine, take, taken)
-    }
-
-    /// The device's move answered.
-    pub(super) fn ingest_device_herdr_take(
-        &mut self,
-        device: &str,
-        take: Take,
-        taken: Taken,
-    ) -> bool {
-        let place = Some(device.to_owned());
-        let machine = Arc::clone(&self.herdr_import.places[&place].machine);
-        self.ingest_herdr_take_of(&place, &machine, take, taken)
-    }
 }
 
-const KIND_MOVE: &str = "move";
 const KIND_IMPORT: &str = "import";
 
 /// What the screen shows for `seen`, `None` when there is nothing to show
 /// (B11: no save, no question, no line).
 fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
-    let kind = if seen.server == Server::Hide {
-        KIND_MOVE
-    } else {
-        KIND_IMPORT
-    };
     let refused = match &seen.outcome {
         Some(Outcome::Moved { refused, .. }) => refused
             .iter()
@@ -416,7 +387,7 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
         _ => Vec::new(),
     };
     let base = HerdrImportSnapshot {
-        kind: kind.to_owned(),
+        kind: KIND_IMPORT.to_owned(),
         stage: if taking { "moving" } else { "offered" }.to_owned(),
         workspaces: 0,
         tabs: 0,
@@ -438,16 +409,7 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
         // Waiting conversations resume only once their Herdr no longer runs,
         // so while another Herdr runs on, a save with nothing else is no offer.
         Look::Offer(offer) if offer.workspaces > 0 || seen.server != Server::Other => {
-            let not_stopped =
-                !taking && kind == KIND_MOVE && seen.outcome == Some(Outcome::NotStopped);
-            let stage = if not_stopped {
-                "failed".to_owned()
-            } else {
-                base.stage.clone()
-            };
             Some(HerdrImportSnapshot {
-                stage,
-                failure: not_stopped.then(|| "not_stopped".to_owned()),
                 workspaces: offer.workspaces,
                 tabs: offer.tabs,
                 agents: offer.agents,
@@ -455,7 +417,7 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
                 ..base
             })
         }
-        // A move's left-out workspaces wait to be read once nothing else is
+        // An import's left-out workspaces wait to be read once nothing else is
         // offered (B11).
         Look::Nothing | Look::Offer(_) if !base.refused.is_empty() => Some(HerdrImportSnapshot {
             kind: "result".to_owned(),
