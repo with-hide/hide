@@ -39,6 +39,12 @@ export type DemoState = {
 
 export const START_STATE: DemoState = { t0: 0, started: [], answered: false, merged: [], feedback: null, seenLooks: [], said: {} };
 
+/**
+ * The kind of every sample agent and conductor: one Hide has no adapter for, so a row and a detail draw the neutral terminal
+ * mark and no vendor's name or logo (a store screenshot of the demo shows no other company's mark). A step names no worker.
+ */
+const SAMPLE_KIND = "agent";
+
 const LOOK_PANE = "a2";
 export const LOOK_HTML = "v1";
 export const LOOK_IMAGE = "v2";
@@ -46,7 +52,7 @@ export const LOOK_IMAGE = "v2";
 function agent(pane: string, title: string, ago: number, state: DemoState, over: Partial<PhoneAgent> = {}): PhoneAgent {
   return {
     device_id: DEMO_DEVICE, pane_id: pane, root_pane_id: pane, group: "working", mark: "going", wait: null, descendants_working: 0,
-    agent_kind: "claude", title, place: null, device_label: null, changed_at_unix_ms: state.t0 - ago * MINUTE,
+    agent_kind: SAMPLE_KIND, title, place: null, device_label: null, changed_at_unix_ms: state.t0 - ago * MINUTE,
     line: null, status_code: "working", demand: "none", emphasized: false, holds_notification: false, ...over,
   };
 }
@@ -123,7 +129,7 @@ export function conversation(t: T, state: DemoState, pane: string): Conversation
 }
 
 /** Terminal text is program output, so it is not worded from a catalog. */
-export const TERMINAL_TEXT = "$ claude\n\n> sample terminal\n  Nothing runs in the demo.\n";
+export const TERMINAL_TEXT = "$ agent\n\n> sample terminal\n  Nothing runs in the demo.\n";
 
 export function looks(state: DemoState, pane: string): LookRow[] {
   if (pane !== LOOK_PANE) return [];
@@ -156,18 +162,18 @@ export function base64Of(text: string): { data: string; size: number } {
 function step(key: string, title: string, status: PhoneMissionNode["status"], over: Partial<PhoneMissionNode> = {}): PhoneMissionNode {
   return {
     key, title, kind: "change", depends_on: [], status, blocked: null, delivery: "pr", pr: null, pr_state: null, base_pr: null, stage: null,
-    attention: null, landing: null, agent_runtime: "running", worker_agent: "claude", agent: null, escalation: null, ...over,
+    attention: null, landing: null, agent_runtime: "running", worker_agent: null, agent: null, escalation: null, ...over,
   };
 }
 
-const merged = (key: string, title: string, number: number, worker: string): PhoneMissionNode =>
-  step(key, title, "done", { pr: number, pr_state: "merged", worker_agent: worker, agent_runtime: "ended" });
+const merged = (key: string, title: string, number: number): PhoneMissionNode =>
+  step(key, title, "done", { pr: number, pr_state: "merged", agent_runtime: "ended" });
 
 function mission(id: string, title: string, state: DemoState, over: Partial<PhoneMission> = {}): PhoneMission {
   return {
     id, title, device_id: DEMO_DEVICE, device_label: null, status: "running", decision: null, question: null, answer: null, answer_failed: null,
     landing_order: [], created_at_unix_ms: state.t0 - 3 * HOUR, started_at_unix_ms: state.t0 - 3 * HOUR, closed_at_unix_ms: null, stale: false,
-    conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: "claude", agent: null }, nodes: [], ...over,
+    conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: SAMPLE_KIND, agent: null }, nodes: [], ...over,
   };
 }
 
@@ -179,9 +185,9 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     decision: state.answered ? null : t("mobile.demo.m1.decision"),
     question: state.answered ? null : { key: 3, why: null, options: [t("mobile.demo.m1.option1"), t("mobile.demo.m1.option2")], recommend: null, node: "sign", asked_at_unix_ms: asked },
     nodes: [
-      merged("notes", t("mobile.demo.a4.title"), 2085, "claude"),
-      merged("bump", t("mobile.demo.m1.bump"), 2080, "codex"),
-      step("rehearse", t("mobile.demo.m1.rehearse"), "working", { pr: 2093, worker_agent: "claude", stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" } }),
+      merged("notes", t("mobile.demo.a4.title"), 2085),
+      merged("bump", t("mobile.demo.m1.bump"), 2080),
+      step("rehearse", t("mobile.demo.m1.rehearse"), "working", { pr: 2093, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" } }),
       step("sign", t("mobile.demo.m1.sign"), "working", { stage: 0 }),
     ],
   });
@@ -189,8 +195,8 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     created_at_unix_ms: state.t0 - 50 * MINUTE,
     started_at_unix_ms: state.t0 - 50 * MINUTE,
     nodes: [
-      merged("a", t("mobile.demo.m2.tabs"), 2101, "claude"),
-      step("b", t("mobile.demo.m2.missions"), "working", { pr: 2102, stage: 1, worker_agent: "codex", agent: { device_id: DEMO_DEVICE, pane_id: "a4" } }),
+      merged("a", t("mobile.demo.m2.tabs"), 2101),
+      step("b", t("mobile.demo.m2.missions"), "working", { pr: 2102, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a4" } }),
     ],
   });
   const finished = mission("mission-guide", t("mobile.demo.a2.title"), state, {
@@ -198,7 +204,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     created_at_unix_ms: state.t0 - 26 * HOUR,
     started_at_unix_ms: state.t0 - 26 * HOUR,
     closed_at_unix_ms: state.t0 - 24 * HOUR,
-    nodes: [merged("a", t("mobile.demo.a2.title"), 2000, "claude")],
+    nodes: [merged("a", t("mobile.demo.a2.title"), 2000)],
   });
   return { type: "missions", items: [release, ui, finished], failed: false };
 }
