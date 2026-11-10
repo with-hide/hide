@@ -10,7 +10,8 @@ import { MISSION_ATTENTION_REASONS } from "../snapshot";
 import { staleTags, type AgentGroup } from "./protocol";
 import { patch, usePhone } from "./store";
 import { send, currentHost } from "./connection";
-import { hostedPhone, serviceWorkerAllowed } from "./relayRuntime";
+import { serviceWorkerAllowed } from "./appHost";
+import { hostedPhone } from "./relayRuntime";
 import { dropHostPush, registerHostPush } from "./hosts";
 
 export function pushSupported(): boolean {

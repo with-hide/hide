@@ -1,4 +1,4 @@
-import { serviceWorkerAllowed } from "./relayRuntime";
+import { serviceWorkerAllowed } from "./appHost";
 
 /** Only paired-device identity and credentials persist, never a QR code or conversation. */
 export interface PairedHost {

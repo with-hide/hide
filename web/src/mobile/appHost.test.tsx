@@ -2,9 +2,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 import { VersionScreen } from "./HostList";
+import { renderMarkdown } from "./markdown";
 import { useLoaderTranslation } from "./loaderTranslation";
-import { appHost, serviceWorkerAllowed } from "./relayRuntime";
+import { appHost, serviceWorkerAllowed } from "./appHost";
 
 function inApp(protocol: string) {
   vi.stubGlobal("location", { ...window.location, protocol, pathname: "/" });
@@ -35,5 +37,14 @@ describe("the page inside the iOS app", () => {
     await act(async () => root.render(<Screen appBehind={false} />));
     expect(host.querySelector("h1")?.textContent).toBe("Update Hide on this device");
     await act(async () => root.unmount());
+  });
+
+  it("draws an http link as a link in a browser and as plain text in the app, which opens only https outside", () => {
+    const body = '<a href="http://example.com/a">plain</a> <a href="https://example.com/b">safe</a>';
+    const draw = () => renderToStaticMarkup(<>{renderMarkdown(body, { html: true })}</>);
+    expect(draw()).toMatch(/<a [^>]*href="http:\/\/example.com\/a"/);
+    inApp("capacitor:");
+    expect(draw()).not.toMatch(/<a [^>]*href="http:/);
+    expect(draw()).toContain('href="https://example.com/b"');
   });
 });

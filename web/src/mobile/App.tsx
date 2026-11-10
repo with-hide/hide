@@ -27,7 +27,8 @@ import {
 } from "./protocol";
 import { closeStaleNotifications, enableNotifications, permission, pushSupported } from "./push";
 import { patch, usePhone } from "./store";
-import { appHost, hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
+import { appHost } from "./appHost";
+import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";

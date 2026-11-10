@@ -9,7 +9,8 @@ import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr } from "./ScanQr";
 import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
-import { RELAY_URL, appHost, relayReady, serviceWorkerAllowed, takePairing } from "./relayRuntime";
+import { appHost, serviceWorkerAllowed } from "./appHost";
+import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
 
 followPhoneTheme();
