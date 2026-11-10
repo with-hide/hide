@@ -210,6 +210,26 @@ fn a_removal_is_refused_while_an_agent_runs_with_the_profile_and_names_the_proje
     let checked = answer(&runtime);
     assert!(checked.in_use.is_empty());
     assert_eq!(checked.projects, ["blog"]);
+    assert!(!checked.hide_ai, "Hide AI names no profile yet");
+    // Hide AI's fallback list naming it is named too, and the delete leaves
+    // it there as a missing profile (PRD agent-profiles-phase2 B22).
+    let mut settings = hide_ai::AiSettings::default();
+    settings
+        .add_fallback(
+            hide_ai::Item::of(
+                hide_ai::ProviderId::CLAUDE,
+                Some(ProfileId("p-work".into())),
+            ),
+            None,
+        )
+        .unwrap();
+    runtime.ingest_ai_settings(settings, None);
+    change(
+        &mut runtime,
+        "check-3",
+        serde_json::json!({"op": "remove_check", "id": "p-work"}),
+    );
+    assert!(answer(&runtime).hide_ai);
     // A sleeping agent counts as one that runs with it (D-11).
     let mut sleeping = project_agents(
         serde_json::from_value(serde_json::json!({"agents": [
@@ -242,6 +262,52 @@ fn a_removal_is_refused_while_an_agent_runs_with_the_profile_and_names_the_proje
     let checked = answer(&runtime);
     assert_eq!(checked.in_use.len(), 1);
     assert!(checked.in_use[0].asleep);
+}
+
+/// A delete check names how many of Settings › Mission's candidates name
+/// the profile, beside its projects (PRD agent-profiles-phase2 B22, D-16):
+/// the rows of that profile, whatever their model, and no row of the
+/// built-in default or of another profile; a profile no row names says
+/// nothing of candidates.
+#[test]
+fn a_delete_check_counts_the_mission_candidates_that_name_the_profile() {
+    let mut runtime = listed();
+    let row =
+        |agent: &str, profile: Option<&str>, model: Option<&str>| crate::missions::Candidate {
+            agent: agent.into(),
+            profile: profile.map(|id| ProfileId(id.into())),
+            model: model.map(str::to_owned),
+            effort: None,
+            purpose: String::new(),
+        };
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![
+        row("claude", Some("p-work"), None),
+        row("claude", Some("p-work"), Some("opus")),
+        row("claude", None, None),
+        row("codex", Some("p-team"), None),
+    ];
+    change(
+        &mut runtime,
+        "check-1",
+        serde_json::json!({"op": "remove_check", "id": "p-work"}),
+    );
+    assert_eq!(answer(&runtime).candidates, 2);
+    assert_eq!(
+        serde_json::to_value(answer(&runtime)).unwrap()["candidates"],
+        2
+    );
+    change(
+        &mut runtime,
+        "check-2",
+        serde_json::json!({"op": "remove_check", "id": "p-side"}),
+    );
+    assert_eq!(answer(&runtime).candidates, 0);
+    assert!(
+        serde_json::to_value(answer(&runtime))
+            .unwrap()
+            .get("candidates")
+            .is_none()
+    );
 }
 
 #[test]

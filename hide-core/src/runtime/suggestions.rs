@@ -579,7 +579,7 @@ impl Runtime {
     fn suggestions_ai(&self) -> SuggestionsAi {
         match self.ai_settings.as_ref() {
             Some(settings) if settings.enabled && settings.chosen => {
-                if settings.provider == hide_ai::ProviderId::OPENCODE {
+                if settings.runs_on.provider == hide_ai::ProviderId::OPENCODE {
                     SuggestionsAi::CannotInvestigate
                 } else {
                     SuggestionsAi::Ready

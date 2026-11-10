@@ -295,7 +295,7 @@ mod tests {
         AiRouter::with_sleep(
             vec![Arc::clone(script) as Arc<dyn AiBackend>],
             RouterConfig {
-                priority: vec![ProviderId::CLAUDE],
+                priority: vec![ProviderId::CLAUDE.into()],
                 ..RouterConfig::default()
             },
             Arc::new(NoopLogSink),

@@ -1234,11 +1234,14 @@ pub const COMMANDS: &[Spec] = &[
         &[
             optional("--mission", Key),
             cleared("--line", Text, &["--clear"]),
-            clearing("--clear", &["--line"]),
+            clearing("--clear", &["--line", "--show"]),
             optional("--why", Text),
             optional("--option", Text),
             optional("--recommend", Unsigned),
             optional("--node", Key),
+            // A View id or a path the CLI opens as one; given more than once
+            // like `--option`, up to the core's `missions::VIEW_LINK_LIMIT`.
+            optional("--show", Text),
         ],
         &["mission"],
     ),
@@ -2102,6 +2105,10 @@ mod tests {
                 "1",
                 "--node",
                 "fix",
+                "--show",
+                "view-1",
+                "--show",
+                "report.html",
             ][..],
             &["mission", "decide", "--clear"],
             &[

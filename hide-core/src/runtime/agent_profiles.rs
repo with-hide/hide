@@ -351,10 +351,14 @@ impl Runtime {
                 let id = listed(&id)?;
                 let in_use = self.profile_in_use(machine, &id);
                 let projects = self.profile_projects(machine, &id);
+                let candidates = self.profile_candidates(machine, &id);
+                let hide_ai = self.profile_in_hide_ai(machine, &id);
                 return Ok(Planned::Answered(Box::new(move |mut answer| {
                     answer.state = profiles::AnswerState::Done;
                     answer.in_use = in_use;
                     answer.projects = projects;
+                    answer.candidates = candidates;
+                    answer.hide_ai = hide_ai;
                     answer
                 })));
             }
@@ -619,6 +623,36 @@ impl Runtime {
             .collect();
         names.sort();
         names
+    }
+
+    /// How many of Settings › Mission's candidates name the profile `id`
+    /// of `machine`: the candidates name the core's own machine's profiles,
+    /// so none name another machine's. A delete leaves them as they are,
+    /// naming a profile that is gone (PRD agent-profiles-phase2 B15, B22).
+    fn profile_candidates(&self, machine: &str, id: &ProfileId) -> usize {
+        if machine != self.node.as_str() {
+            return 0;
+        }
+        self.snapshot
+            .ui_state
+            .conductor_settings
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.profile.as_ref() == Some(id))
+            .count()
+    }
+
+    /// Whether Hide AI's order names the profile `id` of `machine`: an item
+    /// of it placed there, which a delete leaves as it is, naming a profile
+    /// that is gone (PRD agent-profiles-phase2 B21, B22).
+    fn profile_in_hide_ai(&self, machine: &str, id: &ProfileId) -> bool {
+        let Some(settings) = self.ai_settings.as_ref() else {
+            return false;
+        };
+        settings.order().iter().any(|item| {
+            item.profile.as_ref() == Some(id)
+                && settings.machine(item).unwrap_or(self.node.as_str()) == machine
+        })
     }
 
     /// A removed profile leaves the projects that started with it, which go

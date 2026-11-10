@@ -321,7 +321,7 @@ fn waiting(
     if let Some(subject) = &row.ask_subject {
         let mut waiting = match subject {
             AskSubject::PlanReview { .. } => Waiting::on(WaitCause::PlanReview, None, None),
-            AskSubject::MissionDecision { line } => {
+            AskSubject::MissionDecision { line, .. } => {
                 let mut waiting = Waiting::on(WaitCause::MissionDecision, None, None);
                 waiting.text = Some(line.chars().take(TEXT_CHARS).collect());
                 waiting

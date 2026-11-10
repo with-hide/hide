@@ -30,6 +30,24 @@ impl NodeLink for Node {
             }
             // Asked before every start: the program takes its arguments.
             Call::AgentInstalled { .. } => json!("program"),
+            // A start with a profile: the profile `p-<name>` runs in the
+            // account folder `/accounts/p-<name>`, at version 1.
+            Call::ProfileLaunch { profile, .. } => {
+                serde_json::to_value(hide_node_link::profiles::ProfileLaunch::Ready(
+                    hide_node_link::profiles::ProfileStart {
+                        name: profile.0.trim_start_matches("p-").to_owned(),
+                        account: hide_agent_adapter::AccountKey::Folder(format!(
+                            "/accounts/{}",
+                            profile.0
+                        )),
+                        version: 1,
+                        env: Vec::new(),
+                        program: None,
+                        exec: "/opt/hide/hide".to_owned(),
+                    },
+                ))
+                .unwrap()
+            }
             Call::Project { .. } | Call::Worktrees { .. } => {
                 return Err(LinkError::NotConnected(
                     "this node answers only the spawn's reads".to_owned(),
@@ -132,18 +150,18 @@ fn child_row() -> Value {
             "value": "beside-child-session"}})
 }
 
-struct Spawner {
+pub(super) struct Spawner {
     /// The checkout the caller works in.
     checkout: &'static str,
     _turn: std::sync::MutexGuard<'static, ()>,
     _root: tempfile::TempDir,
-    runtime: Arc<Mutex<Runtime>>,
-    actor: Actor,
+    pub(super) runtime: Arc<Mutex<Runtime>>,
+    pub(super) actor: Actor,
     device: Arc<Mutex<Device>>,
     fake: Fake,
     path: PathBuf,
     _worker: Worker,
-    client: crate::delivery::worker::Client,
+    pub(super) client: crate::delivery::worker::Client,
 }
 
 /// A registered caller agent in pane `w2:p0` of the connected device `mini`,
@@ -364,6 +382,7 @@ impl Spawner {
             authority,
             self.actor.clone(),
             Command::Spawn {
+                pick: None,
                 mission: None,
                 plan_node: None,
                 plan: None,
@@ -385,11 +404,11 @@ impl Spawner {
         )
     }
 
-    fn ledger(&self) -> ledger::Ledger {
+    pub(super) fn ledger(&self) -> ledger::Ledger {
         ledger::load(&self.path).unwrap()
     }
 
-    fn count(&self, method: &str) -> usize {
+    pub(super) fn count(&self, method: &str) -> usize {
         self.fake
             .methods()
             .iter()
@@ -510,11 +529,11 @@ fn an_intent_reused_with_another_placement_is_refused() {
     );
 }
 
-const LOCAL_CHECKOUT: &str = "/checkouts/fixture";
+pub(super) const LOCAL_CHECKOUT: &str = "/checkouts/fixture";
 
 /// A registered caller agent in pane `sender` of this machine, working in the
 /// fixture's checkout, with this machine's engine laid out as one tab.
-fn local_spawner() -> Spawner {
+pub(super) fn local_spawner() -> Spawner {
     let turn = crate::coordination::SPAWN_TURN
         .lock()
         .unwrap_or_else(|e| e.into_inner());

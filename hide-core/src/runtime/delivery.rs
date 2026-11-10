@@ -1457,11 +1457,14 @@ impl Runtime {
                     machine,
                     mission,
                     kind,
+                    repo,
                     launch,
+                    profile,
                     intent,
                     brief,
                     plan_node,
                     plan,
+                    pick,
                     ..
                 },
         } = &mut command
@@ -1475,24 +1478,37 @@ impl Runtime {
                     device,
                     parent.as_deref(),
                     plan_node.as_deref(),
-                    kind,
-                    launch,
                     self.missions.book.conducted_open(&actor).is_some(),
                 )?
                 .map(Box::new);
             if let Some(admission) = plan {
                 *intent = crate::coordination::plan_intent(&admission.link);
             }
-            *mission = self
-                .mission_spawn_admission(
+            let ledger = self.delivery_state()?;
+            let worker = crate::runtime::missions::SpawnWorker {
+                machine: machine.as_deref(),
+                kind,
+                profile: profile.as_deref(),
+                repo,
+                launch,
+                finished: crate::coordination::earlier_spawn(
+                    &ledger,
                     &actor,
-                    machine.as_deref(),
-                    kind,
-                    launch,
+                    parent.as_deref(),
                     intent,
-                    brief.is_some(),
-                )?
+                )
+                .is_some_and(|record| record.completed),
+            };
+            // The item the candidates judge is picked once, here, and the
+            // start takes it (PRD agent-profiles-phase2 D-08, B13).
+            let mut picked = None;
+            if plan.is_some() {
+                self.plan_candidates_admit(&actor, &worker, &mut picked)?;
+            }
+            *mission = self
+                .mission_spawn_admission(&actor, &worker, &mut picked, intent, brief.is_some())?
                 .map(Box::new);
+            *pick = picked.map(|request| crate::coordination::Picked(Box::new(request)));
         }
         // Only the pane's own session proves its composer was submitted, so a
         // stray `hide inbox --hook` from a tool in the pane clears no draft.

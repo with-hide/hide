@@ -2253,6 +2253,7 @@ pub(super) fn spawn_hide_agent(
         },
         start.actor.clone(),
         crate::coordination::Command::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,

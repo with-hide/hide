@@ -1274,6 +1274,8 @@ mod tests {
             recommend: None,
             node: Some("a".into()),
             asked_at_unix_ms: 100 * MINUTE,
+            views: Vec::new(),
+            material_asked: false,
         });
         assert!(warn_acts(&m, Some(&failing), late).is_empty());
         // A question about another node, or about none, leaves it its worker's.

@@ -82,6 +82,7 @@ import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
 import { paneContext, terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } from "./externalFiles";
+import type { AiItemRef } from "./hideAi";
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
@@ -1403,9 +1404,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       updateUiState(hints);
     },
 
-    /** Runs on is `provider` on `device` (null: the core's own machine); with `model`, that agent's model, wherever it runs. */
-    chooseAi(provider: string, model?: string, device: string | null = null) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: model === undefined ? { provider, device } : { provider, model } });
+    /** Runs on is `item` on its device (null: the core's own machine); with `model`, that item's model, wherever it runs (PRD agent-profiles-phase2 D-07). */
+    chooseAi(item: AiItemRef, model?: string) {
+      const named = { provider: item.provider, ...(item.profile ? { profile: item.profile } : {}) };
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: model === undefined ? { ...named, device: item.device } : { ...named, model } });
     },
     /** The `에이전트 요약` switch (PRD overview-request-view D-11): off, agent labels are neither asked for nor shown. */
     setAgentSummary(on: boolean) {
@@ -1419,12 +1421,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     setHideAiEnabled(on: boolean) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { enabled: on } });
     },
-    /** Adds an agent at the end of "If <Runs on> can't answer" (D-16). */
-    addAiFallback(provider: string, device: string | null = null) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_add: provider, device } });
+    /** Adds an item at the end of "If <Runs on> can't answer" (D-16); another item of the Runs on agent may be one (PRD agent-profiles-phase2 B16). */
+    addAiFallback(item: AiItemRef) {
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_add: item.provider, ...(item.profile ? { profile: item.profile } : {}), device: item.device } });
     },
-    removeAiFallback(provider: string) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_remove: provider } });
+    removeAiFallback(item: AiItemRef) {
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_remove: item.provider, ...(item.profile ? { profile: item.profile } : {}) } });
     },
 
     /** Reinstall on a machine's row repairs every part that needs it; a hook row names its one part. */
@@ -2046,6 +2048,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true }) {
       dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
+    },
+
+    /** `자료 요청` on the question with `key`: its Conductor is asked once for one page to look at. */
+    askMissionMaterial(missionId: string, key: number) {
+      dispatch({ schema_version: 2, kind: "mission_material", payload: { mission: missionId, key } });
     },
 
     /** The fields of Settings › Mission one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */

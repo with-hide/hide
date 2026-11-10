@@ -60,6 +60,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | hide_node_link::holders::HOLDER_CAP_REFUSAL
             | "card_not_processed"
             | "mission_cap_reached"
+            | "mission_candidate_refused"
             | "mission_conducted"
             | "mission_criteria_missing"
             | "mission_criteria_too_many"
@@ -73,6 +74,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_machine_no_repository"
             | "mission_nodes_unfinished"
             | "plan_invalid"
+            | "plan_candidate_refused"
             | "plan_order_refused"
             | "plan_too_large"
             | "plan_node_unknown"
@@ -229,8 +231,21 @@ pub enum Command {
         /// children asleep now. Only the core sets it, from `plan_node`.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
         plan: Option<Box<PlanAdmission>>,
+        /// The agent item the spawn starts with, when an admission judged
+        /// it (Settings › Mission's candidates, PRD agent-profiles-phase2
+        /// D-08, B13). Only the core sets it, never on the wire.
+        #[serde(skip)]
+        pick: Option<Picked>,
     },
 }
+
+/// The item the core picked for a spawn when it admitted it
+/// (`Runtime::spawn_request`, under the lock its admissions run under):
+/// the start takes this one rather than picking again, so a project's or
+/// a profile's change between the two never starts an item the admission
+/// did not judge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picked(pub(crate) Box<crate::launch::Request>);
 
 /// The step of a main's plan a spawn's child works on (PRD
 /// hide-plan-delegate D-24), saved with the spawn from its reservation on.
@@ -1312,6 +1327,25 @@ pub(crate) fn live_self<'a>(
         .agents
         .iter()
         .filter(move |record| !record.ended && record.actor.same_identity(caller))
+}
+
+/// An earlier attempt of `intent` by the spawn's parent: `parent`, or the
+/// caller's first live registration for none or `here`. Every check of a
+/// spawn judges a retry by what that attempt already did (engineering 11).
+pub(crate) fn earlier_spawn<'a>(
+    ledger: &'a Ledger,
+    caller: &'a Actor,
+    parent: Option<&str>,
+    intent: &str,
+) -> Option<&'a SpawnRecord> {
+    let parent = match parent.filter(|parent| *parent != HERE) {
+        Some(parent) => parent,
+        None => live_self(ledger, caller).next()?.id.as_str(),
+    };
+    ledger
+        .spawns
+        .iter()
+        .find(|record| record.parent == parent && record.intent == intent)
 }
 
 /// The caller's own registration, by the same match as `--parent here`,
@@ -2855,6 +2889,7 @@ mod tests {
 
     fn command(intent: &str) -> Command {
         Command::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,
@@ -3816,6 +3851,45 @@ mod tests {
         )
         .unwrap();
         (ledger, parent, spawn, child)
+    }
+
+    /// A spawn's record keeps the profile the spawn named apart from the
+    /// one its start took (PRD agent-profiles D-27): a spawn that named none
+    /// and started with its parent's profile records only what started, and
+    /// a spawn on the built-in default records neither, so its record reads
+    /// as one written before profiles.
+    #[test]
+    fn a_spawn_record_keeps_what_it_named_apart_from_the_profile_it_started_with() {
+        let (mut ledger, parent, _, spawn, _) = pending_spawn();
+        let fields = |ledger: &Ledger| {
+            let record = serde_json::to_value(&ledger.spawns[0]).unwrap();
+            (
+                record.get("profile").cloned(),
+                record.get("started_profile").cloned(),
+            )
+        };
+        assert_eq!(fields(&ledger), (None, None));
+        let team = crate::launch::LaunchProfile {
+            id: hide_agent_adapter::ProfileId("p-team".into()),
+            name: "team".into(),
+            account: hide_agent_adapter::AccountKey::Folder("/accounts/team".into()),
+        };
+        apply(
+            &mut ledger,
+            &parent,
+            &Mutation::Typed {
+                id: spawn,
+                profile: Some(team.clone()),
+            },
+            2,
+        )
+        .unwrap();
+        let (named, started) = fields(&ledger);
+        assert_eq!(named, None);
+        assert_eq!(
+            serde_json::from_value::<crate::launch::LaunchProfile>(started.unwrap()).unwrap(),
+            team
+        );
     }
 
     fn phase_of(ledger: &Ledger) -> BriefPhase {

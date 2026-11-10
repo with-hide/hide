@@ -1,9 +1,16 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 7's words (`practice/chapters/project.ts`).
+// Flow 5's words (`practice/chapters/project.ts`).
 const en = {
   "practice.project.title": "The project at a glance",
   "practice.project.summary": "The right lane: counts, the last 7 days, Explorer, Hide AI",
+  "practice.project.pin.quest": "Pin a project",
+  "practice.project.pin.kick": "Pin",
+  "practice.project.pin.title": "Pin a project",
+  "practice.project.pin.text": "Point at a project row and press the **pin** that appears at its start. This practice has two projects; pin **docs-site**.",
+  "practice.project.pinned.kick": "Keep it on top",
+  "practice.project.pinned.title": "Pinned projects stay on top",
+  "practice.project.pinned.text": "A pinned project moves to the **top** of the list, with a **line** under the pinned ones. Press the pin again to put it back.",
   "practice.project.lane.quest": "Open the lane",
   "practice.project.lane.kick": "An agent is fixing a payment bug",
   "practice.project.lane.title": "The whole project, on the right",
@@ -32,7 +39,7 @@ const en = {
   "practice.project.close.kick": "Close",
   "practice.project.close.title": "A key puts it away",
   "practice.project.close.text": "The same key opens it again on the tool you left. Closed with × instead, it opens on the Explorer.",
-  "practice.project.end.kick": "End of chapter 7",
+  "practice.project.end.kick": "End of chapter 5",
   "practice.project.end.title": "The rail stays on the right",
   "practice.project.end.text": "A number on an icon says how much waits there.",
 };
@@ -40,6 +47,13 @@ const en = {
 const ko = {
   "practice.project.title": "프로젝트 한눈에",
   "practice.project.summary": "오른쪽 레인: 숫자, 최근 7일, 탐색기, Hide AI",
+  "practice.project.pin.quest": "프로젝트 고정",
+  "practice.project.pin.kick": "고정",
+  "practice.project.pin.title": "프로젝트 고정하기",
+  "practice.project.pin.text": "프로젝트 줄에 마우스를 올리면 맨 앞에 **핀**이 나와요. 눌러 보세요. 연습에는 프로젝트가 둘 있고, **docs-site**를 고정해요.",
+  "practice.project.pinned.kick": "맨 위에 두기",
+  "practice.project.pinned.title": "고정한 프로젝트는 맨 위에",
+  "practice.project.pinned.text": "고정한 프로젝트는 목록 **맨 위**에 모이고, 그 아래 **선 하나**로 나뉘어요. 핀을 다시 누르면 제자리로 돌아가요.",
   "practice.project.lane.quest": "레인 열기",
   "practice.project.lane.kick": "연습 프로젝트에서 에이전트가 결제 오류를 고치는 중",
   "practice.project.lane.title": "오른쪽에서 프로젝트 전체를",
@@ -68,7 +82,7 @@ const ko = {
   "practice.project.close.kick": "닫기",
   "practice.project.close.title": "단축키로 닫아요",
   "practice.project.close.text": "같은 키로 다시 열면 보던 도구로, ×로 닫았다면 탐색기로 열려요.",
-  "practice.project.end.kick": "7편 끝",
+  "practice.project.end.kick": "5편 끝",
   "practice.project.end.title": "도구 줄은 오른쪽에 늘 있어요",
   "practice.project.end.text": "아이콘의 숫자는 거기서 기다리는 일의 수예요.",
 } satisfies Catalog<typeof en>;
@@ -76,6 +90,13 @@ const ko = {
 const zhCN = {
   "practice.project.title": "项目一览",
   "practice.project.summary": "右侧面板：数字、最近 7 天、文件浏览器、Hide AI",
+  "practice.project.pin.quest": "固定项目",
+  "practice.project.pin.kick": "固定",
+  "practice.project.pin.title": "固定一个项目",
+  "practice.project.pin.text": "把鼠标放到项目行上，点开头出现的**图钉**。这个练习里有两个项目，固定 **docs-site**。",
+  "practice.project.pinned.kick": "放在最上面",
+  "practice.project.pinned.title": "固定的项目留在最上面",
+  "practice.project.pinned.text": "固定的项目会移到列表**最上面**，下面用**一条线**隔开。再点一次图钉就放回原位。",
   "practice.project.lane.quest": "打开右侧面板",
   "practice.project.lane.kick": "练习项目里，一个智能体正在修复支付错误",
   "practice.project.lane.title": "在右边看整个项目",
@@ -104,7 +125,7 @@ const zhCN = {
   "practice.project.close.kick": "关闭",
   "practice.project.close.title": "用快捷键收起",
   "practice.project.close.text": "用同一个键再打开，会回到你上次看的工具。如果用 × 关闭，会打开文件浏览器。",
-  "practice.project.end.kick": "第 7 章结束",
+  "practice.project.end.kick": "第 5 章结束",
   "practice.project.end.title": "工具栏一直在右边",
   "practice.project.end.text": "图标上的数字是那里等着你的事。",
 } satisfies Catalog<typeof en>;
@@ -112,6 +133,13 @@ const zhCN = {
 const ja = {
   "practice.project.title": "プロジェクトをひと目で",
   "practice.project.summary": "右のレーン：件数、直近 7 日、エクスプローラー、Hide AI",
+  "practice.project.pin.quest": "プロジェクトを固定",
+  "practice.project.pin.kick": "固定",
+  "practice.project.pin.title": "プロジェクトを固定する",
+  "practice.project.pin.text": "プロジェクトの行にマウスを重ねると、行頭に**ピン**が出ます。押してみましょう。この練習にはプロジェクトが2つあり、**docs-site** を固定します。",
+  "practice.project.pinned.kick": "いちばん上に置く",
+  "practice.project.pinned.title": "固定したプロジェクトは上に",
+  "practice.project.pinned.text": "固定したプロジェクトはリストの**いちばん上**に集まり、その下に**線が1本**入ります。もう一度ピンを押すと元に戻ります。",
   "practice.project.lane.quest": "レーンを開く",
   "practice.project.lane.kick": "エージェントが決済エラーを修正中",
   "practice.project.lane.title": "右側でプロジェクト全体を",
@@ -140,7 +168,7 @@ const ja = {
   "practice.project.close.kick": "閉じる",
   "practice.project.close.title": "キーでしまえます",
   "practice.project.close.text": "同じキーで開き直すと、最後に見ていたツールで開きます。× で閉じたときはエクスプローラーで開きます。",
-  "practice.project.end.kick": "第 7 章 おわり",
+  "practice.project.end.kick": "第 5 章 おわり",
   "practice.project.end.title": "ツール列はいつも右にあります",
   "practice.project.end.text": "アイコンの数字は、そこで待っていることの数です。",
 } satisfies Catalog<typeof en>;

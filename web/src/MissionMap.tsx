@@ -444,7 +444,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", device && "flex-wrap")} data-node-run={run?.from ?? "none"}>
           {run || device ? (
             <span className="flex min-w-0 max-w-full items-center gap-xxs">
-              {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
+              {worker?.agent ? <AgentMark kind={worker.agent} profile={worker.profile} /> : null}
               {run ? <RunText run={run} /> : null}
               {device ? <>{run ? <span aria-hidden="true">·</span> : null}<MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /></> : null}
             </span>

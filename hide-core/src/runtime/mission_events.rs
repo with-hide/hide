@@ -280,6 +280,7 @@ impl Runtime {
         id: &str,
         line: Option<String>,
         asked: (Option<String>, Vec<String>, Option<u8>, Option<String>),
+        shown: Option<(&crate::delivery::Actor, &[String])>,
         now: u64,
     ) -> Result<bool, String> {
         let (why, options, recommend, node) = asked;
@@ -292,6 +293,9 @@ impl Runtime {
             recommend,
             node.as_deref(),
         )?;
+        if line.is_none() && shown.is_some_and(|(_, show)| !show.is_empty()) {
+            return Err("mission_question_without_line".into());
+        }
         let current = mission.question.as_ref();
         let same = mission.decision == line
             && current.is_some_and(|question| {
@@ -309,8 +313,42 @@ impl Runtime {
                 && recommend.is_none()
                 && node.is_none());
         if same {
-            return Ok(false);
+            // The same question again may name more Views to show with it.
+            let Some((actor, show)) = shown.filter(|(_, show)| !show.is_empty()) else {
+                return Ok(false);
+            };
+            if current.is_none() {
+                return Ok(false);
+            }
+            let links = self.question_view_links(id, actor, show, None, false)?;
+            let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+            let question = target.question.as_mut().ok_or("mission_unknown")?;
+            // Named ones lead the list; past the cap the oldest opened goes.
+            let named: Vec<_> = links
+                .into_iter()
+                .filter(|link| !question.views.iter().any(|known| known.same_view(link)))
+                .collect();
+            if named.is_empty() {
+                return Ok(false);
+            }
+            let mut views = named;
+            views.append(&mut question.views);
+            views.truncate(crate::missions::VIEW_LINK_LIMIT);
+            question.views = views;
+            self.save_missions();
+            return Ok(true);
         }
+        // A new question takes the Views `--show` names, the ones the
+        // Conductor opened since the question before and the ones the
+        // stopped node's worker opened in its attempt; a cleared one leaves
+        // the Conductor's for the next.
+        let views = match (&line, shown) {
+            (Some(_), Some((actor, show))) => {
+                self.question_view_links(id, actor, show, node.as_deref(), true)?
+            }
+            _ => Vec::new(),
+        };
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
         let mut events = Vec::new();
         let key_before = mission.question.as_ref().map_or(0, |question| question.key);
         let asked = mission
@@ -359,6 +397,8 @@ impl Runtime {
                     recommend,
                     node,
                     asked_at_unix_ms: now,
+                    views,
+                    material_asked: false,
                 })
             }
             None => None,

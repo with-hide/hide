@@ -183,7 +183,7 @@ fn provider_recovery_finishes_the_notice_but_keeps_updating_the_row() {
     notices.observe(&projection(&worker, &working));
     let reading = |used_percent| {
         std::collections::BTreeMap::from([(
-            ProviderId::CLAUDE,
+            hide_ai::Item::agent(ProviderId::CLAUDE),
             hide_ai::UsageReading {
                 used_percent,
                 resets_at_unix_ms: None,

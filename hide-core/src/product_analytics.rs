@@ -78,7 +78,6 @@ pub enum PracticeChapter {
     Overview,
     Agents,
     Find,
-    Plan,
     Project,
 }
 
@@ -89,7 +88,6 @@ impl PracticeChapter {
             "overview" => Self::Overview,
             "agents" => Self::Agents,
             "find" => Self::Find,
-            "plan" => Self::Plan,
             "project" => Self::Project,
             _ => return None,
         })
@@ -257,7 +255,6 @@ impl Event {
                         PracticeChapter::Overview => "overview",
                         PracticeChapter::Agents => "agents",
                         PracticeChapter::Find => "find",
-                        PracticeChapter::Plan => "plan",
                         PracticeChapter::Project => "project",
                     },
                 ),

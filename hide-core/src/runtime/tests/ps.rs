@@ -335,6 +335,7 @@ fn mission(
         github: None,
         decision: None,
         question: None,
+        decision_views: Vec::new(),
         answer: None,
         answer_failed: None,
         end_asked: false,

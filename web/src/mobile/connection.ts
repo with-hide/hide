@@ -14,6 +14,7 @@ import {
   listedAgents,
   macNameOf,
   missionAnswerFailure,
+  missionMaterialFailure,
   parseFragment,
   prFailure,
   refusalOf,
@@ -571,7 +572,31 @@ export function settleMissionAnswer(): void {
   patch({ missionAnswer: null });
 }
 
+/** The last `자료 요청` sent, so a refusal of it is told on its mission. */
+let lastMaterial: { requestId: string; mission: string } | null = null;
+
+/**
+ * The decision card's `자료 요청`: one request for the question on the page,
+ * which the core turns into one letter to the Conductor however often it is
+ * pressed; `material_asked` on the question says it went.
+ */
+export function askMissionMaterial(mission: PhoneMission): boolean {
+  const key = mission.question?.key;
+  if (key === undefined) return false;
+  const requestId = newRequestId();
+  const sent = send({ type: "ask_mission_material", request_id: requestId, mission: mission.id, key });
+  lastMaterial = sent ? { requestId, mission: mission.id } : null;
+  patch({ missionAnswerError: sent ? null : { mission: mission.id, notice: missionMaterialFailure("offline") } });
+  return sent;
+}
+
 function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>): void {
+  if (lastMaterial && frame.request_id === lastMaterial.requestId) {
+    const asked = lastMaterial;
+    lastMaterial = null;
+    if (!frame.ok) patch({ missionAnswerError: { mission: asked.mission, notice: missionMaterialFailure(frame.reason) } });
+    return;
+  }
   const sent = usePhone.getState().missionAnswer;
   // Only the answer to the press this page is waiting on.
   if (!sent || frame.request_id !== sent.requestId) return;

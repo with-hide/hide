@@ -325,11 +325,32 @@ export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, dra
 export type InUseAgent = { id: string; title: string; place: string; asleep: boolean; starting?: boolean };
 
 /**
+ * What a delete leaves without the profile, one row each in its dialog (B27;
+ * PRD agent-profiles-phase2 B22, D-16): a project that starts with it, which
+ * goes back to the agent's default, and the Settings › Mission candidates
+ * that name it, which stay as a missing profile.
+ * Hide AI's Runs on or fallback item of it stays as a missing profile too, which Hide AI passes over (B21).
+ */
+export type ProfileUse = { kind: "project"; name: string } | { kind: "candidates"; count: number } | { kind: "hide_ai" };
+
+/** A use's row: what it is, then what the delete does to it. */
+function useWords(use: ProfileUse, t: ReturnType<typeof useInterfaceTranslation>["t"]): { what: string; effect: string } {
+  switch (use.kind) {
+    case "project":
+      return { what: use.name, effect: t("agentProfiles.use.projectEffect") };
+    case "candidates":
+      return { what: t("agentProfiles.use.candidates", { count: use.count }), effect: t("agentProfiles.use.candidatesEffect") };
+    case "hide_ai":
+      return { what: t("agentProfiles.use.hideAi"), effect: t("agentProfiles.use.hideAiEffect") };
+  }
+}
+
+/**
  * Deleting a profile (B27): refused while agents run with it, sleeping ones
  * included, each with the way to it; otherwise what the delete takes away and
- * which projects go back to the agent default, before it does.
+ * what uses the profile, each with what the delete does to it, before it does.
  */
-export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inUse, projects, busy = false, onConfirm, onShow }: { open: boolean; onOpenChange?: (open: boolean) => void; profile: string; location: string; inUse: readonly InUseAgent[]; projects: readonly string[]; busy?: boolean; onConfirm?: () => void; onShow?: (id: string) => void }) {
+export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inUse, uses, busy = false, onConfirm, onShow }: { open: boolean; onOpenChange?: (open: boolean) => void; profile: string; location: string; inUse: readonly InUseAgent[]; uses: readonly ProfileUse[]; busy?: boolean; onConfirm?: () => void; onShow?: (id: string) => void }) {
   const { t } = useInterfaceTranslation();
   const refused = inUse.length > 0;
   return (
@@ -356,11 +377,19 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inU
               </li>
             ))}
           </ul>
-        ) : projects.length > 0 ? (
-          <div className="flex flex-col gap-xs" data-profile-delete-projects="true">
-            <p className="break-keep text-body text-subtle-foreground">{t("agentProfiles.deleteProjects")}</p>
+        ) : uses.length > 0 ? (
+          <div className="flex flex-col gap-xs" data-profile-delete-uses="true">
+            <p className="break-keep text-body text-subtle-foreground">{t("agentProfiles.deleteUses")}</p>
             <ul className="flex flex-col gap-xxs pl-md">
-              {projects.map((project) => <li key={project} className="list-disc text-body text-foreground">{project}</li>)}
+              {uses.map((use) => {
+                const words = useWords(use, t);
+                return (
+                  <li key={`${use.kind}:${words.what}`} className="list-disc break-keep text-body text-foreground" data-profile-use={use.kind}>
+                    {words.what}
+                    <span className="text-muted-foreground"> · {words.effect}</span>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ) : null}

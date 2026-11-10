@@ -18,7 +18,7 @@ hide mission record <node> <line> (--pass | --fail) --evidence <text> [--summary
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
 hide mission start
-hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)
+hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)
 hide mission delay (--line <text> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
@@ -42,6 +42,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 ## 1. Before the plan
 
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates and the verification strength (`default_strength`).
+  Each candidate is an agent item: `item` is its name, and `profile` the `--profile` value that starts it (`default` for the built-in); a candidate with `profile_gone` names a profile this machine no longer has and starts no worker.
 - Run `hide agent catalog` for the agent items here: each agent's built-in default and each of its profiles a start can take, `profile` being the `--profile` value that starts it (`default` for the built-in), with its models, its efforts and its account's weekly usage.
   A model is named as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
@@ -115,7 +116,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.
   Send no effort to an agent that takes none (`hide agent catalog` lists `efforts`).
   If no candidate can run, say so in the plan.
-  Hide refuses a worker that is none of the candidates (`mission_candidate_refused`): another agent, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
+  Start each worker with `--profile` set to its candidate's `profile`, `default` included: a spawn without `--profile` runs with your own profile when the worker is your kind of agent, else the project's choice, and Hide judges the profile the worker would actually start with.
+  Hide refuses a worker that is none of the candidates (`mission_candidate_refused`, naming the item it would have started): another agent or another profile of it, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
 - Every node other than an outside one gets `steps`: three to five short lines of how its work goes, each something it delivers or checks (the core change, the screen, the tests, the pull request), in the operator's language, never the node's title restated and never research (at most 8 steps, each one line of at most 80 characters, otherwise `mission_steps_invalid` names the node).
   They show on the node's card as one bar cell per step and in its panel as a list before anyone has started, so the operator reads how each node will be worked when they read the plan.
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
@@ -223,6 +225,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
 - When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered in conversation.
   When the answer is one of a few choices, give each with `--option` (at most 5, one line each) saying what follows from it, what it gains and what it costs, mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
+  When the operator has to look at something to answer (screens, a report), give it with `--show <path or View id>`: one page that starts with three lines (what changed, the 2-3 things to check, what good looks like); Hide opens a path as a View and lists it on the decision, with the Views you opened since your previous decision and the ones the node's worker opened in its current attempt, while they are still open.
   Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
   The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it; that answer has already taken the decision off the map, so there is nothing to clear.
   Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.

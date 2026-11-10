@@ -198,12 +198,15 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
         ]} />
       );
     case "delete-refused":
-      return <>{list()}<ProfileDeleteDialog open profile="work" location="~/accounts/claude-work" projects={[]} inUse={[
+      return <>{list()}<ProfileDeleteDialog open profile="work" location="~/accounts/claude-work" uses={[]} inUse={[
         { id: "agent-31", title: long ? "로그인 화면의 예외 상황을 모두 찾아서 정리하기" : "fix-bell", place: "herdr-ide", asleep: false },
         { id: "agent-44", title: "usage-store", place: "blog", asleep: true },
       ]} /></>;
     case "delete-confirm":
-      return <>{list()}<ProfileDeleteDialog open profile="work" location={long ? "~/accounts/회사-고객사-프로젝트-전용-계정-폴더/claude" : "~/accounts/claude-work"} inUse={[]} projects={long ? ["개인 블로그와 여러 기기에서 이어지는 아주 긴 프로젝트 이름", "side-app"] : ["blog", "side-app"]} /></>;
+      return <>{list()}<ProfileDeleteDialog open profile="work" location={long ? "~/accounts/회사-고객사-프로젝트-전용-계정-폴더/claude" : "~/accounts/claude-work"} inUse={[]} uses={[
+        ...(long ? ["개인 블로그와 여러 기기에서 이어지는 아주 긴 프로젝트 이름", "side-app"] : ["blog", "side-app"]).map((name) => ({ kind: "project" as const, name })),
+        { kind: "candidates", count: 2 },
+      ]} /></>;
   }
 }
 

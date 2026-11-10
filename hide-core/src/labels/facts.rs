@@ -180,9 +180,16 @@ const REPLY_SHOWN_CHARS: usize = 80;
 
 impl Reply {
     fn of(request_offset: u64, text: &str, at_unix_ms: u64) -> Self {
-        let mut lines = text
-            .lines()
-            .filter_map(|line| crate::display_text::one_line(line, usize::MAX));
+        // The head is read as words: a table row, a code block and a rule
+        // say nothing in two lines, and Markdown's marks are left out; the
+        // whole message is still read as Markdown.
+        let mut fence = false;
+        let mut skipped = false;
+        let mut lines = text.lines().filter_map(|line| {
+            let plain = prose_line(line, &mut fence);
+            skipped |= plain.is_none() && !line.trim().is_empty();
+            plain.and_then(|plain| crate::display_text::one_line(&plain, usize::MAX))
+        });
         let mut cut = false;
         let head: Vec<String> = lines
             .by_ref()
@@ -192,8 +199,9 @@ impl Reply {
                 line.chars().take(REPLY_LINE_CHARS).collect()
             })
             .collect();
+        let rest = lines.next().is_some();
         let head = head.join("\n");
-        let more = cut || lines.next().is_some() || head.chars().count() > REPLY_SHOWN_CHARS;
+        let more = cut || rest || skipped || head.chars().count() > REPLY_SHOWN_CHARS;
         Self {
             request_offset,
             head,
@@ -202,6 +210,90 @@ impl Reply {
             at_unix_ms,
         }
     }
+}
+
+/// One line of a Markdown message as the words it says: `None` for a table
+/// row, a line of a code block or its fence, and a rule or heading underline; otherwise the line
+/// without its heading, quote, list and task marks and its emphasis, code
+/// and link marks. `fence` carries whether the line is inside a code block.
+fn prose_line(line: &str, fence: &mut bool) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        *fence = !*fence;
+        return None;
+    }
+    if *fence || trimmed.starts_with('|') {
+        return None;
+    }
+    let marks: Vec<char> = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    if marks.len() >= 3
+        && ['-', '*', '_', '=']
+            .iter()
+            .any(|mark| marks.iter().all(|c| c == mark))
+    {
+        return None;
+    }
+    let mut rest = trimmed;
+    loop {
+        let before = rest;
+        rest = rest.trim_start_matches('>').trim_start();
+        let hashes = rest.len() - rest.trim_start_matches('#').len();
+        if (1..=6).contains(&hashes) && rest[hashes..].starts_with(' ') {
+            rest = rest[hashes..].trim_start();
+        }
+        for bullet in ["- ", "* ", "+ "] {
+            if let Some(after) = rest.strip_prefix(bullet) {
+                rest = after.trim_start();
+            }
+        }
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && (rest[digits..].starts_with(". ") || rest[digits..].starts_with(") ")) {
+            rest = rest[digits + 2..].trim_start();
+        }
+        for task in ["[ ] ", "[x] ", "[X] "] {
+            if let Some(after) = rest.strip_prefix(task) {
+                rest = after.trim_start();
+            }
+        }
+        if rest == before {
+            break;
+        }
+    }
+    Some(inline_plain(rest))
+}
+
+/// A line's words without its emphasis and code marks, and a link or an
+/// image as its text.
+fn inline_plain(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
+        let link = if c == '[' {
+            Some(&rest[1..])
+        } else {
+            rest.strip_prefix("![")
+        };
+        if let Some(after) = link
+            && let Some(close) = after.find("](")
+            && let Some(end) = after[close + 2..].find(')')
+        {
+            out.push_str(&after[..close]);
+            rest = &after[close + 2 + end + 1..];
+            continue;
+        }
+        if let Some(after) = ["**", "__", "~~"]
+            .iter()
+            .find_map(|mark| rest.strip_prefix(mark))
+        {
+            rest = after;
+            continue;
+        }
+        if c != '`' {
+            out.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 type Shown = (
@@ -556,6 +648,22 @@ fn capped(text: &str) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The turn card's head reads an answer's words: a table, a code block and
+    // a rule are passed over, and Markdown's marks are left out.
+    #[test]
+    fn a_reply_head_reads_the_words_of_a_markdown_answer() {
+        let text = "## 결과\n\n| # | 고친 문제 | 상태 |\n|---|---|---|\n| 1 | 카드 | 완료 |\n\n```sh\ngh pr view\n```\n---\n- **두 문제** 모두 `main`에 [PR #12](https://x/12)로 들어감\n> 1. ~~남은~~ 일 없음";
+        let reply = Reply::of(7, text, 1);
+        assert_eq!(reply.head, "결과\n두 문제 모두 main에 PR #12로 들어감");
+        assert!(
+            reply.more,
+            "the table and the line after are more than the head"
+        );
+        let plain = Reply::of(7, "그대로 둔 줄 snake_case_name *별표*\n둘째 줄", 1);
+        assert_eq!(plain.head, "그대로 둔 줄 snake_case_name *별표*\n둘째 줄");
+        assert!(!plain.more);
+    }
 
     const LOG: LogTarget<'static> = LogTarget {
         target: "local",

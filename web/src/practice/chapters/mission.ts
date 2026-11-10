@@ -1,4 +1,4 @@
-// The mission flow (flow 4), where the first run and the sidebar's invitation land: one job
+// The mission flow (flow 3), where the first run and the sidebar's invitation land: one job
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
@@ -23,9 +23,9 @@ const CLOSE = '[data-lane="detail"] [data-detail-close]';
 
 export default chapter<MissionModel>({
   id: "mission",
-  number: 4,
+  number: 3,
   next: "overview",
-  version: 16,
+  version: 17,
   world: MISSION_WORLD,
   quest: true,
   preview: "mission",
@@ -49,6 +49,8 @@ export default chapter<MissionModel>({
     { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
     // What the answer changed runs to the end by itself: the workers finish and the Conductor reports.
     { id: "finishing", target: "[data-mission]", side: "left", wait: true, done: (model) => model.stage >= 9 },
+    // The card's ⚙ opens Settings › Mission: the default scope and the worker candidates. Pointed at and read, never opened here.
+    { id: "settings", target: "[data-detail-conductor-settings]", side: "left" },
     // The card has shown what the mission did; its ✕ puts it away, the pane as it was.
     { id: "leave", quest: true, target: CLOSE, side: "left", gesture: { click: true }, done: missionLeft },
     // ⇧⌘L opens Hide AI on its Memory tab; the rail icon would open it on 제안.

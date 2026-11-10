@@ -32,7 +32,8 @@ export function ConductorTab({ actions }: { actions: Actions }) {
       <Group title={t("conductor.candidates")} action={<CandidateAdd settings={settings} send={send} />} note={t("conductor.footer")} data-conductor-candidates={String(settings.candidates.length)}>
         {settings.candidates.length > 0 ? (
           // One grid for the head and every row, so the effort column is as wide as its widest row and every row's columns line up.
-          <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.3fr)_auto_minmax(0,1.4fr)_auto] gap-x-sm">
+          // The agent column is the widest: an item's name carries its profile (`Claude Code · opengateway`).
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto_minmax(0,1fr)_auto] gap-x-sm">
             <div className="col-span-full grid grid-cols-subgrid items-center px-md py-xs text-caption text-muted-foreground">
               <span>{t("conductor.column.agent")}</span>
               <span>{t("conductor.column.model")}</span>

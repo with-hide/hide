@@ -178,7 +178,7 @@ impl Run {
         let router = AiRouter::with_sleep(
             vec![Arc::clone(&self.provider) as Arc<dyn AiBackend>],
             RouterConfig {
-                priority: vec![ProviderId::CLAUDE],
+                priority: vec![ProviderId::CLAUDE.into()],
                 ..RouterConfig::default()
             },
             Arc::new(NoopLogSink),
@@ -591,7 +591,7 @@ fn an_investigation_that_gets_no_answer_raises_nothing_and_says_so() {
                 let router = AiRouter::with_sleep(
                     vec![Arc::clone(&provider) as Arc<dyn AiBackend>],
                     RouterConfig {
-                        priority: vec![ProviderId::CLAUDE],
+                        priority: vec![ProviderId::CLAUDE.into()],
                         ..RouterConfig::default()
                     },
                     Arc::new(NoopLogSink),

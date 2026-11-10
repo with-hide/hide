@@ -241,7 +241,7 @@ fn a_features_codex_effort_is_sent_with_the_turn_and_logged() {
         let router = AiRouter::new(
             vec![Arc::new(backend())],
             RouterConfig {
-                priority: vec![ProviderId::CODEX],
+                priority: vec![ProviderId::CODEX.into()],
                 ..RouterConfig::default()
             },
             attempts.clone(),
@@ -300,7 +300,7 @@ fn a_plain_json_request_carries_its_schema_in_the_instructions_and_not_as_output
         let router = AiRouter::new(
             vec![Arc::new(backend())],
             RouterConfig {
-                priority: vec![ProviderId::CODEX],
+                priority: vec![ProviderId::CODEX.into()],
                 ..RouterConfig::default()
             },
             Arc::new(NoopLogSink),
@@ -338,7 +338,7 @@ fn a_schema_the_api_refuses_is_a_refused_request_with_its_code() {
         let router = AiRouter::new(
             vec![Arc::new(backend())],
             RouterConfig {
-                priority: vec![ProviderId::CODEX],
+                priority: vec![ProviderId::CODEX.into()],
                 backoff_base: Duration::ZERO,
                 usage_sink: Some(attempts.clone()),
                 ..RouterConfig::default()
@@ -459,7 +459,7 @@ fn a_started_turn_that_ends_without_an_answer_is_one_unknown_call_without_retry(
             let router = AiRouter::new(
                 vec![Arc::new(backend())],
                 RouterConfig {
-                    priority: vec![ProviderId::CODEX],
+                    priority: vec![ProviderId::CODEX.into()],
                     backoff_base: Duration::ZERO,
                     usage_sink: Some(attempts.clone()),
                     ..RouterConfig::default()
@@ -489,7 +489,7 @@ fn a_definite_input_or_pre_response_connection_refusal_spends_no_unknown_call() 
             let router = AiRouter::new(
                 vec![Arc::new(backend())],
                 RouterConfig {
-                    priority: vec![ProviderId::CODEX],
+                    priority: vec![ProviderId::CODEX.into()],
                     backoff_base: Duration::ZERO,
                     usage_sink: Some(attempts.clone()),
                     ..RouterConfig::default()
@@ -607,6 +607,73 @@ fn models_of(run: hide_ai::ItemRun) -> (hide_ai::ModelCatalog, serde_json::Value
     (catalog, env)
 }
 
+/// Reads the model list of an item whose gateway is `base_url` on a backend
+/// the caller keeps, and returns it with what its app-server recorded and
+/// that app-server's identity, its pid and start time, taken while the
+/// backend holds it.
+fn held_item(base_url: &str) -> (CodexAppServerBackend, serde_json::Value, (u32, u64)) {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable, and the
+    // app-server reads it once it is started, inside `models`.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let backend = CodexAppServerBackend::new(
+        CodexConfig {
+            binary: fixture(),
+            model: "gpt-5.6-luna".to_owned(),
+            cwd: std::env::temp_dir(),
+            search_path: None,
+            run: hide_ai::ItemRun {
+                env: vec![("OPENAI_BASE_URL".to_owned(), base_url.to_owned())],
+                program: None,
+            },
+        },
+        Arc::new(NoopLogSink),
+    );
+    let catalog = backend.models();
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+    assert_eq!(catalog, hide_ai::ModelCatalog::plain(["gpt-5.6-luna"]));
+    let seen: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&env_file).unwrap()).unwrap();
+    let pid = u32::try_from(seen["pid"].as_u64().unwrap()).unwrap();
+    let started = hide_platform::process::start_time(pid)
+        .expect("the app-server runs while its backend holds it");
+    (backend, seen, (pid, started))
+}
+
+/// Whether the process `identity` names no longer runs: its pid is gone, or
+/// another process that started later holds it now.
+fn ended((pid, started): (u32, u64)) -> bool {
+    !hide_platform::process::is_alive(pid)
+        || hide_platform::process::start_time(pid).ok() != Some(started)
+}
+
+/// Engineering 14, PRD agent-profiles-phase2 D-09: an item's app-server ends
+/// when its backend is dropped, which is how the core lets go of an item no
+/// window reads any more, and an edited item is read by a new app-server
+/// that runs with the edit.
+#[test]
+fn an_items_app_server_ends_with_its_backend_and_an_edit_starts_a_new_one() {
+    let (first, seen, first_server) = held_item("https://first.example/v1");
+    assert_eq!(seen["OPENAI_BASE_URL"], "https://first.example/v1");
+    assert!(!ended(first_server));
+    drop(first);
+    assert!(
+        ended(first_server),
+        "dropping the backend ended its app-server"
+    );
+
+    let (second, seen, second_server) = held_item("https://second.example/v1");
+    assert_ne!(
+        second_server, first_server,
+        "the edit runs a new app-server"
+    );
+    assert_eq!(seen["OPENAI_BASE_URL"], "https://second.example/v1");
+    drop(second);
+    assert!(ended(second_server));
+}
+
 /// PRD agent-profiles-phase2 D-07, D-09: a Codex item's list is read by an
 /// app-server that still runs under Hide's private home, signed in with the
 /// item's own account (its `auth.json`), with the item's variables, through
@@ -650,5 +717,73 @@ fn an_items_model_list_is_read_with_its_accounts_login_and_through_its_wrapper()
         seen["auth_link"],
         serde_json::Value::from(account.path().join("auth.json").display().to_string()),
         "the private home signs in with the item's account"
+    );
+}
+
+/// One Hide AI request of the item `run`, and what its app-server recorded
+/// when the turn started.
+fn turn_of(run: hide_ai::ItemRun) -> serde_json::Value {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable, and the
+    // app-server reads it once it is started, inside `execute`.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let backend = CodexAppServerBackend::new(
+        CodexConfig {
+            binary: fixture(),
+            model: "gpt-5.6-luna".to_owned(),
+            cwd: std::env::temp_dir(),
+            search_path: None,
+            run,
+        },
+        Arc::new(NoopLogSink),
+    );
+    let answer = backend.execute(&request(Duration::from_secs(10)), &CancelToken::new());
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+    assert_eq!(answer.unwrap().value["summary"], "fixture");
+    serde_json::from_slice(&std::fs::read(&env_file).unwrap()).unwrap()
+}
+
+/// PRD agent-profiles-phase2 B19, D-07 (inventory I-3.26): a Hide AI request
+/// of a Codex item runs under Hide's private home, never the account's own
+/// folder, so the account's conversation list gains nothing, and that home
+/// signs in with the item's account: the built-in default's is the account
+/// Codex reads by default, a profile's is its own folder.
+#[test]
+fn a_codex_items_request_runs_in_the_private_home_signed_in_as_that_items_account() {
+    let default = turn_of(hide_ai::ItemRun::default());
+    let default_account = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| hide_platform::host::home_dir().unwrap().join(".codex"));
+    assert_eq!(
+        default["auth_link"],
+        serde_json::Value::from(default_account.join("auth.json").display().to_string()),
+        "the built-in default signs in as the account Codex reads by default"
+    );
+
+    let account = tempfile::tempdir().unwrap();
+    let profiled = turn_of(hide_ai::ItemRun {
+        env: vec![(
+            "CODEX_HOME".to_owned(),
+            account.path().display().to_string(),
+        )],
+        program: None,
+    });
+    let home = profiled["CODEX_HOME"].as_str().unwrap();
+    assert!(
+        home.contains("hide-ai-codex-home-")
+            && !home.starts_with(&*account.path().to_string_lossy()),
+        "the turn runs under Hide's private home: {home}"
+    );
+    assert_eq!(
+        profiled["auth_link"],
+        serde_json::Value::from(account.path().join("auth.json").display().to_string()),
+        "the private home signs in with the item's account"
+    );
+    assert_eq!(
+        std::fs::read_dir(account.path()).unwrap().count(),
+        0,
+        "nothing of the request is written into the account's folder"
     );
 }

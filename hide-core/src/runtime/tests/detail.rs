@@ -145,6 +145,9 @@ fn a_practice_chapter_counts_its_start_and_end_once() {
     // A flow that was folded into another sends nothing; the one it was folded into counts.
     assert!(practice_event(&mut runtime, "screen", 9, true));
     assert_eq!(statistics.take(), []);
+    // A flow that was dropped keeps what a learner already saved under its id, and sends nothing.
+    assert!(practice_event(&mut runtime, "plan", 9, true));
+    assert_eq!(statistics.take(), []);
     assert!(practice_event(&mut runtime, "agents", 0, false));
     assert_eq!(
         statistics.take(),

@@ -1168,3 +1168,42 @@ it("says in 내 차례 how many letters the Conductor has not got and what to do
     expect(map.q("[data-mission-turn]")).toBeNull();
   } finally { await map.unmount(); }
 });
+
+it("lists the Views linked to the decision, seen or not, each bringing its View forward, and offers only a quiet 자료 요청 with none", async () => {
+  const views = [
+    { device_id: "mac", checkout_path: "/repo", display_id: "d7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d8", kind: "file" as const, label: "notes.md", unseen: true, by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d9", kind: "diff" as const, label: "screen.diff", by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d10", kind: "file" as const, label: "measure.csv", by: "worker" as const },
+  ];
+  const linked = await mount({ items: [asked({ decision_views: views })] });
+  try {
+    const rows = () => [...linked.container.querySelectorAll<HTMLElement>("[data-mission-banner-view]")];
+    expect(linked.q("[data-mission-banner-views]")?.firstElementChild?.textContent).toBe("To look at 4");
+    expect(rows().map((row) => row.dataset.missionBannerView)).toEqual(["d7", "d8", "d9"]);
+    // The one not looked at wears the eye; who linked it is said on each row.
+    expect(rows().map((row) => row.querySelector('[data-mark="look"]') !== null)).toEqual([false, true, false]);
+    expect(rows()[0]?.dataset.missionBannerViewBy).toBe("conductor");
+    await act(async () => linked.q("[data-mission-banner-views-more]")!.click());
+    expect(rows()).toHaveLength(4);
+    // A row brings its View forward, never a letter to the Conductor.
+    await act(async () => rows()[0]!.click());
+    expect(linked.events.some((event) => event.kind === "mission_material")).toBe(false);
+    // With Views linked, no request is offered.
+    expect(linked.q("[data-mission-material]")).toBeNull();
+  } finally { await linked.unmount(); }
+
+  const none = await mount({ items: [asked()] });
+  try {
+    expect(none.q("[data-mission-banner-views]")).toBeNull();
+    const ask = none.q('[data-mission-material="ask"]')!;
+    expect(ask.textContent).toBe("Ask for material");
+    // It sits in the answer row, beside the choices, which stay pressable.
+    expect(ask.closest("div")?.querySelector("[data-mission-option]")).not.toBeNull();
+    await act(async () => ask.click());
+    expect(none.events.filter((event) => event.kind === "mission_material")).toEqual([{ schema_version: 2, kind: "mission_material", payload: { mission: "mission-1", key: 3 } }]);
+    await none.rerender(asked({ question: { ...asked().question!, material_asked: true } }));
+    expect(none.q('[data-mission-material="asked"]')?.textContent).toBe("Material asked");
+    expect(none.q('[data-mission-material="ask"]')).toBeNull();
+  } finally { await none.unmount(); }
+});

@@ -27,7 +27,7 @@ const EXAMPLES: Example[] = [
   { title: "쉬는 세션", group: "idle", line: null },
   { title: "완료한 검토", group: "resolved", line: null, pr: "merged" },
   // needs-you-cleanup: a Conductor resting on its mission's decision, a question the operator read, and two waits that name their cause.
-  { title: "사이드바 정리 미션", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "mission_decision", line: "뼈대의 check 줄을 건너뛸까요?" } } },
+  { title: "사이드바 정리 미션", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "mission_decision", line: "뼈대의 check 줄을 건너뛸까요?", views: 2 } } },
   { title: "배포 환경 선택", group: "needs_you", line: null, ask: { verb: "answer", what: "staging부터 올릴까요?", more: 0 }, read: true },
   { title: "검토 나눠 맡기기", group: "working", line: null, wait: "children" },
   { title: "PR 체크 기다리기", group: "working", line: null, wait: "checks", pull: 1846 },

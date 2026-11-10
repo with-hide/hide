@@ -260,22 +260,21 @@ export function missingItemName(t: TFunction<"translation">, agentLabel: string)
 /** One item of an agent's list on a machine (D-01): `profile` is its id, `default` for the built-in one, and `name` the profile's name, null for the built-in one. */
 export type AgentItem = { kind: ProviderKind; profile: string; name: string | null };
 
-/** The items of `kind` on `device`: the built-in one first, then the profiles its list holds, in order; the built-in one alone where the machine lists none. */
-export function agentItems(device: Device | undefined, kind: ProviderKind): AgentItem[] {
+/** The items of `kind` in a machine's profile list: the built-in one first, then the profiles it holds, in order; the built-in one alone where there is no list. */
+function itemsOf(listed: MachineAgentProfiles | null, kind: ProviderKind): AgentItem[] {
   const adapter = agentAdapter(kind);
-  const listed = listedProfiles(device);
   const view = adapter && listed ? agentProfilesView(listed, adapter.id, adapter.label) : null;
   if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null }];
   return view.profiles.map((row) => ({ kind, profile: row.id, name: row.builtIn ? null : row.name }));
 }
 
+/** The items of `kind` on `device`. */
+export function agentItems(device: Device | undefined, kind: ProviderKind): AgentItem[] {
+  return itemsOf(listedProfiles(device), kind);
+}
+
 /** One item of the start panel's agent menu (D-01): an agent with one of its machine's profiles, `default` for the built-in one. */
-export type StartItem = {
-  kind: ProviderKind;
-  /** The profile's id, `default` for the agent's built-in one; what a start sends (D-02). */
-  profile: string;
-  /** The profile's name; null for the built-in profile. */
-  name: string | null;
+export type StartItem = AgentItem & {
   /** The profile's version now, which its model list must have been read at; null for the built-in profile. */
   version: number | null;
   /** The weekly percent left of the item's account; null when it is not known, which the menu draws `—` (D-11). */
@@ -305,11 +304,12 @@ export function startItems(rest: SnapshotRest | null, deviceId: string, usage: {
   // The usage read is this machine's alone: a device's items have no figure.
   const own = usage?.nodes[0]?.node === deviceId ? usage : null;
   const items = PROVIDER_KINDS.flatMap((kind): StartItem[] => {
-    const adapter = agentAdapter(kind);
     const row = own ? ownAgentUsage(own, kind) : null;
-    const view = adapter && listed ? agentProfilesView(listed, adapter.id, adapter.label) : null;
-    if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null, version: null, left: row ? weeklyLeft(row.limits, now) : null }];
-    return view.profiles.map((profile) => ({ kind, profile: profile.id, name: profile.builtIn ? null : profile.name, version: listed?.profiles.find((row) => row.id === profile.id)?.version ?? null, left: itemLeft(row, profile.id, now) }));
+    return itemsOf(listed, kind).map((item) => ({
+      ...item,
+      version: listed?.profiles.find((profile) => profile.id === item.profile)?.version ?? null,
+      left: itemLeft(row, item.profile, now),
+    }));
   });
   return { items, showLeft: items.some((item) => item.name !== null), listed: listed !== null, note };
 }
