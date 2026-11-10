@@ -109,6 +109,15 @@ Agents sort themselves into **Needs You, Unread, Working and Seen**, and the one
 **Project Memory** turns what you decide in a session into a card, checks it against the repository and hands it to the next agent, whichever vendor runs it; a rule worth keeping comes back as one pull request to your docs.
 Hide AI runs on the agent CLI you already signed in to, and every status still works with it switched off.
 
+### One agent, several accounts
+
+Give an agent more than one account: a work and a personal Claude Code, or a model gateway behind a wrapper program.
+Each profile is its own account folder with hide's hooks installed there; pick one in the start panel, per project, for a mission's workers or for Hide AI.
+
+> [!TIP]
+> You don't have to fill in the form. Ask any agent in hide, "add a Claude Code profile for ~/.claude-work", and it sets the profile up for you.
+> If you also start a wrapper by hand in a terminal, have it set the profile's folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so hide shows that start as the profile too.
+
 ### Your agent drives the browser
 
 An agent opens the page it changed beside its pane, clicks through it and reads what it shows, so it checks its own work before it asks you.
