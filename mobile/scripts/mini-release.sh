@@ -238,7 +238,8 @@ logged() {
 #   a status scratch     $base/status.<pid> (owns_work in `status`): the private home and temporary folder of one altool call
 # What stays is not the run's: release.log (redacted and searched), the machine's uploads.log, the empty lock file, and
 # what Apple's frameworks leave in the account's temporary folder under names any program uses (CFNetworkDownload_*,
-# cms~~~*), which hold neither the key's ids nor a token and are not deleted by name (docs/BUILD.md, The release build).
+# cms~~~*, and the export's own ResultBundle_* beside the one it is given), which hold neither the key's ids nor a
+# token and are not deleted by name (docs/BUILD.md, The release build).
 owns_lock=0 owns_work=0 finished=0 upload_started=0 upload_ended=0
 work= log= account_tmp=
 remove_apple_logs() {
