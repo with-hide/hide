@@ -64,7 +64,7 @@
     "example": "hide watch list"
   },
   "agent register": {
-    "line": "Adds an agent that you started yourself in a Hide pane to Hide's list of agents, under the parent you name."
+    "line": "Adds an agent that you started yourself in a Hide pane to Hide's list of agents, with the parent you name if you name one."
   },
   "agent list": {
     "line": "Lists the agents Hide knows, with the machine each runs on and whether it is running, asleep or ended.",
@@ -115,7 +115,7 @@
     "example": "hide agent profile remove claude work"
   },
   "agent profile reinstall": {
-    "line": "Installs Hide's hooks into a profile's account folder again, to repair a profile whose hooks are missing.",
+    "line": "Installs Hide's hooks into a profile's account folder again.",
     "example": "hide agent profile reinstall claude work"
   },
   "agent spawn": {
@@ -191,7 +191,7 @@
     "example": "hide mission close --as done --report-file report.md"
   },
   "mission reopen": {
-    "line": "Opens a closed mission again so its nodes can continue.",
+    "line": "Opens a mission that was closed as done or as waiting for merge again, so its nodes can continue; a cancelled mission cannot be reopened.",
     "example": "hide mission reopen"
   },
   "mission take": {
@@ -283,7 +283,7 @@
     "example": "hide browser click browser-3 @5"
   },
   "browser fill": {
-    "line": "Fills a form field of the page with a value, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "line": "Fills a form field of the page with a value.",
     "example": "hide browser fill browser-3 @1 'a@b.c'"
   },
   "browser type": {
@@ -303,7 +303,7 @@
     "example": "hide browser drag browser-3 @2 @7"
   },
   "browser scroll": {
-    "line": "Scrolls the page up or down, or to an element, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "line": "Scrolls the page up or down, or to an element.",
     "example": "hide browser scroll browser-3 down"
   },
   "browser wait": {
@@ -347,7 +347,7 @@
     "example": "hide view close browser-3"
   },
   "view split": {
-    "line": "Moves a View to a new area on one edge of the area you name, so it sits beside the others; it is refused when the View is the only one in that area, or when the Workspace already has six areas.",
+    "line": "Moves a View into a new area on one edge of the area you name, so it sits beside the others; the result may not have more than six areas or three levels of splits, and a View alone in its area cannot be split off from that same area.",
     "example": "hide view split browser-3 --area area-1 --edge right"
   },
   "view move": {
@@ -370,7 +370,7 @@
     "example": "hide links session 03293c41-46c6-4326-98d0-31f2dcce4132"
   },
   "session list": {
-    "line": "Lists the recent sessions of this project and of its connected devices, one line each, with a summary.",
+    "line": "Lists the recent sessions of this project, one line each with a summary, and, when Hide knows this project's repository, those of the projects of the same repository on connected devices.",
     "example": "hide session list --since 1d --limit 10"
   },
   "session record": {
@@ -417,7 +417,7 @@
     "line": "Records why a Project Memory card was skipped when moving cards into documents."
   },
   "memory stale": {
-    "line": "Reports that a Project Memory card no longer matches what the operator said, so Hide holds it back from agents until the session is analyzed, the hold is released or its time runs out.",
+    "line": "Reports that a Project Memory card no longer matches what the operator said, so Hide holds it back from agents until the session is analyzed, the hold is released or its time runs out; a hold is only accepted for a card whose full text this session's prompt gave the agent, not for one it only looked up with memory show or saw in the starting list.",
     "example": "hide memory stale m508 'The operator moved the issue template.'"
   },
   "memory release": {
@@ -425,7 +425,7 @@
     "example": "hide memory release m508"
   },
   "memory recheck": {
-    "line": "Asks for a Project Memory card to be checked again, and keeps it out of agents' prompts until that check ends.",
+    "line": "Asks for a Project Memory card to be checked again, and keeps it out of agents' prompts until that check ends; it needs Hide AI on, and an agent may ask only for a card its prompt gave it (the starting list counts, memory show alone does not).",
     "example": "hide memory recheck m508"
   }
 }
