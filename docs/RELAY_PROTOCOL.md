@@ -13,6 +13,7 @@ Neither key is converted into the other, and neither secret travels to the relay
 The room is base64url without padding of SHA-256 of the raw 32-byte Ed25519 public key.
 
 Text control messages are JSON, capped at 2048 bytes, reject unknown fields and use `admission::{ClientMessage,ServerMessage}` and the matching TypeScript types.
+The one exception is a device's `push_request`, which carries ciphertext and has its own 6,144-byte bound (Push relay below).
 A device sends `device` with `DeviceHello {version:1, room, device_key, phone_protocol}`; `phone_protocol` is a positive integer and identifies the phone application contract, separately from relay wire version 1.
 The relay creates `PendingAdmission::new(hello, monotonic_ms)` for that socket and sends `challenge` with its fresh random 32-byte nonce.
 The device answers `proof` with its Ed25519 signature.
@@ -21,6 +22,7 @@ The exact signed bytes are ASCII `hide-relay/device-admission/v1` followed by NU
 The relay must drop the pending value on socket close and on its ten-second socket timer, must not register a room before verification, and must not reuse a challenge.
 The stateless `verify_proof` primitive alone does not establish freshness.
 
+`registered {push}` confirms admission; `push` says whether this relay forwards push requests (Push relay below).
 After `registered`, a phone sends `phone {version:1, room}` and receives `joined {connection, phone_protocol}`; the device receives `peer_joined {connection}`.
 A connection is a nonzero u32, unique for the lifetime of the device's relay socket, and is never recycled within that lifetime.
 `close {connection}`, `peer_left {connection}` and `refused {reason}` carry no user content.
@@ -122,6 +124,110 @@ With `--trusted-proxy <IP>`, only that exact peer must supply one `X-Real-IP` va
 The proxy must overwrite this header with the real client address and must not append or pass through a caller's value.
 IPv4-mapped IPv6 addresses are canonicalized for accounting; native IPv6 addresses share their /64 attempt budget and accounting entry.
 Do not put multiple callers behind a proxy without this explicit trust setting: they would share the proxy IP's budget.
+
+## Push relay
+
+The iOS app cannot receive Web Push, so its notifications reach Apple's push service (APNs) through the relay, which holds Apple's signing key.
+The relay is stateless in the shape of Matrix's sygnal gateway: each request carries the device token and the ciphertext, the relay signs and forwards it while the request is in flight, and it stores neither.
+There is no new HTTP entrance: a request arrives only on an admitted device socket, and Caddy still forwards only `/health` and `/ws`.
+
+### Messages
+
+| Direction | Message | Fields and bounds |
+| --- | --- | --- |
+| relay → device | `registered {push}` | `push` is true only when this relay was given Apple's key; absent reads as false |
+| device → relay | `push_request {id, environment, token, collapse, payload}` | `id` nonzero u32, the device's own and echoed back; `environment` `sandbox` or `production`, no default; `token` hex, 32 to 200 characters, even length (`MIN_TOKEN`, `MAX_TOKEN`); `collapse` base64url, 1 to 64 characters (`MAX_COLLAPSE`); `payload` base64url of 1 to 3,000 bytes of ciphertext (`MAX_CIPHERTEXT`); the whole message at most 6,144 bytes (`MAX_PUSH_CONTROL`) |
+| relay → device | `push_result {id, result}` | `result` is one of `delivered`, `token_gone`, `rate_limited`, `unavailable`, `failed` |
+
+A device sends `push_request` only after a `registered` whose `push` is true.
+A `push_request` from a phone socket, or before admission, is an `invalid_message` refusal like any other message in the wrong place.
+Every other answer is a `push_result` under the request's id and leaves the socket open, because closing a device socket would disconnect every phone in its room.
+A request whose fields are wrong is answered `failed`; one whose id cannot be read is an `invalid_message` refusal, since no answer could name it.
+
+The relay fixes everything Apple reads besides the token, the collapse value and the ciphertext: the topic (the app's bundle id, from its configuration), `apns-push-type: alert`, `apns-priority: 10` and `apns-expiration` one hour after it sends.
+A request has no field for them, and an extra field makes it malformed.
+The environment chooses the host: `api.sandbox.push.apple.com` for a development build, `api.push.apple.com` for TestFlight and the App Store.
+
+### Budgets
+
+`hide-relay/src/limits.rs` holds these constants beside the socket budgets.
+Every request that reaches the room check is counted, a malformed one included, so a room cannot spend the relay's CPU with bad requests.
+
+| Budget | Production cap | Past it | Log `cap` |
+| --- | --- | --- | --- |
+| Requests per room in a fixed 60-second window | 20 | `rate_limited` | `pushes_per_room_per_minute` |
+| Requests per room in a 24-hour window | 1,000 | `rate_limited` | `pushes_per_room_per_day` |
+| Requests across the relay per second | 50 | `rate_limited` | `pushes_per_second` |
+| Requests in flight to Apple, as streams of one HTTP/2 connection | 32 | `rate_limited` | `concurrent_pushes` |
+| One request to Apple, its answer and body included | 10 seconds | `unavailable` | none |
+
+A room's push counters live as long as its byte record and are bounded by the same `room_records`.
+The relay keeps no queue and makes no retry except the one below; a refused request is the sender's to drop.
+
+### Apple's answers
+
+| Apple answers | `result` |
+| --- | --- |
+| 2xx | `delivered` |
+| 410, or 400 `BadDeviceToken` or `DeviceTokenNotForTopic` | `token_gone`: the token names no install of this app, and the sender deletes it |
+| 403 `ExpiredProviderToken` | the provider token is signed again and the request sent once more, the only retry; if the token is younger than 20 minutes, or the retry fails, `unavailable` |
+| 429, 5xx, no answer within the deadline | `unavailable` |
+| anything else | `failed` |
+
+One provider token (an ES256 JWT with `kid`, `iss` and `iat` in Unix seconds) serves every request and is replaced at 50 minutes, never more often than every 20 minutes, since Apple refuses providers that replace it faster (`TooManyProviderTokenUpdates`).
+One HTTP/2 connection to Apple is kept and reused; a dropped one is replaced by the next request.
+Tests stand in for Apple with a local h2c server, so the production TLS and ALPN path is exercised only by a real deployment; the client code is the same function with a different scheme.
+
+### The notification body
+
+This is the contract the iOS app's notification extension implements.
+hided encrypts the same notice JSON a Web Push phone receives (`push::payload`, with the `room` of the computer that sent it) for the key the app registered, using RFC 8291 `aes128gcm` in one record: a 16-byte salt, a 4-byte record size of 4096, a 1-byte key length of 65, hided's 65-byte ephemeral P-256 public key, then the AES-128-GCM ciphertext of the JSON followed by the delimiter byte `0x02`.
+The plaintext is at most 2,897 bytes (`push::MAX_APNS_PLAINTEXT`), so the body stays within 3,000 bytes; past it hided drops tags to close from the end of `clear`, and a notice that still does not fit is not sent.
+The relay sends Apple exactly:
+
+```json
+{"aps":{"alert":{"loc-key":"hide-notification"},"mutable-content":1},"hide":"<payload>"}
+```
+
+`hide-notification` is a localization key the app must carry; it is the only text Apple and a phone without the key can show, so it names nothing.
+No title, state, project, badge count or tag is in plain text.
+The extension tries each computer's key in turn and shows the decrypted notice; a body no key opens keeps the fixed text.
+The largest body is 4,079 bytes, inside Apple's 4,096.
+
+`collapse` is Apple's plaintext `apns-collapse-id`, so it never carries an agent key, tag or title: hided sends the first 24 bytes of HMAC-SHA-256 keyed with the phone's 16-byte authentication secret over `hide-collapse\0` and the agent's tag, base64url (32 characters).
+It is stable for one agent on one phone, so a later notice replaces the earlier one, and different across phones.
+
+Test vector: RFC 8291 Appendix A, whose receiver private key opens it.
+Its inputs (receiver public key `BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4`, sender public key `BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8`, ECDH secret `kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs`, authentication secret `BTBZMqHH6r4Tts7J_aSIgg`, salt `DGv6ra1nlYgDCS1FRnbzlw`, plaintext `When I grow up, I want to be a watermelon`) give the `payload`:
+
+```text
+DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN
+```
+
+`hided` pins this value (`the_app_body_vector_is_appendix_a_in_base64url`) and `hide-relay` pins the body built around it (`the_documented_apple_body_wraps_the_vector_ciphertext`).
+
+### Registration on the phone protocol
+
+Inside its encrypted session the app sends `apns_registration {token, environment, key: {p256dh, auth}}`: the device token as lowercase hex, its environment, and a per-computer P-256 public key (65 bytes uncompressed) and 16-byte secret, base64url, the same shape as a Web Push subscription's keys.
+hided answers `push_state {notifications: "on" | "refused"}` and keeps it in the phone's record in `phones.json` (0600), where it replaces a Web Push subscription and the reverse.
+`push_permission {state: "denied"}` removes it, unpairing removes it with the phone, and a `token_gone` answer removes it.
+An older hided answers the message `refused_request` and keeps the session, so the addition keeps `PHONE_PROTOCOL` at 5.
+hided sends only while its relay link is up and said `push: true`; otherwise the notice is dropped with a diagnostic, never queued.
+
+### Compatibility and deploy order
+
+An older hided reads `{"type":"registered","push":true}` as the unit `registered` it knew, and never sends `push_request`.
+A newer hided reads an older relay's `{"type":"registered"}` as `push: false` and never sends `push_request`, which that relay would refuse by closing the device socket.
+Both directions are tested (`an_older_device_reads_a_pushing_relay_and_keeps_its_phones`, `an_older_relay_keeps_the_link_and_is_never_sent_a_push_request`).
+Deploy the relay first: a hided released before it simply has no push to send.
+
+### The key on the relay host
+
+Apple's `.p8` is the relay's only secret.
+It sits at `/etc/hide-relay/apns.p8`, root-owned, mode 0400, in a 0700 directory, and reaches the service only through systemd `LoadCredential=`, never the repository, CI, an environment variable or a log; `deploy/relay-apns.conf.example` is the drop-in.
+`--apns-key`, `--apns-key-id`, `--apns-team-id` and `--apns-topic` come together or not at all; without them the relay answers every request `unavailable`, and with them it refuses to start on a key it cannot read, a key readable by group or others, or one that is not a P-256 key.
+`--apns-endpoint` names a loopback stand-in for tests and is refused for any other host.
+A push log line names a fixed event (`delivered`, `unregistered`, `push_token_invalid`, `cap_exceeded` and the rest in `hide-relay/src/apns.rs` and `server.rs`) and a cap, never a token, ciphertext, provider token, Apple's answer body or the room.
 
 ## Encrypted frames and messages
 
