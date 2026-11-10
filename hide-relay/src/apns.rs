@@ -2,7 +2,10 @@
 //! reusable HTTP/2 connection, and a fixed body built around the ciphertext
 //! hided sent. Nothing here is persisted: no token, no payload, no JWT
 //! (`docs/RELAY_PROTOCOL.md`, Push relay).
-use crate::limits::{PROVIDER_TOKEN_MIN_AGE, PROVIDER_TOKEN_REFRESH, PushLimits};
+use crate::{
+    config::ApnsConfig,
+    limits::{PROVIDER_TOKEN_MIN_AGE, PROVIDER_TOKEN_REFRESH, PushLimits},
+};
 use hide_relay_protocol::admission::{PushEnvironment, PushOutcome, PushRequest};
 use http_body_util::{BodyExt, Full};
 use hyper::{Method, Request, StatusCode, body::Bytes, header::HeaderValue};
@@ -90,6 +93,54 @@ impl ProviderKey {
             URL_SAFE_NO_PAD.encode(signature.as_ref())
         ))
     }
+}
+
+/// Apple's `.p8` and its ids, read once at start. A key that is missing,
+/// readable by group or others, or not a P-256 key stops the relay rather
+/// than serving with push quietly off (`docs/RELAY_PROTOCOL.md`, Push relay).
+/// No stand-in endpoint means Apple's own hosts, chosen per request from the
+/// environment the phone named.
+pub fn load(config: &ApnsConfig, limits: PushLimits, clock: Clock) -> Result<Apns, &'static str> {
+    let metadata = std::fs::metadata(&config.key).map_err(|_| "apns_key_unreadable")?;
+    // The relay is deployed on Linux; a system without mode bits has no
+    // wider reading to refuse.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("apns_key_permissions");
+        }
+    }
+    if !metadata.is_file() || metadata.len() > 16 * 1024 {
+        return Err("apns_key_unreadable");
+    }
+    let file = std::fs::read(&config.key).map_err(|_| "apns_key_unreadable")?;
+    let pkcs8 = pkcs8_of(&file).ok_or("apns_key_unreadable")?;
+    let key = ProviderKey::from_pkcs8(
+        &pkcs8,
+        config.key_id.clone(),
+        config.team_id.clone(),
+        config.topic.clone(),
+    )?;
+    Apns::new(
+        key,
+        config.endpoint.clone().unwrap_or_default(),
+        limits,
+        clock,
+    )
+}
+
+/// The DER inside Apple's `.p8`, which is PEM: base64 between
+/// `-----BEGIN PRIVATE KEY-----` and its end line.
+fn pkcs8_of(file: &[u8]) -> Option<Vec<u8>> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let text = std::str::from_utf8(file).ok()?;
+    let body = text
+        .trim()
+        .strip_prefix("-----BEGIN PRIVATE KEY-----")?
+        .strip_suffix("-----END PRIVATE KEY-----")?;
+    let base64: String = body.split_whitespace().collect();
+    STANDARD.decode(base64).ok()
 }
 
 /// A header the ids may carry: Apple issues decimal key ids and alphanumeric

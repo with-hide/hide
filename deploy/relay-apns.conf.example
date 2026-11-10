@@ -1,0 +1,27 @@
+# Apple push for the relay: a systemd drop-in, installed by hand as
+# /etc/systemd/system/hide-relay.service.d/apns.conf (docs/RELAY_PROTOCOL.md,
+# Push relay). Without it the relay runs as before and answers every push
+# request `unavailable`.
+#
+# The key is Apple's .p8 and the relay's only secret. It lives on the relay
+# host only, never in the repository, CI, an environment variable or a log:
+#   install -d -m 0700 -o root -g root /etc/hide-relay
+#   install -m 0400 -o root -g root AuthKey_<key id>.p8 /etc/hide-relay/apns.p8
+# systemd copies it into the service's private credential directory (%d), a
+# 0400 file only the service can read; the relay refuses to start when the file
+# it is given is readable by group or others, or cannot be read.
+#
+# The key id and team id are Apple's, not secret; the private operations
+# document holds the values. The topic is the iOS app's bundle id. Both of
+# Apple's hosts are used: each request names the environment its phone was
+# issued in (sandbox for a development build, production for TestFlight and the
+# App Store), and the relay picks api.sandbox.push.apple.com or
+# api.push.apple.com from it. No --apns-endpoint here: that names a loopback
+# stand-in for tests only.
+#
+# ExecStart repeats deploy/relay/hide-relay.service's line with the four Apple
+# arguments added; change both together.
+[Service]
+LoadCredential=apns.p8:/etc/hide-relay/apns.p8
+ExecStart=
+ExecStart=/opt/hide-relay/current/hide-relay --listen 127.0.0.1:8787 --trusted-proxy 127.0.0.1 --apns-key %d/apns.p8 --apns-key-id <key id> --apns-team-id <team id> --apns-topic me.grab.hide.ios

@@ -454,3 +454,53 @@ async fn a_phone_socket_cannot_ask_for_a_push() {
     assert_eq!(outcome, PushOutcome::Delivered);
     fixture.stop().await;
 }
+
+/// The relay starts only with a key it can use: Apple's PEM `.p8`, owner-only.
+/// A missing file, one others may read, or one that is not a key stops it.
+#[cfg(unix)]
+#[test]
+fn the_relay_starts_only_with_an_owner_only_readable_key() {
+    use hide_relay::{
+        apns::{load, unix_clock},
+        config::ApnsConfig,
+    };
+    use std::os::unix::fs::PermissionsExt;
+    let folder = tempfile::tempdir().unwrap();
+    let config = |key: &str| ApnsConfig {
+        key: folder.path().join(key),
+        key_id: "KEYID1234".into(),
+        team_id: "TEAMID5678".into(),
+        topic: "me.grab.hide.ios".into(),
+        endpoint: None,
+    };
+    let write = |name: &str, bytes: &[u8], mode: u32| {
+        let path = folder.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let key = TestKey::new();
+    write("apns.p8", key.pem().as_bytes(), 0o400);
+    write("wide.p8", key.pem().as_bytes(), 0o440);
+    write("other.p8", key.pem().as_bytes(), 0o604);
+    write("garbage.p8", b"not a key", 0o400);
+    write(
+        "truncated.p8",
+        b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+        0o400,
+    );
+    let limits = PushLimits::default();
+    assert!(load(&config("apns.p8"), limits, unix_clock()).is_ok());
+    for (name, reason) in [
+        ("missing.p8", "apns_key_unreadable"),
+        ("wide.p8", "apns_key_permissions"),
+        ("other.p8", "apns_key_permissions"),
+        ("garbage.p8", "apns_key_unreadable"),
+        ("truncated.p8", "apns_key_unreadable"),
+    ] {
+        assert_eq!(
+            load(&config(name), limits, unix_clock()).err(),
+            Some(reason),
+            "{name}"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 use hide_relay::{
     Relay,
-    apns::{Apns, ProviderKey},
+    apns::{load, unix_clock},
     config::{Config, HELP},
     event::Event,
     limits::{Limits, PushLimits},
@@ -13,33 +13,6 @@ fn log(event: Event) {
         // deployment supervises this stderr sink independently of the relay.
         let _ = writeln!(std::io::stderr().lock(), "{line}");
     }
-}
-
-/// Apple's `.p8` and its ids, read once at start. A key that is missing, wide
-/// or unreadable stops the relay rather than serving with push quietly off
-/// (`docs/RELAY_PROTOCOL.md`, Push relay).
-fn apns(config: &hide_relay::config::ApnsConfig) -> Result<Apns, &'static str> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = std::fs::metadata(&config.key).map_err(|_| "apns_key_unreadable")?;
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err("apns_key_permissions");
-    }
-    let pkcs8 = std::fs::read(&config.key).map_err(|_| "apns_key_unreadable")?;
-    let key = ProviderKey::from_pkcs8(
-        &pkcs8,
-        config.key_id.clone(),
-        config.team_id.clone(),
-        config.topic.clone(),
-    )?;
-    // No stand-in means Apple's own hosts, chosen per request from the
-    // environment the phone named.
-    let endpoint = config.endpoint.clone().unwrap_or_default();
-    Apns::new(
-        key,
-        endpoint,
-        PushLimits::default(),
-        hide_relay::apns::unix_clock(),
-    )
 }
 
 #[tokio::main]
@@ -55,7 +28,12 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let apns = match config.apns.as_ref().map(apns).transpose() {
+    let apns = match config
+        .apns
+        .as_ref()
+        .map(|apns| load(apns, PushLimits::default(), unix_clock()))
+        .transpose()
+    {
         Ok(apns) => apns,
         Err(name) => {
             log(Event::new(name, None));

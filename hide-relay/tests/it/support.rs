@@ -470,6 +470,20 @@ pub struct TestKey {
 }
 
 impl TestKey {
+    /// The key as Apple ships a `.p8`: PEM around the PKCS#8 DER.
+    pub fn pem(&self) -> String {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let base64 = STANDARD.encode(&self.pkcs8);
+        let lines: Vec<&str> = base64
+            .as_bytes()
+            .chunks(64)
+            .map(|line| std::str::from_utf8(line).unwrap())
+            .collect();
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            lines.join("\n")
+        )
+    }
     pub fn new() -> Self {
         use ring::signature::KeyPair;
         let pair = ring::signature::EcdsaKeyPair::generate_pkcs8(
