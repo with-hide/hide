@@ -24,6 +24,9 @@ bundle_id=me.grab.hide.ios
 # One folder (about 0.5 GB) and one simulator per branch built here: past this many other branches the build refuses
 # and says what to remove, because the machine runs other work and nothing prunes a branch it does not own.
 max_other_branches=4
+# Ad-hoc signed, not unsigned: the simulator gives the Keychain only to an app that carries its entitlements, which an
+# unsigned build does not (the Keychain answers -34018). No account or certificate is involved; release signing is the release workflow's.
+signing=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES)
 settle=${HIDE_IOS_SETTLE:-15}
 
 device_line() { xcrun simctl list devices | sed -n "s/^ *$device_name (\\([0-9A-F-]*\\)) (\\([A-Za-z]*\\)).*/\\1 \\2/p" | head -1; }
@@ -78,7 +81,7 @@ case "$command" in
         xcodebuild -project "$project/App.xcodeproj" -scheme App -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-            CODE_SIGNING_ALLOWED=NO build
+            "${signing[@]}" build
         ensure_device
         # The HideShell tests run in a real web view on the simulator: they are what proves the bridge refuses a frame.
         # Its own derived data: the app's build already holds a Capacitor framework the package's scheme must not meet.
@@ -88,7 +91,7 @@ case "$command" in
         # The app's own controller, hosted in the app on the simulator: it is what proves the app installs the gate.
         xcodebuild test -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppTests \
-            CODE_SIGNING_ALLOWED=NO
+            "${signing[@]}"
         printf 'built: %s\n' "$derived/Build/Products/Debug-iphonesimulator/App.app"
         df -h / | tail -1 | awk '{printf "build machine free disk: %s of %s\n", $4, $2}'
         ;;

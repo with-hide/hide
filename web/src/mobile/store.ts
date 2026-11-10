@@ -23,7 +23,7 @@ export type Screen =
   | "refused";
 
 /** The bottom bar's places (PRD mobile-companion-ui B28). */
-export type PhoneTab = "agents" | "missions" | "prs";
+export type PhoneTab = "agents" | "missions" | "prs" | "settings";
 
 /** The open pull requests as the last `prs` frame carried them; kept across a lost connection, dimmed under the unreachable line (B45). */
 export type PrsState = { projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted: number };
