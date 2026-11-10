@@ -453,8 +453,12 @@ fn still_holds(
         AttentionReason::WarningStood => {
             node.status == NodeStatus::Working && !node.warnings.is_empty()
         }
+        // A push after it was raised is the move it waited for.
         AttentionReason::WaitStood => {
             node.status == NodeStatus::Working
+                && node
+                    .quiet_since()
+                    .is_none_or(|since| since <= attention.since_unix_ms)
                 && (facts.pulls.is_none()
                     || waiting_pull(node, facts.pulls)
                         .is_some_and(|pull| Some(pull.number) == attention.pr))
@@ -647,6 +651,9 @@ pub(crate) struct Stall {
     pub node: usize,
     pub reason: AttentionReason,
     pub pr: Option<u32>,
+    /// The head a pull request's wait stands on: a new push is a move, so
+    /// its clock starts again.
+    pub head: Option<String>,
 }
 
 /// The nodes of `mission` standing where a move did not come yet, so a
@@ -676,6 +683,7 @@ pub(crate) fn stalls(
             node: at,
             reason,
             pr,
+            head: None,
         };
         if could_start(mission, node) {
             if !cap_full {
@@ -689,7 +697,10 @@ pub(crate) fn stalls(
         {
             out.push(stall(AttentionReason::WarningStood, node.current_pr()));
         } else if let Some(pull) = waiting_pull(node, pulls) {
-            out.push(stall(AttentionReason::WaitStood, Some(pull.number)));
+            out.push(Stall {
+                head: pull.head_oid.clone(),
+                ..stall(AttentionReason::WaitStood, Some(pull.number))
+            });
         }
     }
     out
@@ -1489,7 +1500,14 @@ mod tests {
     }
 
     fn stall(node: usize, reason: AttentionReason, pr: Option<u32>) -> Stall {
-        Stall { node, reason, pr }
+        let head = (reason == AttentionReason::WaitStood)
+            .then(|| format!("head-{}", pr.unwrap_or_default()));
+        Stall {
+            node,
+            reason,
+            pr,
+            head,
+        }
     }
 
     /// A mission whose `b` could start once `a` finished.
@@ -1591,5 +1609,20 @@ mod tests {
         let mut held = raised();
         held.delay = Some("disk".into());
         assert!(clears(&held));
+        // A pull request's wait goes with a new push after it was raised.
+        let mut m = reviewed();
+        m.nodes[0].prs = vec![7];
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
+        let mut wait = attention(AttentionReason::WaitStood, Some(7));
+        wait.since_unix_ms = 60 * MINUTE;
+        m.nodes[0].attention = Some(wait);
+        let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
+        let cleared = |m: &Mission| {
+            evaluate(m, &facts(Some(&waiting), vec![NodeFacts::default()]))
+                .contains(&Act::Clear { node: 0 })
+        };
+        assert!(!cleared(&m));
+        m.nodes[0].pushed_at_unix_ms = Some(65 * MINUTE);
+        assert!(cleared(&m));
     }
 }

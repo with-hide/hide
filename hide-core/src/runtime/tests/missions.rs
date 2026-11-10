@@ -10431,4 +10431,38 @@ fn a_node_not_started_is_raised_twenty_minutes_after_it_was_first_seen() {
     assert_eq!(raised(&runtime), None);
     assert!(runtime.stall_missions(lifted + 20 * minute));
     assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+    let letters = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        mission
+            .wakes
+            .iter()
+            .filter(|wake| {
+                wake.event == crate::missions::WakeEvent::Attention && wake.node == "fix"
+            })
+            .map(|wake| super::super::missions::wake_intent(mission, wake))
+            .collect::<Vec<_>>()
+    };
+    let first = letters(&runtime);
+    assert_eq!(first.len(), 1, "one letter to the Conductor");
+    // Held, the stall goes; standing again after, it is a new one with a
+    // letter of its own.
+    let held = lifted + 21 * minute;
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(held);
+    assert_eq!(raised(&runtime), None);
+    command(&mut runtime, "sender", json!({"op": "delay", "line": null})).unwrap();
+    runtime.drive_mission_health(held + minute);
+    runtime.stall_missions(held + minute);
+    assert!(runtime.stall_missions(held + 21 * minute));
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+    let again = letters(&runtime);
+    assert!(
+        again.iter().any(|letter| !first.contains(letter)),
+        "{first:?} then {again:?}"
+    );
 }

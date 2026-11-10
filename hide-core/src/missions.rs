@@ -322,6 +322,16 @@ impl AttentionReason {
         leave.chain(own.iter().copied()).collect()
     }
 
+    /// A move that did not come (`mission_health::stalls`): raised once
+    /// while it stands, and again as a new one, with its own letter, once it
+    /// went and stands again.
+    pub fn stall(self) -> bool {
+        matches!(
+            self,
+            Self::NotStarted | Self::WarningStood | Self::WaitStood
+        )
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MergedUnproven => "merged_unproven",

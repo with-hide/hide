@@ -138,6 +138,11 @@ pub(super) fn raise_for(
     if reason == AttentionReason::CloseRefused {
         raise_key = format!("{raise_key}:{}", close_key(mission));
     }
+    // A stall that went and stands again is a new one: its own letter and
+    // history entry, named by the raise's count.
+    if reason.stall() {
+        raise_key = format!("{raise_key}:{}", mission.attention_seq + 1);
+    }
     // A cause the node cannot remember is not raised: raised with no
     // memory of it, it would come again once settled (B27).
     if !mission.nodes[at].note_handled(cause) {
@@ -551,7 +556,12 @@ impl Runtime {
                 // again after a restart makes the same key, and one asked
                 // again of a Conductor that took over is its own act (B27).
                 let Some(key) = node.attention.as_ref().map(|attention| {
-                    act_key(node, &format!("operator:{}:{asked}", attention.cause()))
+                    let key = act_key(node, &format!("operator:{}:{asked}", attention.cause()));
+                    if attention.reason.stall() {
+                        format!("{key}:{}", attention.key)
+                    } else {
+                        key
+                    }
                 }) else {
                     continue;
                 };
@@ -733,13 +743,19 @@ impl Runtime {
             let mut due = Vec::new();
             for stall in standing {
                 let node = &mission.nodes[stall.node];
+                // A new push to the pull request is a move: its wait is
+                // counted from the head it waits on.
                 let cause = crate::missions::cause_key(stall.reason, stall.pr, None);
-                let key = (mission.id.clone(), node.key.clone(), cause);
+                let since_key = format!("{cause}:{}", stall.head.as_deref().unwrap_or_default());
+                let key = (mission.id.clone(), node.key.clone(), since_key);
                 let since = self.missions.stall_clock.get(&key).copied().unwrap_or(now);
+                // A stall raised now keeps no clock: should it go and stand
+                // again, it is counted from then.
                 if now.saturating_sub(since) >= crate::mission_health::stall_after(stall.reason) {
                     due.push(stall);
+                } else {
+                    clock.insert(key, since);
                 }
-                clock.insert(key, since);
             }
             if due.is_empty() {
                 continue;
@@ -907,12 +923,19 @@ impl Runtime {
                     // owed now, may stand again later as a new one, with
                     // its own clock and letter.
                     if let Some((
-                        AttentionReason::CloseRefused
-                        | AttentionReason::NotStarted
+                        AttentionReason::NotStarted
                         | AttentionReason::WarningStood
                         | AttentionReason::WaitStood,
-                        cause,
+                        _,
                     )) = cleared
+                    {
+                        let key = mission.nodes[node].key.clone();
+                        self.missions
+                            .stall_clock
+                            .retain(|(of, at, _), _| !(of == id && *at == key));
+                    }
+                    if let Some((reason, cause)) = cleared
+                        && (reason == AttentionReason::CloseRefused || reason.stall())
                     {
                         mission.nodes[node]
                             .handled
