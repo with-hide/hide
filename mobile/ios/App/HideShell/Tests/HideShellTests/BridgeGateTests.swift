@@ -68,13 +68,9 @@ final class BridgeGateTests: XCTestCase {
         return recorder.calls
     }
 
-    func testFramesAreRefusedAndTheMainFrameIsServed() throws {
-        let calls = try run { controller, recorder in BridgeGate.install(on: controller, inner: recorder) }
-        XCTAssertEqual(calls.sorted(), ["main", "main-final"])
-    }
-
-    /// Without the gate the same page reaches the handler from both frames. If this stops being true the test above
-    /// no longer proves anything, because the premise of the gate (WebKit gives a frame the handler) is gone.
+    /// Without the gate the same page reaches the handler from both frames. If this stops being true the app's own
+    /// test (ShellViewControllerTests) no longer proves anything, because the premise of the gate (WebKit gives a
+    /// frame the handler) is gone.
     func testWithoutTheGateFramesReachTheHandler() throws {
         let calls = try run { controller, recorder in controller.add(recorder, name: BridgeGate.handlerName) }
         XCTAssertEqual(calls.sorted(), ["main", "main-final", "same-origin-frame", "sandboxed-frame"])
@@ -110,6 +106,11 @@ final class NavigationPolicyTests: XCTestCase {
         for allowed in ["capacitor://localhost/p/5/index.html", "https://github.com/with-hide/hide", "about:blank"] {
             XCTAssertTrue(policy.allows(URL(string: allowed)), allowed)
         }
+        // Only https goes outside the app, by a navigation or by a new window.
+        XCTAssertTrue(policy.opensOutside(URL(string: "https://github.com")))
+        for inside in ["capacitor://localhost/", "about:blank", "tel:1", "http://example.com"] {
+            XCTAssertFalse(policy.opensOutside(URL(string: inside)), inside)
+        }
         for refused in ["tel:+821012345678", "sms:1", "http://example.com", "capacitor://other/x", "file:///etc/passwd",
                         "data:text/html,hi", "javascript:alert(1)", "itms-apps://apps.apple.com/app/x", "hide://pair"] {
             XCTAssertFalse(policy.allows(URL(string: refused)), refused)
@@ -118,7 +119,7 @@ final class NavigationPolicyTests: XCTestCase {
     }
 }
 
-private final class Dummy: NSObject, WKNavigationDelegate {}
+private final class Dummy: NSObject, WKNavigationDelegate, WKUIDelegate {}
 
 final class PhoneRouterTests: XCTestCase {
     func testProtocolBundlesAreTheirOwnPagesAndEverythingElseKeepsCapacitorsRule() {

@@ -4,23 +4,28 @@ import WebKit
 
 /// Capacitor's view controller with the app's guards put in place once the bridge exists.
 @objc(ShellViewController)
-public final class ShellViewController: CAPBridgeViewController {
+open class ShellViewController: CAPBridgeViewController {
     private var navigationPolicy: NavigationPolicy?
+
+    /// The plugins a script of the app may call. A test names its own.
+    open var exposedPlugins: Set<String> { BridgeGate.appPlugins }
 
     /// The phone site is several pages (the loader and one bundle per protocol), not one page.
     public override func router() -> Router {
         PhoneRouter()
     }
 
-    public override func capacitorDidLoad() {
-        guard let handler = (bridge as? CapacitorBridge)?.webViewDelegationHandler, let webView else {
-            // Without the handler there is nothing to guard, and an unguarded bridge must not run.
-            fatalError("Capacitor did not provide its web view handler")
+    open override func capacitorDidLoad() {
+        guard let handler = (bridge as? CapacitorBridge)?.webViewDelegationHandler, let webView,
+              webView.configuration.userContentController === handler.contentController else {
+            // Without the handler on this very web view there is nothing to guard, and an unguarded bridge must not run.
+            fatalError("Capacitor did not hand the web view the handler it registered the bridge on")
         }
-        BridgeGate.install(on: handler.contentController, inner: handler)
+        BridgeGate.install(on: handler.contentController, inner: handler, plugins: exposedPlugins)
         let policy = NavigationPolicy(inner: handler)
         navigationPolicy = policy
         webView.navigationDelegate = policy
+        webView.uiDelegate = policy
     }
 
 #if DEBUG
