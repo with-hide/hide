@@ -10,6 +10,7 @@ import { linkFixtureTranscripts } from "./pane-fixture";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
 import { endPaneHolders } from "./pane-holders.mjs";
+import { connectControl } from "./hided-control.mjs";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 
 /**
@@ -268,7 +269,31 @@ async function launch(engine: DaemonEngine, label: string, dir: string, home: st
             await beforeStart?.(path.join(dir, "hide"));
             // The next daemon takes over the directory and its removal.
             disown();
-            return launch(engine, label, dir, home, String(state.port), extraEnv, bundledAt);
+            const restarted = await launch(engine, label, dir, home, String(state.port), extraEnv, bundledAt);
+            try {
+              // /health proves the listener is back, not that the core has
+              // adopted the holders and resolved its saved Workspace. Keep
+              // every restart caller behind the same snapshot boundary.
+              const control = await connectControl(restarted);
+              try {
+                await control.until((rest) => {
+                  // This fixture is also compiled by the desktop host's
+                  // non-JSX project; read just the wire fields needed here.
+                  const snapshot = rest as {
+                    status?: { engine?: { state: string } };
+                    ui_state?: { focused_checkout_id?: string | null };
+                    workspace_view?: unknown;
+                  };
+                  return snapshot.status?.engine?.state === "connected"
+                    && (!snapshot.ui_state?.focused_checkout_id || Boolean(snapshot.workspace_view));
+                }, "the restarted core's engine and saved Workspace");
+              } finally {
+                control.close();
+              }
+              return restarted;
+            } catch (error) {
+              throw afterCleanup(error, restarted.stop);
+            }
           };
           return { pid: child.pid!, origin, token: state.token, home: fs.realpathSync(home), stateDir: path.join(dir, "hide"), hostId, node, stop, restart };
         }

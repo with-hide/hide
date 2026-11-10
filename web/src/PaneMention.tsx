@@ -69,7 +69,7 @@ export function PaneMention({ paneId, actions, className = "" }: { paneId: strin
             {candidates.map((agent) => (
               <CommandItem
                 key={agent.pane_id}
-                value={[agent.identity_label, agent.herdr_name, agent.agent_kind, agent.checkout_label, agent.pane_id].filter(Boolean).join(" ")}
+                value={[agent.identity_label, agent.given_name, agent.agent_kind, agent.checkout_label, agent.pane_id].filter(Boolean).join(" ")}
                 onSelect={() => choose(agentReference(agent))}
                 data-pane-mention-choice={agent.pane_id}
               >

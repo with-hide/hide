@@ -20,7 +20,7 @@ type Target = { label: string; confirmation: boolean; statusCheck: boolean };
 function target(pane: PaneRow, agents: readonly AgentRow[]): Target {
   const agent = agents.find((row) => row.pane_id === pane.id);
   return {
-    label: pane.herdr_label ?? pane.id,
+    label: pane.engine_label ?? pane.id,
     confirmation: pane.requires_close_confirmation || (agent?.requires_close_confirmation ?? false),
     statusCheck: pane.requires_close_status_check || (agent?.requires_close_status_check ?? false),
   };

@@ -7,9 +7,7 @@
 //! the others and says why, and a piece the kit installed and the operator
 //! then took away stays away until Reinstall. The record's `agents` map is
 //! the operator's choice; its `installed` set holds `hook:<agent>` and
-//! `skill:<folder>` for what the kit has put down, and `herdr:<agent>` for
-//! Herdr's own integration an earlier build installed, which the kit retires
-//! (`herdr_integration`).
+//! `skill:<folder>` for what the kit has put down.
 //!
 //! Claude Code and Codex keep their hook as a kit part ([`HookSupport::Part`])
 //! because Memory, pane diagnosis and the device rows read it there. Their
@@ -979,16 +977,6 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         }
     }
 
-    // Herdr's integration an earlier build installed goes, whether the
-    // agent is on or off (D-12).
-    for adapter in ADAPTERS {
-        if let Some(outcome) = crate::herdr_integration::retire(target, record, adapter.id)
-            && !matches!(outcome, RemoveOutcome::Failed { .. })
-        {
-            changed = true;
-        }
-    }
-
     Applied {
         failures,
         detection,
@@ -1050,24 +1038,6 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
         outcomes.push((skill_code(dir), outcome));
     }
     outcomes.extend(retired_agents::remove(target));
-    outcomes
-}
-
-/// Takes the Herdr integrations Hide installed off a machine that is being
-/// removed from Hide, by the record's ownership (`herdr_integration`); an
-/// integration the operator installed stays.
-pub(crate) fn remove_herdr(
-    target: &KitTarget,
-    record: &mut Record,
-) -> Vec<(String, RemoveOutcome)> {
-    let mut outcomes: Vec<(String, RemoveOutcome)> = ADAPTERS
-        .iter()
-        .filter_map(|adapter| {
-            crate::herdr_integration::retire(target, record, adapter.id)
-                .map(|outcome| (crate::herdr_integration::code(adapter.id), outcome))
-        })
-        .collect();
-    outcomes.extend(retired_agents::remove_herdr(target, record));
     outcomes
 }
 

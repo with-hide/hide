@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { corePaneFocus, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
+import { dumpOnFailure, pageSide } from "./failure-dump";
 import { enterWorkspace, screenshot } from "./wire";
 
 type Diagnostic = { kind: string; message: string; occurred_at: number };
@@ -92,7 +93,12 @@ async function focusHarness(page: Page, daemon: Daemon, panes: readonly string[]
   await enterWorkspace(page, "fixture");
   const [first] = panes as [string, string];
   const views = panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
-  for (const pane of views) await expect(pane).toHaveAttribute("data-transport", "controlling");
+  // A run on Windows once found no `[data-pane-view]` for the first pane five
+  // seconds after the workspace was open (with-hide/hide-private#442); the dump
+  // says what the page drew instead, which the daemon's log cannot.
+  await dumpOnFailure("fixture panes", () => pageSide(page), async () => {
+    for (const pane of views) await expect(pane).toHaveAttribute("data-transport", "controlling");
+  });
   const boxes = await Promise.all(views.map((pane) => pane.boundingBox()));
   // These polls read captured diagnostics in memory, without browser or
   // engine I/O. Observe acceptance promptly within the unchanged timeout.

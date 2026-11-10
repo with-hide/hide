@@ -27,7 +27,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use hide_agent_adapter::{AccountRef, ProfileId};
-use hide_agent_hooks::codex_trust::HookEntry;
 use serde::{Deserialize, Serialize};
 
 use crate::ComponentId;
@@ -99,14 +98,6 @@ pub(crate) struct Record {
     /// is one that predates the choice, so it was never held.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     awaiting_choice: bool,
-    /// The entries Herdr's integration install added to an agent's hook file
-    /// when the kit ran it, by adapter id (PRD codex-herdr-hook-trust): what
-    /// Herdr wrote, as the kit saw it, so Codex's trust for it is for exactly
-    /// those bytes. Read only while the record also holds that agent's
-    /// `herdr:<agent>` piece; an integration the operator installed first has
-    /// neither. A build that does not know the field ignores it.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    herdr_hooks: BTreeMap<String, Vec<HookEntry>>,
     /// Every other installation's part of the record, by its name
     /// (`hide_agent_hooks::route::install_of_root`); written, empty or not,
     /// by every build that keeps installations apart, so a record without it
@@ -175,30 +166,7 @@ impl Record {
 
     /// Forgets a piece, and with it the hook entries learned for it.
     pub(crate) fn forget_piece(&mut self, code: &str) -> bool {
-        if let Some(agent) = code.strip_prefix("herdr:") {
-            self.herdr_hooks.remove(agent);
-        }
         self.mine_mut().installed.remove(code)
-    }
-
-    /// The hook entries the kit saw Herdr's integration for `agent` write,
-    /// only while the record holds that integration as the kit's own.
-    pub(crate) fn herdr_hook_entries(&self, agent: &str) -> &[HookEntry] {
-        if !self.contains_piece(&format!("herdr:{agent}")) {
-            return &[];
-        }
-        self.herdr_hooks.get(agent).map_or(&[], Vec::as_slice)
-    }
-
-    /// Keeps what Herdr's integration for `agent` wrote, as earlier builds
-    /// did; true when that changed the record. Only a fixture writes it now,
-    /// one of the Unix kit cases (`tests::herdr_cases`).
-    #[cfg(all(test, unix))]
-    pub(crate) fn set_herdr_hook_entries(&mut self, agent: &str, entries: Vec<HookEntry>) -> bool {
-        if entries.is_empty() {
-            return self.herdr_hooks.remove(agent).is_some();
-        }
-        self.herdr_hooks.insert(agent.to_owned(), entries.clone()) != Some(entries)
     }
 
     /// Whether the machine has never had the kit applied.
@@ -392,7 +360,6 @@ pub(crate) fn save(home: &Path, record: &Record) -> Result<(), String> {
         app: record.app.clone(),
         agents: record.agents.clone(),
         awaiting_choice: record.awaiting_choice,
-        herdr_hooks: record.herdr_hooks.clone(),
         installs: Some(record.installs.clone().unwrap_or_default()),
         install: String::new(),
         fresh: false,
@@ -435,6 +402,43 @@ pub(crate) fn forget(home: &Path, install: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record an earlier build wrote while it ran Herdr's integration: the
+    /// `herdr_hooks` field and the `herdr:<agent>` piece. The record must
+    /// still load and keep the pieces it names; an older build's fields that
+    /// this one no longer writes are ignored, not refused.
+    #[test]
+    fn a_record_with_an_earlier_builds_herdr_hooks_still_loads() {
+        let earlier = r#"{"format":1,"installed":["hook:codex","herdr:codex"],
+            "agents":{"codex":true},
+            "herdr_hooks":{"codex":[{"event":"SessionStart","matcher":null,
+                "handler_type":"command","command":"bash '/acct/.codex/herdr-agent-state.sh' session"}]}}"#;
+        let record: Record = serde_json::from_str(earlier).expect("an earlier record loads");
+        assert_eq!(record.agent_choice("codex"), Some(true));
+        assert!(record.contains_piece("hook:codex"));
+        assert!(record.contains_piece("herdr:codex"));
+        let saved = serde_json::to_string(&Record {
+            format: FORMAT,
+            ..record
+        })
+        .expect("saves");
+        assert!(
+            !saved.contains("herdr_hooks"),
+            "the field is no longer written"
+        );
+    }
+
+    /// The `herdr:<agent>` piece is only a name now; forgetting it leaves the
+    /// operator's other pieces alone.
+    #[test]
+    fn forgetting_an_earlier_herdr_piece_keeps_the_others() {
+        let mut record: Record =
+            serde_json::from_str(r#"{"format":1,"installed":["hook:codex","herdr:codex"]}"#)
+                .expect("loads");
+        assert!(record.forget_piece("herdr:codex"));
+        assert!(record.contains_piece("hook:codex"));
+        assert!(!record.contains_piece("herdr:codex"));
+    }
 
     /// The app and a device helper on one account each keep what they put
     /// there, starting from what a build before them recorded, and one going

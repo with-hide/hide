@@ -1,0 +1,13 @@
+{
+  "bundleId": "me.grab.hide.ios",
+  "teamId": "GH6F6ZA497",
+  "minimumOS": "15.0",
+  "sdkPrefix": "iphoneos26",
+  "entitlements": {
+    "application-identifier": "GH6F6ZA497.me.grab.hide.ios",
+    "com.apple.developer.team-identifier": "GH6F6ZA497",
+    "get-task-allow": false,
+    "beta-reports-active": true,
+    "com.apple.developer.associated-domains": ["applinks:app.withhide.dev"]
+  }
+}
