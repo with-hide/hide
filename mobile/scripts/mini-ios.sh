@@ -168,7 +168,7 @@ case "$command" in
     store-shots)
         # The raw captures of the App Store screenshots (mobile/scripts/store-shots.mjs composes them). Inputs in front of
         # this script on its standard input, as for `run`: HIDE_STORE_PLAN, one tab-separated line per language and shot
-        # (language, file, capture kind (`notification` asks iOS's notification question first), seconds to wait, Apple language, Apple locale, the debug steps), HIDE_STORE_CLOCK
+        # (language, file, capture kind (`notification` asks iOS's notification question first and checks the banner is in the capture), seconds a launch may take before its steps finish, Apple language, Apple locale, the debug steps), HIDE_STORE_CLOCK
         # (the page's clock) and HIDE_STORE_APPEARANCE. The app is built here, without the tests `build` runs.
         make_relay_framework
         build_app
@@ -196,10 +196,37 @@ case "$command" in
             fi
             fix_status_bar
             xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+            marker=$(xcrun simctl get_app_container "$id" "$bundle_id" data)/tmp/hide-debug-taps
+            rm -f "$marker"
             SIMCTL_CHILD_HIDE_DEBUG_TAPS=$steps SIMCTL_CHILD_HIDE_DEBUG_NOW=${HIDE_STORE_CLOCK:-} \
                 xcrun simctl launch "$id" "$bundle_id" -AppleLanguages "($language)" -AppleLocale "$locale" > /dev/null
-            sleep "$settle"
-            xcrun simctl io "$id" screenshot "$shots/store/$lang-$file.png" 2>&1 | tail -1
+            # The app says when its last step is pressed (`done`) or that one was never found (`failed <step>`): a shot
+            # is taken only after the first, and the run stops on the second or on no word at all.
+            waited=0
+            until [[ -f "$marker" ]]; do
+                (( waited < settle + 60 )) || { printf 'store-shots: %s %s: the steps never finished\n' "$lang" "$file" >&2; exit 1; }
+                sleep 1
+                waited=$((waited + 1))
+            done
+            [[ "$(cat "$marker")" == done ]] || { printf 'store-shots: %s %s: %s\n' "$lang" "$file" "$(cat "$marker")" >&2; exit 1; }
+            target=$shots/store/$lang-$file.png
+            if [[ "$capture" == notification ]]; then
+                # The banner arrives about 2 s after the last press: a capture taken before it and one after must differ at the top.
+                xcrun simctl io "$id" screenshot "$shots/store/before-banner.png" 2>&1 | tail -1
+                sleep 4
+                xcrun simctl io "$id" screenshot "$target" 2>&1 | tail -1
+                for one in "$shots/store/before-banner.png" "$target"; do
+                    sips --cropToHeightWidth 450 1206 --cropOffset 0 0 "$one" --out "$one.top.png" > /dev/null
+                done
+                if [[ "$(shasum "$shots/store/before-banner.png.top.png" | cut -d' ' -f1)" == "$(shasum "$target.top.png" | cut -d' ' -f1)" ]]; then
+                    printf 'store-shots: %s %s: no notification banner in the capture\n' "$lang" "$file" >&2
+                    exit 1
+                fi
+                rm -f "$shots/store/before-banner.png" "$shots/store/before-banner.png.top.png" "$target.top.png"
+            else
+                sleep 4
+                xcrun simctl io "$id" screenshot "$target" 2>&1 | tail -1
+            fi
             xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         done <<< "$HIDE_STORE_PLAN"
         ls "$shots/store"

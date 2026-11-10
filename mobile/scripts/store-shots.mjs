@@ -213,15 +213,19 @@ export async function compose(rawDir, outDir, { repo = REPO, root = ROOT } = {})
   const tokens = await frameTokens(repo);
   const { chromium } = await playwright(repo);
   const work = await mkdtemp(join(tmpdir(), 'store-shots-'));
-  const browser = await chromium.launch();
+  let browser;
   const written = [];
   try {
+    browser = await chromium.launch();
     const page = await browser.newPage({ viewport: shots.canvas, deviceScaleFactor: 1 });
     for (const language of Object.keys(shots.languages)) {
       await mkdir(join(outDir, language), { recursive: true });
       for (const shot of shots.shots) {
         const capturePath = resolve(rawDir, `${language}-${shot.file}.png`);
-        await readFile(capturePath).catch(() => { throw new Error(`no capture for ${language} ${shot.file}: ${capturePath}`); });
+        const capture = await readFile(capturePath).catch(() => { throw new Error(`no capture for ${language} ${shot.file}: ${capturePath}`); });
+        // The simulator's screen is the canvas: a capture of another size is a different device or a failed screenshot, never framed.
+        const raw = pngInfo(capture);
+        if (raw.width !== shots.canvas.width || raw.height !== shots.canvas.height) throw new Error(`the capture for ${language} ${shot.file} is ${raw.width}x${raw.height}, not ${shots.canvas.width}x${shots.canvas.height}: ${capturePath}`);
         const html = join(work, `${language}-${shot.file}.html`);
         await writeFile(html, frameHtml({ shot, language, tokens, capturePath, canvas: shots.canvas }));
         await page.goto(fileUrl(html));
@@ -235,7 +239,7 @@ export async function compose(rawDir, outDir, { repo = REPO, root = ROOT } = {})
       }
     }
   } finally {
-    await browser.close();
+    await browser?.close();
     await rm(work, { recursive: true, force: true });
   }
   return written;

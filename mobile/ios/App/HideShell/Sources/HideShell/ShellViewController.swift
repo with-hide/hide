@@ -79,7 +79,9 @@ open class ShellViewController: CAPBridgeViewController {
     /// and nothing outside can tap the web view. A pairing link given as the launch value `HIDE_DEBUG_PAIR_LINK` is
     /// handed to the same inbox a link opened from outside reaches, and Connect is pressed once the page shows it.
     /// `HIDE_DEBUG_TAPS` is selectors separated by `;;`, each pressed once the page has it, in order; a selector written
-    /// `<selector>::=<text>` is filled with that text instead of pressed. `HIDE_DEBUG_NOW` is a local date and time
+    /// `<selector>::=<text>` is filled with that text instead of pressed. The file `hide-debug-taps` in the app's
+    /// temporary folder says how it went: `done` once the last one is pressed, `failed <selector>` when one is never
+    /// found, so a script that waits on it fails instead of capturing a screen the steps never reached. `HIDE_DEBUG_NOW` is a local date and time
     /// (`2026-11-09T09:41:00`) the page's clock starts from, so a capture shows the same times on every run. A release
     /// build has no such way in.
     public override func viewDidAppear(_ animated: Bool) {
@@ -116,7 +118,8 @@ open class ShellViewController: CAPBridgeViewController {
     }
 
     private func tap(_ selectors: [String], attempt: Int) {
-        guard let step = selectors.first, attempt < 120 else { return }
+        guard let step = selectors.first else { return }
+        guard attempt < 120 else { reportTaps("failed \(step)"); return }
         let parts = step.components(separatedBy: "::=")
         let selector = parts[0].trimmingCharacters(in: .whitespaces)
         guard let literal = try? JSONEncoder().encode(selector), let source = String(data: literal, encoding: .utf8) else { return }
@@ -130,10 +133,15 @@ open class ShellViewController: CAPBridgeViewController {
         let script = "(() => { const found = document.querySelector(\(source)); if (!found) return false; \(action) return true; })()"
         webView?.evaluateJavaScript(script) { [weak self] result, _ in
             let pressed = result as? Bool == true
+            if pressed && selectors.count == 1 { self?.reportTaps("done") }
             DispatchQueue.main.asyncAfter(deadline: .now() + (pressed ? 1.5 : 0.5)) {
                 self?.tap(pressed ? Array(selectors.dropFirst()) : selectors, attempt: pressed ? 0 : attempt + 1)
             }
         }
+    }
+
+    private func reportTaps(_ outcome: String) {
+        try? outcome.write(toFile: NSTemporaryDirectory() + "hide-debug-taps", atomically: true, encoding: .utf8)
     }
 
     private func pressConnect(attempt: Int) {
