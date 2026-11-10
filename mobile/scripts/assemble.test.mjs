@@ -35,7 +35,7 @@ async function build() {
   await mkdir(join(dist, 'p/5'), { recursive: true });
   await writeFile(join(dist, 'index.html'), page('loader'));
   await writeFile(join(dist, 'sw.js'), 'worker');
-  await mkdir(join(dist, '.well-known'));
+  await mkdir(join(dist, '.well-known'), { recursive: true });
   await writeFile(join(dist, '.well-known/apple-app-site-association'), '{}');
   await writeFile(join(dist, 'p/5/index.html'), page('five-built'));
   await writeFile(join(dist, 'protocols.json'), '[5]');
