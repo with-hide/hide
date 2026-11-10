@@ -401,6 +401,48 @@ mod tests {
         phones.pair(&code, UA, now).unwrap()
     }
 
+    /// A phone is reached one way at a time: a Web Push subscription and an
+    /// iOS app registration replace each other, a token Apple called gone is
+    /// dropped only while it is the one stored, and turning notifications off
+    /// clears either, on disk too.
+    #[test]
+    fn a_web_push_subscription_and_an_app_registration_replace_each_other() {
+        let (dir, mut phones) = phones();
+        let (phone, _) = pair_one(&mut phones, 1);
+        let subscription = PushSubscription {
+            endpoint: "https://web.push.apple.com/abc".into(),
+            p256dh: "key".into(),
+            auth: "auth".into(),
+        };
+        let registration = |token: &str| ApnsRegistration {
+            token: token.into(),
+            environment: hide_relay_protocol::admission::PushEnvironment::Production,
+            p256dh: "key".into(),
+            auth: "auth".into(),
+        };
+        let stored = |dir: &tempfile::TempDir| -> PhoneRecord {
+            store::read::<PhonesFile>(&store::phones_path(dir.path())).phones[0].clone()
+        };
+        assert!(phones.set_subscription(&phone.id, Some(subscription.clone())));
+        assert!(phones.set_apns(&phone.id, Some(registration("aa"))));
+        let record = stored(&dir);
+        assert_eq!((record.push, record.apns.is_some()), (None, true));
+        assert_eq!(record.notifications, Notifications::On);
+        assert!(phones.set_subscription(&phone.id, Some(subscription.clone())));
+        let record = stored(&dir);
+        assert_eq!((record.push.is_some(), record.apns), (true, None));
+        assert!(phones.set_apns(&phone.id, Some(registration("aa"))));
+        // A gone answer for a token since replaced leaves the new one.
+        assert!(phones.set_apns(&phone.id, Some(registration("bb"))));
+        assert!(!phones.drop_apns(&phone.id, "aa"));
+        assert!(phones.drop_apns(&phone.id, "bb"));
+        assert_eq!(stored(&dir).apns, None);
+        assert!(phones.set_apns(&phone.id, Some(registration("cc"))));
+        phones.set_notifications(&phone.id, Notifications::Off);
+        let record = stored(&dir);
+        assert_eq!((record.push, record.apns), (None, None));
+    }
+
     /// A phone paired before phones kept their address takes the exposure
     /// the settings name at the first load, and is written with it
     /// (amendment 12).

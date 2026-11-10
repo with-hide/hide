@@ -178,7 +178,10 @@ async fn receive(device: &mut Device, phone: &mut Session, kind: &str) -> Value 
         let Some(Message::Binary(bytes)) = next(device).await else {
             panic!("encrypted {kind}");
         };
-        if let Some(plain) = phone.recv_message(&bytes, 0).unwrap() {
+        let received = phone
+            .recv_message(&bytes, 0)
+            .unwrap_or_else(|error| panic!("waiting for {kind}: {error:?}"));
+        if let Some(plain) = received {
             let frame: Value = serde_json::from_slice(&plain).unwrap();
             if frame["type"] == kind {
                 return frame;
@@ -644,7 +647,12 @@ impl AppKey {
 }
 
 /// The push request hided sends over its device socket, read by the relay.
-async fn push_request(device: &mut Device) -> hide_relay_protocol::admission::PushRequest {
+/// Phone frames that arrive meanwhile still pass through the phone's
+/// session, whose order every later frame depends on.
+async fn push_request(
+    device: &mut Device,
+    phone: &mut Session,
+) -> hide_relay_protocol::admission::PushRequest {
     loop {
         match next(device).await {
             Some(Message::Text(text)) => {
@@ -653,7 +661,9 @@ async fn push_request(device: &mut Device) -> hide_relay_protocol::admission::Pu
                 };
                 return request;
             }
-            Some(Message::Binary(_)) => {}
+            Some(Message::Binary(bytes)) => {
+                phone.recv_message(&bytes, 0).unwrap();
+            }
             other => panic!("expected push_request, got {other:?}"),
         }
     }
@@ -721,7 +731,7 @@ async fn an_app_phone_is_notified_through_the_relay_and_a_gone_token_is_dropped(
     let mobile = std::sync::Arc::clone(&running.mobile);
     let (id, payload) = (phone_id.clone(), notice.clone());
     let sent = tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload));
-    let request = push_request(&mut device).await;
+    let request = push_request(&mut device, &mut session).await;
     assert_eq!(request.token, APP_TOKEN);
     assert_eq!(request.environment, PushEnvironment::Sandbox);
     assert!(!request.collapse.contains("w1") && !request.collapse.contains("device"));
@@ -746,7 +756,7 @@ async fn an_app_phone_is_notified_through_the_relay_and_a_gone_token_is_dropped(
     let mobile = std::sync::Arc::clone(&running.mobile);
     let (id, payload) = (phone_id.clone(), notice.clone());
     let sent = tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload));
-    let again = push_request(&mut device).await;
+    let again = push_request(&mut device, &mut session).await;
     assert_eq!(again.collapse, request.collapse);
     assert_ne!(again.id, request.id);
     // Apple called the token gone: hided drops it and does not retry.
@@ -829,5 +839,113 @@ async fn an_older_relay_keeps_the_link_and_is_never_sent_a_push_request() {
     // message, so no push request reached this relay.
     send(&mut device, &mut session, json!({"type":"ping","id":1})).await;
     receive(&mut device, &mut session, "pong").await;
+    running.stop();
+}
+
+/// A real notice reaches an iOS app phone through the relay: a letter that
+/// missed its delivery deadline in a seeded ledger becomes the operator
+/// notice, and hided's delivery pass takes the app branch, encrypting it for
+/// the registered key and handing it to the relay. Nothing calls the send
+/// directly. The pass runs once a minute, so this waits for it.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
+    use hide_relay_protocol::admission::{PushOutcome, PushResult};
+    use std::os::unix::fs::PermissionsExt;
+    const BODY: &str = "a letter body no push may carry";
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let private = |name: &str, value: Value| {
+        let path = state_dir.join(name);
+        std::fs::write(&path, value.to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let actor = |name: &str| {
+        json!({"pane_id": name, "name": name, "kind": "claude", "device_id": "local",
+            "session": format!("{name}-session")})
+    };
+    private(
+        "delivery-ledger.json",
+        json!({"version": 1, "next_id": 100, "watches": [], "letters": [{
+            "id": "letter-7", "intent": "held", "sender": actor("sender"),
+            "recipient": actor("lead"), "kind": "report", "body": BODY,
+            "state": "undelivered", "waiting_answer": false, "reply_to": null,
+            "created_at_unix_ms": now - 3_600_000, "finished_at_unix_ms": now,
+            "bell_errors": 0, "bell_sent": false, "human_notified": false,
+        }]}),
+    );
+    private(
+        "mobile.json",
+        json!({"enabled": true, "method": "relay", "push_mode": "always"}),
+    );
+    let key = AppKey::new();
+    let registration = key.registration(APP_TOKEN);
+    private(
+        "phones.json",
+        json!({"phones": [{
+            "id": "phone-1", "name": "iPhone", "credential_sha256": "0".repeat(64),
+            "paired_at_ms": now, "last_seen_ms": now, "notifications": "on",
+            "origin": "relay",
+            "apns": {
+                "token": APP_TOKEN, "environment": "sandbox",
+                "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"],
+            },
+        }]}),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir.path(), listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    let mut device = accept_answering(
+        &listener,
+        ServerMessage::Registered { push: true }.encode().unwrap(),
+    )
+    .await;
+    // The delivery pass starts a minute after the daemon; pings are answered
+    // meanwhile so the link stays up.
+    let request = tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            match device.next().await {
+                Some(Ok(Message::Ping(bytes))) => {
+                    device.send(Message::Pong(bytes)).await.unwrap();
+                }
+                Some(Ok(Message::Text(text))) => {
+                    let ClientMessage::Push(request) = ClientMessage::decode(&text).unwrap() else {
+                        panic!("expected push_request, got {text}");
+                    };
+                    return request;
+                }
+                Some(Ok(_)) => {}
+                other => panic!("relay link ended: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the delivery pass sent the notice to the relay");
+    assert_eq!(request.token, APP_TOKEN);
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: request.id,
+            result: PushOutcome::Delivered,
+        }),
+    )
+    .await;
+    let body = URL_SAFE_NO_PAD.decode(&request.payload).unwrap();
+    let plain: Value = serde_json::from_slice(&key.decrypt(&body)).unwrap();
+    // The notice names the letter's place and the computer's room, and never
+    // carries the letter's text; Apple sees neither.
+    assert_eq!(plain["state"], "letter_undelivered");
+    assert_eq!(plain["place"], "letter-7");
+    assert!(plain["room"].is_string());
+    assert!(!plain.to_string().contains(BODY));
+    let wire = ClientMessage::Push(request).encode().unwrap();
+    assert!(!wire.contains("letter-7"));
     running.stop();
 }

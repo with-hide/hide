@@ -131,7 +131,7 @@ pub struct PushSubscription {
 /// Push relay).
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ApnsRegistration {
-    /// Lowercase hex, as Apple issues it.
+    /// Hex, as Apple issues it (`admission::token_valid`).
     pub token: String,
     /// Which of Apple's two push services carries it, as the relay names it.
     pub environment: hide_relay_protocol::admission::PushEnvironment,
