@@ -256,7 +256,7 @@ jobs:
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          args=()
+          args=(--repeat-each 2 --retries 0)
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
