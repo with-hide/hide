@@ -1186,7 +1186,11 @@ mod tests {
             panic!("a shell that never holds the terminal is not a start");
         };
         assert_eq!(screen.as_deref(), Some("Last login: today"));
-        assert_eq!(waited, Duration::from_millis(300), "the wait the shell was given");
+        assert_eq!(
+            waited,
+            Duration::from_millis(300),
+            "the wait the shell was given"
+        );
         assert!(!fake.methods().contains(&"start_agent"));
     }
 
