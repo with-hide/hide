@@ -4416,6 +4416,18 @@ A failure (an unreadable marker, a refused permission, a file or folder it canno
 Removing a device, or losing its connection, leaves its `~/hide` and its agents on it; registering it again continues them.
 The consent contract does not change: the helper's scope already includes `~/hide`, and the add-device wording no longer names it.
 
+### The iOS app host
+
+`mobile/` is a Capacitor host that carries the phone web app (`web/src/mobile/`, the same build the hosted site serves) inside an iOS app, and owns nothing of the phone's behavior: pairing, the relay, conversations and replies stay in the web app.
+It owns four things.
+The web folder: the loader at the root, the current protocol's bundle and every older `p/<n>/` bundle that `mobile/retained-bundles.json` pins (path, size and SHA-256 per file, reviewed by a person; the build trusts the pin, not the site), assembled by `mobile/scripts/assemble.mjs` and served from the app's own scheme (`capacitor://localhost`), with `server.url` never set and nothing executable fetched when the app runs.
+The one runtime fact the web app reads about it, `appHost()` in `web/src/mobile/appHost.ts` (the page's scheme is `capacitor:`): the current protocol registers no service worker, shows no Home Screen install step, words the version screen for the app when the computer is ahead of every bundle in it, and draws a link that is not `https` as plain text, since the app opens nothing else outside.
+Those properties hold for the current protocol only: the retained older bundles (`p/1`, `p/3`, `p/4`) predate `appHost()` and keep the behavior they shipped with, so a service worker registration or an install hint in one of them is not a defect of the app host.
+The bridge: Capacitor's script message handler answers every frame of the page without asking which frame or origin called, and the phone draws agent-made HTML in a frame (`look-frame.html`), so `BridgeGate` replaces it and passes on only a call from the main frame of the app's own origin that names a plugin in a fixed list (`BridgeGate.appPlugins`), while `NavigationPolicy` is the one rule for both ways a page can leave: a navigation goes on only inside the app's origin or to an `https` address, and `window.open` or a link with a target makes no new window and opens outside only for `https`; every other scheme is cancelled.
+The page routing: `PhoneRouter` answers `/p/<n>/` with that bundle's page, where Capacitor's own router would answer the root page for every address without a file name.
+The native code is the local Swift package `mobile/ios/App/HideShell`, whose tests load a real web view and prove a call from a sandboxed frame is refused (and that the same page reaches an ungated handler), and the `AppTests` target hosted in the app, which loads the app's own `ShellViewController` and proves the app installs that gate (the test fails if the install line goes), because a package test over `BridgeGate` alone would pass with the gate unused; the keychain, QR scan, links and push belong to later pieces and add their plugins to that list as they link them.
+The build is in [BUILD.md](BUILD.md#the-ios-app).
+
 ### The desktop host
 
 `desktop/` is the Electron app this repository ships: it shows the web shell hided serves in its own window, holds no UI state and embeds no daemon.

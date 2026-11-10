@@ -1,0 +1,2 @@
+# The assembled web folder Capacitor serves: `pnpm --dir mobile bundles` rebuilds it.
+www/

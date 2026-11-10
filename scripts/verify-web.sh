@@ -2,7 +2,7 @@
 # The web and desktop entrypoint for verification, as plain argv.
 #
 # Usage: verify-web.sh [install [--ignore-scripts | holder] | PACKAGE ACTION [args...]]
-# PACKAGE: web, desktop, relay-protocol (typecheck only). ACTION: typecheck, lint, test, build, e2e, e2e-list,
+# PACKAGE: web, desktop, mobile (test only), relay-protocol (typecheck only). ACTION: typecheck, lint, test, build, e2e, e2e-list,
 # bundle and build:phone (web only), playwright-install,
 # package and electron-install (desktop only).
 #
@@ -44,6 +44,10 @@ if (( $# > 0 )); then
     shift 2
     case "$package" in
         web|desktop) directory=$package ;;
+        mobile)
+            [[ "$action" == test ]] || { printf 'mobile supports test only\n' >&2; exit 2; }
+            directory=$package
+            ;;
         relay-protocol)
             [[ "$action" == typecheck && $# == 0 ]] || { printf 'relay-protocol supports typecheck only\n' >&2; exit 2; }
             exec pnpm --dir web exec tsc -p ../hide-relay-protocol/tsconfig.json

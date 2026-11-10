@@ -9,6 +9,7 @@ import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr } from "./ScanQr";
 import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
+import { appHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
 import { PHONE_PROTOCOL } from "./phoneVersion";
@@ -63,7 +64,7 @@ function Loader() {
       }).catch(() => setError("qrError"));
     };
     window.addEventListener("hashchange", followQr);
-    if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
+    if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
     return () => window.removeEventListener("hashchange", followQr);
   }, []);
   useEffect(() => {
@@ -107,7 +108,7 @@ function Loader() {
     void open();
     return () => { controller.abort(); if (timer) clearTimeout(timer); };
   }, [target]);
-  if (version && target) return <VersionScreen t={t} name={target.name} protocol={version.device} app={version.supported.join(", ")} />;
+  if (version && target) return <VersionScreen t={t} name={target.name} protocol={version.device} app={version.supported.join(", ")} appBehind={appHost() && version.device > Math.max(...version.supported)} />;
   if (pair) return <Landing note={<>{t("mobile.relay.encrypted")}<br />{t("mobile.pair.expiry")}</>}>
     <DeviceIdentity name={pair.name} large />
     <p className="max-w-(--size-mobile-copy) text-subhead leading-relaxed text-subtle-foreground">{t("mobile.pair.description")}</p>

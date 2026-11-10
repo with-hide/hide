@@ -24,7 +24,7 @@ import { GFM, parser } from "@lezer/markdown";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { drawMermaid, isMermaidInfo, showMermaidSvg, watchPalette, type MermaidDrawing } from "../markdownMermaid";
-
+import { appHost } from "./appHost";
 const markdown = parser.configure(GFM);
 
 /** The syntax the drawing stands in for: `**`, `#`, `-`, `>`, backticks, brackets, pipes, a fence's language. */
@@ -292,10 +292,13 @@ function parsedAddress(raw: string): URL | null {
   }
 }
 
-/** The page an address names, when it is an http or https one; never a script, a file or a relative path. */
+/**
+ * The page an address names, when it is an http or https one; never a script, a file or a relative path. The iOS app
+ * hands only https addresses to the system, so there an http link is no link rather than one that does nothing.
+ */
 function webAddress(raw: string): string | null {
   const url = parsedAddress(raw);
-  return url && (url.protocol === "http:" || url.protocol === "https:") ? url.href : null;
+  return url && (url.protocol === "https:" || (url.protocol === "http:" && !appHost())) ? url.href : null;
 }
 
 /**

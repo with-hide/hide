@@ -134,10 +134,11 @@ export function DeviceConnecting({ t, name, error, onChoose }: { t: TFunction; n
   </Landing>;
 }
 
-export function VersionScreen({ t, name, protocol, app }: { t: TFunction; name: string; protocol: number | null; app: string }) {
+/** `appBehind`: this is the iOS app and the computer speaks a newer protocol than any bundle inside it, so the app is what needs updating. */
+export function VersionScreen({ t, name, protocol, app, appBehind = false }: { t: TFunction; name: string; protocol: number | null; app: string; appBehind?: boolean }) {
   return <Landing>
     <DeviceIdentity name={name} />
-    <h1 className="max-w-(--size-mobile-copy) whitespace-normal break-keep text-headline font-semibold leading-relaxed wrap-anywhere">{t("mobile.relay.updateTitle")}</h1>
+    <h1 className="max-w-(--size-mobile-copy) whitespace-normal break-keep text-headline font-semibold leading-relaxed wrap-anywhere">{t(appBehind ? "mobile.relay.updateAppTitle" : "mobile.relay.updateTitle")}</h1>
     <dl className="flex gap-xxl text-body text-muted-foreground" aria-label={t("mobile.relay.versions", { app, device: protocol ?? "?" })}>
       <div className="flex flex-col gap-xs"><dt>{t("mobile.relay.phoneVersion")}</dt><dd className="font-mono text-subtle-foreground">{app}</dd></div>
       <div className="flex flex-col gap-xs"><dt>{t("mobile.relay.deviceVersion")}</dt><dd className="font-mono text-subtle-foreground">{protocol ?? "?"}</dd></div>
