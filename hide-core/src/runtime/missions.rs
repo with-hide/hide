@@ -1716,6 +1716,20 @@ impl Runtime {
                     &node,
                     &patch,
                 )?;
+                // A worker whose spawn is under way has started the node, so
+                // a hold set now could not stop it.
+                if matches!(patch.hold, Some(Some(_)))
+                    && ledger.as_deref().is_some_and(|ledger| {
+                        let intent = format!("{id}:{node}");
+                        ledger.spawns.iter().any(|spawn| {
+                            !spawn.completed
+                                && spawn.mission.as_deref() == Some(id.as_str())
+                                && spawn.intent == intent
+                        })
+                    })
+                {
+                    return Err(crate::coordination::refusal("mission_node_started", &node));
+                }
                 let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
                 let index = current
                     .nodes
@@ -2494,6 +2508,17 @@ impl Runtime {
     /// project's that may not run it (`admit_elsewhere`), or when it is none
     /// of the operator's worker candidates,
     /// and otherwise the mission whose cap the ledger checks.
+    /// Whether the node `intent` names in `mission` is held now
+    /// (`MissionNode::hold`): its worker's spawn is refused at its admission
+    /// and again where its place is reserved (`delivery::worker`).
+    pub(crate) fn mission_intent_held(&self, mission: &str, intent: &str) -> bool {
+        self.missions
+            .book
+            .get(mission)
+            .and_then(|mission| mission.intent_node(intent))
+            .is_some_and(|node| node.hold.is_some())
+    }
+
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,

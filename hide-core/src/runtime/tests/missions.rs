@@ -10669,6 +10669,9 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
     )
     .unwrap_err();
     assert!(refused.contains("mission_node_held"), "{refused}");
+    // The same rule stops it again where its place is reserved.
+    assert!(runtime.mission_intent_held("mission-1", "mission-1:docs"));
+    assert!(!runtime.mission_intent_held("mission-1", "mission-1:fix"));
     command(&mut runtime, "sender", json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
         {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
          "criteria": ["the parser keeps v1 files"],
