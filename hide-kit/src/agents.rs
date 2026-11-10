@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide` and `hide-mission`;
+//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-mission` and `hide-issue`;
 //!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stubs stay while any of them is on;
@@ -239,11 +239,12 @@ pub const GUIDE_SKILL: Skill = Skill {
     // (PRD agent-profiles D-33, D-34). Version 8 routes complex work,
     // planning and review requests to missions (PRD hide-task-skill-merge B7, B8).
     // Version 9 proposes a mission before starting complex work.
+    // Version 10 adds the row that sends a bug in Hide itself to `hide-issue`.
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 9,
+    version: 10,
 };
 
 /// Routes work that needs a Conductor to `hide mission help`, leaving
@@ -258,10 +259,20 @@ pub const MISSION_SKILL: Skill = Skill {
     version: 3,
 };
 
+/// Routes a bug in Hide itself to `hide issue help`, which owns the procedure
+/// and the bug form's template, so a change to either reaches every install
+/// with the binary and not with the next kit pass.
+pub const ISSUE_SKILL: Skill = Skill {
+    name: "hide-issue",
+    description: "Report a bug in Hide itself to Hide's GitHub issues, with the exact error, versions, steps and log lines. Use when a hide command, pane, tab or screen fails in a way you or the operator saw and the cause is Hide, not the project's own code.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide issue help` and follow what it prints: when a bug is worth reporting, what to collect, the bug form's template, what to remove before it leaves the machine, and the operator's yes before it is filed.",
+    version: 1,
+};
+
 /// Every stub Hide writes; each skill folder holds all of them. A new stub
 /// is one more entry here and nothing else: the observe, write and remove
 /// passes read the array.
-pub const SKILLS: [Skill; 2] = [GUIDE_SKILL, MISSION_SKILL];
+pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, MISSION_SKILL, ISSUE_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.

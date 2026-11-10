@@ -188,4 +188,5 @@ hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
   If any applies, first ask in one line: Shall I run this as a mission, or do it directly?
   Wait for the operator's answer and follow it: a mission means `hide mission help`, direct work means doing it yourself.
   With none of these signals, work directly without asking.
+- Hide itself misbehaves, such as a crash, a command that fails or answers wrongly for no reason of yours, or a pane or screen that breaks: run `hide issue help` and follow it (the `hide-issue` skill points there). It collects the exact error, the versions, the steps and the log lines into the bug template, shows the operator the report and files it in with-hide/hide only after their yes.
 - A worker or reviewer of a mission node: record your lines with `hide mission record`, as `hide mission help` says under For workers and checkers. A worker, reviewer or verifier can open, with `hide request show <id>`, a letter between the Conductor and another agent of its node; it opens no other agent's letters.

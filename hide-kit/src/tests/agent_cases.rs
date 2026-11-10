@@ -2,7 +2,7 @@
 //! the skill stub and the guidance hooks, against a private HOME.
 
 use super::*;
-use crate::agents::{ADAPTERS, GUIDE_SKILL, MISSION_SKILL, RETIRED_SKILLS, SKILLS};
+use crate::agents::{ADAPTERS, GUIDE_SKILL, ISSUE_SKILL, MISSION_SKILL, RETIRED_SKILLS, SKILLS};
 
 // Frozen output of the previous build, independent of the retirement table.
 const TASK_V1_TEXT: &str = "---\nname: hide-task\ndescription: \"Carry a task yourself in Hide and keep its steps: what each delivers, what it waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the steps reviewed. To conduct several agents carrying PRs as a group, use hide-mission instead.\"\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nFirst check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the task's contract, with the commands, the steps' shape, when to put the steps up for review with `--ask`, how to approve or drop them on the operator's words, and how to keep them current.\n";
@@ -268,7 +268,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@9:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@10:"));
     assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
@@ -298,6 +298,22 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
     }
     assert!(!MISSION_SKILL.text().contains("hide task help"));
     assert!(MISSION_SKILL.text().contains("<!-- hide-skill@3:"));
+    // The issue stub names the bug and sends the agent to the help that owns
+    // the procedure and the template.
+    assert!(ISSUE_SKILL.text().starts_with("---\nname: hide-issue\n"));
+    assert!(
+        ISSUE_SKILL
+            .text()
+            .contains("description: \"Report a bug in Hide itself")
+    );
+    assert!(ISSUE_SKILL.text().contains("run `hide issue help`"));
+    assert!(ISSUE_SKILL.text().contains("<!-- hide-skill@1:"));
+    // The session-start table sends the agent to it.
+    assert!(
+        GUIDE_SKILL
+            .text()
+            .contains("`hide issue help`, which the `hide-issue` skill")
+    );
 }
 
 /// The retired entry must match the file shipped before the merge exactly.
@@ -338,7 +354,7 @@ fn three_installed_stubs_converge_to_two_in_one_update() {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         names.sort();
-        assert_eq!(names, ["hide", "hide-mission"]);
+        assert_eq!(names, ["hide", "hide-issue", "hide-mission"]);
         assert_eq!(
             std::fs::read_to_string(root.join("hide-mission/SKILL.md")).unwrap(),
             MISSION_SKILL.text()
