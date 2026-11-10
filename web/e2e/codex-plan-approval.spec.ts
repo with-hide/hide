@@ -115,6 +115,11 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     const rollout = path.join(sessions, `rollout-2026-10-07T01-00-00-${SESSION}.jsonl`);
     fs.writeFileSync(rollout, planWaiting(cwd));
 
+    // A demand is drawn even under a folded checkout. Open the checkout by
+    // its disclosure state so lifting the demand cannot hide the agent row.
+    const toggle = page.locator("nav[data-sidebar] [data-project]", { hasText: "plan" }).locator("[data-checkout-toggle]");
+    if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     const row = page.locator(`nav[data-sidebar] [data-project] [data-pane="${pane}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
 
@@ -132,12 +137,8 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
 
     // B4: approving starts the next turn; once the engine's state moves, the row
     // leaves Needs You.
-    // A project of one agent that no longer waits folds to its project row, so the operator opens it to see the agent's row.
-    const toggle = page.locator("nav[data-sidebar] [data-project]", { hasText: "plan" }).locator("[data-checkout-toggle]");
     fs.appendFileSync(rollout, event("task_started", "turn-2", { collaboration_mode_kind: "default" }) + person("Implement the plan."));
     await drawTitle(daemon, pane, "working");
-    await expect(row.or(toggle)).toBeVisible();
-    if (!(await row.isVisible())) await toggle.click();
     await expect(row.locator('[data-mark="going"]')).toBeVisible({ timeout: 20_000 });
     await drawTitle(daemon, pane, "ended");
     // A state not read yet shows no wait either, so the row's absence counts

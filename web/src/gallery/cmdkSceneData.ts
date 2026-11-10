@@ -30,7 +30,7 @@ export const PARENT = agent("p-parent", "codex workspace-write 원인 조사", {
 export const CHILD = agent("p-child", "mailbox 쓰기 명령 sandbox 오류 해결", { group: "done", status_code: "done", activity: "stopped", emphasized: true, lineage_parent_pane_id: "p-parent", request: requestWith("result", [PR_275]) });
 export const OTHER = agent("p-dag", "그래프 다이어그램 DAG 시각화");
 
-const pane = (id: string) => ({ id, herdr_label: null, terminal_title: null, cwd: "/repo", status_code: "unknown", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null });
+const pane = (id: string) => ({ id, engine_label: null, terminal_title: null, cwd: "/repo", status_code: "unknown", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null });
 const tab = (checkout: string, panes: string[]) => ({ id: `t-${checkout}`, workspace_id: "w1", checkout_id: checkout, label: "Tab", empty: false, delegated: false, panes: panes.map(pane) });
 
 export const RICH = {

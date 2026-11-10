@@ -124,7 +124,8 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent={sent.state}>
           <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-done" />
           <span className="min-w-0 truncate font-semibold text-mission-done" title={sent.text}>{sent.text}</span>
-          <span className="shrink-0 text-caption text-muted-foreground">· {t(sent.word)}</span>
+          <span className="min-w-0 truncate text-caption text-muted-foreground" data-mission-banner-hold={mission.answer?.hold ?? "other"}>· {t(sent.word)}</span>
+          {sent.canNow ? <Button size="sm" variant="ghost" onClick={() => actions.answerMission(mission.id, key, { now: true })} data-mission-now="true">{t("mission.banner.now")}</Button> : null}
         </p>
       ) : (
         <div className="flex min-w-0 flex-col gap-sm">

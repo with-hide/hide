@@ -878,7 +878,7 @@ fn decide_batch(
         BatchDecision::Discard => {
             let discarded = match engine.as_deref() {
                 Some(engine) => branch_decision::discard(engine, link.as_ref(), place, own, tip),
-                None => Err("herdr_unavailable".to_owned()),
+                None => Err("engine_unavailable".to_owned()),
             };
             match discarded {
                 Ok(()) => {

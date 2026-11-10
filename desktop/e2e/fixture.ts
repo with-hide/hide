@@ -633,6 +633,14 @@ async function shellWaitSides(app: ElectronApplication): Promise<unknown> {
  * operator's click would. Throws when the page does not take it. The caller
  * waits for the host to show the page first: a page focused while its view
  * is hidden does not keep the keyboard once shown.
+ *
+ * A focus the page gets while its document is loading is not an operator's:
+ * the host reads it as the navigation taking the keyboard and gives it back
+ * (docs/BROWSER_DISPLAYS.md, Keyboard), so the shell would never hear the
+ * page take it. The page's title can be known before its load stops, and a
+ * page that refreshes itself loads again every second, so this waits for the
+ * load to stop and focuses in the same turn of the host's loop, where no new
+ * load can have begun.
  */
 export async function focusPage(app: ElectronApplication, page: { url: string } | { title: string }): Promise<void> {
   await app.evaluate(async ({ app: electron, BrowserWindow }, page) => {
@@ -654,6 +662,15 @@ export async function focusPage(app: ElectronApplication, page: { url: string } 
     });
     if (!view) throw new Error(`no page ${JSON.stringify(page)} in the window`);
     const contents = (view as unknown as { webContents: Electron.WebContents }).webContents;
+    if (contents.isLoading()) {
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error(`page ${JSON.stringify(page)} never stopped loading`)), 10_000);
+        contents.once("did-stop-loading", () => {
+          clearTimeout(deadline);
+          resolve();
+        });
+      });
+    }
     window.webContents.focus();
     contents.focus();
     if (!contents.isFocused()) throw new Error(`page ${JSON.stringify(page)} did not take the keyboard in the key window`);

@@ -562,11 +562,19 @@ impl AgentSleepStore {
 
     /// Moves each awake agent's change stamp on one machine when its state
     /// changed or it appeared, and drops the stamps of that machine's panes
-    /// that hold no agent now. Returns whether anything moved.
+    /// the engine's topology says are gone. Returns whether anything moved.
+    ///
+    /// A pane that holds no agent now keeps its stamp, and with it its last
+    /// look: a restarted engine lists an agent only once its program shows
+    /// again, so the agent list is empty or incomplete for a while and is
+    /// never an eviction source (as for the read records,
+    /// `agent_state::prune_read_records`). `live_pane_ids` is the topology
+    /// of the same read; none keeps every stamp.
     pub fn stamp(
         &mut self,
         agents: &[SidebarAgentSnapshot],
         scope: SleepScope<'_>,
+        live_pane_ids: Option<&HashSet<String>>,
         now_unix_ms: u64,
     ) -> bool {
         let mut changed = false;
@@ -605,6 +613,7 @@ impl AgentSleepStore {
             !scope.holds(pane_id)
                 || present.contains(pane_id.as_str())
                 || self.records.contains_key(pane_id)
+                || live_pane_ids.is_none_or(|live| live.contains(pane_id))
         });
         changed | (self.stamps.len() != before)
     }
@@ -839,7 +848,7 @@ mod tests {
     /// A store that first saw `agents` at time zero.
     fn stamped(agents: &[SidebarAgentSnapshot]) -> AgentSleepStore {
         let mut store = AgentSleepStore::default();
-        store.stamp(agents, SleepScope::Core, 0);
+        store.stamp(agents, SleepScope::Core, None, 0);
         store
     }
 
@@ -904,9 +913,9 @@ mod tests {
         let mut store = stamped(&agents);
         // A relaunch reports a state for a moment.
         agents[0].activity = "unknown".to_owned();
-        assert!(store.stamp(&agents, SleepScope::Core, 20 * HOUR));
+        assert!(store.stamp(&agents, SleepScope::Core, None, 20 * HOUR));
         agents[0].activity = "stopped".to_owned();
-        assert!(store.stamp(&agents, SleepScope::Core, 20 * HOUR));
+        assert!(store.stamp(&agents, SleepScope::Core, None, 20 * HOUR));
         assert!(due_at(&store, &agents, 25 * HOUR - 1).is_empty());
         assert_eq!(due_at(&store, &agents, 25 * HOUR), ["w1:p1"]);
 
@@ -919,11 +928,35 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_without_an_agent_keeps_its_last_look_until_the_pane_itself_is_gone() {
+        let mut agents = [agent("w1:p1")];
+        agents[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = stamped(&agents);
+        store.mark_seen(["w1:p1"], 10 * HOUR);
+        let live = HashSet::from(["w1:p1".to_owned()]);
+
+        // A restarted engine lists an agent only once its program shows again.
+        assert!(!store.stamp(&[], SleepScope::Core, Some(&live), 11 * HOUR));
+        agents[0].activity = "unknown".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, Some(&live), 12 * HOUR));
+        agents[0].activity = "stopped".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, Some(&live), 13 * HOUR));
+        assert!(due_at(&store, &agents, 34 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, 34 * HOUR), ["w1:p1"]);
+
+        // No topology to judge by evicts nothing; one that lacks the pane does.
+        assert!(!store.stamp(&[], SleepScope::Core, None, 14 * HOUR));
+        assert!(store.stamps.contains_key("w1:p1"));
+        assert!(store.stamp(&[], SleepScope::Core, Some(&HashSet::new()), 15 * HOUR));
+        assert!(store.stamps.is_empty());
+    }
+
+    #[test]
     fn without_a_conversation_read_a_state_change_restarts_the_clock() {
         let mut agents = [agent("w1:p1")];
         let mut store = stamped(&agents);
         agents[0].completed = true;
-        assert!(store.stamp(&agents, SleepScope::Core, 20 * HOUR));
+        assert!(store.stamp(&agents, SleepScope::Core, None, 20 * HOUR));
         assert!(due_at(&store, &agents, 24 * HOUR).is_empty());
         assert_eq!(due_at(&store, &agents, 44 * HOUR), ["w1:p1"]);
     }

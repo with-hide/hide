@@ -107,7 +107,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       const tab = checkout.tabs[0]!;
       const tabId = tab.id;
       if (!tabId) throw new Error("the record scene's checkout has no tab id");
-      checkout.strip = [{ id: `strip:${tabId}`, kind: "herdr", source_id: tabId, label: tab.label ?? tabId, preview: false }];
+      checkout.strip = [{ id: `strip:${tabId}`, kind: "engine", source_id: tabId, label: tab.label ?? tabId, preview: false }];
       rest.pane_layouts = [{
         workspace_id: project.id, tab_id: tabId, focused_pane_id: "h-a1", zoomed: false,
         root: { type: "split", direction: "right", ratio: 0.55, first: { type: "pane", pane_id: "h-a1" }, second: { type: "split", direction: "down", ratio: 0.5, first: { type: "pane", pane_id: "h-a1c1" }, second: { type: "pane", pane_id: "h-a1c2" } } },

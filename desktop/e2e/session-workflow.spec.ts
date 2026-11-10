@@ -7,7 +7,7 @@ import { setAgentState } from "../../web/e2e/fixture-agents";
 import { agentIn, showTabOf, withControl } from "../../web/e2e/daemon-actions";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
-import { startWork } from "../../web/e2e/session-work-fixture";
+import { askPermission, startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
@@ -21,11 +21,13 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
   const failures: unknown[] = [];
   try {
     // The parent runs a session labelled from its start, and delegates a child running a labelled session of its own.
+    const childTask = "자식의 긴 한국어 검증 요청과 회귀 결과 확인", childAsk = "검증 명령 실행 권한이 필요합니다";
     const started = await startWork(fixture, daemon,
       { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" },
-      { task: "자식의 긴 한국어 검증 요청과 회귀 결과 확인", progress: "검증 명령 실행 권한이 필요합니다" });
+      { task: childTask, progress: "자식이 검증 명령을 준비하는 중" });
     const parent = started.pane, child = started.child!.pane, parentSession = started.session;
-    await setAgentState(daemon, child, "blocked");
+    // The child's request is its next turn, asked at a permission prompt (see `askPermission`).
+    await askPermission(fixture, daemon, child, started.child!.session, { task: childTask, progress: childAsk });
     // The parent's row says what its blocked child asks in the child's label line, which the core
     // lays on the parent's raised ask once the label proves the child's session. The page draws
     // only what the snapshot carries, so wait for the snapshot, not for the page's own timeout:
@@ -34,7 +36,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await dumpOnFailure("the parent's and the child's agent rows",
       () => withControl(daemon, (control) => control.until((rest) => ({ parent: agentIn(rest, parent), child: agentIn(rest, child) }), "the two agent rows", 2_000)),
       () => withControl(daemon, (control) => control.until(
-        (rest) => agentIn(rest, parent)?.raised?.find((ask) => ask.raised_pane_id === child)?.what || undefined,
+        (rest) => agentIn(rest, parent)?.raised?.find((ask) => ask.raised_pane_id === child)?.what === childAsk || undefined,
         `${parent}'s raised ask from ${child} carrying the child's label line`, 30_000)));
     // Drawing the child's prompt types into its pane. Inspect the parent's
     // header with the parent's tab selected, as the scenario requires.
@@ -78,7 +80,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       await expect(treeButton).toBeFocused();
       // The raised child asks through its root's row, folded under it, with its question as the row's second line (agent-hierarchy-screens B1, B2; sidebar-task-lens B7, B8, B10).
       const tasks = await showTasks(page);
-      await expect(tasks.locator(`[data-task-group="needs_you"] [data-task-row="${parent}"] [data-task-line="needs_you"]`)).toContainText("검증 명령 실행 권한이 필요합니다");
+      await expect(tasks.locator(`[data-task-group="needs_you"] [data-task-row="${parent}"] [data-task-line="needs_you"]`)).toContainText(childAsk);
       await expect(tasks.locator(`[data-task-row="${child}"], [data-task-child="${child}"]`)).toHaveCount(0);
       // A folded parent counts no children (status-marks B35).
       await expect(tasks.locator(`[data-task-row="${parent}"] [data-task-children]`)).toHaveCount(0);
