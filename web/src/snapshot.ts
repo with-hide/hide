@@ -1496,6 +1496,8 @@ export type DecisionView = {
   label: string;
   /** The operator has not looked at it since it was opened; absent once they have. */
   unseen?: boolean;
+  /** It closed since the decision linked it: the row stays and opens it again from what the link kept (`display_id` is then the link's). */
+  closed?: boolean;
   /** Who linked it (`contracts/snapshot-wire-enums.json`: `mission_decision_view_by`). */
   by: "conductor" | "worker";
   /** The pane of the agent that opened it, while that agent is open. */

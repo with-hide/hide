@@ -125,9 +125,18 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
     await expect(node).toHaveAttribute("data-node-status", "working");
     // Where a moving node is now is the summary's, beside the map, not the card's (PRD mission-tool B16, B19).
     await expect(map.locator('[data-mission-summary-line="api"]')).toHaveText("엔드포인트 작성 중");
-    await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
+    await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택", "--option", "API PR 위에 쌓기", "--option", "API PR 머지 뒤 main에서 시작하기", "--recommend", "1"]);
     // The decision is the operator's turn, above the map.
-    await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
+    const decision = map.locator('[data-mission-turn] [data-mission-banner="decision"]');
+    await expect(decision).toContainText("화면 PR 방식 선택");
+    // Its choices are radio rows: the recommended one is tagged, a press only marks a row, and 답하기 sends (PRD mission-human-gate B19).
+    await expect(decision.locator("[data-mission-option]")).toHaveCount(2);
+    await expect(decision.locator('[data-mission-option="1"]')).toHaveAttribute("data-mission-recommended", "true");
+    await expect(decision.locator("[data-mission-answer-send]")).toBeDisabled();
+    await decision.locator('[data-mission-option="2"]').click();
+    await expect(decision.locator('[data-mission-option="2"]')).toHaveAttribute("aria-checked", "true");
+    await expect(decision.locator("[data-mission-answer-send]")).toBeEnabled();
+    await expect(decision).toHaveAttribute("data-mission-answer", "open");
     // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice,
     // and the core's events for it, which the core sends for the mission card in front of the slot (B31).
     await node.click();

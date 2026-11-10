@@ -5,7 +5,8 @@
 // rejected (running, with the search fix's check failed and one reviewer's
 // rejection, its short reason first), decision (a decision, a failed node whose worker ended, raised to the
 // operator with its PR's CI failure beside the choices, a stuck worker and an outside PR closed unmerged in the
-// operator's turn), decision-views (a decision about screens with the Views linked to it to look at), decision-sent (its answer waiting
+// operator's turn; its choices radio rows, one long enough to wrap, the recommended one tagged), decision-views (a decision about
+// screens with the Views linked to it to look at: one seen, one not looked at, one closed that opens again), decision-sent (its answer waiting
 // for the Conductor's turn), decision-unreadable (its answer waiting on a
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // the engine confirming it), stack (the merge order), no-conductor, stale, failed
@@ -331,13 +332,14 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     question: looking
       ? { key: 3, why: "화면이 바뀌는 PR이라 머지 전에 직접 봐야 해요", options: ["머지해도 됨", "고칠 점 있음"], recommend: null, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : state === "decision"
-      ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
+      ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기: 목록 화면은 지금 올리고, 검색 화면은 API가 머지된 뒤 따로 올려요"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : null,
     answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting" } : null,
     answer_failed: shown === "decision-unreadable" ? "session_unreadable" : null,
     decision_views: looking ? [
       { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", kind: "browser" as const, label: "전후 비교 · screens.html", by: "conductor" as const },
       { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d8", kind: "file" as const, label: "리뷰 요약.md", unseen: true, by: "worker" as const },
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d9", kind: "file" as const, label: "이전 시안.png", closed: true, by: "worker" as const },
     ] : undefined,
     delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
     created_at_unix_ms: now - 320 * MINUTE,

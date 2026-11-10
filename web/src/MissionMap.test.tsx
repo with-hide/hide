@@ -122,7 +122,7 @@ const asked = (extra: Partial<Mission> = {}): Mission => mission({
   ...extra,
 });
 
-it("shows the decision with why, the node it stopped, its wait and the choices, and sends a pressed choice once (B25, B26, B30)", async () => {
+it("shows the decision with why, the node it stopped, its wait and the choices as radio rows, and sends a marked choice once on 답하기 (B25, B26, B30; PRD mission-human-gate B19)", async () => {
   const map = await mount({ items: [asked()] });
   try {
     const banner = map.q('[data-mission-banner="decision"]')!;
@@ -130,13 +130,22 @@ it("shows the decision with why, the node it stopped, its wait and the choices, 
     expect(banner.querySelector("[data-mission-banner-why]")?.textContent).toBe("Two PRs touch the same file");
     expect(banner.querySelector("[data-mission-banner-node]")?.textContent).toBe("API screen · awaiting decision");
     expect(banner.querySelector("[data-mission-banner-waited]")?.textContent).toBe("waiting 2m");
-    expect([...banner.querySelectorAll("[data-mission-option]")].map((button) => button.textContent)).toEqual(["Stack on the API PRRecommended", "Wait for the API PR to merge"]);
+    expect([...banner.querySelectorAll("[data-mission-option]")].map((radio) => radio.closest("label")?.textContent)).toEqual(["Stack on the API PRRecommended", "Wait for the API PR to merge"]);
     expect(banner.querySelector("[data-mission-recommended]")?.getAttribute("data-mission-option")).toBe("1");
+    // Nothing is marked yet, so 답하기 cannot send; a press on a row only marks it.
+    const send = () => map.q("[data-mission-answer-send]") as HTMLButtonElement | null;
+    expect(send()?.textContent).toBe("Answer");
+    expect(send()?.disabled).toBe(true);
+    await act(async () => (banner.querySelector('[data-mission-option="1"]') as HTMLElement).click());
     await act(async () => (banner.querySelector('[data-mission-option="2"]') as HTMLElement).click());
+    expect(map.events.some((event) => event.kind === "mission_answer")).toBe(false);
+    expect(banner.querySelector('[data-mission-option="2"]')?.getAttribute("aria-checked")).toBe("true");
+    await act(async () => send()!.click());
     expect(map.events.filter((event) => event.kind === "mission_answer")).toEqual([{ schema_version: 2, kind: "mission_answer", payload: { mission: "mission-1", key: 3, option: 2 } }]);
     // Sent at once: the choice with a check, nothing left to press twice.
     expect(map.q("[data-mission-banner-sent]")?.textContent).toBe("Wait for the API PR to merge· Conductor is reading");
     expect(map.q("[data-mission-option]")).toBeNull();
+    expect(send()).toBeNull();
     // A working Conductor reads it on its next turn.
     await map.rerender(asked({ answer: { key: 3, text: "Wait for the API PR to merge", option: 2, state: "waiting" } }));
     expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("waiting");
@@ -190,6 +199,7 @@ it("draws a pressed choice as sent for five seconds and then the core's state ag
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     await act(async () => map.q('[data-mission-option="2"]')!.click());
+    await act(async () => map.q("[data-mission-answer-send]")!.click());
     const sent = () => map.q("[data-mission-banner-sent]");
     expect(sent()?.getAttribute("data-mission-banner-sent")).toBe("sending");
     expect(sent()?.textContent).toContain("Wait for the API PR to merge");
@@ -1169,6 +1179,28 @@ it("says in 내 차례 how many letters the Conductor has not got and what to do
   } finally { await map.unmount(); }
 });
 
+it("keeps a looked-at or closed View on the decision, marked so, and opens a closed one again from its link in one event (PRD mission-human-gate B20)", async () => {
+  const views = [
+    { device_id: "mac", checkout_path: "/repo", display_id: "d7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d8", kind: "file" as const, label: "notes.md", closed: true, by: "worker" as const },
+  ];
+  const map = await mount({ items: [asked({ decision_views: views })] });
+  await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, navigator: { ...state.rest!.navigator!, workspaces: [{ id: "w", device_id: "mac", checkouts: [{ id: "c", path: "/repo" }] }] } } as unknown as SnapshotRest })));
+  try {
+    const rows = [...map.container.querySelectorAll<HTMLElement>("[data-mission-banner-view]")];
+    expect(rows.map((row) => row.dataset.missionBannerViewState)).toEqual(["seen", "closed"]);
+    expect(rows[0]?.querySelector('[aria-label="Seen"]')).not.toBeNull();
+    expect(rows[1]?.textContent).toContain("Closed");
+    expect(rows[1]?.textContent).toContain("Reopen ›");
+    await act(async () => rows[1]!.click());
+    expect(map.events.filter((event) => event.kind === "mission_view_reopen")).toEqual([{ schema_version: 2, kind: "mission_view_reopen", payload: { mission: "mission-1", key: 3, device_id: "mac", checkout_path: "/repo", display_id: "d8" } }]);
+    // An open one comes forward as any View does, with no reopen.
+    await act(async () => rows[0]!.click());
+    expect(map.events.filter((event) => event.kind === "mission_view_reopen")).toHaveLength(1);
+    expect(map.events.at(-1)).toMatchObject({ kind: "focus_checkout", payload: { workspace_id: "w", checkout_id: "c", display_id: "d7" } });
+  } finally { await map.unmount(); }
+});
+
 it("lists the Views linked to the decision, seen or not, each bringing its View forward, and offers only a quiet 자료 요청 with none", async () => {
   const views = [
     { device_id: "mac", checkout_path: "/repo", display_id: "d7", kind: "browser" as const, label: "screens.html", by: "conductor" as const },
@@ -1198,8 +1230,9 @@ it("lists the Views linked to the decision, seen or not, each bringing its View 
     expect(none.q("[data-mission-banner-views]")).toBeNull();
     const ask = none.q('[data-mission-material="ask"]')!;
     expect(ask.textContent).toBe("Ask for material");
-    // It sits in the answer row, beside the choices, which stay pressable.
+    // It is a row of its own above the choices, which stay pressable (PRD mission-human-gate B19).
     expect(ask.closest("div")?.querySelector("[data-mission-option]")).not.toBeNull();
+    expect(ask.compareDocumentPosition(none.q("[data-mission-option]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await act(async () => ask.click());
     expect(none.events.filter((event) => event.kind === "mission_material")).toEqual([{ schema_version: 2, kind: "mission_material", payload: { mission: "mission-1", key: 3 } }]);
     await none.rerender(asked({ question: { ...asked().question!, material_asked: true } }));

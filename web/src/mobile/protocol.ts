@@ -114,7 +114,7 @@ export type PhoneMissionNode = MissionNodeBrief & {
 };
 
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */
-export type PhoneDecisionView = { device_id: string; display_id: string; kind: string; label: string; unseen?: boolean; by: "conductor" | "worker"; pane_id?: string };
+export type PhoneDecisionView = { device_id: string; display_id: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string };
 
 /** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
 export type PhoneMission = MissionBrief<PhoneMissionNode> & {

@@ -1,4 +1,4 @@
-import { CheckIcon, CircleAlertIcon, FileDiffIcon, GlobeIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon, FileDiffIcon, FilePlusIcon, GlobeIcon, PencilIcon, ThumbsUpIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed } from "./components/elapsed";
@@ -6,6 +6,7 @@ import { FileMark } from "./components/file-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
+import { RadioGroup, RadioGroupItem } from "./components/ui/radio-group";
 import { RowButton } from "./components/ui/row-button";
 import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -20,7 +21,8 @@ import { DECISION_VIEWS_SHOWN } from "./missions";
 // PRD mission-map-git-criteria B25): the question, why
 // it matters, the node it stopped and how long it waited, the Conductor's
 // choices with its recommendation, a short written answer, and the way to
-// the conversation. The core keeps the answer and types it into the
+// the conversation. A choice is a radio row that a press only marks, and
+// `답하기` sends it (PRD mission-human-gate D-19, B19). The core keeps the answer and types it into the
 // Conductor's conversation as the operator's own input; this draws where
 // that answer is. One typed without the engine confirming it is typed again only
 // when the operator sends it again, so a question is answered once (B26).
@@ -30,6 +32,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   const question = mission.question;
   const [pressed, setPressed] = useState<PressedAnswer | null>(null);
   const [writing, setWriting] = useState(false);
+  const [picked, setPicked] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const writeButton = useRef<HTMLButtonElement>(null);
   const field = useRef<HTMLInputElement>(null);
@@ -85,7 +88,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
     <div
       role="group"
       aria-label={mission.decision ?? undefined}
-      className="mx-md mb-xs flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-card px-sm py-xs"
+      className="mx-md mb-xs flex min-w-0 flex-col gap-sm rounded-md border border-mission-hold bg-card px-md py-sm"
       data-mission-banner="decision"
       data-mission-answer={sent?.state ?? (closed ? "closed" : "open")}
     >
@@ -102,7 +105,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
-      {views.length > 0 ? <DecisionViews views={views} actions={actions} /> : null}
+      {views.length > 0 ? <DecisionViews views={views} onOpen={(linked) => actions.openDecisionView(mission.id, key, linked)} /> : null}
       {sent?.line === "unconfirmed" ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent="unconfirmed">
           <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />
@@ -124,26 +127,35 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           <span className="shrink-0 text-caption text-muted-foreground">· {t(sent.word)}</span>
         </p>
       ) : (
-        <div className="flex min-w-0 flex-wrap items-center gap-xs">
-          {options.map((option, index) => {
-            const recommended = question?.recommend === index + 1;
-            return (
-              <Button
-                key={index}
-                size="sm"
-                variant="secondary"
-                disabled={closed}
-                onClick={() => choose(index)}
-                className={recommended ? "max-w-full font-semibold" : "max-w-full"}
-                title={option}
-                data-mission-option={index + 1}
-                data-mission-recommended={recommended || undefined}
-              >
-                <span className="min-w-0 truncate">{option}</span>
-                {recommended ? <span className="shrink-0 rounded-xs bg-background px-xxs text-micro text-foreground">{t("mission.banner.recommended")}</span> : null}
+        <div className="flex min-w-0 flex-col gap-sm">
+          {/* With nothing linked to look at, asking for material is a row of its own above the choices; it never holds the answer back. */}
+          {views.length === 0 && question && !writing ? (
+            question.material_asked ? (
+              <span className="flex min-w-0 items-center gap-xs self-start text-caption text-muted-foreground" data-mission-material="asked">
+                <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-done" />
+                {t("mission.banner.asked")}
+              </span>
+            ) : (
+              <Button variant="outline" size="sm" className="self-start border-dashed text-muted-foreground" title={t("mission.banner.askHint")} disabled={closed || unreachable} onClick={() => actions.askMissionMaterial(mission.id, key)} data-mission-material="ask">
+                <FilePlusIcon aria-hidden="true" />
+                {t("mission.banner.ask")}
               </Button>
-            );
-          })}
+            )
+          ) : null}
+          {/* The choices are rows of a radio group, so a long choice wraps and reads whole; a press only marks it, and 답하기 sends it (PRD mission-human-gate B19). */}
+          {options.length ? <RadioGroup value={picked == null ? "" : String(picked)} onValueChange={(value) => setPicked(Number(value))} disabled={closed} className="gap-xs" aria-label={mission.decision ?? undefined}>
+            {options.map((option, index) => {
+              const recommended = question?.recommend === index + 1;
+              return (
+                <label key={index} className={cn("flex min-w-0 cursor-pointer items-start gap-xs rounded-sm border px-md py-sm text-body transition-colors hover:bg-accent", picked === index ? "border-foreground/40 bg-accent" : recommended ? "border-mission-hold/50 bg-mission-hold/5" : "border-transparent")}>
+                  <RadioGroupItem value={String(index)} className="mt-xxs shrink-0" data-mission-option={index + 1} data-mission-recommended={recommended || undefined} />
+                  <span className={cn("min-w-0 flex-1 break-words", recommended && "font-semibold")}>{option}</span>
+                  {recommended ? <span className="flex shrink-0 items-center gap-xxs rounded-full bg-mission-hold/20 px-sm text-caption font-semibold text-mission-hold" data-mission-recommended-tag="true"><ThumbsUpIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("mission.banner.recommended")}</span> : null}
+                </label>
+              );
+            })}
+          </RadioGroup> : null}
+          <div className="flex min-w-0 flex-wrap items-center gap-xs border-t border-border pt-sm">
           {writing ? (
             <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-xs">
               <Input
@@ -161,21 +173,11 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
               </span>
             </span>
           ) : (
-            <Button ref={writeButton} size="sm" variant="ghost" disabled={closed} onClick={() => setWriting(true)} data-mission-write="true">{t("mission.banner.write")}</Button>
+            <Button ref={writeButton} size="sm" variant="outline" disabled={closed} onClick={() => setWriting(true)} data-mission-write="true"><PencilIcon aria-hidden="true" />{t("mission.banner.write")}</Button>
           )}
-          {/* With nothing linked to look at, the operator may ask for it; it never holds the answer back. */}
-          {views.length === 0 && question && !writing ? (
-            question.material_asked ? (
-              <span className="flex shrink-0 items-center gap-xxs text-caption text-muted-foreground" data-mission-material="asked">
-                <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) text-mission-done" />
-                {t("mission.banner.asked")}
-              </span>
-            ) : (
-              <Button variant="text" size="inline" className="text-caption text-muted-foreground" disabled={closed || unreachable} onClick={() => actions.askMissionMaterial(mission.id, key)} data-mission-material="ask">
-                {t("mission.banner.ask")}
-              </Button>
-            )
-          ) : null}
+          {/* A decision without choices, an old one included, is answered by writing only. */}
+          {options.length ? <Button size="sm" variant="secondary" className="ml-auto" disabled={closed || picked == null} onClick={() => picked != null && choose(picked)} data-mission-answer-send="true">{t("mission.banner.answer")}</Button> : null}
+          </div>
         </div>
       )}
       {view.reason ? <p className={cn("min-w-0 text-caption", view.refused ? "text-mission-failed" : "text-muted-foreground")} data-mission-banner-reason={view.reason.kind === "failed" ? view.reason.failure : view.reason.kind}>{reason}</p> : null}
@@ -185,11 +187,13 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
 
 
 /**
- * The Views linked to the decision that are still open, seen or not: each
- * a row that brings its View forward, its kind's mark, its name, the eye
- * while the operator has not looked at it, and who linked it.
+ * The Views linked to the decision, until it is answered or cleared (PRD
+ * mission-human-gate B20): each a row with its kind's mark, its name, the
+ * eye while the operator has not looked at it, a check once they have,
+ * `닫힘` once it closed, and who linked it. Pressing an open one brings it
+ * forward; pressing a closed one opens it again from what its link kept.
  */
-function DecisionViews({ views, actions }: { views: DecisionView[]; actions: Actions }) {
+function DecisionViews({ views, onOpen }: { views: DecisionView[]; onOpen: (view: DecisionView) => void }) {
   const { t } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
   const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
@@ -200,12 +204,18 @@ function DecisionViews({ views, actions }: { views: DecisionView[]; actions: Act
       <ul className="flex min-w-0 flex-col">
         {shown.map((view) => (
           <li key={`${view.device_id}:${view.checkout_path}:${view.display_id}`} className="min-w-0">
-            <RowButton className="gap-xs px-xxs py-xxs text-body" title={view.label} onClick={() => actions.openViewAt(view.device_id, view.checkout_path, view.display_id)} data-mission-banner-view={view.display_id} data-mission-banner-view-by={view.by}>
+            <RowButton className="gap-xs px-xxs py-xxs text-body" title={view.label} onClick={() => onOpen(view)} data-mission-banner-view={view.display_id} data-mission-banner-view-by={view.by} data-mission-banner-view-state={view.closed ? "closed" : view.unseen ? "unseen" : "seen"}>
               <ViewMark view={view} />
-              <span className="min-w-0 flex-1 truncate">{view.label}</span>
-              {view.unseen ? <StatusMark mark="look" label={t("agents.mark.look")} /> : null}
+              <span className={cn("min-w-0 flex-1 truncate", view.closed && "text-muted-foreground")}>{view.label}</span>
+              {view.closed ? (
+                <span className="shrink-0 text-caption text-muted-foreground">{t("mission.banner.closed")}</span>
+              ) : view.unseen ? (
+                <StatusMark mark="look" label={t("agents.mark.look")} />
+              ) : (
+                <CheckIcon role="img" aria-label={t("mission.banner.seen")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+              )}
               <span className="shrink-0 text-caption text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
-              <span className="ml-xs shrink-0 text-caption font-semibold text-subtle-foreground">{t("mission.banner.open")}</span>
+              <span className="ml-xs shrink-0 text-caption font-semibold text-subtle-foreground">{t(view.closed ? "mission.banner.reopen" : "mission.banner.open")}</span>
             </RowButton>
           </li>
         ))}

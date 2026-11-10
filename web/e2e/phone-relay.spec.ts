@@ -370,7 +370,11 @@ test("the missions tab lists a mission, and its answer reaches the device as one
   await expect(page.locator("[data-phone-answer-input]")).toHaveValue("sign it after lunch");
 
   relay.state.refuseMission = "";
+  // A press only marks the choice; 답하기 sends it (PRD mission-human-gate B19).
+  await expect(page.locator("[data-phone-choice-send]")).toBeDisabled();
   await page.locator('[data-phone-option="1"]').click();
+  await expect(page.locator('[data-phone-option="1"]')).toHaveAttribute("aria-checked", "true");
+  await page.locator("[data-phone-choice-send]").click();
   await expect(page.locator("[data-phone-decision]")).toHaveAttribute("data-phone-decision", "sending");
   const answers = () => relay.received.filter((frame) => frame.type === "answer_mission");
   await expect.poll(() => answers().length).toBe(2);

@@ -207,7 +207,7 @@ it("opens a step's worker only when the phone's list holds that row", async () =
   }
 });
 
-it("answers a decision with one request, and the same press again reuses that request id", async () => {
+it("answers a decision with one request once a marked choice is sent with 답하기, and the same answer again reuses that request id (PRD mission-human-gate B19)", async () => {
   const { container, click, answers, connection, unmount } = await connect([deciding()]);
   try {
     await click('[data-phone-tab="missions"]');
@@ -219,7 +219,11 @@ it("answers a decision with one request, and the same press again reuses that re
     expect(page.querySelector('[data-phone-step-kind="hold"]')!.getAttribute("data-phone-step")).toBe("b");
     expect(container.querySelector("[data-phone-tabs]")).toBeNull();
 
+    // A press only marks the row; 답하기 sends it, and cannot before one is marked.
+    expect(container.querySelector<HTMLButtonElement>("[data-phone-choice-send]")!.disabled).toBe(true);
     await click('[data-phone-option="1"]');
+    expect(answers()).toHaveLength(0);
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(1);
     expect(answers()[0]).toMatchObject({ type: "answer_mission", mission: "m-turn", key: 4, option: 1 });
     expect(container.querySelector("[data-phone-decision]")!.getAttribute("data-phone-decision")).toBe("sending");
@@ -228,6 +232,7 @@ it("answers a decision with one request, and the same press again reuses that re
     // The page draws the core's state again after a while; the press that was never confirmed goes again under the same id.
     await act(async () => connection.settleMissionAnswer());
     await click('[data-phone-option="1"]');
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(2);
     expect(answers()[1]!.request_id).toBe(answers()[0]!.request_id);
   } finally {
@@ -241,6 +246,7 @@ it("sends another mission's answer while the first one's accepted answer is stil
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-turn"]');
     await click('[data-phone-option="1"]');
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(1);
     await serve({ type: "mission_result", request_id: answers()[0]!.request_id as string, mission: "m-turn", ok: true, reason: null });
 
@@ -248,6 +254,7 @@ it("sends another mission's answer while the first one's accepted answer is stil
     await click('[data-phone-back="missions"]');
     await click('[data-phone-mission="m-other"]');
     await click('[data-phone-option="2"]');
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(2);
     expect(answers()[1]).toMatchObject({ mission: "m-other", key: 4, option: 2 });
     expect(container.querySelector('[data-phone-mission-page="m-other"] [data-phone-decision]')!.getAttribute("data-phone-decision")).toBe("sending");
@@ -316,6 +323,7 @@ it("lists the decision's Views, opening one from its agent's 볼 것, and with n
     decision_views: [
       { device_id: "local", display_id: "d1", kind: "browser", label: "compare.html", unseen: true, by: "conductor", pane_id: "p-conductor" },
       { device_id: "local", display_id: "d2", kind: "file", label: "notes.md", by: "worker" },
+      { device_id: "local", display_id: "d3", kind: "file", label: "old.md", closed: true, by: "conductor" },
     ],
   });
   const { container, click, serve, socket, unmount } = await connect([look]);
@@ -323,9 +331,12 @@ it("lists the decision's Views, opening one from its agent's 볼 것, and with n
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-turn"]');
     const rows = [...container.querySelectorAll<HTMLElement>("[data-phone-decision-view]")];
-    expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("compare.html"), expect.stringContaining("notes.md")]);
+    expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("compare.html"), expect.stringContaining("notes.md"), expect.stringContaining("old.md")]);
     // A row whose opener's agent is closed presses nothing; with Views there is nothing to ask for.
     expect(rows[1]!.tagName).not.toBe("BUTTON");
+    // A View closed since the decision linked it stays, marked closed, with nothing to open (PRD mission-human-gate B20).
+    expect(rows[2]!.tagName).not.toBe("BUTTON");
+    expect(rows[2]!.textContent).toContain("Closed");
     expect(container.querySelector("[data-phone-material]")).toBeNull();
 
     await serve({ type: "missions", items: [deciding()], failed: false });
