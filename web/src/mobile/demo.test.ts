@@ -132,6 +132,26 @@ describe("the sample host", () => {
     expect(listedAgents(state().groups!).some((agent) => agent.pane_id.startsWith("s"))).toBe(true);
   });
 
+  it("refuses a start past its cap with the sheet's own failure line, and keeps what it had", async () => {
+    const { connection, settle, state } = await demoPhone();
+    for (let at = 0; at < 10; at += 1) {
+      connection.openStartSheet();
+      await settle();
+      connection.editStartSheet({ text: `Task ${at}` });
+      expect(connection.submitStart()).toBe(true);
+      await settle();
+      expect(state().startSheet.error).toBeNull();
+    }
+    connection.openStartSheet();
+    await settle();
+    connection.editStartSheet({ text: "One too many" });
+    connection.submitStart();
+    await settle();
+    expect(state().startSheet.error).toEqual({ key: "mobile.start.failed" });
+    expect(state().startSheet.text).toBe("One too many");
+    expect(titles(listedAgents(state().groups!))).not.toContain("One too many");
+  });
+
   it("words its content again when the phone's language changes", async () => {
     const { settle, state } = await demoPhone();
     const { clientI18n } = await import("../i18n/translator");

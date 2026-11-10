@@ -22,6 +22,10 @@ const ANSWER_MS = 150;
 const REPLY_MS = 900;
 
 const MAX_TITLE_CHARS = 60;
+/** What one visit may add: sample rows and sentences are memory the page holds, so crossing either is a refusal the sheet or the reply bar words. */
+const MAX_STARTED = 10;
+const MAX_SAID = 40;
+const DEMO_LIMIT = "demo_limit";
 
 export class DemoSocket implements PhoneSocket {
   readyState: number = WebSocket.CONNECTING;
@@ -194,6 +198,10 @@ export class DemoSocket implements PhoneSocket {
   /** A reply or a key: accepted, then (for a reply) answered with a sample sentence. */
   private input(message: Extract<PhoneMessage, { type: "input" }>): void {
     this.later(ANSWER_MS, () => {
+      if ("text" in message && (this.state.said[message.pane_id]?.length ?? 0) >= MAX_SAID) {
+        this.emit({ type: "input_result", request_id: message.request_id, ok: false, reason: DEMO_LIMIT });
+        return;
+      }
       if ("text" in message) {
         this.say(message.pane_id, { who: "you", text: message.text });
         this.emit({ type: "input_result", request_id: message.request_id, ok: true, reason: null });
@@ -232,6 +240,10 @@ export class DemoSocket implements PhoneSocket {
 
   private startAgent(requestId: string, text: string): void {
     this.later(ANSWER_MS, () => {
+      if (this.state.started.length >= MAX_STARTED) {
+        this.emit({ type: "start_result", request_id: requestId, ok: false, reason: DEMO_LIMIT });
+        return;
+      }
       const pane = this.addAgent([...text.trim().split("\n")[0]!].slice(0, MAX_TITLE_CHARS).join(""), text);
       this.emit(agentsFrame(translate, this.state));
       this.emit({ type: "start_result", request_id: requestId, ok: true, reason: null, device_id: DEMO_DEVICE, pane_id: pane });
@@ -240,6 +252,10 @@ export class DemoSocket implements PhoneSocket {
 
   private delegate(requestId: string, pr: string, prompt: string): void {
     this.later(ANSWER_MS, () => {
+      if (this.state.started.length >= MAX_STARTED) {
+        this.emit({ type: "start_result", request_id: requestId, ok: false, reason: DEMO_LIMIT });
+        return;
+      }
       const pane = this.addAgent(`#${pr.split("#")[1]}`, prompt);
       this.state = { ...this.state, feedback: null };
       this.emit(agentsFrame(translate, this.state));
