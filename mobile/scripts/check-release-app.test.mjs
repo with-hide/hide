@@ -45,8 +45,10 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'release-check-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
 describe('the release gate on the signed app', () => {
-  it('passes a release build as the project makes it', () => {
-    const result = run(fixture());
+  it('passes a release build as the project makes it, whatever other platforms its profile lists', () => {
+    const app = fixture();
+    edit('profile.json', (v) => { v.Platform = ['iOS', 'xrOS', 'visionOS']; });
+    const result = run(app);
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('release checks passed');
@@ -69,6 +71,7 @@ describe('the release gate on the signed app', () => {
     'an entitlement nobody listed': [(app) => edit('entitlements.json', (v) => { v['aps-environment'] = 'production'; }), 'entitlements differ'],
     'a development signature': [(app) => edit('entitlements.json', (v) => { v['get-task-allow'] = true; }), 'entitlements differ'],
     'a profile with a device list': [(app) => edit('profile.json', (v) => { v.ProvisionedDevices = ['device']; }), 'App Store profile'],
+    'a profile for another platform': [(app) => edit('profile.json', (v) => { v.Platform = ['macOS']; }), 'for iOS'],
     'a profile of another team': [(app) => edit('profile.json', (v) => { v.TeamIdentifier = ['XXXXXXXXXX']; }), 'team'],
     'a bundle file nobody assembled': [(app) => write(join(app, 'public/extra.js'), 'x'), 'public/'],
     'a bundle file that is missing': [(app) => rmSync(join(app, 'public/p/3/index.html')), 'public/'],

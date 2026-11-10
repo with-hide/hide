@@ -73,7 +73,8 @@ if jq -e --slurpfile want "$expect" '. == $want[0].entitlements' "$facts/entitle
 fi
 ok "the profile is an App Store profile (no device list, not enterprise)" '(has("ProvisionedDevices") | not) and (.ProvisionsAllDevices // false) == false' "$facts/profile.json"
 ok "the profile belongs to team $team" ".TeamIdentifier == [\"$team\"]" "$facts/profile.json"
-ok "the profile is for iOS" '.Platform == ["iOS"]' "$facts/profile.json"
+# Apple lists every platform a profile covers (iOS, xrOS, visionOS); iOS must be one of them.
+ok "the profile is for iOS" '(.Platform // []) | index("iOS") != null' "$facts/profile.json"
 
 # The web bundle: every file in public/ is in the manifest, with its digest, and none is missing.
 if [[ -d "$app/public" ]]; then
