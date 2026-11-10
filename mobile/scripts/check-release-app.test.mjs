@@ -27,7 +27,7 @@ function fixture() {
   write(join(app, 'PlugIns', APPEX, 'HideNotification'), 'extension code with only CryptoKit and Foundation');
   write(join(app, 'PlugIns', APPEX, 'PrivacyInfo.xcprivacy'), 'plist');
   write(join(app, 'PrivacyInfo.xcprivacy'), 'plist');
-  write(join(app, 'capacitor.config.json'), { appId: want.bundleId, loggingBehavior: 'none', server: { iosScheme: 'capacitor', hostname: 'localhost', allowNavigation: [] }, ios: { webContentsDebuggingEnabled: false } });
+  write(join(app, 'capacitor.config.json'), { appId: want.bundleId, loggingBehavior: 'none', server: { iosScheme: 'capacitor', hostname: 'localhost', allowNavigation: [] }, ios: { webContentsDebuggingEnabled: false, handleApplicationNotifications: false } });
   write(join(app, 'public/index.html'), PAGE);
   write(join(app, 'public/p/3/index.html'), PAGE);
   facts = join(root, 'facts');
@@ -81,6 +81,7 @@ describe('the release gate on the signed app', () => {
     'another build number': [(app) => edit('info.json', (v) => { v.CFBundleVersion = '1'; }), 'build number'],
     'Capacitor logging on': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'debug' }), 'logging'],
     'a remote server url': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', server: { url: 'https://example.test' } }), 'server url'],
+    'Capacitor taking the notification center': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', ios: { webContentsDebuggingEnabled: false, handleApplicationNotifications: true } }), 'notification center'],
     'an inspectable web view': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', ios: { webContentsDebuggingEnabled: true } }), 'inspected'],
     'the debug pairing hook in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_PAIR_LINK'), 'debug pairing hook'],
     'no bridge gate in the binary': [(app) => write(join(app, 'App'), 'binary only'), 'bridge gate'],

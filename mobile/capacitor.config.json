@@ -9,6 +9,7 @@
     "allowNavigation": []
   },
   "ios": {
-    "webContentsDebuggingEnabled": false
+    "webContentsDebuggingEnabled": false,
+    "handleApplicationNotifications": false
   }
 }

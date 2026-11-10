@@ -58,6 +58,7 @@ ok "no App Transport Security exception" 'has("NSAppTransportSecurity") | not' "
 ok "Capacitor logging is none" '.loggingBehavior == "none"' "$app/capacitor.config.json"
 ok "the app loads no server url" '(.server // {}) | (has("url") or .cleartext == true) | not' "$app/capacitor.config.json"
 ok "the app allows no navigation" '((.server // {}).allowNavigation // []) == []' "$app/capacitor.config.json"
+ok "Capacitor leaves the notification center to the app" '((.ios // {}).handleApplicationNotifications) == false' "$app/capacitor.config.json"
 ok "the web view cannot be inspected" '((.ios // {}).webContentsDebuggingEnabled // false) == false' "$app/capacitor.config.json"
 
 # The binary: the debug pairing hook is compiled out, and the bridge gate is compiled in.
