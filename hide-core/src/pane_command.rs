@@ -213,8 +213,12 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         }
         "purpose_invalid" => "Write the purpose as one line of text",
         "purpose_too_long" => "Write the purpose in 40 characters or fewer",
-        "pane_unavailable" => "Run hide ps for the panes there are and their ids",
-        "agent_unavailable" => "Run hide ps for the agents there are, their names and panes",
+        "pane_unavailable" => {
+            "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, and a pane of another machine is remote:<device id>:pane:<id> (the device id is in hide device list)"
+        }
+        "agent_unavailable" => {
+            "Run hide ps for the agents there are, their names and panes; an agent of another machine is named by its registration id from hide agent list, a pane that is no registered agent by remote:<device id>:pane:<id>"
+        }
         "target_ambiguous" => {
             "Name the agent by its registration id or its pane, both shown by hide ps"
         }
@@ -785,6 +789,19 @@ mod tests {
             "a paste of nothing"
         );
         assert_eq!(send(Some(""), 1, false, false), Err("text_empty"));
+    }
+
+    #[test]
+    fn a_pane_refusal_names_the_address_of_a_pane_on_another_machine() {
+        // A bare id names a pane of the caller's machine; the refusal is the
+        // only place an agent that pasted one from another machine learns why.
+        for code in ["pane_unavailable", "agent_unavailable"] {
+            let next = next_action(code).expect(code);
+            assert!(
+                next.contains("remote:<device id>:pane:<id>"),
+                "{code}: {next}"
+            );
+        }
     }
 
     #[test]
