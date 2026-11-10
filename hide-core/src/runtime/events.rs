@@ -1053,6 +1053,19 @@ pub(super) struct MissionMaterialPayload {
     pub(super) key: u64,
 }
 
+/// `mission_view_reopen`: the operator pressed a closed View on the
+/// question with `key`, named by the link's checkout and View id: it opens
+/// again from what the link kept (PRD mission-human-gate D-20).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionViewReopenPayload {
+    pub(super) mission: String,
+    pub(super) key: u64,
+    pub(super) device_id: String,
+    pub(super) checkout_path: String,
+    pub(super) display_id: String,
+}
+
 /// `mission_end`: the operator's `미션 종료` from a mission's map: the
 /// Conductor is asked to end it, or a mission no Conductor holds is
 /// cancelled at once.
@@ -1823,6 +1836,7 @@ pub(super) enum Event {
     MissionAnswer(MissionAnswerPayload),
     MissionEnd(MissionEndPayload),
     MissionMaterial(MissionMaterialPayload),
+    MissionViewReopen(MissionViewReopenPayload),
     MissionAttention(super::mission_health::MissionAttentionPayload),
     /// `mission_brief_read`: the operator opened the folded brief of a node.
     MissionBriefRead(super::mission_brief::BriefReadPayload),
@@ -2191,6 +2205,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
         "mission_end" => decode!(MissionEndPayload, MissionEnd),
         "mission_material" => decode!(MissionMaterialPayload, MissionMaterial),
+        "mission_view_reopen" => decode!(MissionViewReopenPayload, MissionViewReopen),
         "mission_attention" => decode!(
             super::mission_health::MissionAttentionPayload,
             MissionAttention
@@ -4158,6 +4173,13 @@ impl Runtime {
             Event::MissionMaterial(payload) => {
                 self.mission_material_event(&payload.mission, payload.key)
             }
+            Event::MissionViewReopen(payload) => self.mission_view_reopen_event(
+                &payload.mission,
+                payload.key,
+                &payload.device_id,
+                &payload.checkout_path,
+                &payload.display_id,
+            ),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
             Event::TurnAnswerRead(payload) => self.turn_answer_read(payload),

@@ -734,6 +734,67 @@ pub struct ViewLink {
     /// opened it, where every other link is the Conductor's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worker: bool,
+    /// On a question: what the View was when the decision linked it, so the
+    /// card keeps the row after the View closes and opens it again from
+    /// here (PRD mission-human-gate D-20). Absent on a node's or the
+    /// Conductor's own link, on a link recorded before it was kept, and for
+    /// a View no address can open again (an outside file's grant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptView>,
+}
+
+/// The longest page or file name a link keeps; a row shows far fewer.
+const KEPT_LABEL_LIMIT: usize = 256;
+
+/// A linked View's kind, name and address, as the decision linked it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KeptView {
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    /// A file's or a diff's path, or a page's address.
+    pub address: String,
+    /// The Changes group a diff compares against.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub committed: bool,
+}
+
+impl KeptView {
+    /// What `display`, titled `label`, can be opened again from; none for
+    /// an outside file, which no address names, or an address past
+    /// [`SHOW_LIMIT`].
+    pub fn of(display: &crate::view_layout::Display, label: String) -> Option<Self> {
+        use crate::view_layout::DisplayKind;
+        let address = match display.kind {
+            DisplayKind::File | DisplayKind::Diff => display.path.clone(),
+            DisplayKind::Browser => display.url.clone()?,
+            DisplayKind::External => return None,
+        };
+        if address.is_empty() || address.len() > SHOW_LIMIT {
+            return None;
+        }
+        Some(Self {
+            kind: display.kind,
+            label: label.chars().take(KEPT_LABEL_LIMIT).collect(),
+            address,
+            committed: display.committed.unwrap_or(false),
+        })
+    }
+
+    /// Whether `display` shows what this kept: the same document, or the
+    /// same page address.
+    pub fn shown_by(&self, display: &crate::view_layout::Display) -> bool {
+        use crate::view_layout::DisplayKind;
+        match self.kind {
+            DisplayKind::Browser => {
+                display.kind == DisplayKind::Browser
+                    && display.url.as_deref() == Some(self.address.as_str())
+            }
+            DisplayKind::File | DisplayKind::Diff => {
+                display.shows(&self.address, self.kind, Some(self.committed))
+            }
+            DisplayKind::External => false,
+        }
+    }
 }
 
 impl ViewLink {
@@ -4047,6 +4108,35 @@ pub(crate) mod tests {
         let planned = apply_plan(&read, &input, 2).unwrap();
         assert_eq!(planned.strength, Some(Strength::Thorough));
         assert_eq!(planned.checkers, Some(recorded));
+    }
+
+    /// A question's View link recorded before links kept their View reads
+    /// with nothing kept and writes back as it was, without a schema raise
+    /// (PRD mission-human-gate D-20).
+    #[test]
+    fn a_view_link_recorded_before_links_kept_their_view_reads_as_it_was() {
+        let recorded = serde_json::json!({
+            "device_id": "local", "checkout_path": "/repo", "display_id": "d3",
+            "at_unix_ms": 10,
+        });
+        let read: ViewLink = serde_json::from_value(recorded.clone()).unwrap();
+        assert_eq!(read.kept, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), recorded);
+        let kept = ViewLink {
+            kept: Some(KeptView {
+                kind: crate::view_layout::DisplayKind::Diff,
+                label: "a.rs".into(),
+                address: "/repo/a.rs".into(),
+                committed: true,
+            }),
+            ..read
+        };
+        let written = serde_json::to_value(&kept).unwrap();
+        assert_eq!(
+            written["kept"],
+            serde_json::json!({"kind": "diff", "label": "a.rs", "address": "/repo/a.rs", "committed": true})
+        );
+        assert_eq!(serde_json::from_value::<ViewLink>(written).unwrap(), kept);
     }
 
     #[test]

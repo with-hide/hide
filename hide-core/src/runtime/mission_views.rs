@@ -16,11 +16,13 @@
 //!
 //! The list is made when `decide` runs and kept on the question: the named
 //! Views first, then the opened ones newest first, at most
-//! [`VIEW_LINK_LIMIT`]; a View closed later leaves it, and nothing opened
-//! later joins it. Linking marks nothing seen or unseen and raises nothing:
-//! the decision's row, its read state and the Needs You count are the
-//! question's alone. The map lists the linked Views still open, seen or
-//! not; with none the operator can ask the Conductor for one page to look
+//! [`VIEW_LINK_LIMIT`]; nothing opened later joins it. Each link keeps what
+//! its View was (kind, name, address), so a View looked at or closed later
+//! stays listed until the question is answered or cleared, and a closed one
+//! opens again from what its link kept (PRD mission-human-gate D-20).
+//! Linking marks nothing seen or unseen and raises nothing: the decision's
+//! row, its read state and the Needs You count are the question's alone.
+//! With none linked the operator can ask the Conductor for one page to look
 //! at (`자료 요청`), once per question, which never holds the answer back.
 
 use serde::Serialize;
@@ -29,7 +31,8 @@ use serde_json::json;
 use super::Runtime;
 use super::workspace_view::WorkspaceKey;
 use crate::delivery::Actor;
-use crate::missions::{Mission, VIEW_LINK_LIMIT, ViewLink, WakeEvent, push_view_link};
+use crate::missions::{KeptView, Mission, VIEW_LINK_LIMIT, ViewLink, WakeEvent, push_view_link};
+use crate::view_layout::{Display, DisplayKind};
 
 /// How deep an opener's parents are walked to find the node's worker.
 const LINEAGE_LIMIT: usize = 32;
@@ -42,7 +45,7 @@ pub enum DecisionViewBy {
     Worker,
 }
 
-/// A View linked to a mission's open decision that is still open, as the
+/// A View linked to a mission's open decision, open or closed, as the
 /// decision's card lists it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DecisionView {
@@ -56,6 +59,11 @@ pub struct DecisionView {
     /// The operator has not looked at it since it was opened.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unseen: bool,
+    /// It was closed since the decision linked it: the row stays, and
+    /// pressing it opens it again from what the link kept (D-20). The
+    /// display id is then the link's, which no View has.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
     pub by: DecisionViewBy,
     /// The pane the agent that opened it is in now, whose 볼 것 the phone
     /// opens it from; absent while that agent is closed.
@@ -93,6 +101,7 @@ impl Runtime {
             attempt: 0,
             at_unix_ms: now,
             worker: false,
+            kept: None,
         };
         let lineage = self.lineage_of(&actor);
         let mut changed = false;
@@ -180,7 +189,7 @@ impl Runtime {
             let layout = self.view_layout_of(&place).ok_or("mission_show_unknown")?;
             let now = super::memory::now_ms();
             for view in show {
-                layout.display(view).ok_or("mission_show_unknown")?;
+                let display = layout.display(view).ok_or("mission_show_unknown")?;
                 let link = ViewLink {
                     device_id: place.0.clone(),
                     checkout_path: place.1.clone(),
@@ -188,6 +197,7 @@ impl Runtime {
                     attempt: 0,
                     at_unix_ms: now,
                     worker: false,
+                    kept: kept_of(display),
                 };
                 if !links.iter().any(|known| known.same_view(&link)) {
                     links.push(link);
@@ -215,15 +225,19 @@ impl Runtime {
         }
         // Newest first; on a tie the Conductor's, which came first.
         opened.sort_by_key(|link| std::cmp::Reverse(link.at_unix_ms));
-        for link in opened {
+        for mut link in opened {
             if links.len() >= VIEW_LINK_LIMIT {
                 break;
             }
             let key = (link.device_id.clone(), link.checkout_path.clone());
-            let open = self
+            let Some(display) = self
                 .view_layout_of(&key)
-                .is_some_and(|layout| layout.display(&link.display_id).is_some());
-            if open && !links.iter().any(|known| known.same_view(&link)) {
+                .and_then(|layout| layout.display(&link.display_id))
+            else {
+                continue;
+            };
+            if !links.iter().any(|known| known.same_view(&link)) {
+                link.kept = kept_of(display);
                 links.push(link);
             }
         }
@@ -253,7 +267,10 @@ impl Runtime {
     }
 
     /// The Views `mission`'s open decision lists: the ones linked when it
-    /// was asked, in that order, each only while it is open.
+    /// was asked, in that order. An open one is read from its View, the one
+    /// its link names or, after it closed and opened again, one showing the
+    /// same document or page; a closed one from what its link kept. A
+    /// closed link recorded before links kept anything is not listed.
     pub(super) fn decision_views(&self, mission: &Mission) -> Vec<DecisionView> {
         let Some(question) = mission.decision.as_ref().and(mission.question.as_ref()) else {
             return Vec::new();
@@ -262,20 +279,34 @@ impl Runtime {
             .views
             .iter()
             .filter_map(|link| {
-                let key = (link.device_id.clone(), link.checkout_path.clone());
-                let display = self.view_layout_of(&key)?.display(&link.display_id)?;
+                let by = if link.worker {
+                    DecisionViewBy::Worker
+                } else {
+                    DecisionViewBy::Conductor
+                };
+                let Some(display) = self.linked_display(link) else {
+                    let kept = link.kept.as_ref()?;
+                    return Some(DecisionView {
+                        device_id: link.device_id.clone(),
+                        checkout_path: link.checkout_path.clone(),
+                        display_id: link.display_id.clone(),
+                        kind: kept.kind,
+                        label: kept.label.clone(),
+                        unseen: false,
+                        closed: true,
+                        by,
+                        pane_id: None,
+                    });
+                };
                 Some(DecisionView {
                     device_id: link.device_id.clone(),
                     checkout_path: link.checkout_path.clone(),
-                    display_id: link.display_id.clone(),
+                    display_id: display.id.clone(),
                     kind: display.kind,
                     label: super::view_areas::display_label(display),
                     unseen: display.unseen.is_some(),
-                    by: if link.worker {
-                        DecisionViewBy::Worker
-                    } else {
-                        DecisionViewBy::Conductor
-                    },
+                    closed: false,
+                    by,
                     pane_id: display
                         .opener
                         .as_ref()
@@ -283,6 +314,106 @@ impl Runtime {
                 })
             })
             .collect()
+    }
+
+    /// The open View a decision's `link` stands for: the one it names, else
+    /// one showing what it kept.
+    fn linked_display(&self, link: &ViewLink) -> Option<&Display> {
+        let key = (link.device_id.clone(), link.checkout_path.clone());
+        let layout = self.view_layout_of(&key)?;
+        layout.display(&link.display_id).or_else(|| {
+            let kept = link.kept.as_ref()?;
+            layout
+                .displays()
+                .filter(|display| kept.shown_by(display))
+                .max_by_key(|display| display.last_focused_unix_ms)
+        })
+    }
+
+    /// The operator pressed a closed row of question `key` of mission `id`
+    /// (`mission_view_reopen`): the View its link (`device_id`,
+    /// `checkout_path`, `display_id`) kept opens again in that checkout,
+    /// brought forward, as a file, a diff or a page opened there would. A
+    /// View that is open again is only brought forward; a link that kept
+    /// nothing, or a question that changed, opens nothing.
+    pub(super) fn reopen_decision_view(
+        &mut self,
+        id: &str,
+        key: u64,
+        device_id: &str,
+        checkout_path: &str,
+        display_id: &str,
+    ) -> Result<bool, &'static str> {
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        let question = mission
+            .decision
+            .as_ref()
+            .and(mission.question.as_ref())
+            .filter(|question| question.key == key)
+            .ok_or("mission_decision_changed")?;
+        let link = question
+            .views
+            .iter()
+            .find(|link| {
+                link.device_id == device_id
+                    && link.checkout_path == checkout_path
+                    && link.display_id == display_id
+            })
+            .ok_or("mission_view_unknown")?;
+        let place = (link.device_id.clone(), link.checkout_path.clone());
+        let (workspace_id, checkout_id) = self
+            .agent_workspace_ids(&place)
+            .ok_or("mission_view_checkout_gone")?;
+        if let Some(open) = self.linked_display(link).map(|display| display.id.clone()) {
+            let mut changed = self.focus_checkout(&workspace_id, &checkout_id);
+            changed |= self.focus_view_display_of(&workspace_id, &checkout_id, &open);
+            return Ok(changed);
+        }
+        let kept = link.kept.clone().ok_or("mission_view_not_kept")?;
+        Ok(match kept.kind {
+            DisplayKind::File => self.reveal_path(super::events::RevealPathPayload {
+                path: kept.address,
+                workspace_id,
+                checkout_id,
+                is_directory: false,
+                opener_pane: None,
+            }),
+            DisplayKind::Browser => self.open_browser(
+                super::view_areas::BrowserOpenPayload::reveal(kept.address, place),
+            ),
+            DisplayKind::Diff => {
+                let mut changed = self.focus_checkout(&workspace_id, &checkout_id);
+                changed |= self.show_diff_in_view(
+                    &workspace_id,
+                    &checkout_id,
+                    &kept.address,
+                    kept.committed,
+                    false,
+                    false,
+                );
+                changed
+            }
+            DisplayKind::External => return Err("mission_view_not_kept"),
+        })
+    }
+
+    pub(super) fn mission_view_reopen_event(
+        &mut self,
+        id: &str,
+        key: u64,
+        device_id: &str,
+        checkout_path: &str,
+        display_id: &str,
+    ) -> bool {
+        self.reopen_decision_view(id, key, device_id, checkout_path, display_id)
+            .unwrap_or_else(|code| {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.view_reopen_refused",
+                    "mission": id, "question": key, "device": device_id,
+                    "view": display_id, "code": code,
+                }));
+                false
+            })
     }
 
     /// What a decision's card compares to know its Views moved: the View
@@ -362,4 +493,10 @@ impl Runtime {
             false
         })
     }
+}
+
+/// What a decision's link keeps of `display`: its kind, its name as its tab
+/// says it and its address.
+fn kept_of(display: &Display) -> Option<KeptView> {
+    KeptView::of(display, super::view_areas::display_label(display))
 }

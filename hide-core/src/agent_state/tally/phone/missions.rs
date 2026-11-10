@@ -184,7 +184,8 @@ pub struct PhoneEscalation {
 }
 
 /// A View linked to a mission's open decision, as the phone's decision card
-/// lists it: its row opens the 볼 것 of the agent that opened it.
+/// lists it: its row opens the 볼 것 of the agent that opened it; a closed
+/// one stays listed, marked closed, with nothing to open.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PhoneDecisionView {
     pub device_id: String,
@@ -193,6 +194,8 @@ pub struct PhoneDecisionView {
     pub label: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unseen: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
     pub by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,

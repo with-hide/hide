@@ -9153,7 +9153,8 @@ fn decision_views(runtime: &mut Runtime) -> Vec<(String, &'static str)> {
 /// that are still open when it asks, and the ones the stopped node's worker
 /// or an agent under it opened in the node's current attempt. What the
 /// Conductor opens after asking waits for its next question; a seen View
-/// stays listed, a closed one leaves.
+/// stays listed, and a closed one stays too, marked closed under the name
+/// it had, until the question changes (PRD mission-human-gate D-20).
 #[test]
 fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     let fixture = conducting();
@@ -9254,15 +9255,50 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     let listed = decision_views(&mut runtime);
     assert!(!listed.iter().any(|(id, _)| *id == after || *id == late));
 
-    // A seen View stays; a closed one leaves.
+    // A seen View stays; a closed one stays too, marked closed under the
+    // name it had, and opened again it is the open row once more.
     runtime.mark_view_unseen(&key, &page);
     assert!(runtime.mark_view_seen(&key, &page));
     assert!(decision_views(&mut runtime).contains(&(page.clone(), "conductor")));
     close(&mut runtime, &page);
-    assert!(
-        !decision_views(&mut runtime)
+    let row = |runtime: &mut Runtime, label: &str| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0]
+            .decision_views
             .iter()
-            .any(|(id, _)| *id == page)
+            .find(|view| view.label == label)
+            .map(|view| (view.display_id.clone(), view.closed))
+    };
+    assert_eq!(
+        decision_views(&mut runtime),
+        [
+            (named.clone(), "conductor"),
+            (notes.clone(), "worker"),
+            (page.clone(), "conductor")
+        ]
+    );
+    assert_eq!(
+        row(&mut runtime, "screens.html"),
+        Some((page.clone(), true))
+    );
+    let question = runtime.missions.book.missions[0]
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert_eq!(
+        runtime.reopen_decision_view("mission-1", question + 1, &key.0, &key.1, &page),
+        Err("mission_decision_changed")
+    );
+    let again = project_view(&mut runtime, "/checkouts/fixture/screens.html");
+    assert_eq!(
+        row(&mut runtime, "screens.html"),
+        Some((again.clone(), false))
+    );
+    assert!(
+        runtime
+            .reopen_decision_view("mission-1", question, &key.0, &key.1, &page)
+            .is_ok()
     );
 
     // The next question takes what the Conductor opened since this one and

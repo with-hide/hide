@@ -111,6 +111,26 @@ pub(super) struct BrowserOpenPayload {
     request_id: Option<String>,
 }
 
+impl BrowserOpenPayload {
+    /// The operator's open of `url` in Workspace `key`, brought forward, as
+    /// a closed View a mission's decision linked opens again.
+    pub(super) fn reveal(url: String, key: WorkspaceKey) -> Self {
+        Self {
+            url,
+            reveal: true,
+            area_id: None,
+            beside_display: None,
+            workspace: Some(ViewWorkspace {
+                device_id: key.0,
+                path: key.1,
+            }),
+            pane_id: None,
+            opener_pane: None,
+            request_id: None,
+        }
+    }
+}
+
 /// The payload of `browser_state`: what a browser display's page says now,
 /// its address after it navigated and its title, as the desktop host reports
 /// it. It records; it never loads anything.
