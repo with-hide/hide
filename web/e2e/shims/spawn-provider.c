@@ -486,9 +486,8 @@ int main(int argc, char **argv) {
     return status;
   }
   if (load_config() != 0) return 1;
-  /* The pane names itself as `hide_agent_hooks::pane` reads it: HIDE_PANE_ID first. */
+  /* The pane names itself as `hide_agent_hooks::pane` reads it: HIDE_PANE_ID. */
   const char *pane = getenv("HIDE_PANE_ID");
-  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
   if (!pane || !*pane) return 1;
   /* A resumed conversation keeps its id, as Claude Code's own does. */
   char session[80];

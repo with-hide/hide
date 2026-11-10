@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # over, and only the second one is a byline.
 ATTRIBUTION = re.compile(
     r'co-authored-by:'
-    r'|(?:generated|authored|written|created|produced|developed|implemented'
+    r'|\b(?:generated|authored|written|created|produced|developed|implemented'
     r'|co-developed|co-written|built|made|assisted)'
     r'\s+(?:by|with|using)\b',
     re.IGNORECASE,

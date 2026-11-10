@@ -251,7 +251,7 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
         // Added under an alias the config no longer names, in capitals.
         registration("box", "Box", "upper"),
     ];
-    for kind in ["ssh_hosts_list", "herdr_profiles_list"] {
+    for kind in ["ssh_hosts_list", "machine_profiles_list"] {
         assert!(shared.lock().unwrap().dispatch_json(&event(kind)));
     }
     wait(&shared, "both listings", |runtime| {
@@ -281,6 +281,28 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
     assert_eq!(first_run, expected);
 }
 
+/// A screen of an earlier build still sends the profiles list under the
+/// name that build used, and the core must answer it rather than refuse
+/// the event as an unknown kind.
+#[test]
+fn an_open_screen_that_sends_the_old_profiles_list_name_still_gets_the_listing() {
+    let shared = first_run_runtime("Host first\n", Arc::new(|_, _, _| Err(Problem::SshFailed)));
+    {
+        let mut runtime = shared.lock().unwrap();
+        assert!(runtime.dispatch_json(&event("herdr_profiles_list")));
+        let refused = runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.clone());
+        assert_ne!(refused.as_deref(), Some("event.unknown_kind"));
+    }
+    wait(&shared, "the listing the old name asks for", |runtime| {
+        runtime.snapshot().status.machine_profiles.state != "loading"
+    });
+}
+
 /// A wildcard Include whose folder cannot be opened says nothing about
 /// the Hosts it names: the first-run step reads it as a failed read with
 /// Retry, never as a list that could be skipped. The folder is a file,
@@ -301,7 +323,7 @@ fn an_include_folder_that_cannot_be_opened_fails_the_first_run_read_with_retry()
             version: crate::model::FIRST_RUN_VERSION,
             step: crate::model::FirstRunStep::Devices,
         });
-        assert!(runtime.dispatch_json(&event("herdr_profiles_list")));
+        assert!(runtime.dispatch_json(&event("machine_profiles_list")));
     }
     wait(&shared, "the device listing", |runtime| {
         runtime.snapshot().status.machine_profiles.state != "loading"
@@ -337,7 +359,7 @@ fn an_unreadable_include_stays_unreadable_past_a_later_include_bound() {
         shared
             .lock()
             .unwrap()
-            .dispatch_json(&event("herdr_profiles_list"))
+            .dispatch_json(&event("machine_profiles_list"))
     );
     wait(&shared, "the device listing", |runtime| {
         runtime.snapshot().status.machine_profiles.state != "loading"

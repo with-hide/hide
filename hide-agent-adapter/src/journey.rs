@@ -7,7 +7,7 @@
 pub struct JourneyAdapter {
     pub id: &'static str,
     /// The agent kind `hide agent spawn --kind` takes and the engine reports.
-    #[serde(rename = "herdr_kind")]
+    #[serde(rename = "agent_cli")]
     pub engine_kind: &'static str,
     /// The agent's own folder in its HOME, whose presence tells the kit the
     /// agent is set up there, as a CLI that has run once leaves it.

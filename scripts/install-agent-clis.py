@@ -226,10 +226,10 @@ def unproved(kind, program):
 
 
 def full_access_flags():
-    """Each started agent's full-access arguments by its Herdr kind, from the
+    """Each started agent's full-access arguments by its agent CLI kind, from the
     generated adapter contract."""
     rows = json.loads((CHECKOUT / "contracts/agent-journey.json").read_text())
-    return {row["herdr_kind"]: row.get("full_access_flag") or [] for row in rows}
+    return {row["agent_cli"]: row.get("full_access_flag") or [] for row in rows}
 
 
 def helped(program):

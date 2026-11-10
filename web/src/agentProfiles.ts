@@ -78,7 +78,7 @@ function itemLeft(usage: AgentUsage | null, id: string, now: number): number | n
 
 /** This machine's usage row of `agent`, which carries its profiles' accounts (B23); a device's profiles have none. */
 export function ownAgentUsage(usage: { nodes: { agents: AgentUsage[] }[] } | null | undefined, agent: string): AgentUsage | null {
-  const kind = agentAdapter(agent)?.herdr_kind ?? agent;
+  const kind = agentAdapter(agent)?.agent_cli ?? agent;
   return usage?.nodes[0]?.agents.find((row) => row.agent === kind) ?? null;
 }
 
@@ -350,7 +350,7 @@ export function projectAccountChoices(device: Device | undefined, chosen: Record
  * starts or the device has no checkout to start in; the start panel opens then.
  */
 export function signInStart(targets: StartTargets, deviceId: string, agent: string): { provider: ProviderKind; checkoutPath: string } | null {
-  const provider = PROVIDER_KINDS.find((kind) => kind === agentAdapter(agent)?.herdr_kind);
+  const provider = PROVIDER_KINDS.find((kind) => kind === agentAdapter(agent)?.agent_cli);
   if (!provider) return null;
   const checkouts = (targets.groups.find((group) => group.deviceId === deviceId)?.items ?? []).filter(
     (item): item is Extract<StartTarget, { kind: "checkout" }> => item.kind === "checkout" && item.disabled === null,

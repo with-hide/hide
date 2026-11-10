@@ -35,7 +35,7 @@ export function agentMarkOf(kind: string | null | undefined): { id: string; logo
   const adapter = agentAdapter(kind ?? "");
   if (!adapter) return null;
   const logo = LOGOS[adapter.logo_id] ?? null;
-  return { id: adapter.herdr_kind, logo, label: adapter.label, plated: logo !== null && PLATED.has(adapter.logo_id) };
+  return { id: adapter.agent_cli, logo, label: adapter.label, plated: logo !== null && PLATED.has(adapter.logo_id) };
 }
 
 /** Up to two letters of a name: the monogram of an agent with no logo. */

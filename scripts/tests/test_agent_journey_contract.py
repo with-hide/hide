@@ -84,7 +84,7 @@ class Registration(unittest.TestCase):
         guides, pins = Guides(), clis.table()
         missing = {}
         for row in active_rows(load_contract(ROOT)):
-            kind, label, minimum = row["herdr_kind"], labels[row["id"]], row["minimum_version"]
+            kind, label, minimum = row["agent_cli"], labels[row["id"]], row["minimum_version"]
             pin = pins.get(kind)
             checks = [
                 (kind in local.ROUTES, "a local isolation route in scripts/agent_journey/local.py (ROUTES)"),
@@ -118,7 +118,7 @@ class Registration(unittest.TestCase):
                                                        for agent, pieces in missing.items()))
 
     def test_the_installed_cli_set_matches_the_registered_agents(self):
-        self.assertEqual(set(clis.table()), {row["herdr_kind"] for row in active_rows(load_contract(ROOT))})
+        self.assertEqual(set(clis.table()), {row["agent_cli"] for row in active_rows(load_contract(ROOT))})
 
 
 class GeneratedContract(unittest.TestCase):

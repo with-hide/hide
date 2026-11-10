@@ -149,7 +149,7 @@ export function itemNames(devices: readonly Device[] | undefined, ai: Background
   const device = devices?.find((row) => row.id === machine);
   const named = profile?.id || profile?.name ? profile : null;
   const listed = named ? listedProfiles(device)?.profiles.find((row) => (named.id ? row.id === named.id : row.kind === adapter?.id && row.name === named.name)) ?? null : null;
-  const kind = adapter?.can_start ? (adapter.herdr_kind as ProviderKind) : null;
+  const kind = adapter?.can_start ? (adapter.agent_cli as ProviderKind) : null;
   const local = device !== undefined && device.kind !== "remote";
   const catalog = local && kind && takesModel(kind) && (!named || listed) ? catalogFor(ai, kind, listed ? { id: listed.id, version: listed.version } : null) : null;
   return { profile: named ? (listed?.name ?? named.name ?? gone) : null, model: (model) => modelLabel(catalog, model) };

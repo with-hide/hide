@@ -1474,7 +1474,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },
     listMachineProfiles() {
-      dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
+      dispatch({ schema_version: 2, kind: "machine_profiles_list", payload: {} });
     },
     connectMachineProfile(profileId: string) {
       dispatch({ schema_version: 2, kind: "machine_profile_connect", payload: { profile_id: profileId, host_consent: true } });
@@ -2847,7 +2847,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const ids = { workspace_id: surface.workspaceId, checkout_id: surface.checkoutId };
       expectSurface(surface.key);
       beginOpening({ checkoutId: checkout.id, deviceId: node, path: checkout.path, workspaceId: surface.workspaceId });
-      if (surface.kind === "herdr") {
+      if (surface.kind === "engine") {
         dispatch({ schema_version: 2, kind: "focus_tab", payload: { ...ids, tab_id: surface.id, ...focusDevice } });
         return;
       }

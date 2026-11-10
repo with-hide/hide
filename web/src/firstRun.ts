@@ -133,7 +133,7 @@ export function failedAgents(agents: readonly KitAgent[], chosen: readonly strin
 
 function startKind(id: string): ProviderKind | null {
   const row = AGENT_ADAPTERS.find((adapter) => adapter.id === id && adapter.can_start);
-  return row ? (row.herdr_kind as ProviderKind) : null;
+  return row ? (row.agent_cli as ProviderKind) : null;
 }
 
 /**
@@ -155,7 +155,7 @@ export function firstStartAgent(agents: readonly KitAgent[], providers: readonly
  * check, Terminal, or a sign-in not read yet says nothing (D-06).
  */
 export function notSignedIn(kind: ProviderKind | "terminal", providers: readonly AiProvider[] | undefined): boolean {
-  const id = AGENT_ADAPTERS.find((adapter) => adapter.can_start && adapter.herdr_kind === kind)?.id;
+  const id = AGENT_ADAPTERS.find((adapter) => adapter.can_start && adapter.agent_cli === kind)?.id;
   if (!id || !SIGN_IN_CHECKED.has(id)) return false;
   return providers?.find((row) => row.agent === id)?.state === "needs_login";
 }

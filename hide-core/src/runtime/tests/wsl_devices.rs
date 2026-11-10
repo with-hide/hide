@@ -453,7 +453,7 @@ fn the_first_run_row_reaches_the_distribution_only_once_connect_is_pressed() {
         shared
             .lock()
             .unwrap()
-            .dispatch_json(&event("herdr_profiles_list", serde_json::json!({})))
+            .dispatch_json(&event("machine_profiles_list", serde_json::json!({})))
     );
     super::wait(&shared, "the device listing", |runtime| {
         runtime.snapshot().status.machine_profiles.state == "ready"

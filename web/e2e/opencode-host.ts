@@ -21,7 +21,7 @@ const { execFileSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 
 const config = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "opencode-host.json"), "utf8"));
-const pane = process.env.HIDE_PANE_ID || process.env.HERDR_PANE_ID;
+const pane = process.env.HIDE_PANE_ID;
 const folder = path.join(config.dir, pane.replace(/[^A-Za-z0-9]/g, "-"));
 const session = "ses_" + pane.replace(/[^A-Za-z0-9]/g, "");
 fs.mkdirSync(folder, { recursive: true });

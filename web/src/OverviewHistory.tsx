@@ -106,7 +106,7 @@ export function OverviewHistory({ projects, deviceId, actions }: { projects: Boa
           {STATUSES.map((status) => <option key={status} value={status}>{t(`overviewHistory.${status}`)}</option>)}
         </select>
         <select className={SELECT} aria-label={t("overviewHistory.agent")} value={state.agent} onChange={(event) => criteria({ agent: event.target.value })} data-history-agent="true">
-          <option value="">{t("overviewHistory.allAgents")}</option>{AGENT_ADAPTERS.map((agent) => <option key={agent.id} value={agent.herdr_kind}>{agent.label}</option>)}
+          <option value="">{t("overviewHistory.allAgents")}</option>{AGENT_ADAPTERS.map((agent) => <option key={agent.id} value={agent.agent_cli}>{agent.label}</option>)}
         </select>
         <select className={SELECT} aria-label={t("overviewHistory.period")} value={state.days} onChange={(event) => { const days = Number(event.target.value); criteria({ days, since: days ? Date.now() - days * 86_400_000 : null }); }} data-history-period="true">
           <option value={0}>{t("overviewHistory.allTime")}</option>{[7, 30, 90].map((days) => <option key={days} value={days}>{t("overviewHistory.days", { count: days })}</option>)}

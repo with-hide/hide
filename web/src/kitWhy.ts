@@ -56,15 +56,15 @@ const UNAVAILABLE_KEYS = new Map<KitUnavailable, MessageKey>([
 ]);
 
 const PROFILE_REFUSAL_KEYS = new Map<MachineProfileRefusal, MessageKey>([
-  ["no_consent", "herdrProfileRefusal.no_consent"],
-  ["invalid_target", "herdrProfileRefusal.invalid_target"],
-  ["discovery_pending", "herdrProfileRefusal.discovery_pending"],
-  ["device_limit", "herdrProfileRefusal.device_limit"],
+  ["no_consent", "profileRefusal.no_consent"],
+  ["invalid_target", "profileRefusal.invalid_target"],
+  ["discovery_pending", "profileRefusal.discovery_pending"],
+  ["device_limit", "profileRefusal.device_limit"],
 ]);
 
 /** Why Hide declined to connect a first-run machine; a code this build does not know gets the general sentence. */
 export function profileRefusalText(refusal: MachineProfileRefusal, t: Translate): string {
-  return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "herdrProfileRefusal.other");
+  return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "profileRefusal.other");
 }
 
 /** Why a machine's kit does not run at all; a code this build does not know gets the general sentence. */

@@ -49,7 +49,7 @@ export const Usage = memo(function Usage({ actions }: { actions: Actions }) {
     return () => { window.clearInterval(timer); actions.observeUsage({ usage_popover_open: false }); };
   }, [actions, open]);
   const chips = usageChips(rows, prefs, now);
-  const visible = AGENT_ADAPTERS.filter((adapter) => hasLimits(adapter) && !prefs.hidden.includes(adapter.herdr_kind));
+  const visible = AGENT_ADAPTERS.filter((adapter) => hasLimits(adapter) && !prefs.hidden.includes(adapter.agent_cli));
   if (!chips.length && !node?.history) return null;
   return <Popover open={open} onOpenChange={(next) => { setNow(Date.now()); setOpen(next); }}>
     <PopoverAnchor asChild><div className="flex min-w-0 flex-wrap gap-xs" data-usage-chips="true">
@@ -80,9 +80,9 @@ export const Usage = memo(function Usage({ actions }: { actions: Actions }) {
       </div>
       {node ? <UsageHistory node={node} surface="popover" outline={outline} onHistory={() => { afterClose.current = () => actions.openUsageHistory(); setOpen(false); }}>
         <div className="usage-limits flex flex-col gap-md">
-        {visible.map((adapter) => <div key={adapter.id} className="flex flex-col gap-xs" data-usage-row={adapter.herdr_kind}>
-        <div className="flex items-center gap-xs text-caption font-semibold"><AgentMark kind={adapter.herdr_kind} />{adapter.label}</div>
-        <UsageWindows agent={adapter.herdr_kind} cell={rows.find((row) => row.agent === adapter.herdr_kind)?.limits} now={now} onOutline={setOutline} compact />
+        {visible.map((adapter) => <div key={adapter.id} className="flex flex-col gap-xs" data-usage-row={adapter.agent_cli}>
+        <div className="flex items-center gap-xs text-caption font-semibold"><AgentMark kind={adapter.agent_cli} />{adapter.label}</div>
+        <UsageWindows agent={adapter.agent_cli} cell={rows.find((row) => row.agent === adapter.agent_cli)?.limits} now={now} onOutline={setOutline} compact />
       </div>)}
         </div>
       </UsageHistory> : null}
