@@ -893,6 +893,7 @@ impl Runtime {
             // operator clears, as a block is.
             (Some(crate::model::AskSubject::InputUnconfirmed { .. }), _) => DeskAskKind::Blocked,
             (Some(crate::model::AskSubject::HumanTurn { .. }), _) => DeskAskKind::Blocked,
+            (Some(crate::model::AskSubject::OpenAsk { .. }), _) => DeskAskKind::Question,
             (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
             (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
             (None, _) => DeskAskKind::Question,

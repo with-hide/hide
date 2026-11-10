@@ -727,11 +727,11 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
 });
 
 // The card's later half (docs/UI_BEHAVIOR.md, the turn card): the answer to
-// the request in bold over its first lines, a line per agent it worked with
-// that opens into the letters in time order with the folded reports, a
-// question a letter's turn put to the operator under them, and the whole
-// answer read only when opened.
-it("draws the answer, the letters and the unanswered question since the request", async () => {
+// the request in bold over its first lines, the questions to the operator that
+// still wait right under it (the session record's 나를 기다리는 것), a line per
+// agent it worked with that opens into the letters in time order with the
+// folded reports, and the whole answer read only when opened.
+it("draws the answer, the questions still waiting and the letters since the request", async () => {
   const value: PaneHeader = { working: true, notice: null, band: null, progress: "Waiting on Windows CI", request: { text: "Can a profile exist without the default folder?", images: 0 } };
   const agent = turnAgent();
   agent.request = {
@@ -752,8 +752,9 @@ it("draws the answer, the letters and the unanswered question since the request"
       ],
       more_peers: 2,
     },
-    asked: [{ line: "Decide the closed tab defect", at_unix_ms: 2_500, current: false }],
   };
+  const session = { device_id: "local", agent: "claude", session_id: "s1" };
+  agent.open_asks = { session, items: [{ id: "m1", text: "Decide the closed tab defect", at_unix_ms: 2_500 }, { id: "m2", text: "Merge now or wait for CI", at_unix_ms: 2_600 }] };
   const rest = { status: { pane_focus_request: null }, terminal: { headers: { solo: value } }, turn_answer: { pane_id: "solo", offset: 7, phase: "failed", text: null } } as unknown as SnapshotRest;
   const { container, events, unmount } = await mount(value, [agent], { paneId: "solo", rest });
   const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
@@ -762,12 +763,21 @@ it("draws the answer, the letters and the unanswered question since the request"
     expect(card().querySelector("[data-turn-card-answer-line]")?.textContent).toBe("Yes, rarely: a profile-only machine");
     expect(card().querySelector("[data-turn-card-answer-head]")?.textContent).toBe("Yes, it can happen.\nNot common though.");
     expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("4 agents · 13 letters");
-    // A line per agent, the latest first, then the question to the operator; each named for assistive technology.
-    const lines = () => [...card().querySelectorAll("[data-turn-card-peer], [data-turn-card-letter], [data-turn-card-asked]")].map((line) => line.getAttribute("aria-label"));
+    // The questions still waiting sit between the answer and the letters, oldest first, counted as ?N.
+    const order = [...card().querySelectorAll("[data-turn-card-answer], [data-turn-card-asks], [data-turn-card-letters]")].map((part) => (part.hasAttribute("data-turn-card-asks") ? "asks" : part.hasAttribute("data-turn-card-answer") ? "answer" : "letters"));
+    expect(order).toEqual(["answer", "asks", "letters"]);
+    const asks = () => [...card().querySelectorAll<HTMLElement>("[data-turn-card-asks] [data-record-ask]")];
+    expect(asks().map((ask) => ask.textContent?.includes("Decide the closed tab defect") || ask.textContent?.includes("Merge now or wait for CI"))).toEqual([true, true]);
+    expect(card().querySelector("[data-turn-card-asks] [data-open-asks]")?.textContent).toBe("?2");
+    // 무시하기 puts the question away in the session's record, and the line stays to undo while the card is open.
+    await act(async () => card().querySelector<HTMLButtonElement>("[data-record-ask-dismiss=m1]")!.click());
+    expect(events.filter((event) => event.kind === "session_missed_status").map((event) => event.payload)).toEqual([{ session, id: "m1", status: "dismissed" }]);
+    expect(card().querySelector("[data-record-ask=m1]")?.getAttribute("data-dismissed")).toBe("true");
+    // A line per agent, the latest first; each named for assistive technology.
+    const lines = () => [...card().querySelectorAll("[data-turn-card-peer], [data-turn-card-letter]")].map((line) => line.getAttribute("aria-label"));
     expect(lines()).toEqual([
       "impl · Report · Fixed and pushed · Blocked 1×",
       "windows-x · Awaiting reply · Reviewer FAIL forwarded",
-      "To me · Decide the closed tab defect · not answered",
     ]);
     expect(card().querySelector("[data-turn-card-more-peers]")?.textContent).toBe("2 more");
     // Show all opens the letters in time order in the same place, and Collapse closes them.
@@ -778,7 +788,6 @@ it("draws the answer, the letters and the unanswered question since the request"
     expect(lines()).toEqual([
       "Sent to windows-x · Awaiting reply · Reviewer FAIL forwarded",
       "From impl · Blocked · Plugin contract needed",
-      "To me · Decide the closed tab defect · not answered",
     ]);
     await act(async () => letters().click());
     expect(letters().getAttribute("data-turn-card-letters-whole")).toBe("closed");

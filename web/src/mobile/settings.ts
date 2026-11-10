@@ -8,6 +8,8 @@
 import { create } from "zustand";
 import { isInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 import { resolveTheme, type ThemeChoice } from "../theme";
+import { appHost } from "./appHost";
+import { setAppearance } from "./appBridge";
 
 /** One key for both choices; the loader and every protocol bundle of an origin read the same value. */
 export const SETTINGS_KEY = "hide.phone.settings";
@@ -89,7 +91,12 @@ export function choosePhoneSettings(change: Partial<PhoneSettings>): void {
  */
 export function followPhoneTheme(): void {
   const scheme = window.matchMedia("(prefers-color-scheme: dark)");
-  const apply = () => document.documentElement.classList.toggle("dark", resolveTheme(usePhoneSettings.getState().theme, scheme.matches) === "dark");
+  const apply = () => {
+    const { theme } = usePhoneSettings.getState();
+    document.documentElement.classList.toggle("dark", resolveTheme(theme, scheme.matches) === "dark");
+    // The app's status bar, keyboard and system colors follow the choice; `system` hands the decision back to the system.
+    if (appHost()) void setAppearance(theme).catch((error: unknown) => console.warn("phone.appearance_failed", String(error)));
+  };
   apply();
   scheme.addEventListener("change", apply);
   usePhoneSettings.subscribe(apply);

@@ -501,11 +501,11 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
 
     // B30: with push on, the list offers Turn on notifications; allowing it registers the subscription.
     await choosePush(page, "always");
-    await phone.locator('[data-phone-back="true"]').tap();
+    await phone.locator('[data-phone-back="true"]').tap(); await phone.locator('[data-phone-tab="settings"]').tap();
     const enable = phone.locator('[data-phone-notifications="enable"]');
     await expect(enable).toBeVisible({ timeout: 20_000 });
     await enable.tap();
-    await expect(enable).toHaveCount(0, { timeout: 20_000 });
+    await expect(enable).toHaveCount(0, { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
     await expect(page.locator("[data-mobile-phone-line]")).toHaveText("Just now · Receiving notifications");
 
     // B31, B33 (always): two finishes; one notification for it, with no terminal content.

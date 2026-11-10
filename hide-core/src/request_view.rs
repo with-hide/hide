@@ -63,9 +63,6 @@ pub struct RowFacts {
     /// The label's summaries of the recent turns' requests, oldest first;
     /// empty while summaries are off.
     pub(crate) recent_turns: Vec<RecentTurn>,
-    /// The newest turns the label judged to end on a question, whoever began
-    /// them, oldest first; empty while summaries are off.
-    pub(crate) asked: Vec<crate::labels::store::AskedTurn>,
     /// The session's last turn proposed a plan and waits for the operator to
     /// approve it, as read for the agent's current engine state (PRD
     /// codex-plan-approval-hold D-05).
@@ -196,11 +193,6 @@ pub struct AgentRequestSnapshot {
     /// since the shown request (`delivery::correspondence`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub letters: Option<crate::delivery::correspondence::LettersSinceSnapshot>,
-    /// The questions the agent's later turns put to the operator since the
-    /// shown request, oldest first; the operator has sent nothing since
-    /// each, or the shown request would be newer.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub asked: Vec<AskedSnapshot>,
 }
 
 /// The agent's answer to the shown request: the label's line for how the
@@ -223,15 +215,6 @@ pub struct TurnAnswerSnapshot {
     /// When the agent wrote it, or the turn's request was sent when only
     /// the label's line is known.
     pub at_unix_ms: u64,
-}
-
-/// A question a later turn put to the operator.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct AskedSnapshot {
-    pub line: String,
-    pub at_unix_ms: u64,
-    /// It ended the newest turn, which the card's last line already shows.
-    pub current: bool,
 }
 
 /// A row's verb and when it took it, kept in `core-state.json`.
@@ -352,11 +335,6 @@ pub(crate) fn apply<'a>(
             })
             .collect();
         let shown_at = shown.as_ref().map(|(request, _)| request.at_unix_ms);
-        let newest_offset = [&facts.operator_request, &facts.other_request]
-            .into_iter()
-            .flatten()
-            .max_by_key(|request| request.at_unix_ms)
-            .and_then(|request| request.offset);
         let working = row.activity == "working";
         // The shown request's turn is over once a later request began one,
         // or the agent stopped working.
@@ -369,24 +347,6 @@ pub(crate) fn apply<'a>(
         let answer = shown_offset
             .filter(|_| turn_over)
             .and_then(|offset| answer_of(&facts, offset, shown_at.unwrap_or_default()));
-        let asked = shown_at
-            .map(|shown_at| {
-                facts
-                    .asked
-                    .iter()
-                    .filter(|asked| {
-                        asked.at_unix_ms > shown_at && Some(asked.offset) != shown_offset
-                    })
-                    .filter_map(|asked| {
-                        Some(AskedSnapshot {
-                            line: display_text::one_line(&asked.line, MAX_LINE_CHARS)?,
-                            at_unix_ms: asked.at_unix_ms,
-                            current: Some(asked.offset) == newest_offset && !working,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         let letters = shown_at
             .and_then(|shown_at| letters.since(&row.pane_id, shown_at))
             .map(|mut letters| {
@@ -432,7 +392,6 @@ pub(crate) fn apply<'a>(
             pull_requests,
             answer,
             letters,
-            asked,
         });
         row.state = crate::agent_state::row_state(row);
     }

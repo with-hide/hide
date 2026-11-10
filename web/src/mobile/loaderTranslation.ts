@@ -28,7 +28,9 @@ export function useLoaderTranslation() {
     };
     follow();
     window.addEventListener("languagechange", follow);
-    return () => window.removeEventListener("languagechange", follow);
+    // A language chosen in the start page's settings applies at once.
+    const stop = usePhoneSettings.subscribe(follow);
+    return () => { window.removeEventListener("languagechange", follow); stop(); };
   }, []);
   return useTranslation("translation", { i18n: instance, useSuspense: false });
 }

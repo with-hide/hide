@@ -1593,17 +1593,10 @@ impl LinkStore {
             }
         }
         record.missed = self.ledger_missed(session)?;
-        let current_start = chapters.last().map(|chapter| chapter.at_unix_ms);
-        record.asks = record
-            .missed
-            .iter()
-            .filter(|missed| {
-                missed.kind == MissedKind::Ask
-                    && missed.status == MissedStatus::Open
-                    && waits(missed, current_start)
-            })
-            .cloned()
-            .collect();
+        record.asks = open_asks(
+            &record.missed,
+            chapters.last().map(|chapter| chapter.at_unix_ms),
+        );
         let mut statement = self
             .connection
             .prepare(
@@ -2006,6 +1999,36 @@ impl LinkStore {
         if counts.len() > SUMMARY_SESSION_LIMIT {
             return Err("ledger_summary_capacity".into());
         }
+        // The sessions with an open question to the operator: the row's
+        // turn reads them (status-model.md, A question still waiting).
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT DISTINCT device,agent,id FROM ledger_missed \
+            WHERE status=?1 AND kind=?2 LIMIT ?3",
+            )
+            .map_err(failed)?;
+        let asking = statement
+            .query_map(
+                params![
+                    encoded(&MissedStatus::Open)?,
+                    encoded(&MissedKind::Ask)?,
+                    SUMMARY_SESSION_LIMIT as i64 + 1
+                ],
+                |r| {
+                    Ok(SessionIdentity {
+                        device_id: r.get(0)?,
+                        agent: r.get(1)?,
+                        session_id: r.get(2)?,
+                    })
+                },
+            )
+            .map_err(failed)?
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(failed)?;
+        if asking.len() > SUMMARY_SESSION_LIMIT {
+            return Err("ledger_summary_capacity".into());
+        }
         let mut statement = self
             .connection
             .prepare("SELECT device,agent,id,parent_agent,parent_id,parent_device FROM session_parents LIMIT ?1")
@@ -2077,17 +2100,25 @@ impl LinkStore {
                     },
                 )
                 .map_err(failed)?;
-            let missed = if counts.get(&identity).copied().unwrap_or(0) > 0 {
+            let open_missed = counts.get(&identity).copied().unwrap_or(0);
+            let asks_open = asking.contains(&identity);
+            let all = if open_missed > 0 || asks_open {
                 self.ledger_missed(&identity)?
-                    .into_iter()
-                    .filter(|missed| {
-                        missed.status == MissedStatus::Open && missed.kind != MissedKind::Ask
-                    })
-                    .collect()
             } else {
                 Vec::new()
             };
-            missed_count += missed.len();
+            let asks = if asks_open {
+                open_asks(&all, self.current_flow_start(&identity)?)
+            } else {
+                Vec::new()
+            };
+            let missed: Vec<MissedWork> = all
+                .into_iter()
+                .filter(|missed| {
+                    missed.status == MissedStatus::Open && missed.kind != MissedKind::Ask
+                })
+                .collect();
+            missed_count += missed.len() + asks.len();
             if missed_count > SUMMARY_SESSION_LIMIT {
                 return Err("ledger_summary_capacity".into());
             }
@@ -2100,9 +2131,10 @@ impl LinkStore {
                 manual_title: manual,
                 cwd: session.cwd,
                 ended_at_unix_ms: session.ended_at,
-                open_missed: counts.get(&identity).copied().unwrap_or(0),
+                open_missed,
                 subtree_open_missed: subtree.get(&identity).copied().unwrap_or(0),
                 missed,
+                asks,
                 last_line,
                 committed_at_unix_ms: committed_at.and_then(|at| u64::try_from(at).ok()),
                 parent: parents.get(&identity).cloned(),
@@ -2442,6 +2474,23 @@ fn status_of(turns: &[TurnRow]) -> Option<RecordStatus> {
 /// (PRD session-record-fact-status D-03, B6).
 fn waits(missed: &MissedWork, current_start: Option<u64>) -> bool {
     missed.kind != MissedKind::Ask || current_start.is_none_or(|start| missed.at_unix_ms >= start)
+}
+
+/// The questions of a session's `missed` lines that still wait on the
+/// operator, oldest first: the record's `나를 기다리는 것` and the row's
+/// open questions read this one list.
+fn open_asks(missed: &[MissedWork], current_start: Option<u64>) -> Vec<MissedWork> {
+    let mut asks: Vec<MissedWork> = missed
+        .iter()
+        .filter(|missed| {
+            missed.kind == MissedKind::Ask
+                && missed.status == MissedStatus::Open
+                && waits(missed, current_start)
+        })
+        .cloned()
+        .collect();
+    asks.sort_by_key(|ask| ask.at_unix_ms);
+    asks
 }
 
 /// Hide's facts over the labels' lines (PRD session-record-fact-status

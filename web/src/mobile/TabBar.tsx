@@ -4,7 +4,7 @@
 // count in `useBadges`; the bar is drawn on the lists only, never over a
 // detail.
 
-import { FlagIcon, GitPullRequestIcon, ListIcon, type LucideIcon } from "lucide-react";
+import { FlagIcon, GitPullRequestIcon, ListIcon, SettingsIcon, type LucideIcon } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { MessageKey } from "../i18n/catalogs";
@@ -16,13 +16,14 @@ export const PHONE_TABS: readonly { id: PhoneTab; icon: LucideIcon; label: Messa
   { id: "agents", icon: ListIcon, label: "mobile.tab.agents" },
   { id: "missions", icon: FlagIcon, label: "mobile.tab.missions" },
   { id: "prs", icon: GitPullRequestIcon, label: "mobile.tab.prs" },
+  { id: "settings", icon: SettingsIcon, label: "mobile.tab.settings" },
 ];
 
-/** What waits on the operator in each place: the agent list's 내 차례 rows, and the missions with anything in theirs; the PR tab has no count (B28). */
+/** What waits on the operator in each place: the agent list's 내 차례 rows, and the missions with anything in theirs; the PR and Settings tabs have no count (B28). */
 function useBadges(): Record<PhoneTab, number> {
   const agents = usePhone((s) => s.groups?.find((group) => group.group === "needs_you")?.count ?? 0);
   const missions = useMissionBadge();
-  return { agents, missions, prs: 0 };
+  return { agents, missions, prs: 0, settings: 0 };
 }
 
 export function TabBar({ active }: { active: PhoneTab }) {

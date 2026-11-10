@@ -342,6 +342,13 @@ fn waiting(
                     .filter(|_| waiting.spawn_id.is_none());
                 waiting
             }
+            // A question the agent put to the operator that still waits,
+            // laid from its record: a question, in its own words.
+            AskSubject::OpenAsk { line, .. } => {
+                let mut waiting = Waiting::on(WaitCause::Question, None, None);
+                waiting.text = Some(line.chars().take(TEXT_CHARS).collect());
+                waiting
+            }
             AskSubject::HumanTurn { place, kind, .. } => {
                 let mut waiting = Waiting::on(WaitCause::HumanTurn, None, None);
                 waiting.text = Some(

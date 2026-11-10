@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Runs on the build machine (piped by build-ios.sh): xcodebuild and simctl for one branch's copy of the project.
 #
-# Everything this starts it ends: the simulator it created is shut down and deleted, one it found is shut down if it
-# found it off, and the pairing link file is removed, on every way out including a failure. HIDE_IOS_KEEP_SIMULATOR=1
-# leaves the simulator booted for a check by hand; `clean` removes it later.
+# Everything this starts it ends: the simulator it created is shut down and deleted, and one it found is shut down if it
+# found it off, on every way out including a failure. The pairing link of a `run` is the variable HIDE_PAIR_LINK that
+# build-ios.sh puts in front of this script on its standard input: no argument, no file.
+# HIDE_IOS_KEEP_SIMULATOR=1 leaves the simulator booted for a check by hand and marks it; the next command of this
+# branch that does not ask to keep it ends it (as does `clean`), so a kept simulator is never left for good.
 set -euo pipefail
 
 command=$1
@@ -16,12 +18,15 @@ derived=$base/DerivedData
 derived_tests=$base/DerivedDataTests
 packages=$base/SourcePackages
 shots=$base/shots
-link_file=$base/pair-link
+kept_marker=$base/kept-simulator
 device_name=hide-ios-$slug
 bundle_id=me.grab.hide.ios
 # One folder (about 0.5 GB) and one simulator per branch built here: past this many other branches the build refuses
 # and says what to remove, because the machine runs other work and nothing prunes a branch it does not own.
 max_other_branches=4
+# Ad-hoc signed, not unsigned: the simulator gives the Keychain only to an app that carries its entitlements, which an
+# unsigned build does not (the Keychain answers -34018). No account or certificate is involved; release signing is the release workflow's.
+signing=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES)
 settle=${HIDE_IOS_SETTLE:-15}
 
 device_line() { xcrun simctl list devices | sed -n "s/^ *$device_name (\\([0-9A-F-]*\\)) (\\([A-Za-z]*\\)).*/\\1 \\2/p" | head -1; }
@@ -30,11 +35,19 @@ device_id() { device_line | cut -d' ' -f1; }
 created=0
 was_booted=0
 id=
+# The appearance of a simulator this command found and did not make, put back on the way out.
+found_appearance=
 cleanup() {
-    rm -f "$link_file"
-    [[ "${HIDE_IOS_KEEP_SIMULATOR:-}" == 1 ]] && return 0
+    if [[ -n "$found_appearance" && "$created" == 0 && -n "$id" ]]; then
+        xcrun simctl ui "$id" appearance "$found_appearance" 2> /dev/null || true
+    fi
+    if [[ "${HIDE_IOS_KEEP_SIMULATOR:-}" == 1 ]]; then
+        [[ -n "$id" && -d "$base" ]] && touch "$kept_marker"
+        return 0
+    fi
     [[ -n "$id" ]] || return 0
     if [[ $created == 1 ]]; then
+        rm -f "$kept_marker"
         xcrun simctl shutdown "$id" 2> /dev/null || true
         xcrun simctl delete "$id" 2> /dev/null || true
     elif [[ $was_booted == 0 ]]; then
@@ -53,6 +66,8 @@ ensure_device() {
     else
         id=${line%% *}
         [[ "${line#* }" == Booted ]] && was_booted=1
+        # A simulator an earlier command was told to keep is this command's to end, unless this one is told to keep it too.
+        if [[ -f "$kept_marker" && "${HIDE_IOS_KEEP_SIMULATOR:-}" != 1 ]]; then created=1; fi
     fi
 }
 
@@ -71,7 +86,7 @@ case "$command" in
         xcodebuild -project "$project/App.xcodeproj" -scheme App -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-            CODE_SIGNING_ALLOWED=NO build
+            "${signing[@]}" build
         ensure_device
         # The HideShell tests run in a real web view on the simulator: they are what proves the bridge refuses a frame.
         # Its own derived data: the app's build already holds a Capacitor framework the package's scheme must not meet.
@@ -81,7 +96,7 @@ case "$command" in
         # The app's own controller, hosted in the app on the simulator: it is what proves the app installs the gate.
         xcodebuild test -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppTests \
-            CODE_SIGNING_ALLOWED=NO
+            "${signing[@]}"
         printf 'built: %s\n' "$derived/Build/Products/Debug-iphonesimulator/App.app"
         df -h / | tail -1 | awk '{printf "build machine free disk: %s of %s\n", $4, $2}'
         ;;
@@ -90,16 +105,27 @@ case "$command" in
         xcrun simctl bootstatus "$id" -b > /dev/null
         xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
-        # A pairing link for the simulator check (debug builds only) arrives in a private file, never in an argument.
-        if [[ -f "$link_file" ]]; then
-            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=$(cat "$link_file") xcrun simctl launch "$id" "$bundle_id"
-            rm -f "$link_file"
-        else
-            xcrun simctl launch "$id" "$bundle_id"
+        if [[ -n "${HIDE_IOS_APPEARANCE:-}" ]]; then
+            if [[ $created == 0 && ! -f "$kept_marker" ]]; then found_appearance=$(xcrun simctl ui "$id" appearance 2> /dev/null || true); fi
+            xcrun simctl ui "$id" appearance "$HIDE_IOS_APPEARANCE"
         fi
         mkdir -p "$shots"
+        # The debug build's inputs (see ShellViewController): a pairing link and taps, from variables the script was
+        # sent with. `HIDE_IOS_HOME=1` shows the home screen with the icon, `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on
+        # its launch screen (it starts and waits for a debugger that never comes) and captures that.
+        if [[ "${HIDE_IOS_HOME:-}" == 1 ]]; then
+            xcrun simctl launch "$id" "$bundle_id" > /dev/null
+            sleep 2
+            xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+            xcrun simctl launch "$id" com.apple.springboard > /dev/null 2>&1 || true
+        elif [[ "${HIDE_IOS_LAUNCH_SCREEN:-}" == 1 ]]; then
+            xcrun simctl launch --wait-for-debugger "$id" "$bundle_id" > /dev/null
+        else
+            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=${HIDE_PAIR_LINK:-} SIMCTL_CHILD_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcrun simctl launch "$id" "$bundle_id"
+        fi
         sleep "$settle"
         xcrun simctl io "$id" screenshot "$shots/run.png" 2>&1 | tail -1
+        [[ "${HIDE_IOS_LAUNCH_SCREEN:-}" == 1 ]] && xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
         ;;
     clean)

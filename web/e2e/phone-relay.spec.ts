@@ -47,7 +47,7 @@ async function pair(page: import("@playwright/test").Page, relay: Awaited<Return
 test("QR clears its secret, pairs over Noise and uses the shared conversation, terminal and reply UI", async ({ page, relay }) => {
   // A camera/link can return to a root page that is already open (same-document navigation).
   await page.goto(relay.origin + "/");
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
   await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/#pair=/);
@@ -135,7 +135,7 @@ test("unsupported device shows both protocol versions and lets the user choose a
   await expect(page.getByText("Device", { exact: true })).toBeVisible();
   await expect(page.getByText("9", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Choose another device" }).click();
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
 });
 
 for (const [reason, copy] of [["code_expired", "expired"], ["phone_limit", "4"]]) {
@@ -201,7 +201,8 @@ test("the device list marks a device that refuses its status check as disconnect
 
 test("the in-app link scanner adds a device and CSP refuses external scripts", async ({ page, relay }) => {
   await page.goto(relay.origin);
-  await page.getByRole("button", { name: "Connect another device" }).click();
+  // No computer yet: the first screen's big button opens the browser's scan and paste page.
+  await page.getByRole("button", { name: "Scan QR code", exact: true }).click();
   await page.getByRole("textbox", { name: "Paste QR link" }).fill(relay.qr);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
@@ -287,16 +288,17 @@ test("hosted push registers and removes only the device scope while keeping the 
     PushManager.prototype.subscribe = async () => ({ toJSON: () => ({ endpoint: "https://push.example/subscription", keys: { p256dh: "public", auth: "secret" } }) }) as PushSubscription;
   });
   await pair(page, relay);
+  // Notifications and the paired computers live in the Settings tab.
+  await page.locator('[data-phone-tab="settings"]').click();
   await page.getByRole("button", { name: "Turn on notifications", exact: true }).click();
   await expect(page.locator('[data-phone-notifications="enable"]')).toHaveCount(0);
   await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
   const scopes = () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((worker) => new URL(worker.scope).pathname).sort());
   await expect.poll(scopes).toEqual(["/", `/push/${relay.pairing.room}/`]);
-  await page.getByRole("button", { name: relay.pairing.name, exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).last().click();
   await expect(page).toHaveURL(relay.origin + "/");
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   await expect.poll(scopes).toEqual(["/"]);
 });
 
@@ -308,6 +310,7 @@ for (const permission of ["denied", "unsupported"]) {
       else Object.defineProperty(Notification, "permission", { configurable: true, get: () => "denied" });
     }, permission);
     await pair(page, relay);
+    await page.locator('[data-phone-tab="settings"]').click();
     await expect(page.locator(`[data-phone-notifications="${permission === "denied" ? "denied" : "install_first"}"]`)).toBeVisible();
   });
 }

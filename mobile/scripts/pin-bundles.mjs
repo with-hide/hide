@@ -4,13 +4,12 @@
 // reads in a pull request of its own before a build trusts it (docs/BUILD.md, The iOS app). Every file is downloaded
 // and hashed here, and must also agree with the site's inventory, so a half-deployed site fails now rather than
 // being pinned. The protocol this source builds itself (`PHONE_PROTOCOL`) is never pinned.
-import { readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ORIGIN, inventory, sha256 } from '../../scripts/phone-release.mjs';
-import { PINS, json, parsePins, read } from './assemble.mjs';
+import { PINS, json, parsePins, read, sourceProtocol } from './assemble.mjs';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 export async function pin({ current, origin = ORIGIN, fetcher = fetch }) {
   const site = await json(`${origin}/phone-site.json`, fetcher);
@@ -43,10 +42,7 @@ export function text(value) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const source = await readFile(resolve(ROOT, 'web/src/mobile/phoneVersion.ts'), 'utf8');
-    const current = Number(source.match(/PHONE_PROTOCOL = (\d+)/)?.[1]);
-    if (!Number.isSafeInteger(current) || current < 1) throw new Error('phone protocol missing');
-    const value = await pin({ current });
+    const value = await pin({ current: await sourceProtocol() });
     await writeFile(PINS, `${text(value)}\n`);
     console.log(`pinned protocols ${Object.keys(value.protocols).join(', ')} in mobile/retained-bundles.json; review the diff`);
   } catch (error) {

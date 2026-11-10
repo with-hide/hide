@@ -73,7 +73,6 @@ struct Summary {
     line: String,
     end: Option<LabelEnd>,
     recent_turns: Vec<store::RecentTurn>,
-    asked: Vec<store::AskedTurn>,
 }
 
 impl LabelOverlay {
@@ -95,7 +94,6 @@ impl LabelOverlay {
                         line: record.line.clone(),
                         end: record.end,
                         recent_turns: record.recent_turns.clone(),
-                        asked: record.asked.clone(),
                     }),
                     facts: row_facts(&record.facts),
                     turn: record.turn_read(),
@@ -331,7 +329,6 @@ impl LabelOverlay {
                 for turn in &mut facts.recent_turns {
                     turn.end = turn.end.map(as_pane);
                 }
-                facts.asked.clone_from(&summary.asked);
             }
             agent.facts = Some(facts);
         }
@@ -371,7 +368,6 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
         end: None,
         line: None,
         recent_turns: Vec::new(),
-        asked: Vec::new(),
         awaiting_operator: false,
         user_turn: None,
         wake_devices: 0,

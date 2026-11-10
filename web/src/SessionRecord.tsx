@@ -29,6 +29,7 @@ import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
 import { PlanChecklist } from "./components/plan-checklist";
+import { OpenAskList } from "./components/open-asks";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
@@ -422,43 +423,17 @@ function RequestTime({ at, full = false }: { at: number; full?: boolean }) {
   return <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(at).toISOString()}>{full ? `${recordDate(at)} ` : null}{formatDateTime(requireInterfaceLanguage(i18n.language), at, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>;
 }
 
-/**
- * 나를 기다리는 것 (D-12, B11, B12): the agent's open questions and decisions,
- * each with 넘기기; a line put away keeps its place with 되돌리기 while this
- * record stays open, and leaves that state when the core lists it as open
- * again after it was gone. No line at all when nothing waits.
- */
+/** 나를 기다리는 것 (D-12, B11, B12): the agent's open questions and decisions, the list the turn card draws too. No line at all when nothing waits. */
 function Asks({ record, actions }: { record: RecordValue; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  // `gone` is set once the core no longer lists the line; listed again after that, it is open again.
-  const [away, setAway] = useState<readonly { ask: MissedWork; gone: boolean }[]>([]);
-  useEffect(() => {
-    const open = new Set(record.asks.map((ask) => ask.id));
-    setAway((held) => {
-      const next = held.filter((one) => !(one.gone && open.has(one.ask.id))).map((one) => (one.gone || open.has(one.ask.id) ? one : { ...one, gone: true }));
-      return next.length === held.length && next.every((one, index) => one === held[index]) ? held : next;
-    });
-  }, [record.asks]);
-  const lines = [...record.asks, ...away.map((one) => one.ask).filter((ask) => !record.asks.some((open) => open.id === ask.id))].sort((a, b) => a.at_unix_ms - b.at_unix_ms);
-  if (!lines.length) return null;
-  const small = "h-auto shrink-0 px-xs py-0 text-micro";
-  return <section className="mt-lg min-w-0" aria-label={t("record.waiting")} data-record-asks={record.asks.length}>
-    <SectionHead label={t("record.waiting")} count={record.asks.length} />
-    <ul className="min-w-0">
-      {lines.map((ask) => {
-        const dismissed = away.some((one) => one.ask.id === ask.id);
-        return <li key={ask.id} className="flex min-w-0 items-start gap-xs border-b border-border py-xs last:border-b-0" data-record-ask={ask.id} data-dismissed={dismissed ? "true" : undefined}>
-          <CircleHelpIcon aria-hidden="true" className={cn("mt-xxs size-(--size-icon-sm) shrink-0", dismissed ? "text-muted-foreground" : "text-warning")} />
-          <span className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", dismissed ? "text-muted-foreground line-through" : "text-foreground")} title={ask.text}>{ask.text}</span>
-          {dismissed ? (
-            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "open"); setAway((held) => held.filter((one) => one.ask.id !== ask.id)); }} data-record-ask-undo={ask.id}>{t("backlog.panel.undo")}</Button>
-          ) : (
-            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "dismissed"); setAway((held) => [...held, { ask, gone: false }]); }} data-record-ask-dismiss={ask.id}>{t("sessionWork.dismiss")}</Button>
-          )}
-        </li>;
-      })}
-    </ul>
-  </section>;
+  return <OpenAskList
+    asks={record.asks}
+    onSet={(id, status) => actions.setMissedStatus(record.session, id, status)}
+    frame={(list, open) => <section className="mt-lg min-w-0" aria-label={t("record.waiting")} data-record-asks={open}>
+      <SectionHead label={t("record.waiting")} count={open} />
+      {list}
+    </section>}
+  />;
 }
 
 /** A recorded turn's end word; a usage limit takes the block's look. */

@@ -2579,7 +2579,7 @@ fn a_pull_request_its_creating_call_printed_early_is_the_sessions_output_and_a_l
 /// D-12, D-13: an ask waits on the operator in its session's record, and
 /// stays out of the Overview backlog's missed work, which keeps problems.
 #[test]
-fn an_ask_waits_in_the_record_and_never_reaches_the_backlogs_missed_work() {
+fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_work() {
     let directory = tempfile::tempdir().unwrap();
     let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
     let project = origin_project("device-a", "acme/app", 0);
@@ -2625,6 +2625,23 @@ fn an_ask_waits_in_the_record_and_never_reaches_the_backlogs_missed_work() {
             .collect::<Vec<_>>(),
         [MissedKind::Problem]
     );
+    // The row reads the same open questions the record lists (status-model.md,
+    // A question still waiting), and one put away leaves both.
+    assert_eq!(mine.asks, record.asks);
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id: record.asks[0].id.clone(),
+            status: MissedStatus::Dismissed,
+        })
+        .unwrap();
+    let summaries = store.ledger_summaries(&project.key).unwrap();
+    let mine = summaries
+        .iter()
+        .find(|summary| summary.session == session())
+        .unwrap();
+    assert!(mine.asks.is_empty());
+    assert!(store.ledger_record(&session()).unwrap().asks.is_empty());
 }
 
 /// PRD project-panel-results D-20, D-21: a session's summary carries the

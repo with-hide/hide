@@ -8,3 +8,8 @@ export const appHost = () => window.location.protocol === "capacitor:";
 
 /** Whether this page may register or ask for a service worker: a browser tab can, the app never does. */
 export const serviceWorkerAllowed = () => !appHost() && "serviceWorker" in navigator;
+
+/** Marks the page as the app's for the styles that only the app has (no text selection on a control, no callout): one attribute, set once at start. */
+export function markAppHost(): void {
+  if (appHost()) document.documentElement.dataset.appHost = "true";
+}
