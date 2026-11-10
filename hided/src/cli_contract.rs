@@ -593,6 +593,7 @@ pub const COMMANDS: &[Spec] = &[
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_with_parent",
             "beside_pane_unavailable",
             "plan_missing",
             "plan_node_unknown",
@@ -910,6 +911,7 @@ pub const COMMANDS: &[Spec] = &[
             "composer_unconfirmed",
             "force_target_asleep",
             "intent_conflict",
+            "no_parent",
         ],
     },
     spec(

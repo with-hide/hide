@@ -4615,6 +4615,7 @@
                 "beside_other_checkout",
                 "beside_other_machine",
                 "beside_needs_agent_pane",
+                "beside_with_parent",
                 "beside_pane_unavailable",
                 "plan_missing",
                 "plan_node_unknown",
@@ -5157,7 +5158,8 @@
                 "composer_not_empty",
                 "composer_unconfirmed",
                 "force_target_asleep",
-                "intent_conflict"
+                "intent_conflict",
+                "no_parent"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6613,7 +6615,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:976d0ed4f0b6636b350b41294335d4294acf00c7bffdf76ca0f70fabe5917d58",
+    "digest": "sha256:6d75ef4cfd8a37d93551710e5eb0f96f3fe5b6c2c7827ed1482cd0446156ac9a",
     "envelopes": {
         "agent": {
             "answer": "value",

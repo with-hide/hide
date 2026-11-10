@@ -1325,6 +1325,10 @@ pub fn archive_next_action(code: &str) -> &'static str {
 /// The id `hide agent show` and `--parent` take for the caller itself.
 pub const HERE: &str = "here";
 
+/// The recipient `hide request send` takes for the sender's own parent; it
+/// wins over an agent that registered under the same name.
+pub const PARENT: &str = "parent";
+
 /// The caller's live registrations: the records not ended whose actor is
 /// the caller's attested pane, device and session. `--parent here` takes
 /// the first; `here` refuses more than one.

@@ -1164,6 +1164,12 @@ fn spawn(
     if plan_node.is_some() != plan.is_some() {
         return Err("invalid_spawn".into());
     }
+    // Where a spawn opens says who answers for it: beside its caller is the
+    // operator's to watch, so it never has a parent, and a supervised child
+    // opens in a tab of its own (docs/delivery.md).
+    if *beside && parent.is_some() {
+        return Err("beside_with_parent".into());
+    }
     if brief
         .as_ref()
         .is_some_and(|brief| brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT)
