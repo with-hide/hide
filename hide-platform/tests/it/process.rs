@@ -3277,9 +3277,10 @@ const FOREIGN_PANE_NAMES: [&str; 7] = [
 ];
 
 /// The one rule that withholds the operator's Herdr pane identity from a Hide
-/// pane: every copy (the holder's pane environment, the desk process, the
-/// node's ssh command) calls `is_foreign_pane_identity`, so the prefix and its
-/// case rule are fixed here and nowhere else.
+/// pane: the holder's pane environment and the desk process call
+/// `is_foreign_pane_identity`, so the prefix and its case rule are fixed here
+/// and nowhere else. The node's ssh command keeps its own case-sensitive match
+/// on the same prefix, so a lowercase `herdr_*` variable still reaches ssh.
 #[test]
 fn the_foreign_pane_identity_is_the_herdr_prefix_whatever_the_case() {
     assert_eq!(FOREIGN_PANE_IDENTITY, "HERDR_");
