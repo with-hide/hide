@@ -204,12 +204,7 @@ impl PushRequest {
         if self.id == 0 {
             return Err(PushField::Shape);
         }
-        let token = self.token.as_bytes();
-        if token.len() < MIN_TOKEN
-            || token.len() > MAX_TOKEN
-            || !token.len().is_multiple_of(2)
-            || !token.iter().all(u8::is_ascii_hexdigit)
-        {
+        if !token_valid(&self.token) {
             return Err(PushField::Token);
         }
         if self.collapse.is_empty()
@@ -230,6 +225,15 @@ impl PushRequest {
     pub fn validate(&self) -> Result<(), Error> {
         self.check().map_err(|_| Error::InvalidMessage)
     }
+}
+
+/// Whether `token` has the shape of an APNs device token: hex, an even
+/// length between `MIN_TOKEN` and `MAX_TOKEN`. The one rule the relay and the
+/// device that stores a token both apply.
+pub fn token_valid(token: &str) -> bool {
+    (MIN_TOKEN..=MAX_TOKEN).contains(&token.len())
+        && token.len().is_multiple_of(2)
+        && token.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// The first thing the relay finds wrong with a push request. It names a

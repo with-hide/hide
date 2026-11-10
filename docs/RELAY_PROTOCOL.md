@@ -208,7 +208,7 @@ DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vC
 
 ### Registration on the phone protocol
 
-Inside its encrypted session the app sends `apns_registration {token, environment, key: {p256dh, auth}}`: the device token as lowercase hex, its environment, and a per-computer P-256 public key (65 bytes uncompressed) and 16-byte secret, base64url, the same shape as a Web Push subscription's keys.
+Inside its encrypted session the app sends `apns_registration {token, environment, key: {p256dh, auth}}`: the device token as hex (`admission::token_valid`), its environment, and a per-computer P-256 public key (65 bytes uncompressed) and 16-byte secret, base64url, the same shape as a Web Push subscription's keys.
 hided answers `push_state {notifications: "on" | "refused"}` and keeps it in the phone's record in `phones.json` (0600), where it replaces a Web Push subscription and the reverse.
 `push_permission {state: "denied"}` removes it, unpairing removes it with the phone, and a `token_gone` answer removes it.
 An older hided answers the message `refused_request` and keeps the session, so the addition keeps `PHONE_PROTOCOL` at 5.

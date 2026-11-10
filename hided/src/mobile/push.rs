@@ -413,17 +413,11 @@ pub fn notice_route(
     Ok(())
 }
 
-/// Whether an iOS app phone's registration can be stored: a lowercase hex
-/// device token inside the relay's bounds, and the key and secret in the same
-/// shape a Web Push subscription carries.
+/// Whether an iOS app phone's registration can be stored: a device token the
+/// relay accepts, and the key and secret in the same shape a Web Push
+/// subscription carries.
 pub fn registration_valid(registration: &ApnsRegistration) -> bool {
-    let token = &registration.token;
-    token.len() >= admission::MIN_TOKEN
-        && token.len() <= admission::MAX_TOKEN
-        && token.len().is_multiple_of(2)
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    admission::token_valid(&registration.token)
         && encrypt_for(&registration.p256dh, &registration.auth, &[]).is_ok()
 }
 
