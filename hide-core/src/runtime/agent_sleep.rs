@@ -266,9 +266,13 @@ impl Runtime {
 
     /// Marks the projected rows that sleep and moves each awake agent's
     /// change stamp. The stamps are persisted, never published.
-    pub(super) fn stamp_agent_sleep(&mut self, agents: &mut [SidebarAgentSnapshot]) {
+    pub(super) fn stamp_agent_sleep(
+        &mut self,
+        agents: &mut [SidebarAgentSnapshot],
+        live_pane_ids: Option<&HashSet<String>>,
+    ) {
         self.confirm_dormant_wake(agents);
-        self.stamp_agent_sleep_in(agents, SleepScope::Core);
+        self.stamp_agent_sleep_in(agents, SleepScope::Core, live_pane_ids);
     }
 
     /// The same for the rows of another machine.
@@ -276,14 +280,20 @@ impl Runtime {
         &mut self,
         device: &str,
         agents: &mut [SidebarAgentSnapshot],
+        live_pane_ids: &HashSet<String>,
     ) {
-        self.stamp_agent_sleep_in(agents, SleepScope::Device(device));
+        self.stamp_agent_sleep_in(agents, SleepScope::Device(device), Some(live_pane_ids));
     }
 
-    fn stamp_agent_sleep_in(&mut self, agents: &mut [SidebarAgentSnapshot], scope: SleepScope<'_>) {
+    fn stamp_agent_sleep_in(
+        &mut self,
+        agents: &mut [SidebarAgentSnapshot],
+        scope: SleepScope<'_>,
+        live_pane_ids: Option<&HashSet<String>>,
+    ) {
         let store = &mut self.snapshot.ui_state.agent_sleep;
         store.annotate(agents);
-        if store.stamp(agents, scope, unix_milliseconds()) {
+        if store.stamp(agents, scope, live_pane_ids, unix_milliseconds()) {
             self.persist_ui_state();
         }
     }

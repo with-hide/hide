@@ -566,11 +566,12 @@ fn fork_antigravity(
 /// fork opened, so what its composer holds is erased, each erase judged by
 /// the screen with agy's composer declaration, the one delivery reads a
 /// held letter's composer by (`docs/delivery.md`, Reading the composer).
-/// A screen the declaration cannot confirm empty (no composer as declared,
-/// a cut screen, or text that outlasts the erase, as a hint a later agy
-/// draws might) is typed into as before and logged, so a declaration that
-/// no longer matches agy's screen never stops a fork. Bounded by
-/// `deadline` and `ANTIGRAVITY_ERASE_LIMIT`.
+/// A screen with no composer as declared is no agy prompt (an editor agy
+/// opened on a stray key, a question): nothing is typed and the fork fails.
+/// A screen the declaration cannot otherwise confirm empty (a cut screen, or
+/// text that outlasts the erase, as a hint a later agy draws might) is typed
+/// into as before and logged. Bounded by `deadline` and
+/// `ANTIGRAVITY_ERASE_LIMIT`.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: agy redraws between erases
 fn clear_antigravity_composer(
     engine: &dyn Engine,
@@ -603,7 +604,13 @@ fn clear_antigravity_composer(
         }
         match composer.judge(&screen.text) {
             Verdict::Empty => return Ok(()),
-            Verdict::NotFound => return unconfirmed("not_found", sent),
+            // No composer on the screen is a pane that is not agy's prompt
+            // (an editor agy opened on a stray key, a question), and what is
+            // typed into it is not a command: nothing is typed.
+            Verdict::NotFound => {
+                let _ = unconfirmed("not_found", sent);
+                return Err("agy's composer was not on the screen, so /fork was not typed".into());
+            }
             Verdict::Holds if sent >= ANTIGRAVITY_ERASE_LIMIT || Instant::now() >= deadline => {
                 return unconfirmed("not_empty", sent);
             }
@@ -1450,8 +1457,8 @@ mod tests {
         // agy's mode query, `27;1$y`, #1529), which is erased first.
         // `stuck`: text outlasts the erase, as a hint a later agy draws in an
         // empty composer might, and `/fork` is typed as before.
-        // `no-composer`: the screen shows no composer as declared, and
-        // `/fork` is typed as before.
+        // `no-composer`: the screen shows no composer as declared (an editor
+        // agy opened), and nothing is typed.
         // `done`: agy read working for a moment as it opened the
         // conversation, so its rest reads done, and `/fork` is typed on it.
         const AGY_EMPTY: &str =
@@ -1624,7 +1631,14 @@ mod tests {
                     assert_eq!(result, Ok(()), "{case}");
                     &stuck
                 }
-                "success" | "moved" | "in-motion" | "no-composer" | "done" => {
+                "no-composer" => {
+                    assert!(
+                        result.as_ref().unwrap_err().contains("composer"),
+                        "{result:?}"
+                    );
+                    &["pane_agent_status", "pane_agent_status", "read_screen"]
+                }
+                "success" | "moved" | "in-motion" | "done" => {
                     assert_eq!(result, Ok(()), "{case}");
                     &[
                         "pane_agent_status",

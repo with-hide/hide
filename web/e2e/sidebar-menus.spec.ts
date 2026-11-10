@@ -283,7 +283,7 @@ test("New tab in main opens a terminal in the default checkout", async ({ page }
   try {
     const before = await withControl(daemon, (control) => control.until((rest) => tabsOf(rest, opened.workspace), "the project's tabs"));
     // Drafts share the Agent tab kind; native IDs distinguish the live tabs.
-    const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="herdr"]:not([data-tab^="draft:"])');
+    const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="engine"]:not([data-tab^="draft:"])');
     const menu = await openMenu(page, projectRow, "repo actions");
     await menu.locator('[data-menu-item="new_tab_primary"]').click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
@@ -333,7 +333,7 @@ test("the agent row's Close tab… closes that agent's tab without asking when i
     // B8: through the tab close flow, in a checkout that is not the one in
     // front. An idle agent's tab closes without asking (close.ts asks only
     // for working or attention panes), and the row leaves with its pane.
-    const mainTabs = page.locator(`[data-tab-bar] [data-tab-kind="herdr"]`);
+    const mainTabs = page.locator(`[data-tab-bar] [data-tab-kind="engine"]`);
     await expect(agentRow).toBeVisible();
     const menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
     await menu.locator('[data-menu-item="close_tab"]').click();

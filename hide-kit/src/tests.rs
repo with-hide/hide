@@ -30,7 +30,6 @@ mod agent_cases;
 #[cfg(unix)]
 mod codex_trust_cases;
 #[cfg(unix)]
-mod herdr_cases;
 #[cfg(unix)]
 mod kit_cases;
 mod profile_cases;

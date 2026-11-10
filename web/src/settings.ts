@@ -526,12 +526,12 @@ export type DiagnosticsInput = {
  * Copy diagnostics' input from what the stores hold, the same for Settings'
  * About and the sidebar's Help menu (PRD sidebar-titlebar-refresh D-12).
  */
-export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connection: string; rest: { status?: { herdr?: EngineStatus; environment?: EnvironmentStatus[]; diagnostics?: CoreDiagnostic[]; last_error?: { kind: string; message: string } | null } } | null }, userAgent: string): DiagnosticsInput {
+export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connection: string; rest: { status?: { engine?: EngineStatus; environment?: EnvironmentStatus[]; diagnostics?: CoreDiagnostic[]; last_error?: { kind: string; message: string } | null } } | null }, userAgent: string): DiagnosticsInput {
   const status = state.rest?.status;
   return {
     daemon: state.daemon,
     connection: state.connection,
-    engine: status?.herdr,
+    engine: status?.engine,
     environment: status?.environment ?? [],
     diagnostics: status?.diagnostics ?? [],
     lastError: status?.last_error,

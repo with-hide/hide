@@ -6,7 +6,7 @@
 
 import { useEffect, useRef } from "react";
 import type { MessageKey } from "./i18n/catalogs";
-import type { Mission, MissionAnswerFailure, MissionAnswerState } from "./snapshot";
+import type { Mission, MissionAnswerFailure, MissionAnswerHold, MissionAnswerState } from "./snapshot";
 
 /** The longest written answer the core takes (`missions::ANSWER_LIMIT`), counted in UTF-16 units so the field's own cap never lets past what the core refuses. */
 export const ANSWER_LIMIT = 500;
@@ -37,7 +37,7 @@ export type AnswerView = {
   options: string[];
   recommend: number | null;
   /** The answer as it stands: the core's, or the one just pressed; null while the question is open. */
-  sent: { text: string; state: MissionAnswerState; line: SentLine; word: MessageKey } | null;
+  sent: { text: string; state: MissionAnswerState; line: SentLine; word: MessageKey; /** `지금 보내기` can lift what it waits for. */ canNow: boolean } | null;
   /** Sending an unconfirmed answer again shows it sending until the core moves it on. */
   resending: boolean;
   /** Nothing can be pressed: it cannot be taken, or it was already sent. */
@@ -54,8 +54,8 @@ export function answerView(mission: AnswerSource, device: string | null, pressed
   const key = question?.key ?? 0;
   const answer = mission.answer?.key === key ? mission.answer : null;
   const resending = pressed?.resend === true && answer?.state === "unconfirmed";
-  const shown = answer && !resending ? { text: answer.text, state: answer.state } : pressed ? { text: pressed.text, state: "sending" as const } : null;
-  const sent: AnswerView["sent"] = shown ? { ...shown, ...sentLine(shown.state, mission.answer_failed) } : null;
+  const shown = answer && !resending ? { text: answer.text, state: answer.state, hold: answer.hold } : pressed ? { text: pressed.text, state: "sending" as const, hold: undefined } : null;
+  const sent: AnswerView["sent"] = shown ? { text: shown.text, state: shown.state, ...sentLine(shown.state, mission.answer_failed, shown.hold), canNow: shown.state === "waiting" && (shown.hold === "working" || shown.hold === "typing" || shown.hold === "recent") } : null;
   const gone = !mission.conductor.present;
   const offline = mission.stale;
   const unsupported = !mission.conductor.takes_answers;
@@ -72,10 +72,20 @@ export function answerView(mission: AnswerSource, device: string | null, pressed
   return { key, options: question?.options ?? [], recommend: question?.recommend ?? null, sent, resending, closed: unreachable || sent !== null, unreachable, reason, refused: reason?.kind === "failed" };
 }
 
-function sentLine(state: MissionAnswerState, failed: MissionAnswerFailure | null): { line: SentLine; word: MessageKey } {
+/** What a waiting answer says it waits for; a wait that ends on its own, and an older core's, keep the plain `차례 기다림`. */
+const HOLD_WORD: Record<MissionAnswerHold, MessageKey> = {
+  working: "mission.banner.hold.working",
+  typing: "mission.banner.hold.typing",
+  recent: "mission.banner.hold.recent",
+  approval: "mission.banner.hold.approval",
+  forced: "mission.banner.hold.forced",
+  other: "mission.banner.waitingTurn",
+};
+
+function sentLine(state: MissionAnswerState, failed: MissionAnswerFailure | null, hold: MissionAnswerHold | undefined): { line: SentLine; word: MessageKey } {
   if (state === "unconfirmed") return { line: "unconfirmed", word: "mission.banner.unconfirmed" };
   if (state === "waiting" && failed === "session_unreadable") return { line: "unreadable", word: "mission.banner.failed.session_unreadable" };
-  return { line: "delivered", word: state === "waiting" ? "mission.banner.waitingTurn" : "mission.banner.reading" };
+  return { line: "delivered", word: state === "waiting" ? HOLD_WORD[hold ?? "other"] : "mission.banner.reading" };
 }
 
 /** Whether the pressed answer still shows: not once the core answers for it, refuses it differently, or asks something else (B26). */

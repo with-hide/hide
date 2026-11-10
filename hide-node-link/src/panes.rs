@@ -13,7 +13,7 @@ pub const CHECKOUT_NEXT_ACTION: &str = "Run the command from a shell inside a re
 pub const PANE_NEXT_ACTION: &str = "Reconnect the pane and retry";
 /// A Herdr pane whose workspace is not moved into Hide's own engine yet
 /// (PRD engine-bundle-4-herdr-removal B10).
-pub const PANE_NOT_MOVED_NEXT_ACTION: &str = "This pane still runs in Herdr: move Herdr from Hide's window, then run the command in the moved pane";
+pub const PANE_NOT_MOVED_NEXT_ACTION: &str = "This pane still runs in Herdr: import the Herdr session from Hide's window, then run the command in the imported pane";
 
 /// What a pane's caller can do about a node's or daemon's refusal; the
 /// installation rule's own refusals say theirs

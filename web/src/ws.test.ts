@@ -311,6 +311,71 @@ it("a window no move holds reconnects as reconnecting, and a move that stops sho
   shell.close();
 });
 
+/** The address changes under an open page, as the host's next attach or a followed link does. */
+function addressNowCarries(token: string) {
+  window.history.replaceState(null, "", `#token=${token}`);
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
+const tokenOf = (socket: FakeSocket) => (JSON.parse(socket.sent[0] ?? "{}") as { token: string }).token;
+
+// A restarted daemon has a new token. A page that reconnected with the old one
+// is refused and gone (4001); the address that carries the new token, changed
+// under the open page, draws it again without a reload.
+it("a new token in the address draws a page the old token's refusal left gone", async () => {
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  const first = made(0);
+  first.open();
+  first.frame({ type: "snapshot", payload: { revision: 5, rest: {} } });
+  first.closeWith(1012, "");
+  await vi.advanceTimersByTimeAsync(nextBackoff(BACKOFF_START_MS));
+  const refused = made(1);
+  refused.open();
+  expect(tokenOf(refused)).toBe("t");
+  refused.closeWith(4001, "invalid_token");
+  expect(useShellStore.getState().connection).toBe("gone");
+
+  addressNowCarries("t2");
+  expect(FakeSocket.made).toHaveLength(3);
+  const again = made(2);
+  again.open();
+  expect(tokenOf(again)).toBe("t2");
+  again.frame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+  expect(useShellStore.getState().connection).toBe("live");
+  shell.close();
+});
+
+it("a token replacement fails its old reads and a late refusal leaves the new reads alone", async () => {
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  configureFileBytes(shell.dispatch);
+  const old = made(0);
+  old.open();
+  const outcome = (read: Promise<Uint8Array>) => read.then(() => "answered", (error: Error) => error.message);
+  const oldRead = outcome(requestFileBytes("/repo/old.bin"));
+  addressNowCarries("t2");
+  expect(await oldRead).toBe("socket_closed");
+  const again = made(1);
+  again.open();
+  again.frame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+  const newRead = outcome(requestFileBytes("/repo/new.bin"));
+  const request = JSON.parse(again.sent.at(-1)!) as { payload: { request_id: string } };
+  old.closeWith(4001, "invalid_token");
+  await vi.advanceTimersByTimeAsync(nextBackoff(BACKOFF_START_MS));
+  expect(useShellStore.getState().connection).toBe("live");
+  expect(FakeSocket.made).toHaveLength(2);
+  again.frame({ type: "file_bytes_error", payload: { request_id: request.payload.request_id, reason: "read_failed" } });
+  expect(await newRead).toBe("read_failed");
+  shell.close();
+});
+
+it("a page whose address keeps its token does not open another connection", () => {
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  made(0).open();
+  addressNowCarries("t");
+  expect(FakeSocket.made).toHaveLength(1);
+  shell.close();
+});
+
 // with-hide/hide-private#659: a program's copy reaches the window as its own
 // frame, handed over once, and never as a pane's output that a redraw or a
 // reconnect would replay.

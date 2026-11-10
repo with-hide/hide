@@ -83,7 +83,12 @@ struct Known {
     owns_every_pane: AtomicBool,
     /// Told whenever a start under way ends, either way.
     settled: Condvar,
+    /// Told when an open cannot reach a holder ([`Holders::on_holder_lost`]).
+    unreachable: Mutex<Option<Unreachable>>,
 }
+
+/// What is done with the pane of a holder an open could not reach.
+type Unreachable = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// A pane's holder as the node knows it.
 enum Holder {
@@ -169,6 +174,25 @@ impl Known {
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Holder>> {
         self.panes.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn set_unreachable(&self, tell: Unreachable) {
+        *self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tell);
+    }
+
+    /// Tells whoever asked that an open of `pane` could not reach its holder.
+    fn tell_unreachable(&self, pane: &str) {
+        let tell = self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(tell) = tell {
+            tell(pane);
+        }
+    }
 }
 
 /// Who is told when a holder pane's program exits on its own.
@@ -207,7 +231,12 @@ impl Attacher for PaneAttacher {
             .socket_once_started(pane_id, deadline)
             .map_err(OpenFailure::retried)?
         {
-            Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends))),
+            Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends)))
+                .inspect_err(|failure| {
+                    if failure.category == "holder_unreachable" {
+                        self.known.tell_unreachable(pane_id);
+                    }
+                }),
             None => Err(OpenFailure::retried(format!(
                 "Pane {pane_id} has no holder on this node"
             ))),
@@ -1273,6 +1302,29 @@ impl Holders {
         let _ = self.known.socket_once_started(pane, deadline);
     }
 
+    /// Calls `tell` with the pane when an open cannot reach its holder and
+    /// the pane's record names a holder that no longer runs (`Panes::holder_gone`):
+    /// the holder died without saying why. A holder that is only slow or busy
+    /// is never reported, and the open fails and is tried again as it did.
+    /// Nothing is ended here: what a daemon does about it is the caller's.
+    pub fn on_holder_lost(self: &Arc<Self>, tell: Arc<dyn Fn(&str) + Send + Sync>) {
+        let holders = Arc::downgrade(self);
+        self.known.set_unreachable(Arc::new(move |pane| {
+            let Some(holders) = holders.upgrade() else {
+                return;
+            };
+            if !holders.panes.holder_gone(&holder_pane(pane)) {
+                return;
+            }
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.holder_lost",
+                "pane_id": pane,
+            }));
+            tell(pane);
+        }));
+    }
+
     /// The pane's record, read under no lock: a reader sees one whole
     /// record, as each change replaces it atomically.
     pub fn record(&self, pane: &str) -> Result<Option<PaneRecord>, String> {
@@ -1706,6 +1758,34 @@ mod tests {
             .err()
             .expect("a pane no holder runs is refused");
         assert!(refused.retried, "{}", refused.message);
+    }
+
+    /// An open that cannot reach a holder tells whoever asked, and fails as it
+    /// did. Whether the record names a holder that is gone is `holder_gone`'s,
+    /// tested with real holders in `hide-holder`.
+    #[test]
+    fn an_attach_that_cannot_reach_a_holder_tells_who_asked() {
+        let known = Arc::new(Known::default());
+        let attacher = PaneAttacher {
+            known: Arc::clone(&known),
+            ends: Arc::default(),
+        };
+        let size = Some(GridSize { rows: 24, cols: 80 });
+        let folder = tempfile::tempdir().unwrap();
+        known.insert("w1:p2", folder.path().join("w1_p2.sock"));
+
+        let unreachable = attacher.open_transport("w1:p2", size).err().unwrap();
+        assert_eq!(unreachable.category, "holder_unreachable");
+
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&told);
+        known.set_unreachable(Arc::new(move |pane| {
+            record.lock().unwrap().push(pane.to_owned());
+        }));
+        let again = attacher.open_transport("w1:p2", size).err().unwrap();
+        assert_eq!(again.category, "holder_unreachable");
+        assert!(again.retried, "{}", again.message);
+        assert_eq!(*told.lock().unwrap(), ["w1:p2"]);
     }
 
     #[test]

@@ -2063,9 +2063,10 @@ impl Runtime {
             self.overlay_remote_pane_moves(target_id, session);
             // A node that dials this core sleeps as the core's own machine
             // does (PRD core-host-node-remote-core B13).
-            self.stamp_node_agent_sleep(target_id, &mut session.agents);
+            let live_pane_ids = remote_live_pane_ids(session);
+            self.stamp_node_agent_sleep(target_id, &mut session.agents, &live_pane_ids);
             self.lay_plan_reviews(target_id, &mut session.agents);
-            read_changed = self.apply_remote_read_state(target_id, session);
+            read_changed = self.apply_remote_read_state(target_id, session, &live_pane_ids);
             for workspace in &mut session.workspaces {
                 for checkout in &mut workspace.checkouts {
                     for tab in &mut checkout.tabs {
@@ -3195,7 +3196,7 @@ impl Runtime {
         if let Some(mut agents) = agents {
             let held = Arc::clone(&self.herdr_held);
             let local = ReadRecordScope::Local(&held);
-            self.stamp_agent_sleep(&mut agents);
+            self.stamp_agent_sleep(&mut agents, live_pane_ids.as_ref());
             self.place_agents_in_navigator(&mut agents);
             // The lineage is built before the read axis is applied, because
             // the read fingerprint carries what each row's descendants are

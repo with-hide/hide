@@ -11,7 +11,6 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { FirstRunWizard, useSetupWalk } from "../FirstRunWizard";
-import { HerdrImportQuestion, useHerdrImportLater } from "../HerdrImport";
 import type { HostBridge, NotificationPermission, UpdateStatus } from "../host";
 import type { MobileState } from "../mobileSettings";
 import { clientI18n } from "../i18n/translator";
@@ -111,16 +110,12 @@ export const ONBOARDING_STATES = [
   "settings-both",
   "settings-refused",
   "settings-update",
-  "import-ask",
-  "import-moving",
-  "import-not-stopped",
-  "import-later",
+  "settings-import",
   "import-offer",
   "import-start",
   "import-unreadable",
   "import-refused",
   "import-waiting",
-  "import-device",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
@@ -287,29 +282,23 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
 }
 
 /** This machine's engine connection and its Herdr save, as the core publishes them for the `import-*` states. */
-function sceneEngineStatus(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
+function sceneEngineStatus(state: OnboardingState): { engine: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
   const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
   switch (state) {
-    case "import-device": return { herdr: connected, herdr_import_devices: [{ ...sceneHerdrImport("import-ask")!, tabs: 2, agents: 1, device: "build" }] };
-    default: return { herdr: connected, herdr_import: sceneHerdrImport(state) };
+    default: return { engine: connected, herdr_import: sceneHerdrImport(state) };
   }
 }
 
 /**
- * This machine's Herdr save as the core offers it for the `import-*` states (PRD engine-bundle-4-herdr-removal B2 to
- * B5, B11, B14 to B16): the question while Hide's Herdr runs, its move, a Herdr that would not stop, the line it was put
- * off to, a save to import read only, a save that could not be read, workspaces a move left out, and conversations
- * waiting for their Herdr to close; `import-device` asks the same question about a device's Herdr under its name (B18).
- * The refusal reasons are the converter's own.
+ * This machine's Herdr save as the core offers it for the `import-*` states (PRD engine-bundle-4-herdr-removal B11,
+ * B14 to B16): a save to import read only, a save that could not be read, workspaces an import left out, and
+ * conversations waiting for their Herdr to close. The refusal reasons are the converter's own.
  */
 function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
-  const found = (patch: Partial<HerdrImport>): HerdrImport => ({ kind: "move", stage: "offered", workspaces: 3, tabs: 5, agents: 4, waiting: 0, herdr_running: true, failure: null, reason: null, refused: [], ...patch });
+  const found = (patch: Partial<HerdrImport>): HerdrImport => ({ kind: "import", stage: "offered", workspaces: 3, tabs: 5, agents: 4, waiting: 0, herdr_running: true, failure: null, reason: null, refused: [], ...patch });
   const none = { workspaces: 0, tabs: 0, agents: 0, herdr_running: false };
   switch (state) {
-    case "import-ask": case "import-later": return found({});
-    case "import-moving": return found({ stage: "moving" });
-    case "import-not-stopped": return found({ stage: "failed", failure: "not_stopped" });
-    case "import-offer": case "import-start": return found({ kind: "import" });
+    case "import-offer": case "import-start": case "settings-import": return found({ kind: "import" });
     case "import-unreadable": return found({ kind: "import", stage: "failed", failure: "unreadable", reason: "it is format 4, newer than the format 3 this build reads", ...none });
     case "import-refused": return found({ kind: "result", stage: "moved", ...none, refused: [{ label: "api", reason: "its tab 2 does not lay out exactly the panes it holds" }, { label: "docs", reason: "its tab 1 holds more than 24 panes" }] });
     case "import-waiting": return found({ kind: "import", ...none, waiting: 2 });
@@ -363,7 +352,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" || state === "import-device" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit), ...(state.startsWith("home-device") ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "window", label: "window", kind: "remote", state: "connected", message: null, ssh_alias: "window", agent_count: 0, test: null, kit }] : [])],
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit), ...(state.startsWith("home-device") ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "window", label: "window", kind: "remote", state: "connected", message: null, ssh_alias: "window", agent_count: 0, test: null, kit }] : [])],
       focused_device_id: state.startsWith("home-device") ? "window" : "local",
       focused_checkout_id: null,
     },
@@ -376,7 +365,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
+    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, machine_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
 }
 
@@ -394,12 +383,12 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
       const payload = event.payload as Record<string, unknown>;
       if (event.kind === "first_run_draft") ui.first_run_choices = { ...ui.first_run_choices, ...payload };
       if (event.kind === "first_run_back" || event.kind === "first_run_advance") {
-        const steps = rest.status?.herdr_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
+        const steps = rest.status?.machine_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
         const index = steps.indexOf(String(payload.from));
         if (ui.first_run?.step === payload.from && index >= 0) ui.first_run = { version: 1, step: steps[index + (event.kind === "first_run_back" ? -1 : 1)] as NonNullable<typeof ui.first_run>["step"] };
       }
-      if (event.kind === "herdr_profile_connect") {
-        const row = rest.status?.herdr_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
+      if (event.kind === "machine_profile_connect") {
+        const row = rest.status?.machine_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
         if (row) row.connect_state = "connecting";
       }
       return { rest, revision: current.revision + 1 };
@@ -413,7 +402,6 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
     // The Overview's Work tab is where an empty device, or one on its way, says so (UI_BEHAVIOR, Overview).
     const device = state.startsWith("home-device") ? "window" : undefined;
     useUiStore.setState({ screen: { kind: "main", ...(device ? { deviceId: device } : {}) }, overviewOpen: false, mainView: state === "home-no-agent-work" || device ? "work" : "backlog" } as never);
-    useHerdrImportLater.getState().set(state === "import-later");
   }, [state, system, update]);
 
   // Set once the presses below have landed and a frame has drawn them, so a capture waits for it.
@@ -474,7 +462,6 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
         <StartPanelHost actions={actions} />
         <SettingsGate actions={actions} />
         <FirstRunWizard actions={actions} />
-        <HerdrImportQuestion actions={actions} />
       </div>
     </TooltipProvider>
   );

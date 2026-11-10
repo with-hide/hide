@@ -1906,7 +1906,7 @@ pub struct SidebarAgentSnapshot {
     /// none or only one Hide made up from its pane (`fork::hide_made_name`).
     /// `id` falls back to the pane id and a device's row replaces it, so it
     /// cannot stand in for this.
-    #[serde(rename = "herdr_name", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub given_name: Option<String>,
     /// The name the engine reports the agent by, a name Hide made up included,
     /// which a pane's launch record is matched by (`runtime::agent_choice`).
@@ -2674,7 +2674,6 @@ pub struct StripTabSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StripTabKind {
-    #[serde(rename = "herdr")]
     Engine,
     File,
     Diff,
@@ -2685,7 +2684,7 @@ impl StripTabSnapshot {
     pub fn engine(source_id: impl Into<String>, label: impl Into<String>) -> Self {
         let source_id = source_id.into();
         Self {
-            id: format!("herdr:{source_id}"),
+            id: format!("engine:{source_id}"),
             kind: StripTabKind::Engine,
             source_id,
             label: label.into(),
@@ -3075,7 +3074,6 @@ pub struct PaneSnapshot {
     /// them. The core ships the ingredients rather than a chosen title so the
     /// local and remote projections cannot disagree about the ladder, and so
     /// the one that runs it stays testable in the shell.
-    #[serde(rename = "herdr_label")]
     pub engine_label: Option<String>,
     pub terminal_title: Option<String>,
     pub cwd: String,
@@ -7420,9 +7418,8 @@ pub struct StatusSnapshot {
     pub start_profiles: BTreeMap<String, StartProfilesSnapshot>,
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
-    #[serde(rename = "herdr")]
     pub engine: ProviderStatusSnapshot,
-    /// What this machine's Herdr save offers to move into the core's own
+    /// What this machine's Herdr save offers to import into the core's own
     /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
     /// nothing to show.
     pub herdr_import: Option<HerdrImportSnapshot>,
@@ -7435,7 +7432,6 @@ pub struct StatusSnapshot {
     pub background_ai: BackgroundAiSnapshot,
     /// The Host entries Add device offers (Settings › Devices).
     pub ssh_hosts: SshHostsSnapshot,
-    #[serde(rename = "herdr_profiles")]
     pub machine_profiles: MachineProfilesSnapshot,
     /// What Settings › Agents' last profile request came to (PRD
     /// agent-profiles B2-B13); absent until one was made.
@@ -7593,7 +7589,7 @@ pub struct MachineProfileSnapshot {
     pub device_id: Option<String>,
     pub connect_state: String,
     /// Why Hide itself declined to connect the profile, as a code the web
-    /// words (`contracts/snapshot-wire-enums.json`: `herdr_profile_refusal`).
+    /// words (`contracts/snapshot-wire-enums.json`: `profile_refusal`).
     /// A connection that was tried and failed has none: its row reads the
     /// device's connection state.
     pub connect_refusal: Option<MachineProfileRefusal>,
@@ -7950,23 +7946,21 @@ pub struct DiagnosticSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ProviderStatusSnapshot {
     pub state: String,
-    pub socket_path: Option<String>,
     pub message: Option<String>,
 }
 
-/// What this machine's Herdr save offers to move into the core's own engine,
-/// and what the last move came to (PRD engine-bundle-4-herdr-removal D-6 to
-/// D-8, B2 to B5, B11, B14 to B17).
+/// What this machine's Herdr save offers to import into the core's own engine,
+/// and what the last import came to (PRD engine-bundle-4-herdr-removal D-7,
+/// D-8, B11, B14 to B17).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrImportSnapshot {
-    /// `move` while Hide's own Herdr runs, which moving stops (the question,
-    /// D-6); `import` for any other save, read only (D-8); `result` when
-    /// nothing is left to offer and the last move's result waits to be read.
+    /// `import` for a save, read only (D-8); `result` when nothing is left to
+    /// offer and the last import's result waits to be read.
     pub kind: String,
-    /// `offered`, `moving` while the move is asked for and the core starts
+    /// `offered`, `moving` while the import is asked for and the core starts
     /// again with it, `failed`, or `moved` for a `result`.
     pub stage: String,
-    /// What moving offers: workspaces, tabs and agents not moved yet.
+    /// What importing offers: workspaces, tabs and agents not imported yet.
     pub workspaces: usize,
     pub tabs: usize,
     pub agents: usize,
@@ -7976,12 +7970,11 @@ pub struct HerdrImportSnapshot {
     /// A Herdr runs on with the save's conversations open, so an import
     /// opens their panes as shells (B15).
     pub herdr_running: bool,
-    /// `not_stopped` (Hide's Herdr could not be stopped, B4) or `unreadable`
-    /// (the save could not be read, B11) while `stage` is `failed`.
+    /// `unreadable` (the save could not be read, B11) while `stage` is `failed`.
     pub failure: Option<String>,
     /// Why the save could not be read, in one line.
     pub reason: Option<String>,
-    /// The workspaces the last move left out, with why (B11).
+    /// The workspaces the last import left out, with why (B11).
     pub refused: Vec<HerdrImportRefusedSnapshot>,
     /// The device whose save this is; absent for this machine's (B18).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8245,7 +8238,6 @@ impl Snapshot {
                 // The engine's status until the session sync first answers.
                 engine: ProviderStatusSnapshot {
                     state: "unconfigured".to_owned(),
-                    socket_path: None,
                     message: None,
                 },
                 herdr_import: None,
@@ -9816,8 +9808,8 @@ mod wire_enum_tests {
                 | MachineProfileRefusal::DeviceLimit => {}
             }
         }
-        assert_wire(&contract, "herdr_profile_refusal", &profile_refusals);
-        checked.insert("herdr_profile_refusal");
+        assert_wire(&contract, "profile_refusal", &profile_refusals);
+        checked.insert("profile_refusal");
 
         let action_refusals = [
             AgentActionRefusal::Unsupported,
@@ -10232,6 +10224,27 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_state", &states);
             checked.insert("mission_answer_state");
+            use crate::runtime::missions::AnswerHold;
+            let holds = [
+                AnswerHold::Working,
+                AnswerHold::Typing,
+                AnswerHold::Recent,
+                AnswerHold::Approval,
+                AnswerHold::Other,
+                AnswerHold::Forced,
+            ];
+            for variant in holds {
+                match variant {
+                    AnswerHold::Working
+                    | AnswerHold::Typing
+                    | AnswerHold::Recent
+                    | AnswerHold::Approval
+                    | AnswerHold::Other
+                    | AnswerHold::Forced => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_hold", &holds);
+            checked.insert("mission_answer_hold");
             use crate::mission_events::{AnswerSource, EventKind};
             let kinds = [
                 EventKind::Planned,
@@ -11297,12 +11310,14 @@ mod wire_enum_tests {
 
 #[cfg(test)]
 mod release_1_2_1_wire_tests {
-    //! The snapshot names release 1.2.1's daemon sent, read from what it sent
-    //! in an isolated run (`tests/fixtures/release-1.2.1/snapshot.json`): a
-    //! field renamed in the code since keeps its 1.2.1 key, so a 1.2.1 shell
-    //! reads this build's snapshot as it read its own.
+    //! The snapshot wire has no cross-build reader (`docs/ARCHITECTURE.md`,
+    //! "No link forms across builds"): a shell and its core are one build.
+    //! These tests read what release 1.2.1 sent (`tests/fixtures/release-1.2.1/
+    //! snapshot.json`, an isolated run) and pin each rename: the old key is
+    //! mapped to its engine name in the test, so a renamed field that drifts
+    //! back to its 1.2.1 key fails here.
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
 
     fn sent() -> Value {
         serde_json::from_str(include_str!(
@@ -11311,8 +11326,21 @@ mod release_1_2_1_wire_tests {
         .unwrap()
     }
 
+    /// The 1.2.1 object with each listed top-level key renamed.
+    fn renamed(sent: &Value, names: &[(&str, &str)]) -> Value {
+        let mut object = Map::new();
+        for (key, value) in sent.as_object().unwrap() {
+            let name = names
+                .iter()
+                .find(|(old, _)| *old == key)
+                .map_or(key.as_str(), |(_, new)| *new);
+            object.insert(name.to_owned(), value.clone());
+        }
+        Value::Object(object)
+    }
+
     #[test]
-    fn every_status_key_1_2_1_sent_is_sent_under_the_same_name() {
+    fn every_status_key_1_2_1_sent_is_sent_under_its_engine_name() {
         let snapshot = Snapshot::initial(&CoreOptions {
             schema_version: SCHEMA_VERSION,
             home: None,
@@ -11329,8 +11357,11 @@ mod release_1_2_1_wire_tests {
         });
         let rest = RestSections::capture(&snapshot, None, 1);
         let status = serde_json::to_value(&rest.status).unwrap();
-        let sent = sent();
-        let missing = sent["status"]
+        let expected = renamed(
+            &sent()["status"],
+            &[("herdr", "engine"), ("herdr_profiles", "machine_profiles")],
+        );
+        let missing = expected
             .as_object()
             .unwrap()
             .keys()
@@ -11338,21 +11369,25 @@ mod release_1_2_1_wire_tests {
             .collect::<Vec<_>>();
         assert!(
             missing.is_empty(),
-            "1.2.1 sent, this build does not: {missing:?}"
+            "1.2.1 sent under engine names, this build does not: {missing:?}"
         );
-        assert!(status.get("engine").is_none() && status.get("machine_profiles").is_none());
+        assert!(status.get("herdr").is_none() && status.get("herdr_profiles").is_none());
+        assert!(status["engine"].get("socket_path").is_none());
     }
 
     #[test]
-    fn an_engine_tab_in_the_strip_is_sent_as_1_2_1_sent_it() {
+    fn an_engine_tab_in_the_strip_is_sent_as_1_2_1_sent_it_under_engine_names() {
+        let mut expected = sent()["strip"].clone();
+        expected["id"] = json!("engine:h1:t1");
+        expected["kind"] = json!("engine");
         assert_eq!(
             serde_json::to_value(StripTabSnapshot::engine("h1:t1", "c3 first named")).unwrap(),
-            sent()["strip"]
+            expected
         );
     }
 
     #[test]
-    fn a_pane_is_sent_as_1_2_1_sent_it() {
+    fn a_pane_is_sent_as_1_2_1_sent_it_under_engine_names() {
         let pane = PaneSnapshot {
             device_id: Default::default(),
             device_pane_id: Default::default(),
@@ -11380,13 +11415,16 @@ mod release_1_2_1_wire_tests {
             sleep: None,
             sleep_action: None,
         };
-        assert_eq!(serde_json::to_value(&pane).unwrap(), sent()["pane"]);
+        assert_eq!(
+            serde_json::to_value(&pane).unwrap(),
+            renamed(&sent()["pane"], &[("herdr_label", "engine_label")])
+        );
     }
 
-    /// 1.2.1's shell reads a named agent's name as `herdr_name`
-    /// (`web/src/snapshot.ts` at that release); the run above named none.
+    /// 1.2.1's shell read a named agent's name as `herdr_name`; this build
+    /// sends `given_name`, and the 1.2.1 key is not sent.
     #[test]
-    fn a_named_agent_row_sends_its_name_under_the_1_2_1_key() {
+    fn a_named_agent_row_sends_its_name_as_given_name() {
         let mut row = crate::sidebar::project_agents(
             crate::sidebar::owned_label_fixture(json!({"agents": [
                 {"id": "h1:p4", "pane_id": "h1:p4", "agent_status": "idle", "state_change_seq": 1}
@@ -11397,8 +11435,8 @@ mod release_1_2_1_wire_tests {
         .remove(0);
         row.given_name = Some("reviewer".into());
         let wire = serde_json::to_value(&row).unwrap();
-        assert_eq!(wire["herdr_name"], json!("reviewer"));
-        assert!(wire.get("given_name").is_none());
+        assert_eq!(wire["given_name"], json!("reviewer"));
+        assert!(wire.get("herdr_name").is_none());
     }
 }
 

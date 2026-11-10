@@ -154,7 +154,7 @@ describe("snapshot merge", () => {
             ],
           },
           focused: { pane_id: "p1" },
-          status: { herdr: { state: "unconfigured" } },
+          status: { engine: { state: "unconfigured" } },
         },
       },
     });

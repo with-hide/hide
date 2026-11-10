@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "file": "~/.config/hide-ios/release.env",
+  "keys": {
+    "HIDE_IOS_ASC_KEY_ID": {
+      "requirement": "required",
+      "shape": "^[A-Z0-9]{10}$",
+      "note": "Names the App Store Connect API key that signs and uploads the release build; without it the release command stops before it builds anything."
+    },
+    "HIDE_IOS_ASC_ISSUER_ID": {
+      "requirement": "required",
+      "shape": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "note": "The team behind that key; xcodebuild and altool both send it with the key, so without it nothing is signed or uploaded."
+    },
+    "HIDE_IOS_ASC_KEY_PATH": {
+      "requirement": "required",
+      "shape": "^/.*/AuthKey_[A-Z0-9]{10}\\.p8$",
+      "note": "The key file on the build machine, outside the checkout; Apple's tools read it by path; the command checks its name, owner and mode and never opens, copies or passes its body."
+    }
+  }
+}

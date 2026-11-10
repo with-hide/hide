@@ -20,7 +20,6 @@ import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
-import { HerdrImportQuestion } from "./HerdrImport";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
 import { SettingsGate } from "./SettingsSheet";
@@ -285,7 +284,6 @@ export function App() {
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
-    ["herdr_import", <HerdrImportQuestion actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],
     ["browser", <BrowserHost actions={actions} />],
@@ -340,7 +338,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
   const front = useShellStore((s) => frontCheckout(s.rest)?.id ?? null);
   const hasView = useShellStore((s) => Boolean(s.rest?.workspace_view));
   const first = useShellStore((s) => startupScreen(s.rest, front !== null));
-  const restoring = useShellStore((s) => waitingForSavedWorkspace(s.rest) && s.rest?.status?.herdr?.state === "connected");
+  const restoring = useShellStore((s) => waitingForSavedWorkspace(s.rest) && s.rest?.status?.engine?.state === "connected");
   const loaded = useShellStore((s) => s.rest !== null);
   const remoteFront = useShellStore((s) => focusedRemoteDevice(s.rest) !== null);
   const opening = useUiStore((s) => s.opening);
