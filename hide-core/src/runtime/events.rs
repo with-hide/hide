@@ -4579,6 +4579,7 @@ impl Runtime {
                     first_run_choices: current.first_run_choices,
                     desktop_notifications: current.desktop_notifications,
                     product_analytics_enabled: current.product_analytics_enabled,
+                    product_active_days: current.product_active_days,
                     desktop_notifications_done: current.desktop_notifications_done,
                     screen_intros_seen: current.screen_intros_seen,
                     // A width outside the drag's range keeps the last one; the

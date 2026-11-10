@@ -127,6 +127,8 @@ pub(super) mod pane_move;
 #[path = "tests/phone_viewing.rs"]
 mod phone_viewing;
 mod plans;
+#[path = "tests/product_active.rs"]
+mod product_active;
 #[path = "tests/project_open.rs"]
 mod project_open;
 #[path = "tests/project_settings.rs"]

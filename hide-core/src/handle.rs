@@ -1071,6 +1071,15 @@ impl Core {
         lock_recover(&self.runtime).prepare_memory(device, caller, expected, command)
     }
 
+    /// The operator acted from `surface` somewhere the core does not see
+    /// (a phone's action): its first action of a UTC day counts once.
+    pub fn note_operator_active(&self, surface: crate::product_analytics::ActiveSurface) {
+        if !check_owner_thread(self, "product_analytics.active") {
+            return;
+        }
+        lock_recover(&self.runtime).note_operator_active(surface);
+    }
+
     pub fn prepare_delivery_human(&self) -> Result<crate::delivery::worker::PreparedHuman, String> {
         if !check_owner_thread(self, "delivery.human.prepare") {
             return Err("delivery_unavailable".into());

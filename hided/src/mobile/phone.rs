@@ -839,6 +839,12 @@ async fn handle(
     projection: &Arc<Projection>,
 ) -> Option<Value> {
     let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
+    if operator_action(kind) {
+        mobile
+            .config
+            .core
+            .note_operator_active(hide_core::product_analytics::ActiveSurface::Phone);
+    }
     match kind {
         "open" => {
             let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
@@ -1051,6 +1057,26 @@ async fn handle(
             )
         }
     }
+}
+
+/// A message the operator sends by acting on the phone: a reply or a key, an
+/// answer, a wake, a merge, a start. Opening, reading, scrolling, a ping and
+/// a notification registration are not: the app sends those on its own when
+/// it opens or reconnects.
+fn operator_action(kind: &str) -> bool {
+    matches!(
+        kind,
+        "input"
+            | "wake_agent"
+            | "human_turn_done"
+            | "answer_mission"
+            | "ask_mission_material"
+            | "reopen_mission_view"
+            | "merge_pr"
+            | "delegate_pr"
+            | "wake_sleeping_session"
+            | "start_agent"
+    )
 }
 
 /// The answer to a `look_*` request that cannot go on: its state says why.

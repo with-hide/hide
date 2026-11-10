@@ -1630,6 +1630,9 @@ impl Runtime {
                 submitted,
                 focus,
             } => {
+                // Only the operator's keys on a screen become this report,
+                // never the engine's own input, a phone's or an agent's.
+                self.note_operator_active(crate::product_analytics::ActiveSurface::Desktop);
                 // A pane the core does not project is neither typed into
                 // nor focused by a node's word, a device's least of all.
                 if !self.pane_still_terminal(&pane) {

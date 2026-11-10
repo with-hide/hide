@@ -2341,6 +2341,7 @@ mod tests {
         "color_theme",
         "interface_language",
         "product_analytics_enabled",
+        "product_active_days",
         "usage",
         "agent_onboarding",
         "agent_onboarding_agents",

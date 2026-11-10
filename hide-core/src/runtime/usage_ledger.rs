@@ -56,6 +56,32 @@ impl Runtime {
         self.product_analytics = Some(sink);
     }
 
+    /// The operator acted from `surface`: its first action of a UTC day
+    /// sends `hide_active` and saves the day, so a restart, a reload or a
+    /// reconnect that day sends nothing. Called on operator input, so until
+    /// the day turns it costs two flag reads and one day comparison; nothing
+    /// is recorded while statistics are off, so turning them back on counts
+    /// the day.
+    pub(crate) fn note_operator_active(
+        &mut self,
+        surface: crate::product_analytics::ActiveSurface,
+    ) {
+        let Some(sink) = &self.product_analytics else {
+            return;
+        };
+        if !self.snapshot.ui_state.product_analytics_enabled
+            || !self
+                .snapshot
+                .ui_state
+                .product_active_days
+                .first_of_day(surface, super::unix_milliseconds())
+        {
+            return;
+        }
+        sink.capture(crate::product_analytics::Event::Active { surface });
+        self.persist_ui_state();
+    }
+
     /// The sink a router is built with, so what it spends is counted.
     pub(crate) fn ai_usage(&self) -> Arc<dyn hide_ai::AiUsageSink> {
         Arc::clone(&self.ai_usage) as Arc<dyn hide_ai::AiUsageSink>
