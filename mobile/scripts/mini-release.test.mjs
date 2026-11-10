@@ -21,10 +21,12 @@ const real = (name) => spawnSync('/bin/sh', ['-c', `command -v ${name}`], { enco
 // A signal only ever goes to a pid that parsed as a real one: 0 or a negative number would reach this process's group.
 const realPid = (pid) => { if (!Number.isInteger(pid) || pid <= 1) throw new Error(`not a process id: ${pid}`); return pid; };
 const alive = (pid) => { try { process.kill(realPid(pid), 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
-const until = async (what, check, ms = 20000) => {
+// It polls on a timer: a loop on setImmediate keeps a core busy, which on a loaded machine starves the very processes it
+// waits for, and the test runner's own messages with them.
+const until = async (what, check, ms = 60000) => {
   for (const start = Date.now(); !check(); ) {
     if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((done) => setImmediate(done));
+    await new Promise((done) => setTimeout(done, 25));
   }
 };
 
@@ -69,9 +71,11 @@ describe('the release command on the build machine', { timeout: 120000 }, () => 
     // says, as the real one does, and records the home and temporary folder it was given.
     stub('xcodebuild', `
 printf 'xcodebuild %s\\n' "$*"
-# A helper that outlives the step in a process group of its own, as a tool's daemon would.
-if [ "$1" = archive ] && [ -n "$STUB_LEAVES_DAEMON" ]; then perl -e 'setpgrp(0, 0); exec @ARGV' -- sleep 30 > /dev/null 2>&1 &
-  echo $! > "${home}/daemon.tmp" && mv "${home}/daemon.tmp" "${home}/daemon"; fi
+# A helper that outlives the step in a process group of its own, as a tool's daemon would. It names itself only once it
+# has left the step's group, and the step waits for that, so a loaded machine cannot end the step while it is still in it.
+if [ "$1" = archive ] && [ -n "$STUB_LEAVES_DAEMON" ]; then
+  perl -e 'setpgrp(0, 0); open(my $f, ">", "$ARGV[0].tmp") or die; print $f "$$\\n"; close $f; rename("$ARGV[0].tmp", $ARGV[0]) or die; exec "sleep", "300"' "${home}/daemon" > /dev/null 2>&1 &
+  n=0; while [ ! -e "${home}/daemon" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done; fi
 case "$*" in *-exportArchive*)
   printf '%s %s %s\\n' "$CFFIXED_USER_HOME" "$TMPDIR" "$([ -d "$CFFIXED_USER_HOME/Library/Caches" ] && echo caches-ready)" > "${home}/export-env"
   echo "authenticating with ${TOKEN} as ${KEY_ID} for ${ISSUER.toUpperCase()}"
