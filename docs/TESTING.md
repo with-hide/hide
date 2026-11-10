@@ -358,11 +358,15 @@ A piece that another open change is still building is marked as pending with the
 7. **Restart through `daemon.restart()`, and leave the old page first.**
    `daemon.restart()` in `web/e2e/hided-fixture.ts` stops `hided` and starts it again on the same state folder and port, as a real restart does, and takes an optional callback to edit the state folder before the start; `web/e2e/sidebar-pr-start.spec.ts` restarts three times in one test.
    It uses `hide stop` on every system and preserves the own engine's holders for adoption; only final fixture cleanup sweeps their process trees.
+   It returns only after its own WebSocket reads the core's connected engine and, when a saved checkout is selected, its restored Workspace view.
+   `/health` alone proves only that the listener is back; this shared snapshot boundary keeps restart callers from acting on an unresolved saved selection.
    A navigation that only changes the hash does not remount the page: its connection follows the new token (`followToken` in `web/src/ws.ts`), but the page it keeps has the old page's state and may already have been refused with the old token, so a test that reopens the product goes through a fresh page.
    Go through `about:blank` before opening the new origin and token, as `openSettings` in `web/e2e/interface-language.spec.ts` does, and keep that step in one helper per spec.
    Why: the old page and the new token reconnect at the same time and either can win.
    `hide-e2e/reopen-after-restart-through-blank` fails a `goto` of `#token=` after `restart()` in the same function; a helper defined elsewhere and called after the restart is not seen, so keep the step in the helper.
    A test whose subject is a surviving page reconnecting to the restarted daemon (`web/e2e/s3.spec.ts`, the two draft recovery tests) must not reload it, and says so in a line allow.
+   A restored editable draft needs an editable file: the View-tab draft test makes the parent folder unwritable to refuse atomic saves while keeping the file editable when the restarted node opens it.
+   Making that file itself read-only would correctly prevent the draft from being restored into it.
 8. **Put a system difference in one fixture helper.**
    See [Operating-system differences belong to one fixture helper](#operating-system-differences-belong-to-one-fixture-helper); native home variables, executable names, the tool path and the no-op opener live in `web/e2e/platform-fixture.ts`, not in a `process.platform` branch in a spec.
 9. **A retry is a label, not a fix.**
