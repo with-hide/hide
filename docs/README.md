@@ -6,7 +6,7 @@ A document's location or an old PRD citation does not make it current authority.
 
 ## Current sources of truth
 
-Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `hide-core/src/product_analytics.rs`, the link worker's pane pass (`hide-core/src/links/`), the mission commands (`hide-core/src/runtime/missions.rs`), practice progress (`hide-core/src/runtime/detail.rs`), phone pairing (`hided/src/mobile/`), and `web/e2e/product-analytics.spec.ts`.
+Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `hide-core/src/product_analytics.rs`, the link worker's pane pass (`hide-core/src/links/`), the mission commands (`hide-core/src/runtime/missions.rs`), practice progress (`hide-core/src/runtime/detail.rs`), phone pairing (`hided/src/mobile/`), and `web/e2e/product-analytics.spec.ts`; the public statement is `site/privacy.html`, held to the events by `site/tests/legal.test.mjs`.
 
 The iOS app's release build, its signing, checks and TestFlight upload: [the release build](BUILD.md#the-release-build); owners are `mobile/scripts/{build-ios,mini-release}.sh`, `mobile/scripts/check-release-app.sh`, `mobile/scripts/{bundle-manifest,release-version}.mjs`, `mobile/release-{env,expect}.json` and their tests in `mobile/scripts/`.
 
