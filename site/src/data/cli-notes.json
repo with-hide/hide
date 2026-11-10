@@ -430,5 +430,9 @@
   "memory recheck": {
     "line": "Placeholder note for hide memory recheck; the CLI notes replace it.",
     "example": "hide memory recheck"
+  },
+  "mission gate": {
+    "line": "Placeholder note for hide mission gate; the CLI notes replace it.",
+    "example": "hide mission gate"
   }
 }
