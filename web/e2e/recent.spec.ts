@@ -128,7 +128,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await expect(marks(betaTab).locator("[data-agent-mark]")).toHaveCount(0);
     await expect(page.locator(`[data-cycle=panels] [data-cycle-row="${betaTab}"]`)).toHaveAttribute("aria-label", /Codex agent/);
     await expect(page.locator('[data-cycle=panels] [data-agent-mark]:not([data-agent-mark="neutral"])')).toHaveCount(0);
-    await expect(marks(engine.tab)).toHaveAttribute("data-cycle-marks", "herdr");
+    await expect(marks(engine.tab)).toHaveAttribute("data-cycle-marks", "engine");
     await expect(marks(engine.tab).locator('[data-agent-mark="neutral"]')).toHaveCount(1);
     await expect(marks(engine.tab).locator("[data-cycle-status]")).toHaveCount(0);
     await expect(marks(display!).locator('[data-view-mark="file"]')).toHaveCount(1);
@@ -159,7 +159,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await expect(cycleRow).toContainText("beta · Terminal");
     await expect(cycleRow).toHaveAttribute("aria-label", /Codex agent/);
     // Only panes: no View display, Overview or project rows.
-    await expect(agents.locator('[role=option]:not([data-cycle-kind="herdr"])')).toHaveCount(0);
+    await expect(agents.locator('[role=option]:not([data-cycle-kind="engine"])')).toHaveCount(0);
     await screenshot(page, "recent-agent-panes");
     expect(sent.get("focus_pane") ?? 0).toBe(paneFocuses);
     await page.keyboard.up("Alt");

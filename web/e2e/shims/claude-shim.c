@@ -326,7 +326,7 @@ static int copy_seed(const char *seed, const char *destination) {
 
 /* Appends the arguments after the program as one JSON array line, so a spec
    reads exactly what the program received after the pane's shell read the
-   line Herdr typed. */
+   line the pane's shell read. */
 static int append_argv(const char *path, int argc, char **argv) {
   FILE *file = fopen(path, "ab");
   if (!file) return 1;
@@ -350,7 +350,7 @@ static int append_argv(const char *path, int argc, char **argv) {
    `<kind>-session-report.config` (`web/e2e/session-reader-fixture.ts`): the
    command line to run, then a newline, then what that command reads on its
    standard input. Each integration's input is the spec's knowledge, not this
-   program's. With no such file (Herdr's engine, whose own report the spec
+   program's. With no such file (the own engine, whose own report the spec
    makes) nothing is reported. */
 static int report_session(const char *root, const char *kind) {
   static char report[8192];
@@ -496,7 +496,6 @@ int main(int argc, char **argv) {
      the pane names itself as `hide_agent_hooks::pane` reads it. */
   char pane_log[4096];
   const char *pane_root = getenv("HIDE_E2E_ROOT"), *pane = getenv("HIDE_PANE_ID");
-  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
   if (!log_path && pane_root && pane && *pane) {
     if (snprintf(pane_log, sizeof pane_log, "%s/input-%s.log", pane_root, pane) >= (int)sizeof pane_log) return 1;
     for (char *at = pane_log + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';

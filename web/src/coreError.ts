@@ -28,7 +28,7 @@ const KEYS = new Map<string, MessageKey>([
   ["workspace.remove_in_flight", "coreError.project.removeInFlight"],
   ["workspace.remove_failed", "coreError.project.removeFailed"],
   ["workspace.remove_cancelled", "coreError.project.removeCancelled"],
-  ["workspace.control_unavailable", "coreError.herdrNotConnected"],
+  ["workspace.control_unavailable", "coreError.engineNotConnected"],
 
   ["memory.recheck_ai_off", "memory.recheckNeedsAi"],
 
@@ -63,9 +63,7 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_start.shell_starting", "coreError.agent.shellStarting"],
   ["agent_start.shell_unreadable", "coreError.agent.shellUnreadable"],
   ["agent_start.line_unchecked", "coreError.agent.lineUnchecked"],
-  ["agent_start.refused_by_engine", "coreError.agent.refusedByHerdr"],
-  // Kept for a launch record stored before the engine name.
-  ["agent_start.refused_by_herdr", "coreError.agent.refusedByHerdr"],
+  ["agent_start.refused_by_engine", "coreError.agent.refusedByEngine"],
   ["agent_start.unconfirmed", "coreError.agent.unconfirmed"],
   ["agent_start.prompt_not_typed", "coreError.agent.promptNotTyped"],
   ["agent_start.not_saved", "coreError.agent.notSaved"],
@@ -157,16 +155,16 @@ export function coreErrorText(error: { kind: string; home?: boolean }, t: TFunct
 }
 
 const ENGINE_STATES = new Map<string, MessageKey>([
-  ["socket_missing", "coreError.herdr.socket_missing"],
-  ["unreachable", "coreError.herdr.unreachable"],
-  ["stale", "coreError.herdr.stale"],
-  ["malformed", "coreError.herdr.malformed"],
-  ["unconfigured", "coreError.herdr.unconfigured"],
+  ["socket_missing", "coreError.engine.socket_missing"],
+  ["unreachable", "coreError.engine.unreachable"],
+  ["stale", "coreError.engine.stale"],
+  ["malformed", "coreError.engine.malformed"],
+  ["unconfigured", "coreError.engine.unconfigured"],
 ]);
 
 /** Why this machine's engine does not answer, from `status.engine.state`; its `message` is the About tab's and the log's. */
 export function engineStateText(state: string, t: TFunction<"translation">): string {
-  return t(ENGINE_STATES.get(state) ?? "coreError.herdr.other");
+  return t(ENGINE_STATES.get(state) ?? "coreError.engine.other");
 }
 
 const REMOTE_STATES = new Map<string, MessageKey>([

@@ -22,8 +22,8 @@ const { pathToFileURL } = require("node:url");
 
 const agent = path.basename(process.argv[1]);
 const config = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "pi-omp-host.json"), "utf8"));
-// A pane on the core's own engine names itself HIDE_PANE_ID and carries no HERDR_* variable.
-const pane = process.env.HIDE_PANE_ID || process.env.HERDR_PANE_ID;
+// A pane on the core's own engine names itself HIDE_PANE_ID.
+const pane = process.env.HIDE_PANE_ID;
 const folder = path.join(config.dir, pane.replace(/[^A-Za-z0-9]/g, "-"));
 fs.mkdirSync(folder, { recursive: true });
 // The pane's hide reaches the fixture daemon, as the operator's reaches theirs.

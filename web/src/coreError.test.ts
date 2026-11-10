@@ -19,13 +19,11 @@ describe("a failure the core names by its kind", () => {
 });
 
 describe("a launch refusal the core names by its code", () => {
-  it("words the engine name and the herdr name a launch record stored before the rename alike", () => {
-    const sentence = english("coreError.agent.refusedByHerdr");
-    expect(sentence).not.toBe("coreError.agent.refusedByHerdr");
+  it("words the engine name refusal the core sends", () => {
+    const sentence = english("coreError.agent.refusedByEngine");
+    expect(sentence).not.toBe("coreError.agent.refusedByEngine");
     expect(coreErrorText({ kind: "agent_start.refused_by_engine" }, english)).toBe(sentence);
-    expect(coreErrorText({ kind: "agent_start.refused_by_herdr" }, english)).toBe(sentence);
-    const korean_sentence = korean("coreError.agent.refusedByHerdr");
-    expect(coreErrorText({ kind: "agent_start.refused_by_herdr" }, korean)).toBe(korean_sentence);
+    expect(coreErrorText({ kind: "agent_start.refused_by_engine" }, korean)).toBe(korean("coreError.agent.refusedByEngine"));
   });
 });
 

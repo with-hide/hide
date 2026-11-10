@@ -251,7 +251,7 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
         // Added under an alias the config no longer names, in capitals.
         registration("box", "Box", "upper"),
     ];
-    for kind in ["ssh_hosts_list", "herdr_profiles_list"] {
+    for kind in ["ssh_hosts_list", "machine_profiles_list"] {
         assert!(shared.lock().unwrap().dispatch_json(&event(kind)));
     }
     wait(&shared, "both listings", |runtime| {
@@ -301,7 +301,7 @@ fn an_include_folder_that_cannot_be_opened_fails_the_first_run_read_with_retry()
             version: crate::model::FIRST_RUN_VERSION,
             step: crate::model::FirstRunStep::Devices,
         });
-        assert!(runtime.dispatch_json(&event("herdr_profiles_list")));
+        assert!(runtime.dispatch_json(&event("machine_profiles_list")));
     }
     wait(&shared, "the device listing", |runtime| {
         runtime.snapshot().status.machine_profiles.state != "loading"
@@ -337,7 +337,7 @@ fn an_unreadable_include_stays_unreadable_past_a_later_include_bound() {
         shared
             .lock()
             .unwrap()
-            .dispatch_json(&event("herdr_profiles_list"))
+            .dispatch_json(&event("machine_profiles_list"))
     );
     wait(&shared, "the device listing", |runtime| {
         runtime.snapshot().status.machine_profiles.state != "loading"

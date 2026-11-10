@@ -46,7 +46,7 @@ export function AboutTab({ actions }: { actions: Actions }) {
           </Status>
         </Row>
         <Row
-          label={t("settings.herdrRuntime")}
+          label={t("settings.engineRuntime")}
           detail={
             line.tone !== "ok" && engine?.message ? (
               <Note tone={line.tone === "error" ? "error" : "warn"} data-engine-message="true">

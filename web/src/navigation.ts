@@ -182,9 +182,9 @@ export function liveDescendantCounts(scope: AgentScope): Map<string, number> {
 function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
   const engine = rest?.status?.engine;
   if (!engine?.state || engine.state === "connected") return { state: "ready" };
-  if (engine.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
+  if (engine.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingEngine") };
   // The state is worded here; the engine's own sentence, with its socket path, is the About tab's and the log's.
-  return { state: "unavailable", text: translate("coreError.herdr.countsLater", { reason: engineStateText(engine.state, translate) }), retry: null };
+  return { state: "unavailable", text: translate("coreError.engine.countsLater", { reason: engineStateText(engine.state, translate) }), retry: null };
 }
 
 /** `name`: the device as this window calls it (`machineName`). */

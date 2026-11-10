@@ -37,7 +37,7 @@ const CYCLE_TITLE: Record<Cycle["kind"], MessageKey> = {
 };
 
 const SURFACE_LABEL: Record<SurfaceKind, MessageKey> = {
-  herdr: "common.terminal",
+  engine: "common.terminal",
   file: "shell.surface.file",
   diff: "shell.diff",
   browser: "shell.surface.browser",
@@ -126,7 +126,7 @@ function CycleMarks({ item, title }: { item: CycleItem; title: string }) {
 /** The Overview and a Project's Overview wear the marks their sidebar rows wear; an agent's row has its status mark in this slot instead (above). */
 function KindMark({ item, title }: { item: CycleItem; title: string }) {
   // A tab with no single agent keeps the neutral mark the tab strip draws (PRD agent-mark-quiet D-09).
-  if (item.kind === "herdr") return <AgentMark kind={null} />;
+  if (item.kind === "engine") return <AgentMark kind={null} />;
   if (item.kind === "project") return <FolderIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
   if (item.kind === "main") return <HouseIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
   return displayMark({ kind: item.kind, label: title });

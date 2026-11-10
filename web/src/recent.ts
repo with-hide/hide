@@ -30,9 +30,9 @@ import { activeDisplay, areasOf } from "./viewLayout";
 import { workspaceViewOf } from "./workspace";
 
 /** An engine tab, or what a View-area display shows. */
-export type SurfaceKind = "herdr" | ViewDisplaySnapshot["kind"];
+export type SurfaceKind = "engine" | ViewDisplaySnapshot["kind"];
 
-const AGENT_SURFACE = "herdr";
+const AGENT_SURFACE = "engine";
 
 /** One surface a Recent Panels row stands for, with what committing it names. */
 export type Surface = {
