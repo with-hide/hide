@@ -7,7 +7,6 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import type { MissionGate } from "../snapshot";
 import { Button } from "./ui/button";
-import { Hint } from "./ui/tooltip";
 
 /**
  * What the operator will look at, as a strip of the card itself, up to two
@@ -76,11 +75,9 @@ export function GateAheadCount({ count, className }: { count: number; className?
   const { t } = useInterfaceTranslation();
   if (count === 0) return null;
   return (
-    <Hint label={t("mission.gate.planTitle", { count })}>
-      <span className={cn("flex shrink-0 items-center gap-xxs text-caption text-muted-foreground", className)} role="img" aria-label={t("mission.gate.planTitle", { count })} data-mission-row-gates={count}>
-        <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-        <span className="font-mono tabular-nums">{count}</span>
-      </span>
-    </Hint>
+    <span className={cn("flex shrink-0 items-center gap-xxs text-caption text-muted-foreground", className)} role="img" aria-label={t("mission.gate.planTitle", { count })} data-mission-row-gates={count}>
+      <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      <span className="font-mono tabular-nums">{count}</span>
+    </span>
   );
 }
