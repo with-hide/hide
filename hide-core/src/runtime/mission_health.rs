@@ -729,6 +729,28 @@ impl Runtime {
                 crate::coordination::mission_workers(ledger, &mission.id, &closed, now)
                     >= usize::from(mission.cap)
             });
+            // A node waiting for a place under the cap owes no start: a
+            // `not_started` already raised goes, to stand again once a place
+            // is free.
+            if cap_full {
+                let id = mission.id.clone();
+                let mission = &mut self.missions.book.missions[index];
+                for node in &mut mission.nodes {
+                    let Some(cause) = node
+                        .attention
+                        .as_ref()
+                        .filter(|attention| attention.reason == AttentionReason::NotStarted)
+                        .map(crate::missions::Attention::cause)
+                    else {
+                        continue;
+                    };
+                    settle(&id, node, "hide");
+                    node.handled.retain(|handled| *handled != cause);
+                    mission.updated_at_unix_ms = now;
+                    changed = true;
+                }
+            }
+            let mission = &self.missions.book.missions[index];
             let operator_waits: Vec<bool> = mission
                 .nodes
                 .iter()
