@@ -35,7 +35,12 @@ device_id() { device_line | cut -d' ' -f1; }
 created=0
 was_booted=0
 id=
+# The appearance of a simulator this command found and did not make, put back on the way out.
+found_appearance=
 cleanup() {
+    if [[ -n "$found_appearance" && "$created" == 0 && -n "$id" ]]; then
+        xcrun simctl ui "$id" appearance "$found_appearance" 2> /dev/null || true
+    fi
     if [[ "${HIDE_IOS_KEEP_SIMULATOR:-}" == 1 ]]; then
         [[ -n "$id" && -d "$base" ]] && touch "$kept_marker"
         return 0
@@ -100,7 +105,10 @@ case "$command" in
         xcrun simctl bootstatus "$id" -b > /dev/null
         xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
-        [[ -n "${HIDE_IOS_APPEARANCE:-}" ]] && xcrun simctl ui "$id" appearance "$HIDE_IOS_APPEARANCE"
+        if [[ -n "${HIDE_IOS_APPEARANCE:-}" ]]; then
+            if [[ $created == 0 && ! -f "$kept_marker" ]]; then found_appearance=$(xcrun simctl ui "$id" appearance 2> /dev/null || true); fi
+            xcrun simctl ui "$id" appearance "$HIDE_IOS_APPEARANCE"
+        fi
         mkdir -p "$shots"
         # The debug build's inputs (see ShellViewController): a pairing link and taps, from variables the script was
         # sent with. `HIDE_IOS_HOME=1` shows the home screen with the icon, `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on
