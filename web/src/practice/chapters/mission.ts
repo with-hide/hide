@@ -39,7 +39,7 @@ export default chapter<MissionModel>({
     { id: "plan", target: "[data-mission]", side: "left" },
     // The go is said to the Conductor in the terminal, because Hide has no button that starts a mission.
     { id: "approve", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.approve" } }, done: (model) => model.stage >= 3 },
-    // The pane head's second row is the Conductor's child agents: it opens the list of the workers started.
+    // The children button at the left end of the pane head's second row opens the list of the workers started; the turn words beside it open the turn card.
     { id: "children", quest: true, target: `[data-pane-tree="${CONDUCTOR}"]`, side: "right", gesture: { click: true }, shown: `[data-agent-child="${SCREEN}"]` },
     // The workers run until the Conductor has a question; the chip counts the parts as they finish.
     { id: "running", target: CHIP, side: "right", wait: true, done: (model) => model.stage >= 5 },
