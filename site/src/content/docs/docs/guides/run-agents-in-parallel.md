@@ -14,10 +14,10 @@ One row is one agent's work. Read the dot first: it tells you whether the agent 
 
 1. Press `⌘N` (Windows and Linux: `Ctrl+Shift+N`). The Start panel opens over the window. In a browser tab `⌘N` stays the browser's: press `⌘K` (`Ctrl+Shift+K`) and type `Start an agent…` instead.
 2. Write the job in the box that asks "What should the agent do?".
-3. Look at the row above the box. It reads project, then branch. Open the branch menu and choose `Start on a new branch…`, then type a name in `New branch name`. Hide makes a worktree for that branch, which is its own folder, and starts the agent in it. Agents in different worktrees do not write to each other's files. The branch menu offers this for a Git project.
+3. Look at the row above the box. It reads project, then branch. Open the branch menu and choose `Start on a new branch…`, then type a name in `New branch name`. Hide makes a worktree for that branch, which is its own folder, and starts the agent in it. The branch menu offers this for a Git project.
 4. Under the box, pick the agent and the model, then press `Start` (or `Enter`). `Shift+Enter` adds a new line.
-5. Press `⌘N` again for the next job. Each start opens a tab of its own, so you can start the next one at once.
-6. To race agents on one task, start it again with the same words, a different branch name and a different agent. Give each branch a name that says who it is, such as `try-claude` and `try-codex`.
+5. Press `⌘N` (`Ctrl+Shift+N`) again for the next job. Each start opens a tab of its own, so you can start the next one at once.
+6. To race agents on one task, start it again with the same words, a different branch name and a different agent. Give each branch its own name, such as `try-a` and `try-b`.
 7. When they finish, open each result and keep the one you like. To drop the others, right-click that branch's row in the Projects list and choose `Delete worktree…`. The dialog asks whether to delete the branch too (`Also delete branch`).
 
 To see everything at once, switch the sidebar list from `Projects` to `Tasks`. In the desktop app, `⌥1` to `⌥9` (`Alt+1` to `Alt+9`) jump to the first nine agents.

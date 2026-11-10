@@ -8,13 +8,7 @@ features: [tasks-status]
 
 <iframe src="/embed/docs-embed.html?part=mission-map&theme=dark" title="A mission map: the Conductor, workers side by side, a decision for you, checks, and main" height="460" loading="lazy"></iframe>
 
-The map shows the Conductor, the parts running side by side, the checks, and the one node that waits on you.
-
-## What a mission is
-
-A mission is one goal carried by one lead agent, the Conductor. The Conductor plans the work with you, starts the agents that do each part, changes the plan when you say so, and reports at the end. Another model checks each part as it finishes. Only decisions come to you.
-
-For the design behind missions, see `docs/missions.md` in the private with-hide/hide-private repository. This guide covers what you see and do.
+A mission is one goal carried by a lead agent, the Conductor: it plans with you, starts the agents, another model checks each part, and only decisions come to you. The map shows that, with the one node that waits on you.
 
 ## Steps
 
@@ -23,7 +17,7 @@ For the design behind missions, see `docs/missions.md` in the private with-hide/
 3. Plan with the Conductor in the same conversation. Say what done means, and whether the agents stop at ready pull requests (`Up to ready PRs`) or go through the merge (`Through the merge`). Defaults live in Settings, under Mission.
 4. Open the map. Press the `Mission` chip on the Conductor's pane, or the sidebar's `Missions` row. The `Missions` screen groups missions as `Your turn`, `In progress`, `Waiting to merge` and `Finished`. The command palette entry is `Open missions` and has no shortcut until you bind one.
 5. Work on something else. When a node waits on you, the mission moves into `Your turn`, and its row or card shows the action: `Answer`, `Read letters`, `See what's stuck`, `Take a look`, `Merge` or `Join`.
-6. Answer a decision. The card names the node and says `awaiting decision`. Press an option (the Conductor may mark one `Recommended`), or press `Write an answer…`, type, and press `Answer`. You can also answer in the Conductor's conversation.
+6. Answer a decision. The card names the node and says `awaiting decision`. Press an option to mark it (the Conductor may mark one `Recommended`), then press `Answer` to send it. Or press `Write an answer…`, type, and press `Enter`. You can also answer in the Conductor's conversation.
 7. To change course, say it to the Conductor: "stop", "resume", "drop node 3", "do this one first". The map is for looking, not editing.
 8. To end it early, open `Mission menu` on the map, choose `End mission…`, then `Ask to end`. `Keep it` backs out.
 

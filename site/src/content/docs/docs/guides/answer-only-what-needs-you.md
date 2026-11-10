@@ -8,15 +8,7 @@ features: [tasks-status, project-memory]
 
 <iframe src="/embed/docs-embed.html?part=turn-card&theme=dark" title="The turn card: your request, the agent's answer, and what waits on you" height="560" loading="lazy"></iframe>
 
-The turn card holds one turn: what you asked, what the agent answered, and what still waits on you.
-
-## Your turn and done are different
-
-- **Needs You** is your turn. An agent asked a question, wants an approval, is blocked, or opened a file for you to look at. Act on these.
-- **Unread** is done. The agent finished and you have not looked. Read it when you have a moment.
-- **Working** and **Seen** need nothing from you.
-
-A question waits in `Needs You` until it is answered. Finished work never goes there.
+`Needs You` is your turn: a question, an approval, a block, or a file the agent opened for you to look at. `Unread` only means you have not read a result yet.
 
 ## Steps
 
@@ -25,9 +17,10 @@ A question waits in `Needs You` until it is answered. Finished work never goes t
 3. When the Overview or the sidebar shows `Needs You`, press the first row. It takes you to the agent that waits.
 4. Press the turn row under the pane's title. The turn card opens with your request, the agent's answer and a `Waiting on you` list. `Show all` opens the whole answer. `Open record` shows the full session.
 5. Answer in the agent's terminal.
-6. The row leaves `Needs You` when the question is answered. A question you read but did not answer keeps its row.
+6. The row leaves `Needs You` when the question is answered. A question you read but did not answer keeps its row, and a file the agent opened keeps it until you look at the file.
+7. Open each `Unread` row and read the result. `Unread` is not a promise that the work is done: a stopped or unfinished agent is there too, and a read question that is still unanswered can wait in `Seen`. Check the turn card's `Waiting on you` list and the files the agent opened before you leave.
 
-If the agent needs you to sign in, unlock something or allow a permission, its row shows a key instead of the `!`. The line reads `Sign-in` or `Permission`, then the place to act. Do the step, then press `Done` on the row or the pane. The agent gets a letter and goes on. Typing your own message to it also ends the wait.
+If the agent needs you to sign in, unlock something or allow a permission, its row shows a key instead of the `!`. The line reads `Sign-in` or `Permission`, then the place to act. Do the step, then press `Done` on the row or the pane. The agent gets a letter and goes on. Sending your own message to it also ends the wait; a message you typed but did not send does not.
 
 When an answer is a rule you will repeat, ask the agent to keep it as a card with `hide memory add <text>`.
 
