@@ -1,0 +1,24 @@
+{
+  "name": "hide-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The Hide iOS app host: a Capacitor shell that carries the phone web app inside the app.",
+  "type": "module",
+  "scripts": {
+    "bundles": "node scripts/assemble.mjs",
+    "sync": "node scripts/assemble.mjs && cap sync ios",
+    "test": "vitest run",
+    "build": "bash scripts/build-ios.sh"
+  },
+  "dependencies": {
+    "@capacitor/cli": "8.6.0",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/ios": "8.6.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

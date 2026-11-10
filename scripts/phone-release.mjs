@@ -27,15 +27,15 @@ export function requireMain(env) {
     throw new Error('Phone production deployment requires release-candidate.yml on protected main.');
   }
 }
-const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-function filePath(path) {
+export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+export function filePath(path) {
   if (typeof path !== 'string' || path.length > 240 ||
       !path.split('/').every(part => /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(part))) {
     throw new Error('Invalid phone site file path');
   }
   return path;
 }
-function inventory(value) {
+export function inventory(value) {
   if (value?.schema !== 1 || !/^[a-f0-9]{40}$/.test(value.source) ||
       !value.files || typeof value.files !== 'object' || Array.isArray(value.files) ||
       Object.keys(value.files).length > MAX_FILES) throw new Error('Invalid phone site inventory');
@@ -55,7 +55,7 @@ function inventory(value) {
   }
   return numbers;
 }
-async function get(url, fetcher, headers = {}) {
+export async function get(url, fetcher, headers = {}) {
   const response = await fetcher(url, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`Phone deployment read failed (${response.status}): ${new URL(url).pathname}`);
   const chunks = [];
@@ -75,7 +75,7 @@ async function put(root, path, bytes) {
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, bytes);
 }
-async function localFiles(root, prefix = '') {
+export async function localFiles(root, prefix = '') {
   const result = [];
   for (const entry of await readdir(resolve(root, prefix), { withFileTypes: true })) {
     const path = filePath(prefix + entry.name);
@@ -89,8 +89,8 @@ async function localFiles(root, prefix = '') {
 // The frame a phone draws an HTML file in (web/public/m/look-frame.html) keeps a policy of its own: it runs a page's
 // scripts in a sandbox of their own origin, and may load what a generated page needs but never talk back. It is framed
 // only by the app, so every other file keeps `frame-ancestors 'none'`.
-const FRAME = /^p\/[1-9][0-9]*\/look-frame\.html$/;
-function framePolicy(html) {
+export const FRAME = /^p\/[1-9][0-9]*\/look-frame\.html$/;
+export function framePolicy(html) {
   const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
   const directives = new Map(policy?.split(';').map(d => { const [key, ...values] = d.trim().split(/\s+/); return [key, values.join(' ')]; }));
   for (const key of ['default-src', 'connect-src', 'form-action', 'frame-src', 'object-src']) {
@@ -99,7 +99,7 @@ function framePolicy(html) {
   if (/'self'/.test(policy)) throw new Error("Phone look frame must not reach the app's own origin.");
   return policy;
 }
-function contentPolicy(html) {
+export function contentPolicy(html) {
   const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
   const directives = new Map(policy?.split(';').map(d => { const [key, ...values] = d.trim().split(/\s+/); return [key, values.join(' ')]; }));
   if (directives.get('script-src') !== "'self' 'wasm-unsafe-eval'" ||
