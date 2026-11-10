@@ -512,6 +512,7 @@ The table names the lanes a path reaches; on a pull request the macOS jobs among
 | Registered desktop Vitest unit tests: `desktop/src/**/*.test.ts`, `desktop/e2e/fixture-cleanup.unit.ts` and `desktop/e2e/windows-processes.unit.ts` | `policy`, `checks` and `windows-check`, without application e2e or package jobs for these test files |
 | The web shell: `web/src`, `web/index.html` | `checks` (the web shell's and the desktop app's typecheck, lint and unit suites in one job), the Linux `web-e2e` and the macOS `desktop-e2e`, which drives the same shell inside the app |
 | The phone page: `web/mobile.html`, `web/public/m` | `checks` and `web-e2e`; hided serves it at `/m/`, and the app never loads it |
+| `site/` (the landing page in `site/public` and the user docs), `scripts/docs/`, `web/docs-embed.html`, `web/docs-embed.config.ts`; also every `web/src` file but a unit test, `hided/src/cli.rs` and `contracts/hide-cli.json` | `docs`, the [user docs](#the-user-docs) build; the web and CLI files add it to the lanes they already plan, because the docs frame the shell's own components and list the commands `hide --help` prints |
 | Web code the desktop host imports or drives through native input (the host bridge, the shortcut registry, keys and keyboard, store, snapshot and socket, terminals, focus and area cycling, `App.tsx`, `main.tsx`; `SHARED_WEB` in the script) | also `windows-e2e` and `windows-desktop` |
 | A `web/e2e` spec | `checks` and `web-e2e`; a spec tagged `@platform` also runs `windows-e2e` (the whole suite runs on Linux, so the Linux leg of `@platform` is `web-e2e`) |
 | `desktop/src` outside registered unit tests, `desktop/static`, a `desktop/e2e` spec | `checks` and `desktop-e2e`, the only macOS lane (two shard jobs) a change outside the two crates and the package inputs below asks for, and `windows-desktop` (the desktop `@platform` tests on Windows) for `desktop/src`, `desktop/static` and a spec tagged `@platform`; `desktop/src/main` also runs `windows-check`, where the main process's unit suite runs on Windows |
@@ -523,7 +524,7 @@ The table names the lanes a path reaches; on a pull request the macOS jobs among
 | `hide-vt`, `hide-holder`, `hide-holder-protocol`, `vendor/portable-pty` (which the holder alone uses) and `hide-kit/src/holders.rs` | also `vt`, which builds the terminal parser and runs the pane holder's tests on all three systems ([The pane holder](#the-pane-holder)) |
 | `hide-ai` or `hide-platform` | also `omp-contract`, the real OMP SDK against synthetic authentication and localhost inference on all three systems; no paid model or operator login |
 | What goes into a package (`PACKAGE_PATHS` in the script): `desktop/scripts`, `desktop/package.json`, `desktop/resources`, `verify-cargo.sh`, `verify-web.sh`, `toolchain-env.sh`, `hided/build.rs`, which embeds the web shell, `hided/src/cli.rs`, `hide-kit` and `hide-agent-hooks` | also `package`: `package.yml`'s Windows and Linux packages, the two Linux device helper builds, and the macOS archive with the packaged app's own specs |
-| The paths `POLICY_ONLY` names, which no lane reads: `agents/`, `site/`, `.gitignore` files, the root `LICENSE` and `NOTICE`, the PR template and `dependabot.yml`, the contribution intake (the issue and discussion forms and `APPROVED_CONTRIBUTORS`), `scripts/tests/`, the policy `check-*` scripts, the design, release and measurement scripts, the pre-merge check and the merge order with the helpers they share, the design contract's token generator and checks (`gen-tokens.mjs`, `check-design-contract.mjs` and the checks it runs, which `design-contract.yml` runs on every pull request), and Markdown below a folder no rule claims | `policy` alone |
+| The paths `POLICY_ONLY` names, which no lane reads: `agents/`, `.gitignore` files, the root `LICENSE` and `NOTICE`, the PR template and `dependabot.yml`, the contribution intake (the issue and discussion forms and `APPROVED_CONTRIBUTORS`), `scripts/tests/`, the policy `check-*` scripts, the design, release and measurement scripts, the pre-merge check and the merge order with the helpers they share, the design contract's token generator and checks (`gen-tokens.mjs`, `check-design-contract.mjs` and the checks it runs, which `design-contract.yml` runs on every pull request), and Markdown below a folder no rule claims | `policy` alone |
 | The paths `NAMED_LANES` names, whose readers are a known set: a `web/e2e` file that is not a spec (the `desktop` suites on macOS and Windows import it, and `desktop/e2e` unit tests run in `windows-check`), a `desktop/e2e` file that is not a spec, the Playwright, eslint and vitest configurations, `web/vite.config.ts` (every lane that builds the shell or runs its unit suite), `web/scripts` and `desktop/scripts` | the lanes that read it, listed in the script and its test; known packaging helpers run `checks` and `package`, without unrelated desktop, OMP or OS contracts |
 | Any `.github/workflows/` or `.github/actions/` change, or `scripts/ci-plan.py` | every lane, including `package` and `agent-clis`; a CI definition must exercise all its decisions |
 | `scripts/` the lanes call (`verify-*.sh`, `ci-flaky-report.py`, ...), any contract `READERS` does not name, any `package.json`, lockfile, the workspace `Cargo.toml`, a type change, and any path no row above names | every lane but `package`, which only the package inputs add |
@@ -767,6 +768,19 @@ It is ignored only because it needs that release; the rust lane's `Every gh comm
 A new shape in `hide_node_link::gh::allowed` gets a line there, and a field or flag only a newer `gh` knows fails it until the minimum, the script's version and digest move together.
 Run it locally with `HIDE_TEST_GH_BIN=$(bash scripts/fetch-gh.sh <folder>) bash scripts/verify-cargo.sh nextest -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only`.
 
+### The user docs
+
+`site/` is one Astro project: `site/public/` is the landing page, served at `/` byte for byte as it is on disk, and Starlight serves the user docs at `/docs` from `site/src/content/docs/docs/{start,guides,features,reference}/`.
+The `docs` lane runs `node scripts/docs/check-all.mjs`, which is also the local command:
+
+1. `scripts/docs/check-features.mjs` fails on a guide whose `features:` header names a feature page that does not exist, on a guide with no header, and on a feature page no guide uses; it writes each feature's "Used in guides" list from those headers, so nobody types it.
+2. `scripts/docs/cli-reference.mjs` reads every command from `hide --help` (and the options of those `contracts/hide-cli.json` describes) and fails on a command with no note in `site/src/data/cli-notes.json` and on a note for a command that is gone; it writes the generated, ignored `reference/cli.md`.
+3. `bash scripts/verify-web.sh web build:docs-embed` builds the live parts the pages frame (`web/docs-embed.html`, made from the shell's own components, so a component that changes or goes away breaks the docs build instead of leaving a stale picture), then `bash scripts/verify-web.sh site build` builds the site and copies the parts to `/embed/`.
+
+The lane builds `hide` with `verify-cargo.sh build -p hided --bin hide`, and locally `--hide <binary>` (or `HIDE_DOCS_BIN`) names the `hide` to read, such as the installed app's.
+`bash scripts/verify-web.sh install docs` installs the web shell's packages and the site's own: `site/` is a pnpm root of its own (`site/pnpm-workspace.yaml`, `site/pnpm-lock.yaml`), so Astro is installed by no other lane.
+`node --test site/tests/downloads.test.mjs` is the landing's download-policy test and needs no install.
+
 ### How many jobs a run starts
 
 The transition retains these explicit exceptions:
@@ -775,7 +789,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 51 jobs.
+A run that plans every lane a pull request can plan starts at most 52 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
