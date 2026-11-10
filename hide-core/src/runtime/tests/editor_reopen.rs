@@ -287,7 +287,10 @@ fn tab_strip_lists_engine_tabs_and_then_the_file_that_was_opened() {
     ))));
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
-        vec!["engine:w-order:t1".to_owned(), "engine:w-order:t2".to_owned()]
+        vec![
+            "engine:w-order:t1".to_owned(),
+            "engine:w-order:t2".to_owned()
+        ]
     );
 
     open_file(&mut runtime, &checkout_id, &file);
@@ -295,7 +298,10 @@ fn tab_strip_lists_engine_tabs_and_then_the_file_that_was_opened() {
     assert_eq!(with_file.len(), 3);
     assert_eq!(
         &with_file[..2],
-        &["engine:w-order:t1".to_owned(), "engine:w-order:t2".to_owned()]
+        &[
+            "engine:w-order:t1".to_owned(),
+            "engine:w-order:t2".to_owned()
+        ]
     );
     assert!(with_file[2].starts_with("file:"));
     assert_eq!(strip_labels(&runtime, &checkout_id)[2], "notes.md");

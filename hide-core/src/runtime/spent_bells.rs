@@ -295,9 +295,7 @@ fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str
         "engine_format" => {
             "the answer to its typing could not be read, and Hide found none of it in the agent's session record, or could not read that record"
         }
-        "engine_parameters" => {
-            "the bell could not be put into the engine's terms"
-        }
+        "engine_parameters" => "the bell could not be put into the engine's terms",
         "doorbell_reservation_failed" | "doorbell_reservation_format" => {
             "the delivery store did not save its bell"
         }

@@ -622,7 +622,10 @@ fn queued_move(runtime: &mut Runtime, checkout_id: &str, phase: &str) {
     runtime.pending_tab_move.insert(
         checkout_id.to_owned(),
         PendingTabMove {
-            desired: vec!["engine:w-order:t2".to_owned(), "engine:w-order:t1".to_owned()],
+            desired: vec![
+                "engine:w-order:t2".to_owned(),
+                "engine:w-order:t1".to_owned(),
+            ],
             workspace_id: "w-order".to_owned(),
             engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
             target_id: "w-order:t1".to_owned(),

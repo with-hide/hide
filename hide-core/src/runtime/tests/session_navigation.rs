@@ -3274,7 +3274,10 @@ fn tab_strip_reorder_keeps_the_engine_s_order_and_reports_when_a_move_is_refused
     runtime.pending_tab_move.insert(
         checkout_id.clone(),
         PendingTabMove {
-            desired: vec!["engine:w-order:t2".to_owned(), "engine:w-order:t1".to_owned()],
+            desired: vec![
+                "engine:w-order:t2".to_owned(),
+                "engine:w-order:t1".to_owned(),
+            ],
             workspace_id: "w-order".to_owned(),
             engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
             target_id: "w-order:t1".to_owned(),
@@ -3409,7 +3412,10 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
     ))));
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
-        vec!["engine:w-order:t2".to_owned(), "engine:w-order:t1".to_owned()]
+        vec![
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t1".to_owned()
+        ]
     );
     assert!(runtime.pending_tab_move.is_empty());
 
@@ -3427,7 +3433,10 @@ fn tab_strip_reorder_ignores_a_result_a_later_drag_has_replaced() {
         "w-order:t1"
     ))));
     let live = PendingTabMove {
-        desired: vec!["engine:w-order:t2".to_owned(), "engine:w-order:t1".to_owned()],
+        desired: vec![
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t1".to_owned(),
+        ],
         workspace_id: "w-order".to_owned(),
         engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
         target_id: "w-order:t1".to_owned(),
@@ -4299,7 +4308,10 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
         .collect::<Vec<_>>();
     assert_eq!(
         right,
-        vec!["engine:w-right:t2".to_owned(), "engine:w-right:t1".to_owned()],
+        vec![
+            "engine:w-right:t2".to_owned(),
+            "engine:w-right:t1".to_owned()
+        ],
         "the move Herdr granted did not land: {after:?}"
     );
     assert!(

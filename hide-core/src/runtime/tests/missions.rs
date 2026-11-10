@@ -2919,7 +2919,11 @@ fn an_answer_the_engine_may_have_typed_is_typed_again_only_when_the_operator_sen
     runtime.mission_answer_typing("mission-1", 1);
     runtime.mission_answer_sent("mission-1", 1, Ok(()));
     // A late second report for the same prompt changes nothing.
-    runtime.mission_answer_sent("mission-1", 1, Err(SendFailure::MaybeTyped("engine_format")));
+    runtime.mission_answer_sent(
+        "mission-1",
+        1,
+        Err(SendFailure::MaybeTyped("engine_format")),
+    );
     // Typed, the answer takes the decision away; the Conductor need not clear it.
     let mission = &runtime.missions.book.missions[0];
     assert_eq!(

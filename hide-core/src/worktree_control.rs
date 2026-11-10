@@ -1749,9 +1749,12 @@ fn launch_agent(
         {
             Launch::Unknown(AgentFailure::with_detail(code, message))
         }
-        Err(StartError::Engine(EngineError::Refused { code, message })) => Launch::Failed(
-            AgentFailure::with_detail("agent_start.refused_by_engine", format!("{code}: {message}")),
-        ),
+        Err(StartError::Engine(EngineError::Refused { code, message })) => {
+            Launch::Failed(AgentFailure::with_detail(
+                "agent_start.refused_by_engine",
+                format!("{code}: {message}"),
+            ))
+        }
         Err(StartError::Engine(error)) => Launch::Unknown(AgentFailure::with_detail(
             "agent_start.unconfirmed",
             format!("The engine did not confirm the agent start ({error})"),

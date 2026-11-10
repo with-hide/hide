@@ -2674,7 +2674,7 @@ pub struct StripTabSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StripTabKind {
-        Engine,
+    Engine,
     File,
     Diff,
     Session,

@@ -147,14 +147,18 @@ mod tests {
         assert_eq!(wire["engine_scope"], "scope-1");
         assert!(wire.get("herdr_socket").is_none());
         assert_eq!(
-            serde_json::from_value::<Inspection>(wire.clone()).unwrap().engine_scope,
+            serde_json::from_value::<Inspection>(wire.clone())
+                .unwrap()
+                .engine_scope,
             Some("scope-1".to_owned())
         );
         let object = wire.as_object_mut().unwrap();
         object.remove("engine_scope");
         object.insert("herdr_socket".to_owned(), serde_json::json!("scope-1"));
         assert_eq!(
-            serde_json::from_value::<Inspection>(wire).unwrap().engine_scope,
+            serde_json::from_value::<Inspection>(wire)
+                .unwrap()
+                .engine_scope,
             Some("scope-1".to_owned())
         );
     }
