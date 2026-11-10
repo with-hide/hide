@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, heldNodes, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import { forgetCatalogs } from "./agentPicker";
 import type { AgentRow, BackgroundAi, Device, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
@@ -650,6 +650,24 @@ describe("a node's warnings", () => {
     expect(warningWords(mission("m"), node("n"), t)).toBeNull();
     expect(warningWords(mission("m"), { ...warned, status: "dropped" }, t)).toBeNull();
     expect(warningWords(mission("m", { status: "cancelled" }), warned, t)).toBeNull();
+  });
+});
+
+describe("nodeHold", () => {
+  // A Conductor's hold shows only on a node that has not started in a mission
+  // still open: the card's pause line and the list's count read the same nodes.
+  const hold = { why: "check on the phone in the morning", until_unix_ms: 9 * 3_600_000 };
+
+  it("counts the held nodes that have not started", () => {
+    const held = mission("m", { nodes: [node("a", { hold }), node("b", { hold, status: "working" }), node("c"), node("d", { hold, status: "dropped" })] });
+    expect(nodeHold(held, held.nodes[0]!)).toEqual(hold);
+    expect(nodeHold(held, held.nodes[1]!)).toBeNull();
+    expect(heldNodes(held)).toBe(1);
+  });
+
+  it("is none once the mission ended", () => {
+    expect(heldNodes(mission("m", { status: "done", nodes: [node("a", { hold })] }))).toBe(0);
+    expect(heldNodes(mission("m", { status: "cancelled", nodes: [node("a", { hold })] }))).toBe(0);
   });
 });
 

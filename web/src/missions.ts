@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -915,6 +915,22 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
   const attention = node.attention;
   if (!attention) return null;
   return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes) };
+}
+
+/**
+ * A Conductor's hold on a node that has not started
+ * (`hide mission node --hold`): the card's grey pause line and the list's
+ * `⏸N`. None once the node started or left the plan, or for a mission that
+ * ended; the core lifts an expired hold within a minute.
+ */
+export function nodeHold(mission: Mission, node: MissionNode): MissionNodeHold | null {
+  if (mission.status === "done" || mission.status === "cancelled" || node.status !== "planned") return null;
+  return node.hold ?? null;
+}
+
+/** How many of a mission's nodes its Conductor holds back now (`nodeHold`). */
+export function heldNodes(mission: Mission): number {
+  return mission.nodes.filter((node) => nodeHold(mission, node) !== null).length;
 }
 
 /**

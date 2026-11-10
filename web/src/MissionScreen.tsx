@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, PauseIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -36,7 +36,7 @@ import {
   type MissionGroup,
   type MissionProject,
 } from "./missionList";
-import { missionCells, missionCounts, type TurnItem } from "./missions";
+import { heldNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
@@ -346,6 +346,24 @@ function Steps({ mission }: { mission: Mission }) {
     <span className="pointer-events-none relative flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
       <ProgressCells tones={missionCells(mission)} size="chip" className="min-w-0 overflow-hidden" />
       <span className="shrink-0 font-mono tabular-nums" data-mission-row-counts={`${done}/${total}`}>{done}/{total}</span>
+      <HoldCount mission={mission} />
+    </span>
+  );
+}
+
+/**
+ * How many nodes its Conductor holds back, a quiet grey pause mark and number
+ * at the row's end with `보류한 노드 N개` as its name; never in 내 차례's
+ * colour or count. None when no node is held.
+ */
+function HoldCount({ mission }: { mission: Mission }) {
+  const { t } = useInterfaceTranslation();
+  const held = heldNodes(mission);
+  if (held === 0) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-xxs" role="img" aria-label={t("mission.holdCount", { count: held })} title={t("mission.holdCount", { count: held })} data-mission-row-held={held}>
+      <PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      <span className="font-mono tabular-nums">{held}</span>
     </span>
   );
 }

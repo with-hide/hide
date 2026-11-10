@@ -1655,7 +1655,12 @@ export type MissionNode = {
   work?: MissionNodeWork | null;
   /** The node's gate (PRD mission-human-gate); absent for a node without one. */
   gate?: MissionGate;
+  /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
+  hold?: MissionNodeHold | null;
 };
+
+/** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
+export type MissionNodeHold = { why: string; until_unix_ms: number };
 
 /** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
 export type MissionNodeWork = { state: "working" } | { state: "waiting"; on: MissionWaitingOn } | { state: "no_worker" };

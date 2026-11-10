@@ -1,4 +1,4 @@
-import { CogIcon, GitBranchIcon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
+import { CogIcon, GitBranchIcon, KeyRoundIcon, PauseIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -41,6 +41,7 @@ import {
   missionOf,
   missionOpen,
   neighbours,
+  nodeHold,
   nodeLook,
   nodeSteps,
   nodeWork,
@@ -54,7 +55,7 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionMapFlow, MissionNode } from "./snapshot";
+import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionNodeHold } from "./snapshot";
 import { useShellStore } from "./store";
 import type { TFunction } from "i18next";
 
@@ -363,6 +364,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // What its worker does now (hide-private issue 680): a resting or absent worker stops the ring and says so under the title; a working one needs no words.
   const doing = nodeWork(mission, node);
   const doingLine = doing && doing.state !== "working" ? nodeWorkWords(doing, t) : null;
+  const hold = nodeHold(mission, node);
+  const holdLine = useHoldWords(hold);
   // A worker's person's turn is the step's waiting reason, a key and what and where (PRD ask-human D-18, B25); the Conductor's row carries Done.
   const escalationOf = useWorkerEscalation();
   const human = node.status === "working" ? escalationOf(node)?.human ?? null : null;
@@ -392,6 +395,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
+        ...(holdLine ? [holdLine] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
@@ -424,6 +428,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {doingLine ? (
         <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
           {doingLine}
+        </span>
+      ) : null}
+      {/* A node its Conductor holds back says why and how long in grey under the title, with the pause mark the list's `⏸N` uses. */}
+      {holdLine ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={holdLine} data-node-hold="true">
+          <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <span className="min-w-0 truncate">{holdLine}</span>
         </span>
       ) : null}
       {humanLine ? (
@@ -558,6 +569,14 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
 }
 
 /** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
+/** A held node's line: why, and how long it still holds while the core has not lifted it yet. */
+function useHoldWords(hold: MissionNodeHold | null): string | null {
+  const { t } = useInterfaceTranslation();
+  const left = useRemaining(hold?.until_unix_ms);
+  if (!hold) return null;
+  return left && left !== "past" ? t("mission.holdLeft", { why: hold.why, left: left.text }) : t("mission.hold", { why: hold.why });
+}
+
 function DelayLine({ line, until }: { line: string; until: number | null | undefined }) {
   const { t } = useInterfaceTranslation();
   const left = useRemaining(until);
