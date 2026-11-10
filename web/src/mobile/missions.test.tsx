@@ -207,7 +207,7 @@ it("opens a step's worker only when the phone's list holds that row", async () =
   }
 });
 
-it("answers a decision with one request, and the same press again reuses that request id", async () => {
+it("answers a decision with one request once a marked choice is sent with 답하기, and the same answer again reuses that request id (PRD mission-human-gate B19)", async () => {
   const { container, click, answers, connection, unmount } = await connect([deciding()]);
   try {
     await click('[data-phone-tab="missions"]');
@@ -219,7 +219,11 @@ it("answers a decision with one request, and the same press again reuses that re
     expect(page.querySelector('[data-phone-step-kind="hold"]')!.getAttribute("data-phone-step")).toBe("b");
     expect(container.querySelector("[data-phone-tabs]")).toBeNull();
 
+    // A press only marks the row; 답하기 sends it, and cannot before one is marked.
+    expect(container.querySelector<HTMLButtonElement>("[data-phone-choice-send]")!.disabled).toBe(true);
     await click('[data-phone-option="1"]');
+    expect(answers()).toHaveLength(0);
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(1);
     expect(answers()[0]).toMatchObject({ type: "answer_mission", mission: "m-turn", key: 4, option: 1 });
     expect(container.querySelector("[data-phone-decision]")!.getAttribute("data-phone-decision")).toBe("sending");
@@ -228,6 +232,7 @@ it("answers a decision with one request, and the same press again reuses that re
     // The page draws the core's state again after a while; the press that was never confirmed goes again under the same id.
     await act(async () => connection.settleMissionAnswer());
     await click('[data-phone-option="1"]');
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(2);
     expect(answers()[1]!.request_id).toBe(answers()[0]!.request_id);
   } finally {
@@ -241,6 +246,7 @@ it("sends another mission's answer while the first one's accepted answer is stil
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-turn"]');
     await click('[data-phone-option="1"]');
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(1);
     await serve({ type: "mission_result", request_id: answers()[0]!.request_id as string, mission: "m-turn", ok: true, reason: null });
 
@@ -248,6 +254,7 @@ it("sends another mission's answer while the first one's accepted answer is stil
     await click('[data-phone-back="missions"]');
     await click('[data-phone-mission="m-other"]');
     await click('[data-phone-option="2"]');
+    await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(2);
     expect(answers()[1]).toMatchObject({ mission: "m-other", key: 4, option: 2 });
     expect(container.querySelector('[data-phone-mission-page="m-other"] [data-phone-decision]')!.getAttribute("data-phone-decision")).toBe("sending");
@@ -314,8 +321,9 @@ it("shows the desktop's reason and presses nothing when the Conductor is gone or
 it("lists the decision's Views, opening one from its agent's 볼 것, and with none asks for material once and says so from the core's frame", async () => {
   const look = deciding({
     decision_views: [
-      { device_id: "local", display_id: "d1", kind: "browser", label: "compare.html", unseen: true, by: "conductor", pane_id: "p-conductor" },
-      { device_id: "local", display_id: "d2", kind: "file", label: "notes.md", by: "worker" },
+      { device_id: "local", display_id: "d1", view: "v1", kind: "browser", label: "compare.html", unseen: true, by: "conductor", pane_id: "p-conductor" },
+      { device_id: "local", display_id: "d2", view: "v2", kind: "file", label: "notes.md", by: "worker" },
+      { device_id: "local", display_id: "d3", view: "v3", kind: "file", label: "old.md", closed: true, by: "conductor" },
     ],
   });
   const { container, click, serve, socket, unmount } = await connect([look]);
@@ -323,9 +331,12 @@ it("lists the decision's Views, opening one from its agent's 볼 것, and with n
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-turn"]');
     const rows = [...container.querySelectorAll<HTMLElement>("[data-phone-decision-view]")];
-    expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("compare.html"), expect.stringContaining("notes.md")]);
+    expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("compare.html"), expect.stringContaining("notes.md"), expect.stringContaining("old.md")]);
     // A row whose opener's agent is closed presses nothing; with Views there is nothing to ask for.
     expect(rows[1]!.tagName).not.toBe("BUTTON");
+    // A View closed since the decision linked it stays, marked closed; with its agent closed too it presses nothing (PRD mission-human-gate B20).
+    expect(rows[2]!.tagName).not.toBe("BUTTON");
+    expect(rows[2]!.textContent).toContain("Closed");
     expect(container.querySelector("[data-phone-material]")).toBeNull();
 
     await serve({ type: "missions", items: [deciding()], failed: false });
@@ -345,8 +356,70 @@ it("lists the decision's Views, opening one from its agent's 볼 것, and with n
   }
 });
 
+it("opens a closed View on the Mac first, then its agent's 볼 것 lists it; a refusal or a question that moved on says so (PRD mission-human-gate B20)", async () => {
+  const row = { device_id: "local", display_id: "d3", view: "v3", kind: "file", label: "old.md", by: "conductor" as const, pane_id: "w1:p1" };
+  const { container, click, serve, socket, unmount } = await connect([deciding({ decision_views: [{ ...row, closed: true }] })]);
+  const reopens = () => socket.sent.filter((message) => message.type === "reopen_mission_view");
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-turn"]');
+    await click('[data-phone-decision-view="d3"]');
+    expect(reopens()).toEqual([expect.objectContaining({ mission: "m-turn", key: 4, view: "v3" })]);
+    const requestId = reopens()[0]!.request_id as string;
+    await serve({ type: "mission_result", request_id: requestId, mission: "m-turn", ok: true, reason: null });
+    // Accepted, the press waits for the row, and a second press sends nothing.
+    expect(container.querySelector("[data-phone-decision-view-opening]")).not.toBeNull();
+    await click('[data-phone-decision-view="d3"]');
+    expect(reopens()).toHaveLength(1);
+    // The row open again opens the agent's 볼 것, where the View is listed.
+    await serve({ type: "missions", items: [deciding({ decision_views: [{ ...row, display_id: "d11", reopens: [{ request_id: requestId }] }] })], failed: false });
+    await serve({ type: "agents", groups: [{ group: "needs_you", count: 1, rows: [{ kind: "agent", device_id: "local", pane_id: "w1:p1", root_pane_id: "w1:p1", group: "needs_you", mark: "look", wait: null, descendants_working: 0, agent_kind: "claude", title: "Conductor", place: null, device_label: null, changed_at_unix_ms: null, line: null, status_code: "idle", demand: "none", emphasized: true, holds_notification: false }] }], devices: [], interface_language: "en", color_theme: null });
+    expect(socket.sent.filter((message) => message.type === "open").at(-1)).toMatchObject({ device_id: "local", pane_id: "w1:p1" });
+    await serve({ type: "looks", device_id: "local", pane_id: "w1:p1", views: [{ id: "d11", kind: "doc", name: "old.md", unseen: false, at: 1 }], omitted: 0 });
+    expect(container.querySelector('[data-phone-view="looks"]')!.getAttribute("data-state")).toBe("active");
+    expect(container.querySelector('[data-phone-look="d11"]')).not.toBeNull();
+  } finally {
+    await unmount();
+  }
+
+  const refused = await connect([deciding({ decision_views: [{ ...row, closed: true }] })]);
+  const asked = () => refused.socket.sent.filter((message) => message.type === "reopen_mission_view");
+  try {
+    await refused.click('[data-phone-tab="missions"]');
+    await refused.click('[data-phone-mission="m-turn"]');
+    await refused.click('[data-phone-decision-view="d3"]');
+    const first = asked()[0]!.request_id as string;
+    // Another phone's press of the same row refused first leaves this one waiting, until its own is refused too.
+    await refused.serve({ type: "missions", items: [deciding({ decision_views: [{ ...row, closed: true, reopens: [{ request_id: "other-phone", refused: true }, { request_id: first }] }] })], failed: false });
+    expect(refused.container.querySelector("[data-phone-decision-view-opening]")).not.toBeNull();
+    expect(refused.container.querySelector("[data-phone-answer-error]")).toBeNull();
+    await refused.serve({ type: "missions", items: [deciding({ decision_views: [{ ...row, closed: true, reopens: [{ request_id: "other-phone", refused: true }, { request_id: first, refused: true }] }] })], failed: false });
+    expect(refused.container.querySelector("[data-phone-answer-error]")!.textContent).toBe("It couldn't be opened again on your Mac.");
+    expect(refused.container.querySelector("[data-phone-decision-view-opening]")).toBeNull();
+    // Pressed again while the question moves on, the press ends on that.
+    await refused.click('[data-phone-decision-view="d3"]');
+    expect(asked()).toHaveLength(2);
+    await refused.serve({ type: "missions", items: [deciding({ question: { ...deciding().question!, key: 5 } })], failed: false });
+    expect(refused.container.querySelector("[data-phone-answer-error]")!.textContent).toBe("This question is no longer open.");
+    // A press the core never answers for ends once the phone's wait is over.
+    await refused.serve({ type: "missions", items: [deciding({ decision_views: [{ ...row, closed: true }] })], failed: false });
+    vi.useFakeTimers();
+    try {
+      await refused.click('[data-phone-decision-view="d3"]');
+      expect(refused.container.querySelector("[data-phone-decision-view-opening]")).not.toBeNull();
+      await act(async () => vi.advanceTimersByTime(30_000));
+      expect(refused.container.querySelector("[data-phone-decision-view-opening]")).toBeNull();
+      expect(refused.container.querySelector("[data-phone-answer-error]")!.textContent).toBe("It couldn't be opened again on your Mac.");
+    } finally {
+      vi.useRealTimers();
+    }
+  } finally {
+    await refused.unmount();
+  }
+});
+
 it("lists a decision's first three Views and folds the rest behind +N, as the desktop's card does", async () => {
-  const views = [1, 2, 3, 4, 5].map((n) => ({ device_id: "local", display_id: `d${n}`, kind: "file" as const, label: `view-${n}.md`, by: "conductor" as const, pane_id: "p-conductor" }));
+  const views = [1, 2, 3, 4, 5].map((n) => ({ device_id: "local", display_id: `d${n}`, view: `v${n}`, kind: "file" as const, label: `view-${n}.md`, by: "conductor" as const, pane_id: "p-conductor" }));
   const { container, click, unmount } = await connect([deciding({ decision_views: views })]);
   try {
     await click('[data-phone-tab="missions"]');

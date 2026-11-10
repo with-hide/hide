@@ -46,6 +46,8 @@ export type PrDelegateSheet = {
 
 /** An answer sent from a mission's page that the core has not yet kept or refused; the page draws it as the desktop's banner does. */
 export type MissionAnswerSent = { requestId: string; mission: string; pressed: PressedAnswer };
+/** A press that asked the Mac to open a decision's closed View again (`reopen_mission_view`), by its row's `view`. */
+export type MissionReopenSent = { requestId: string; mission: string; key: number; view: string };
 
 /**
  * The answer this mission's page waits on, if any. One rule for "a press of this mission is still out":
@@ -155,6 +157,8 @@ type PhoneState = {
   missionDrafts: Record<string, string>;
   missionAnswer: MissionAnswerSent | null;
   missionAnswerError: { mission: string; notice: Notice } | null;
+  /** The press on a closed decision View the page waits on: open again, the agent's 볼 것 opens; refused, its notice shows. */
+  missionReopen: MissionReopenSent | null;
   /** Null until the first `prs` frame; kept across a lost connection, dimmed under the unreachable line (B45). */
   prs: PrsState | null;
   /** The pull request whose page is open on the PR tab, by `PhonePr.key`. */
@@ -216,6 +220,7 @@ const initial: PhoneState = {
   missionDrafts: {},
   missionAnswer: null,
   missionAnswerError: null,
+  missionReopen: null,
   prs: null,
   prOpen: null,
   prConfirm: null,

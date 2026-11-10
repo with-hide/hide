@@ -602,6 +602,11 @@ pub(super) struct RevealPathPayload {
     /// The agent pane whose terminal link named the path (D-02).
     #[serde(default)]
     pub(super) opener_pane: Option<String>,
+    /// The agent a decision's closed View was opened by, which the file
+    /// opened again is stamped with (`mission_view_reopen`); never on the
+    /// wire.
+    #[serde(skip)]
+    pub(super) kept_opener: Option<crate::view_feedback::Opener>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1051,6 +1056,22 @@ pub(super) struct MissionAnswerPayload {
 pub(super) struct MissionMaterialPayload {
     pub(super) mission: String,
     pub(super) key: u64,
+}
+
+/// `mission_view_reopen`: the operator pressed a View on the question with
+/// `key`, named by its link's token: an open one takes its area, a closed
+/// one opens again from what the link kept (PRD mission-human-gate D-20).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionViewReopenPayload {
+    pub(super) mission: String,
+    pub(super) key: u64,
+    /// The row's link (`DecisionView::view`).
+    pub(super) view: String,
+    /// Names the press, whose outcome the row then carries
+    /// (`DecisionView::reopen`); the phone's names one, the desktop's none.
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
 }
 
 /// `mission_end`: the operator's `미션 종료` from a mission's map: the
@@ -1823,6 +1844,7 @@ pub(super) enum Event {
     MissionAnswer(MissionAnswerPayload),
     MissionEnd(MissionEndPayload),
     MissionMaterial(MissionMaterialPayload),
+    MissionViewReopen(MissionViewReopenPayload),
     MissionAttention(super::mission_health::MissionAttentionPayload),
     /// `mission_brief_read`: the operator opened the folded brief of a node.
     MissionBriefRead(super::mission_brief::BriefReadPayload),
@@ -2191,6 +2213,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
         "mission_end" => decode!(MissionEndPayload, MissionEnd),
         "mission_material" => decode!(MissionMaterialPayload, MissionMaterial),
+        "mission_view_reopen" => decode!(MissionViewReopenPayload, MissionViewReopen),
         "mission_attention" => decode!(
             super::mission_health::MissionAttentionPayload,
             MissionAttention
@@ -4158,6 +4181,7 @@ impl Runtime {
             Event::MissionMaterial(payload) => {
                 self.mission_material_event(&payload.mission, payload.key)
             }
+            Event::MissionViewReopen(payload) => self.mission_view_reopen_event(payload),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
             Event::TurnAnswerRead(payload) => self.turn_answer_read(payload),

@@ -58,9 +58,9 @@ struct PendingChoice {
     acknowledged: bool,
     /// Core checkout navigation has already landed, without an engine effect.
     core_choice: bool,
-    /// A path the operator clicked in the chosen checkout, revealed once it
-    /// is in front (`Runtime::reveal_when_in_front`).
-    reveal: Option<super::RevealPathPayload>,
+    /// What the operator's press shows in the chosen checkout, once it is
+    /// in front (`Runtime::reveal_when_in_front`).
+    reveal: Option<super::session::FrontReveal>,
     terminal: Option<TerminalChoice>,
 }
 
@@ -624,7 +624,7 @@ impl Runtime {
         &mut self,
         device: &str,
         request: &str,
-        reveal: super::RevealPathPayload,
+        reveal: super::session::FrontReveal,
     ) -> bool {
         let Some(pending) = self
             .workspace_views
@@ -636,6 +636,15 @@ impl Runtime {
         };
         pending.reveal = Some(reveal);
         true
+    }
+
+    /// Whether a press's reveal waits for `device`'s front to land
+    /// (`reveal_when_in_front`).
+    pub(super) fn reveal_waits_on(&self, device: &str) -> bool {
+        self.workspace_views
+            .as_ref()
+            .and_then(|store| store.pending_choice.as_ref())
+            .is_some_and(|pending| pending.device_id == device && pending.reveal.is_some())
     }
 
     /// The device accepted the request that made the choice: the front
@@ -1044,7 +1053,7 @@ impl Runtime {
                 self.show_project_memory_at(key, project);
             }
             if let Some(reveal) = reveal {
-                self.reveal_path(reveal);
+                self.reveal_in_checkout(reveal);
             }
         }
         self.restore_front_when_ready();

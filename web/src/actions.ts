@@ -2055,6 +2055,21 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "mission_material", payload: { mission: missionId, key } });
     },
 
+    /**
+     * A View linked to the question with `key` (PRD mission-human-gate D-20):
+     * an open one comes forward as any View does; a closed one is opened
+     * again by the core from what its link kept, its checkout brought
+     * forward, in one event.
+     */
+    openDecisionView(missionId: string, key: number, view: import("./snapshot").DecisionView) {
+      if (!view.closed) return this.openViewAt(view.device_id, view.checkout_path, view.display_id);
+      const project = catalogWorkspaces(rest()).find((row) => row.device_id === view.device_id && row.checkouts.some((checkout) => checkout.path === view.checkout_path));
+      const checkout = project?.checkouts.find((row) => row.path === view.checkout_path);
+      if (!project || !checkout) return diagnostic(`decision view: ${view.checkout_path} is no longer open on ${view.device_id}`);
+      beginOpening({ checkoutId: checkout.id, deviceId: view.device_id, path: checkout.path, workspaceId: project.id });
+      dispatch({ schema_version: 2, kind: "mission_view_reopen", payload: { mission: missionId, key, view: view.view } });
+    },
+
     /** The fields of Settings › Mission one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
     setConductorSettings(patch: Partial<import("./snapshot").ConductorSettings>) {
       dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });

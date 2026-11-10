@@ -387,6 +387,20 @@ impl Runtime {
         pane: Option<&str>,
     ) {
         let opener = pane.and_then(|pane| self.opener_of_pane(pane));
+        self.expect_view_opener_as(key, path, kind, opener);
+    }
+
+    /// The View the document lands in is `opener`'s, or the operator's with
+    /// none: a decision's View opened again is the agent's it was (PRD
+    /// mission-human-gate D-20), found again by its terminal and session,
+    /// never by a pane id.
+    pub(super) fn expect_view_opener_as(
+        &mut self,
+        key: &WorkspaceKey,
+        path: &str,
+        kind: DisplayKind,
+        opener: Option<Opener>,
+    ) {
         let pending = &mut self.view_feedback.pending_openers;
         pending.retain(|old| !(old.key == *key && old.path == path && old.kind == kind));
         if pending.len() >= PENDING_OPENERS {

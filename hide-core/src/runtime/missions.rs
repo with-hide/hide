@@ -548,6 +548,9 @@ pub(crate) struct MissionRuntime {
     /// What the last launch proof read (`record_node_launches`), so an agent
     /// pass in which none of it moved reads nothing.
     launch_proof_made: Option<LaunchProofMade>,
+    /// The phone's presses that asked a decision's View to open again, and
+    /// what became of each (`mission_views.rs`).
+    pub(super) reopens: super::mission_views::Reopens,
 }
 
 /// The inputs of a launch proof: the ledger (held weakly, so it is never

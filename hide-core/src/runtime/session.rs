@@ -56,6 +56,59 @@ struct RevealCheckout {
     comes_forward: bool,
 }
 
+/// What one press shows in a checkout, brought forward with it: run at once
+/// where the core brings the checkout forward or it is in front already,
+/// else once its device's engine has brought it forward
+/// (`Runtime::reveal_when_in_front`), so a device's checkout ends where this
+/// machine's does.
+#[derive(Debug)]
+pub(super) enum FrontReveal {
+    /// A clicked or named path (`reveal_path`).
+    Path(RevealPathPayload),
+    /// A decision's closed diff opened again (`mission_view_reopen`), as the
+    /// View of the agent that had it open, if one did.
+    Diff {
+        workspace_id: String,
+        checkout_id: String,
+        path: String,
+        committed: bool,
+        opener: Option<crate::view_feedback::Opener>,
+    },
+    /// An open View of the checkout taking its area.
+    Display {
+        workspace_id: String,
+        checkout_id: String,
+        display_id: String,
+    },
+}
+
+impl FrontReveal {
+    fn checkout(&self) -> (&str, &str) {
+        match self {
+            Self::Path(payload) => (&payload.workspace_id, &payload.checkout_id),
+            Self::Diff {
+                workspace_id,
+                checkout_id,
+                ..
+            }
+            | Self::Display {
+                workspace_id,
+                checkout_id,
+                ..
+            } => (workspace_id, checkout_id),
+        }
+    }
+
+    /// What it shows, as a message names it.
+    fn subject(&self) -> &str {
+        match self {
+            Self::Path(payload) => &payload.path,
+            Self::Diff { path, .. } => path,
+            Self::Display { display_id, .. } => display_id,
+        }
+    }
+}
+
 /// How a path is read before it is compared with a checkout's: this machine's
 /// own paths resolve links and trailing separators on its file system, a
 /// device's are its own strings, which this machine's files cannot speak for.
@@ -6056,13 +6109,21 @@ impl Runtime {
     /// checkout switch, then the panel appear, then the tree move, and a
     /// refusal partway would leave the screen in a state nobody asked for.
     pub(super) fn reveal_path(&mut self, payload: RevealPathPayload) -> bool {
-        match self.reveal_checkout(&payload.workspace_id, &payload.checkout_id) {
+        self.reveal_in_checkout(FrontReveal::Path(payload))
+    }
+
+    /// Shows `reveal` in its checkout, brought forward with its device: now
+    /// where the core brings the checkout forward or it is in front, else
+    /// once the device's engine has brought it forward.
+    pub(super) fn reveal_in_checkout(&mut self, reveal: FrontReveal) -> bool {
+        let (workspace_id, checkout_id) = reveal.checkout();
+        let comes_forward = match self.reveal_checkout(workspace_id, checkout_id) {
             None => {
                 self.set_error(
                     "reveal.unknown_checkout",
                     format!(
-                        "Checkout {} is not registered, so {} was not revealed",
-                        payload.checkout_id, payload.path
+                        "Checkout {checkout_id} is not registered, so {} was not revealed",
+                        reveal.subject()
                     ),
                     false,
                 );
@@ -6072,25 +6133,96 @@ impl Runtime {
                 comes_forward: false,
                 device,
                 ..
-            }) if self.front_checkout()
-                != Some((payload.workspace_id.as_str(), payload.checkout_id.as_str())) =>
-            {
-                self.reveal_when_in_front(device, payload);
+            }) if self.front_checkout() != Some((workspace_id, checkout_id)) => {
+                self.reveal_when_in_front(device, reveal);
                 return true;
             }
-            Some(_) => {}
+            Some(checkout) => checkout.comes_forward,
+        };
+        match reveal {
+            FrontReveal::Path(payload) => self.reveal_path_in_front(payload),
+            FrontReveal::Diff {
+                workspace_id,
+                checkout_id,
+                path,
+                committed,
+                opener,
+            } => {
+                let mut changed =
+                    self.bring_reveal_forward(&workspace_id, &checkout_id, comes_forward);
+                // Only an agent's View is stamped: no opener leaves it as
+                // whoever's it becomes, never the operator's by default.
+                if let (Some(opener), Some(key)) =
+                    (opener, self.workspace_key(&workspace_id, &checkout_id))
+                {
+                    self.expect_view_opener_as(
+                        &key,
+                        &path,
+                        crate::view_layout::DisplayKind::Diff,
+                        Some(opener),
+                    );
+                }
+                changed |= self.show_diff_in_view(
+                    &workspace_id,
+                    &checkout_id,
+                    &path,
+                    committed,
+                    false,
+                    false,
+                );
+                changed
+            }
+            FrontReveal::Display {
+                workspace_id,
+                checkout_id,
+                display_id,
+            } => {
+                let mut changed =
+                    self.bring_reveal_forward(&workspace_id, &checkout_id, comes_forward);
+                changed |= self.focus_view_display_of(&workspace_id, &checkout_id, &display_id);
+                changed
+            }
         }
+    }
+
+    /// A checkout the core brings forward comes forward with this machine;
+    /// a device's is in front already when this runs.
+    fn bring_reveal_forward(
+        &mut self,
+        workspace_id: &str,
+        checkout_id: &str,
+        comes_forward: bool,
+    ) -> bool {
+        if !comes_forward {
+            return false;
+        }
+        if !self.device_in_front(self.node.as_str()) {
+            self.bring_device_forward(self.node.to_string());
+        }
+        self.focus_checkout(workspace_id, checkout_id)
+    }
+
+    /// `reveal_path` once its checkout is where the reveal can land.
+    fn reveal_path_in_front(&mut self, payload: RevealPathPayload) -> bool {
         if payload.is_directory {
             self.settle_reveal_path(&payload, None);
             return true;
         }
         if let Some(key) = self.workspace_key(&payload.workspace_id, &payload.checkout_id) {
-            self.expect_view_opener(
-                &key,
-                &payload.path,
-                crate::view_layout::DisplayKind::File,
-                payload.opener_pane.as_deref(),
-            );
+            match payload.kept_opener.clone() {
+                Some(opener) => self.expect_view_opener_as(
+                    &key,
+                    &payload.path,
+                    crate::view_layout::DisplayKind::File,
+                    Some(opener),
+                ),
+                None => self.expect_view_opener(
+                    &key,
+                    &payload.path,
+                    crate::view_layout::DisplayKind::File,
+                    payload.opener_pane.as_deref(),
+                ),
+            }
         }
         // A revealed file opens into a display, so a Workspace at its display
         // cap refuses it before it is read.
@@ -6162,19 +6294,21 @@ impl Runtime {
     /// one on this machine's checkout does. It dies with the request
     /// (`PendingChoice`); without View areas nothing waits, and the reveal is
     /// refused before anything moves.
-    fn reveal_when_in_front(&mut self, device: String, payload: RevealPathPayload) {
+    fn reveal_when_in_front(&mut self, device: String, reveal: FrontReveal) {
+        let (workspace_id, checkout_id) = reveal.checkout();
+        let (workspace_id, checkout) = (workspace_id.to_owned(), checkout_id.to_owned());
         if !self.separate_view_areas() {
             self.set_error(
                 "reveal.not_in_front",
                 format!(
-                    "Checkout {} is not in front on its device, so {} was not revealed",
-                    payload.checkout_id, payload.path
+                    "Checkout {checkout} is not in front on its device, so {} was not revealed",
+                    reveal.subject()
                 ),
                 false,
             );
             return;
         }
-        let request_id = format!("reveal:{}:{}", unix_milliseconds(), payload.checkout_id);
+        let request_id = format!("reveal:{}:{checkout}", unix_milliseconds());
         let error_before = self.snapshot.status.last_error.clone();
         self.request_remote_control(super::RemoteControlPayload {
             target_id: device.clone(),
@@ -6182,12 +6316,11 @@ impl Runtime {
             report_pane_focus_outcome: false,
             focus_device: true,
             request: super::RemoteControlRequest::FocusWorkspace {
-                workspace_id: payload.workspace_id.clone(),
-                checkout_id: Some(payload.checkout_id.clone()),
+                workspace_id,
+                checkout_id: Some(checkout.clone()),
             },
         });
-        let checkout = payload.checkout_id.clone();
-        if !self.attach_reveal(&device, &request_id, payload)
+        if !self.attach_reveal(&device, &request_id, reveal)
             && self.snapshot.status.last_error == error_before
         {
             self.push_diagnostic(
@@ -6211,6 +6344,7 @@ impl Runtime {
             checkout_id: checkout_id.to_owned(),
             is_directory: false,
             opener_pane: None,
+            kept_opener: None,
         };
         self.settle_reveal_path(&payload, prepared);
     }

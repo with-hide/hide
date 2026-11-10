@@ -1080,7 +1080,14 @@ impl Runtime {
                 since,
                 AskSubject::MissionDecision {
                     line: line.clone(),
-                    views: u32::try_from(self.decision_views(mission).len()).unwrap_or(u32::MAX),
+                    // The open ones: a closed View stays on the card (D-20) but not in the eye's count.
+                    views: u32::try_from(
+                        self.decision_views(mission)
+                            .iter()
+                            .filter(|view| !view.closed)
+                            .count(),
+                    )
+                    .unwrap_or(u32::MAX),
                 },
                 ask_id::decision(mission),
             ))

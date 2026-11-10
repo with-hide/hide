@@ -7,7 +7,7 @@
 // state are the shared rules (`missionSteps`, `missionAnswer.ts`); this draws
 // them.
 
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon, Loader2Icon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIcon, GitPullRequestIcon, Loader2Icon, ThumbsUpIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
 import { Elapsed } from "../components/elapsed";
@@ -15,6 +15,7 @@ import { ProgressCells } from "../components/mission-tone";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
@@ -22,7 +23,7 @@ import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } 
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
 import { DECISION_VIEWS_SHOWN, attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
-import { answerMission, askMissionMaterial, openDetail, settleMissionAnswer } from "./connection";
+import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
 import type { PrState } from "../snapshot";
@@ -125,7 +126,8 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
  * The decision (B34, B35): the question, why it matters, the Conductor's
  * choices with its recommendation, and where the answer is once sent; a
  * refusal's reason in the desktop's words stands under it, and what was
- * typed stays.
+ * typed stays. As on the desktop's card, a choice is a radio row a press
+ * only marks, and `답하기` sends it (PRD mission-human-gate D-19, B19).
  */
 function DecisionCard({ mission, connected }: { mission: PhoneMission; connected: boolean }) {
   const { t } = useInterfaceTranslation();
@@ -135,6 +137,9 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
   const view = answerView(mission, mission.device_label, pressed);
   const question = mission.question;
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
+  // The choice marked on this question; a new question starts unmarked.
+  const [picked, setPicked] = useState<{ key: number; index: number } | null>(null);
+  const marked = picked?.key === view.key ? picked.index : null;
   // What was pressed shows until the core answers for it, refuses it, or asks something else (B26).
   usePressedAnswer(mission, pressed, view, settleMissionAnswer);
   const resend = () => {
@@ -152,7 +157,7 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
       </p>
       <p className="break-keep text-title leading-normal text-foreground wrap-anywhere" data-phone-question="true">{mission.decision}</p>
       {question?.why ? <p className="break-keep text-body text-muted-foreground wrap-anywhere">{question.why}</p> : null}
-      {mission.decision_views?.length ? <DecisionViews views={mission.decision_views} /> : null}
+      {mission.decision_views?.length ? <DecisionViews mission={mission} views={mission.decision_views} connected={connected} /> : null}
       {view.sent?.line === "unconfirmed" ? (
         <div className="flex min-w-0 flex-col gap-xs" data-phone-answer-sent="unconfirmed">
           <p className="flex min-w-0 items-start gap-xs text-body">
@@ -176,46 +181,73 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
           <span className="min-w-0 break-keep wrap-anywhere"><span className="font-semibold text-mission-done">{view.sent.text}</span> <span className="text-muted-foreground">· {t(view.sent.word)}</span></span>
         </p>
       ) : (
-        <div className="flex min-w-0 flex-wrap gap-sm">
-          {view.options.map((option, index) => {
-            const recommended = view.recommend === index + 1;
-            return (
-              <Button
-                key={index}
-                variant="secondary"
-                disabled={view.closed || !connected}
-                className={cn("h-auto min-h-(--size-touch-target) max-w-full whitespace-normal break-keep px-md py-xs text-body wrap-anywhere", recommended && "font-semibold")}
-                data-phone-option={index + 1}
-                data-phone-recommended={recommended || undefined}
-                onClick={() => answerMission(mission, { option: index + 1 }, option)}
-              >
-                <span className="min-w-0">{option}</span>
-                {recommended ? <span className="shrink-0 rounded-xs bg-background px-xxs text-micro text-foreground">{t("mission.banner.recommended")}</span> : null}
-              </Button>
-            );
-          })}
+        <div className="flex min-w-0 flex-col gap-sm">
+          {/* With nothing linked to look at, asking for material is a row of its own above the choices, as on the desktop's card; it never holds the answer back. */}
+          {!mission.decision_views?.length && question ? (
+            question.material_asked ? (
+              <p className="flex min-w-0 items-center gap-xs text-body text-muted-foreground" data-phone-material="asked">
+                <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-done" />
+                {t("mission.banner.asked")}
+              </p>
+            ) : (
+              <div className="flex min-w-0 flex-col gap-xxs">
+                <Button
+                  variant="outline"
+                  className="min-h-(--size-touch-target) self-start border-dashed text-body text-muted-foreground"
+                  disabled={view.closed || view.unreachable || !connected}
+                  data-phone-material="ask"
+                  onClick={() => askMissionMaterial(mission)}
+                >
+                  <FilePlusIcon aria-hidden="true" />
+                  {t("mission.banner.ask")}
+                </Button>
+                {/* The phone has no hover, so why to ask is read out, not hinted. */}
+                <span className="break-keep text-caption text-muted-foreground wrap-anywhere">{t("mission.banner.askHint")}</span>
+              </div>
+            )
+          ) : null}
+          <RadioGroup
+            value={marked == null ? "" : String(marked)}
+            onValueChange={(value) => setPicked({ key: view.key, index: Number(value) })}
+            disabled={view.closed || !connected}
+            className="gap-xs"
+            aria-label={mission.decision ?? undefined}
+          >
+            {view.options.map((option, index) => {
+              const recommended = view.recommend === index + 1;
+              return (
+                <label
+                  key={index}
+                  className={cn(
+                    "flex min-h-(--size-touch-target) min-w-0 cursor-pointer items-start gap-sm rounded-md border px-md py-sm text-body",
+                    marked === index ? "border-foreground/40 bg-accent" : recommended ? "border-mission-hold/50 bg-mission-hold/5" : "border-border",
+                  )}
+                >
+                  <RadioGroupItem value={String(index)} className="mt-xxs shrink-0" data-phone-option={index + 1} data-phone-recommended={recommended || undefined} />
+                  <span className={cn("min-w-0 flex-1 break-keep wrap-anywhere", recommended && "font-semibold")}>{option}</span>
+                  {recommended ? (
+                    <span className="flex shrink-0 items-center gap-xxs rounded-full bg-mission-hold/20 px-sm text-caption font-semibold text-mission-hold" data-phone-recommended-tag="true">
+                      <ThumbsUpIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+                      {t("mission.banner.recommended")}
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
+          </RadioGroup>
+          {view.options.length ? (
+            <Button
+              variant="secondary"
+              className="min-h-(--size-touch-target) self-end"
+              disabled={view.closed || !connected || marked == null}
+              data-phone-choice-send="true"
+              onClick={() => marked != null && answerMission(mission, { option: marked + 1 }, view.options[marked]!)}
+            >
+              {t("mission.banner.answer")}
+            </Button>
+          ) : null}
         </div>
       )}
-      {/* With nothing linked to look at, the operator may ask for it, as on the desktop's card; it never holds the answer back. */}
-      {!mission.decision_views?.length && question && !view.sent ? (
-        question.material_asked ? (
-          <p className="flex min-w-0 items-center gap-xs text-body text-muted-foreground" data-phone-material="asked">
-            <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-done" />
-            {t("mission.banner.asked")}
-          </p>
-        ) : (
-          <Button
-            variant="text"
-            size="inline"
-            className="min-h-(--size-touch-target) self-start text-body"
-            disabled={view.closed || view.unreachable || !connected}
-            data-phone-material="ask"
-            onClick={() => askMissionMaterial(mission)}
-          >
-            {t("mission.banner.ask")}
-          </Button>
-        )
-      ) : null}
       {view.reason ? (
         <p
           className={cn("break-keep text-body wrap-anywhere", view.refused ? "text-mission-failed" : "text-muted-foreground")}
@@ -343,13 +375,17 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
 }
 
 /**
- * The Views linked to the decision, seen or not: a row opens the 볼 것 of
- * the agent that opened it, where the View opens full screen; one whose
- * agent is closed is listed without a press.
+ * The Views linked to the decision, seen, unseen or closed (PRD
+ * mission-human-gate B20): a row opens the 볼 것 of the agent that opened
+ * it, where the View opens full screen; a closed one, marked `닫힘`, asks
+ * the Mac to open it again first and then opens that 볼 것. One whose agent
+ * is closed is listed without a press.
  */
-function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
+function DecisionViews({ mission, views, connected }: { mission: PhoneMission; views: PhoneDecisionView[]; connected: boolean }) {
   const { t } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
+  const reopening = usePhone((s) => (s.missionReopen?.mission === mission.id ? s.missionReopen.view : null));
+  const busy = usePhone((s) => s.missionReopen !== null);
   const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
   const more = views.length - shown.length;
   return (
@@ -358,11 +394,16 @@ function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
       <ul className="flex min-w-0 flex-col divide-y divide-border">
         {shown.map((view) => {
           const pane = view.pane_id;
+          const waiting = reopening === view.view;
           const words = (
             <>
               <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">{view.label}</span>
               {/* The phone has no hover, so the mark's words are read out, not hinted. */}
-              {view.unseen ? (
+              {waiting ? (
+                <span className="shrink-0 text-body text-muted-foreground" data-phone-decision-view-opening="true">{t("mobile.mission.reopen.opening")}</span>
+              ) : view.closed ? (
+                <span className="shrink-0 text-body text-muted-foreground">{t("mission.banner.closed")}</span>
+              ) : view.unseen ? (
                 <>
                   <StatusMark mark="look" />
                   <span className="sr-only">{t("agents.mark.look")}</span>
@@ -371,10 +412,21 @@ function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
               <span className="shrink-0 text-body text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
             </>
           );
+          // A device on a build before the row's name (`view`) cannot be asked to open its closed row again.
+          const press = !pane || (view.closed && !view.view)
+            ? null
+            : view.closed
+              ? () => reopenMissionView(mission, view)
+              : () => openDetail({ device_id: view.device_id, pane_id: pane }, "looks");
           return (
-            <li key={`${view.device_id}:${view.display_id}`} className="min-w-0">
-              {pane ? (
-                <RowButton className="min-h-(--size-touch-target) gap-sm px-0" data-phone-decision-view={view.display_id} onClick={() => openDetail({ device_id: view.device_id, pane_id: pane }, "looks")}>
+            <li key={view.view} className="min-w-0">
+              {press ? (
+                <RowButton
+                  className="min-h-(--size-touch-target) gap-sm px-0"
+                  data-phone-decision-view={view.display_id}
+                  disabled={view.closed && (busy || !connected)}
+                  onClick={press}
+                >
                   {words}
                 </RowButton>
               ) : (

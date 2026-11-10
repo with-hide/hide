@@ -451,6 +451,21 @@ impl Runtime {
 
     /// Drops reads still running for checkouts under `scope` (a removed
     /// device's `remote:<id>:`), so a late answer opens no tab for it.
+    /// Whether a read of `path` in the checkout is still out, whose landing
+    /// opens or refuses it.
+    pub(super) fn document_open_pending(
+        &self,
+        workspace_id: &str,
+        checkout_id: &str,
+        path: &str,
+    ) -> bool {
+        self.document_opens.values().any(|open| {
+            open.workspace_id == workspace_id
+                && open.checkout_id == checkout_id
+                && open.path == path
+        })
+    }
+
     pub(super) fn forget_device_opens(&mut self, device_id: &str) {
         let before = self.document_opens.len();
         self.document_opens
@@ -514,6 +529,9 @@ impl Runtime {
                 return true;
             }
             Err(failure) => {
+                if let Some(key) = self.workspace_key(&request.workspace_id, &request.checkout_id) {
+                    self.refuse_reopens_of_file(&key, &request.path);
+                }
                 self.set_error(
                     if request.reload {
                         "file.reload_failed"

@@ -734,6 +734,73 @@ pub struct ViewLink {
     /// opened it, where every other link is the Conductor's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worker: bool,
+    /// On a question: what the View was when the decision linked it, so the
+    /// card keeps the row after the View closes and opens it again from
+    /// here (PRD mission-human-gate D-20). Absent on a node's or the
+    /// Conductor's own link, on a link recorded before it was kept, and for
+    /// a View no address can open again (an outside file's grant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptView>,
+}
+
+/// The longest page or file name a link keeps; a row shows far fewer.
+const KEPT_LABEL_LIMIT: usize = 256;
+
+/// A linked View's kind, name and address, as the decision linked it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KeptView {
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    /// A file's or a diff's path, or a page's address.
+    pub address: String,
+    /// The Changes group a diff compares against.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub committed: bool,
+    /// The agent that had it open when the decision linked it, which the
+    /// View opened again is stamped with, so it is listed in that agent's
+    /// 볼 것 as before; none for the operator's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<crate::view_feedback::Opener>,
+}
+
+impl KeptView {
+    /// What `display`, titled `label`, can be opened again from; none for
+    /// an outside file, which no address names, or an address past
+    /// [`SHOW_LIMIT`].
+    pub fn of(display: &crate::view_layout::Display, label: String) -> Option<Self> {
+        use crate::view_layout::DisplayKind;
+        let address = match display.kind {
+            DisplayKind::File | DisplayKind::Diff => display.path.clone(),
+            DisplayKind::Browser => display.url.clone()?,
+            DisplayKind::External => return None,
+        };
+        if address.is_empty() || address.len() > SHOW_LIMIT {
+            return None;
+        }
+        Some(Self {
+            kind: display.kind,
+            label: label.chars().take(KEPT_LABEL_LIMIT).collect(),
+            address,
+            committed: display.committed.unwrap_or(false),
+            opener: display.opener.clone(),
+        })
+    }
+
+    /// Whether `display` shows what this kept: the same document, or the
+    /// same page address.
+    pub fn shown_by(&self, display: &crate::view_layout::Display) -> bool {
+        use crate::view_layout::DisplayKind;
+        match self.kind {
+            DisplayKind::Browser => {
+                display.kind == DisplayKind::Browser
+                    && display.url.as_deref() == Some(self.address.as_str())
+            }
+            DisplayKind::File | DisplayKind::Diff => {
+                display.shows(&self.address, self.kind, Some(self.committed))
+            }
+            DisplayKind::External => false,
+        }
+    }
 }
 
 impl ViewLink {
@@ -741,6 +808,24 @@ impl ViewLink {
         self.device_id == other.device_id
             && self.checkout_path == other.checkout_path
             && self.display_id == other.display_id
+    }
+
+    /// The name a decision card's row asks for this link by: it tells two
+    /// checkouts' Views with the same display id apart without saying
+    /// either path, which a phone never receives.
+    pub fn token(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(
+            format!(
+                "{}\0{}\0{}",
+                self.device_id, self.checkout_path, self.display_id
+            )
+            .as_bytes(),
+        );
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
@@ -4047,6 +4132,63 @@ pub(crate) mod tests {
         let planned = apply_plan(&read, &input, 2).unwrap();
         assert_eq!(planned.strength, Some(Strength::Thorough));
         assert_eq!(planned.checkers, Some(recorded));
+    }
+
+    /// A question's View link recorded before links kept their View, or
+    /// before they kept its agent, reads with nothing kept and writes back as
+    /// it was, without a schema raise (PRD mission-human-gate D-20).
+    #[test]
+    fn a_view_link_recorded_before_links_kept_their_view_reads_as_it_was() {
+        let recorded = serde_json::json!({
+            "device_id": "local", "checkout_path": "/repo", "display_id": "d3",
+            "at_unix_ms": 10,
+        });
+        let read: ViewLink = serde_json::from_value(recorded.clone()).unwrap();
+        assert_eq!(read.kept, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), recorded);
+        let kept = ViewLink {
+            kept: Some(KeptView {
+                kind: crate::view_layout::DisplayKind::Diff,
+                label: "a.rs".into(),
+                address: "/repo/a.rs".into(),
+                committed: true,
+                opener: None,
+            }),
+            ..read
+        };
+        let written = serde_json::to_value(&kept).unwrap();
+        assert_eq!(
+            written["kept"],
+            serde_json::json!({"kind": "diff", "label": "a.rs", "address": "/repo/a.rs", "committed": true})
+        );
+        assert_eq!(serde_json::from_value::<ViewLink>(written).unwrap(), kept);
+
+        // A link kept before it kept its View's agent reads with none and
+        // writes back as it was; one that kept it keeps every field.
+        let before_opener = serde_json::json!({
+            "device_id": "local", "checkout_path": "/repo", "display_id": "d3", "at_unix_ms": 10,
+            "kept": {"kind": "file", "label": "notes.md", "address": "/repo/notes.md"},
+        });
+        let read: ViewLink = serde_json::from_value(before_opener.clone()).unwrap();
+        assert_eq!(read.kept.as_ref().unwrap().opener, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), before_opener);
+        let opener = serde_json::json!({
+            "device_id": "mini", "terminal_id": "t-4", "session": "s-digest", "resume": "s-1",
+            "provider": "claude", "name": "dev-a",
+        });
+        let mut with_opener = before_opener;
+        with_opener["kept"]["opener"] = opener.clone();
+        let read: ViewLink = serde_json::from_value(with_opener.clone()).unwrap();
+        let kept_opener = read.kept.as_ref().unwrap().opener.as_ref().unwrap();
+        assert_eq!(
+            (
+                kept_opener.device_id.as_str(),
+                kept_opener.terminal_id.as_str(),
+                kept_opener.session.as_deref()
+            ),
+            ("mini", "t-4", Some("s-digest"))
+        );
+        assert_eq!(serde_json::to_value(&read).unwrap(), with_opener);
     }
 
     #[test]

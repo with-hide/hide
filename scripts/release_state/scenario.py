@@ -358,6 +358,33 @@ class Scenario:
         self.checked("dev-a", f"hide mission node look --status working --agent-id {worker}")
         return {"mission": mission, "worker": worker}
 
+    def decision_view(self):
+        """The device mission's decision naming notes.md, opened by dev-a on
+        the device, then closed: the question's link keeps the View with the
+        device agent that had it open (`kept.opener`: its machine, terminal
+        and session), which a later build stamps the View it opens again
+        with. A release before decisions named Views refuses `--show`."""
+        result = self.run("dev-a", "hide mission decide --line 'Is notes.md ready?' --option ready --option 'not yet' "
+                                   "--show notes.md")
+        answer = result.get("json") or {}
+        if answer.get("ok") is not True:
+            code = (answer.get("error") or {}).get("code")
+            if result["rc"] != 0 and (code in (None, "invalid_request", "usage") or "--show" in result["err"]):
+                raise NotInRelease(f"rc={result['rc']} {result['err'][-300:]}")
+            raise Stop(f"the decision was refused: {result['out'][-800:]} {result['err'][-300:]}")
+        rows = self.wait(lambda rest: next((mission.get("decision_views") for mission in
+                                            (rest.get("missions") or {}).get("items") or []
+                                            if mission.get("decision_views")), None), "the decision's View")
+        view = rows[0]["display_id"]
+        self.checked("dev-a", f"hide view close {view}")
+        # A release before links kept their View drops the row once it closes.
+        def closed(rest):
+            rows = [row for mission in (rest.get("missions") or {}).get("items") or []
+                    for row in mission.get("decision_views") or [] if row.get("display_id") == view or row.get("closed")]
+            return (not rows or any(row.get("closed") for row in rows)) and ("kept" if rows else "dropped")
+        kept = self.wait(closed, "the decision's View closed")
+        return f"{view} linked to the device mission's decision and closed ({kept})"
+
     def sleep(self):
         pane, session = self.agents["dev-b"]["pane"], self.agents["dev-b"]["session"]
         self.send("agent_sleep", {"pane_id": pane})
@@ -568,6 +595,7 @@ class Scenario:
             self.step("project memory cards", self.memory)
             self.step("plan step spawned from a device session", self.plan_spawn)
             self.step("mission conducted on the device with its worker there", self.mission)
+            self.step("decision View opened by a device agent and closed", self.decision_view)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)
             self.step("Pi on the core asleep with its pane closed", self.dormant)
