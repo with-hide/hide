@@ -129,6 +129,23 @@ case "$command" in
             -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
             -only-testing:AppUITests "${signing[@]}"
         ;;
+    push)
+        # Delivers one Apple-shaped push body to the installed app on this branch's simulator, the way Apple would, and
+        # captures the screen while the home screen shows the banner: the body travels in front of this script as
+        # HIDE_PUSH_B64 (base64), is written to a file of the branch's own folder and removed on the way out.
+        ensure_device
+        xcrun simctl bootstatus "$id" -b > /dev/null
+        mkdir -p "$shots"
+        body=$shots/push-body.json
+        trap 'rm -f "$body"; cleanup' EXIT
+        printf '%s' "$HIDE_PUSH_B64" | base64 -D > "$body"
+        xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+        xcrun simctl launch "$id" com.apple.springboard > /dev/null 2>&1 || true
+        xcrun simctl push "$id" "$bundle_id" "$body"
+        sleep "$settle"
+        xcrun simctl io "$id" screenshot "$shots/run.png" 2>&1 | tail -1
+        printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
+        ;;
     run)
         ensure_device
         xcrun simctl bootstatus "$id" -b > /dev/null

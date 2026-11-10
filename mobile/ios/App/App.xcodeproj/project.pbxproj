@@ -30,6 +30,9 @@
 		A1B2C3D4000000000000011B /* PushKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000011C /* PushKeychainTests.swift */; };
 		A1B2C3D40000000000000027 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000024 /* InfoPlist.strings */; };
 		A1B2C3D4000000000000020D /* AllowNotificationsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */; };
+		A1B2C3D4000000000000F012 /* NoticeSealer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000F011 /* NoticeSealer.swift */; };
+		A1B2C3D4000000000000F022 /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000F021 /* NotificationServiceTests.swift */; };
+		A1B2C3D4000000000000F041 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000100 /* NotificationService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -62,6 +65,8 @@
 		A1B2C3D40000000000000028 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllowNotificationsUITests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000000000020C /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4000000000000F011 /* NoticeSealer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoticeSealer.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000F021 /* NotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -199,6 +204,8 @@
 				A1B2C3D40000000000000021 /* PairingKeychainTests.swift */,
 				A1B2C3D40000000000000031 /* QRScannerTests.swift */,
 				A1B2C3D4000000000000011C /* PushKeychainTests.swift */,
+				A1B2C3D4000000000000F021 /* NotificationServiceTests.swift */,
+				A1B2C3D4000000000000F011 /* NoticeSealer.swift */,
 			);
 			path = AppTests;
 			sourceTree = "<group>";
@@ -388,6 +395,9 @@
 				A1B2C3D40000000000000022 /* PairingKeychainTests.swift in Sources */,
 				A1B2C3D40000000000000032 /* QRScannerTests.swift in Sources */,
 				A1B2C3D4000000000000011B /* PushKeychainTests.swift in Sources */,
+				A1B2C3D4000000000000F041 /* NotificationService.swift in Sources */,
+				A1B2C3D4000000000000F022 /* NotificationServiceTests.swift in Sources */,
+				A1B2C3D4000000000000F012 /* NoticeSealer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

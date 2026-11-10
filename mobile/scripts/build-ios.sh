@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Hide iOS app with the phone bundle inside it, on the Mac mini, and runs it in a simulator.
 #
-# Usage: build-ios.sh [build | release | status <delivery id> | run | allow | clean]
+# Usage: build-ios.sh [build | release | status <delivery id> | run | allow | push | clean]
 #   release  everything `build` does, then on the mini: archive, sign with the App Store Connect API key, check the
 #          signed app against mobile/release-expect.json, validate and upload it to TestFlight; the build number is the
 #          UTC time of the run, the version the repository's own (mobile/scripts/release-version.mjs). The key never
@@ -17,6 +17,7 @@
 #           HIDE_IOS_CAPTURE=<file.png> copies the capture back here; HIDE_IOS_SETTLE=<seconds>, default 15)
 #   allow  press Allow on the system's notification question (HIDE_IOS_TAPS as for `run` makes the page ask it); the
 #          grant stays in the simulator, so captures of delivered notifications follow without anyone at it
+#   push   deliver the push body in the file HIDE_IOS_PUSH_BODY to the app, as Apple would, and capture the banner
 #   clean  delete that simulator and this branch's whole folder on the mini
 #
 # Every command ends what it started on the mini: its simulator is shut down and deleted, on any way out (the pairing
@@ -67,18 +68,20 @@ case "$command" in
             mobile/ios/ "$host:$remote/ios/"
         ;;
     run | allow) ;;
+    push) [[ -f "${HIDE_IOS_PUSH_BODY:-}" ]] || { printf 'push needs HIDE_IOS_PUSH_BODY=<file>\n' >&2; exit 2; } ;;
     clean) ;;
     status)
         [[ -n "${2:-}" ]] || { printf 'usage: %s status <delivery id>\n' "$0" >&2; exit 2; }
         exec ssh "$host" bash -s -- status "$slug" "$2" < mobile/scripts/mini-release.sh
         ;;
-    *) printf 'usage: %s [build | release | status <delivery id> | run | allow | clean]\n' "$0" >&2; exit 2 ;;
+    *) printf 'usage: %s [build | release | status <delivery id> | run | allow | push | clean]\n' "$0" >&2; exit 2 ;;
 esac
 
 # Debug builds only: a pairing link the simulator follows at launch (see ShellViewController). It travels in front of
 # the script on the same standard input, so it is in no argument and in no file, and there is nothing to leave behind.
 {
     if [[ "$command" == run && -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then printf 'HIDE_PAIR_LINK=%q\n' "$HIDE_IOS_PAIR_LINK"; fi
+    if [[ "$command" == push ]]; then printf 'HIDE_PUSH_B64=%q\n' "$(base64 < "$HIDE_IOS_PUSH_BODY" | tr -d '\n')"; fi
     if [[ ( "$command" == run || "$command" == allow ) && -n "${HIDE_IOS_TAPS:-}" ]]; then printf 'HIDE_TAPS=%q\n' "$HIDE_IOS_TAPS"; fi
     cat mobile/scripts/mini-ios.sh
 } | ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
@@ -99,6 +102,6 @@ if [[ "$command" == release ]]; then
     printf 'release %s (build %s) from %s\n' "$version" "$build" "$(git rev-parse --short=8 HEAD)"
     ssh "$host" bash -s -- release "$slug" "$version" "$build" < mobile/scripts/mini-release.sh
 fi
-if [[ "$command" == run && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
+if [[ ( "$command" == run || "$command" == push ) && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_IOS_CAPTURE"
 fi
