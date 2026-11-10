@@ -1,0 +1,374 @@
+{
+  "status": {
+    "line": "Placeholder note for hide status; the CLI notes replace it.",
+    "example": "hide status"
+  },
+  "stop": {
+    "line": "Placeholder note for hide stop; the CLI notes replace it.",
+    "example": "hide stop"
+  },
+  "version": {
+    "line": "Placeholder note for hide version; the CLI notes replace it.",
+    "example": "hide version"
+  },
+  "guide": {
+    "line": "Placeholder note for hide guide; the CLI notes replace it.",
+    "example": "hide guide"
+  },
+  "issue help": {
+    "line": "Placeholder note for hide issue help; the CLI notes replace it.",
+    "example": "hide issue help"
+  },
+  "contract": {
+    "line": "Placeholder note for hide contract; the CLI notes replace it.",
+    "example": "hide contract"
+  },
+  "request send": {
+    "line": "Placeholder note for hide request send; the CLI notes replace it.",
+    "example": "hide request send"
+  },
+  "request reply": {
+    "line": "Placeholder note for hide request reply; the CLI notes replace it.",
+    "example": "hide request reply"
+  },
+  "request ack": {
+    "line": "Placeholder note for hide request ack; the CLI notes replace it.",
+    "example": "hide request ack"
+  },
+  "request cancel": {
+    "line": "Placeholder note for hide request cancel; the CLI notes replace it.",
+    "example": "hide request cancel"
+  },
+  "request show": {
+    "line": "Placeholder note for hide request show; the CLI notes replace it.",
+    "example": "hide request show"
+  },
+  "inbox": {
+    "line": "Placeholder note for hide inbox; the CLI notes replace it.",
+    "example": "hide inbox"
+  },
+  "watch start": {
+    "line": "Placeholder note for hide watch start; the CLI notes replace it.",
+    "example": "hide watch start"
+  },
+  "watch assign": {
+    "line": "Placeholder note for hide watch assign; the CLI notes replace it.",
+    "example": "hide watch assign"
+  },
+  "watch stop": {
+    "line": "Placeholder note for hide watch stop; the CLI notes replace it.",
+    "example": "hide watch stop"
+  },
+  "watch list": {
+    "line": "Placeholder note for hide watch list; the CLI notes replace it.",
+    "example": "hide watch list"
+  },
+  "agent register": {
+    "line": "Placeholder note for hide agent register; the CLI notes replace it.",
+    "example": "hide agent register"
+  },
+  "agent list": {
+    "line": "Placeholder note for hide agent list; the CLI notes replace it.",
+    "example": "hide agent list"
+  },
+  "agent show": {
+    "line": "Placeholder note for hide agent show; the CLI notes replace it.",
+    "example": "hide agent show"
+  },
+  "agent ask-human": {
+    "line": "Placeholder note for hide agent ask-human; the CLI notes replace it.",
+    "example": "hide agent ask-human"
+  },
+  "agent end": {
+    "line": "Placeholder note for hide agent end; the CLI notes replace it.",
+    "example": "hide agent end"
+  },
+  "agent sleep": {
+    "line": "Placeholder note for hide agent sleep; the CLI notes replace it.",
+    "example": "hide agent sleep"
+  },
+  "agent archive": {
+    "line": "Placeholder note for hide agent archive; the CLI notes replace it.",
+    "example": "hide agent archive"
+  },
+  "agent catalog": {
+    "line": "Placeholder note for hide agent catalog; the CLI notes replace it.",
+    "example": "hide agent catalog"
+  },
+  "agent profile list": {
+    "line": "Placeholder note for hide agent profile list; the CLI notes replace it.",
+    "example": "hide agent profile list"
+  },
+  "agent profile add": {
+    "line": "Placeholder note for hide agent profile add; the CLI notes replace it.",
+    "example": "hide agent profile add"
+  },
+  "agent profile edit": {
+    "line": "Placeholder note for hide agent profile edit; the CLI notes replace it.",
+    "example": "hide agent profile edit"
+  },
+  "agent profile default": {
+    "line": "Placeholder note for hide agent profile default; the CLI notes replace it.",
+    "example": "hide agent profile default"
+  },
+  "agent profile remove": {
+    "line": "Placeholder note for hide agent profile remove; the CLI notes replace it.",
+    "example": "hide agent profile remove"
+  },
+  "agent profile reinstall": {
+    "line": "Placeholder note for hide agent profile reinstall; the CLI notes replace it.",
+    "example": "hide agent profile reinstall"
+  },
+  "agent spawn": {
+    "line": "Placeholder note for hide agent spawn; the CLI notes replace it.",
+    "example": "hide agent spawn"
+  },
+  "ps": {
+    "line": "Placeholder note for hide ps; the CLI notes replace it.",
+    "example": "hide ps"
+  },
+  "device list": {
+    "line": "Placeholder note for hide device list; the CLI notes replace it.",
+    "example": "hide device list"
+  },
+  "device add": {
+    "line": "Placeholder note for hide device add; the CLI notes replace it.",
+    "example": "hide device add"
+  },
+  "device remove": {
+    "line": "Placeholder note for hide device remove; the CLI notes replace it.",
+    "example": "hide device remove"
+  },
+  "device retry": {
+    "line": "Placeholder note for hide device retry; the CLI notes replace it.",
+    "example": "hide device retry"
+  },
+  "mission help": {
+    "line": "Placeholder note for hide mission help; the CLI notes replace it.",
+    "example": "hide mission help"
+  },
+  "mission create": {
+    "line": "Placeholder note for hide mission create; the CLI notes replace it.",
+    "example": "hide mission create"
+  },
+  "mission plan": {
+    "line": "Placeholder note for hide mission plan; the CLI notes replace it.",
+    "example": "hide mission plan"
+  },
+  "mission node": {
+    "line": "Placeholder note for hide mission node; the CLI notes replace it.",
+    "example": "hide mission node"
+  },
+  "mission record": {
+    "line": "Placeholder note for hide mission record; the CLI notes replace it.",
+    "example": "hide mission record"
+  },
+  "mission skip": {
+    "line": "Placeholder note for hide mission skip; the CLI notes replace it.",
+    "example": "hide mission skip"
+  },
+  "mission defect": {
+    "line": "Placeholder note for hide mission defect; the CLI notes replace it.",
+    "example": "hide mission defect"
+  },
+  "mission start": {
+    "line": "Placeholder note for hide mission start; the CLI notes replace it.",
+    "example": "hide mission start"
+  },
+  "mission decide": {
+    "line": "Placeholder note for hide mission decide; the CLI notes replace it.",
+    "example": "hide mission decide"
+  },
+  "mission delay": {
+    "line": "Placeholder note for hide mission delay; the CLI notes replace it.",
+    "example": "hide mission delay"
+  },
+  "mission close": {
+    "line": "Placeholder note for hide mission close; the CLI notes replace it.",
+    "example": "hide mission close"
+  },
+  "mission reopen": {
+    "line": "Placeholder note for hide mission reopen; the CLI notes replace it.",
+    "example": "hide mission reopen"
+  },
+  "mission take": {
+    "line": "Placeholder note for hide mission take; the CLI notes replace it.",
+    "example": "hide mission take"
+  },
+  "mission show": {
+    "line": "Placeholder note for hide mission show; the CLI notes replace it.",
+    "example": "hide mission show"
+  },
+  "mission list": {
+    "line": "Placeholder note for hide mission list; the CLI notes replace it.",
+    "example": "hide mission list"
+  },
+  "mission settings": {
+    "line": "Placeholder note for hide mission settings; the CLI notes replace it.",
+    "example": "hide mission settings"
+  },
+  "task help": {
+    "line": "Placeholder note for hide task help; the CLI notes replace it.",
+    "example": "hide task help"
+  },
+  "task set": {
+    "line": "Placeholder note for hide task set; the CLI notes replace it.",
+    "example": "hide task set"
+  },
+  "task node": {
+    "line": "Placeholder note for hide task node; the CLI notes replace it.",
+    "example": "hide task node"
+  },
+  "task approve": {
+    "line": "Placeholder note for hide task approve; the CLI notes replace it.",
+    "example": "hide task approve"
+  },
+  "task drop": {
+    "line": "Placeholder note for hide task drop; the CLI notes replace it.",
+    "example": "hide task drop"
+  },
+  "task show": {
+    "line": "Placeholder note for hide task show; the CLI notes replace it.",
+    "example": "hide task show"
+  },
+  "pane read": {
+    "line": "Placeholder note for hide pane read; the CLI notes replace it.",
+    "example": "hide pane read"
+  },
+  "pane send": {
+    "line": "Placeholder note for hide pane send; the CLI notes replace it.",
+    "example": "hide pane send"
+  },
+  "pane open": {
+    "line": "Placeholder note for hide pane open; the CLI notes replace it.",
+    "example": "hide pane open"
+  },
+  "agent read": {
+    "line": "Placeholder note for hide agent read; the CLI notes replace it.",
+    "example": "hide agent read"
+  },
+  "workspace purpose": {
+    "line": "Placeholder note for hide workspace purpose; the CLI notes replace it.",
+    "example": "hide workspace purpose"
+  },
+  "workspace info": {
+    "line": "Placeholder note for hide workspace info; the CLI notes replace it.",
+    "example": "hide workspace info"
+  },
+  "file open": {
+    "line": "Placeholder note for hide file open; the CLI notes replace it.",
+    "example": "hide file open"
+  },
+  "diff open": {
+    "line": "Placeholder note for hide diff open; the CLI notes replace it.",
+    "example": "hide diff open"
+  },
+  "browser open": {
+    "line": "Placeholder note for hide browser open; the CLI notes replace it.",
+    "example": "hide browser open"
+  },
+  "browser connect": {
+    "line": "Placeholder note for hide browser connect; the CLI notes replace it.",
+    "example": "hide browser connect"
+  },
+  "browser snapshot": {
+    "line": "Placeholder note for hide browser snapshot; the CLI notes replace it.",
+    "example": "hide browser snapshot"
+  },
+  "browser click": {
+    "line": "Placeholder note for hide browser click; the CLI notes replace it.",
+    "example": "hide browser click"
+  },
+  "browser fill": {
+    "line": "Placeholder note for hide browser fill; the CLI notes replace it.",
+    "example": "hide browser fill"
+  },
+  "browser type": {
+    "line": "Placeholder note for hide browser type; the CLI notes replace it.",
+    "example": "hide browser type"
+  },
+  "browser press": {
+    "line": "Placeholder note for hide browser press; the CLI notes replace it.",
+    "example": "hide browser press"
+  },
+  "browser hover": {
+    "line": "Placeholder note for hide browser hover; the CLI notes replace it.",
+    "example": "hide browser hover"
+  },
+  "browser drag": {
+    "line": "Placeholder note for hide browser drag; the CLI notes replace it.",
+    "example": "hide browser drag"
+  },
+  "browser scroll": {
+    "line": "Placeholder note for hide browser scroll; the CLI notes replace it.",
+    "example": "hide browser scroll"
+  },
+  "browser wait": {
+    "line": "Placeholder note for hide browser wait; the CLI notes replace it.",
+    "example": "hide browser wait"
+  },
+  "browser screenshot": {
+    "line": "Placeholder note for hide browser screenshot; the CLI notes replace it.",
+    "example": "hide browser screenshot"
+  },
+  "browser eval": {
+    "line": "Placeholder note for hide browser eval; the CLI notes replace it.",
+    "example": "hide browser eval"
+  },
+  "browser console": {
+    "line": "Placeholder note for hide browser console; the CLI notes replace it.",
+    "example": "hide browser console"
+  },
+  "browser network": {
+    "line": "Placeholder note for hide browser network; the CLI notes replace it.",
+    "example": "hide browser network"
+  },
+  "browser help": {
+    "line": "Placeholder note for hide browser help; the CLI notes replace it.",
+    "example": "hide browser help"
+  },
+  "view list": {
+    "line": "Placeholder note for hide view list; the CLI notes replace it.",
+    "example": "hide view list"
+  },
+  "view status": {
+    "line": "Placeholder note for hide view status; the CLI notes replace it.",
+    "example": "hide view status"
+  },
+  "view select": {
+    "line": "Placeholder note for hide view select; the CLI notes replace it.",
+    "example": "hide view select"
+  },
+  "view close": {
+    "line": "Placeholder note for hide view close; the CLI notes replace it.",
+    "example": "hide view close"
+  },
+  "view split": {
+    "line": "Placeholder note for hide view split; the CLI notes replace it.",
+    "example": "hide view split"
+  },
+  "view move": {
+    "line": "Placeholder note for hide view move; the CLI notes replace it.",
+    "example": "hide view move"
+  },
+  "links pr": {
+    "line": "Placeholder note for hide links pr; the CLI notes replace it.",
+    "example": "hide links pr"
+  },
+  "session list": {
+    "line": "Placeholder note for hide session list; the CLI notes replace it.",
+    "example": "hide session list"
+  },
+  "session record": {
+    "line": "Placeholder note for hide session record; the CLI notes replace it.",
+    "example": "hide session record"
+  },
+  "session read": {
+    "line": "Placeholder note for hide session read; the CLI notes replace it.",
+    "example": "hide session read"
+  },
+  "memory show": {
+    "line": "Placeholder note for hide memory show; the CLI notes replace it.",
+    "example": "hide memory show"
+  }
+}
