@@ -65,17 +65,14 @@ impl Device {
     }
 
     /// What the device's save offers.
-    pub(crate) fn look_first(&self) -> (Seen, bool) {
+    pub(crate) fn look_first(&self) -> Seen {
         let found = match self.found() {
             Ok(found) => found,
             Err(reason) => {
-                return (
-                    Seen {
-                        look: Look::Unreadable(reason),
-                        ..Seen::default()
-                    },
-                    false,
-                );
+                return Seen {
+                    look: Look::Unreadable(reason),
+                    ..Seen::default()
+                };
             }
         };
         let look = super::look(&self.engine_dir, &found.save).unwrap_or_else(|reason| {
@@ -87,14 +84,11 @@ impl Device {
             refused(self, &reason);
             None
         });
-        (
-            Seen {
-                look,
-                server: shown(server),
-                outcome,
-            },
-            false,
-        )
+        Seen {
+            look,
+            server: shown(server),
+            outcome,
+        }
     }
 
     fn take_or_fail(&self, take: Take) -> Result<Taken, String> {
@@ -111,7 +105,7 @@ impl Device {
 
 impl Machine for Device {
     fn look(&self) -> Seen {
-        self.look_first().0
+        self.look_first()
     }
 
     /// Imports the device's save the way `take` says, as this machine's is
@@ -206,49 +200,63 @@ mod tests {
         }
     }
 
-    fn device(
-        dir: &Path,
-        found: Vec<Found>,
-        _stop_fails: bool,
-        _hide_used: bool,
-    ) -> (Device, Arc<Node>, Arc<Local>) {
+    fn device(dir: &Path, found: Vec<Found>) -> (Device, Arc<Local>) {
         let node = Arc::new(Node {
             found: Mutex::new(found),
         });
         let local = Arc::new(Local::default());
         let device = Device {
-            link: Arc::clone(&node) as Arc<dyn NodeLink>,
+            link: node as Arc<dyn NodeLink>,
             engine_dir: dir.join("engine/devices/d1"),
             machine: "m1".into(),
             local: Arc::clone(&local) as Arc<dyn Machine>,
         };
-        (device, node, local)
+        (device, local)
     }
 
-    // B5, B18: a device save no Hide agent used is offered and not moved.
+    // B5, B18: a device save no Hide agent used is offered and not imported
+    // until asked.
     #[test]
-    fn a_device_save_hide_never_used_is_only_offered() {
+    fn a_device_save_is_only_offered_until_asked() {
         let dir = tempfile::tempdir().unwrap();
-        let (device, _, local) = device(
-            dir.path(),
-            vec![found(NodeServer::Stopped, 1)],
-            false,
-            false,
-        );
-        let (seen, restarting) = device.look_first();
-        assert!(!restarting && matches!(seen.look, Look::Offer(_)));
+        let (device, local) = device(dir.path(), vec![found(NodeServer::Stopped, 1)]);
+        let seen = device.look_first();
+        assert!(matches!(seen.look, Look::Offer(_)));
         assert_eq!(seen.server, Server::Stopped);
         assert_eq!(local.restarts.load(Ordering::SeqCst), 0);
         assert_eq!(kept_save(&device.engine_dir).unwrap(), None);
     }
 
-    // D-8, B20: the operator's own Herdr on a device is never stopped: a
-    // move of it is refused, and its import leaves its conversations
-    // waiting.
+    // B18, D-10: an asked import keeps the save the node read with the
+    // device's machine id, and tells the core role to start again once; a
+    // later look offers the same save and starts nothing.
+    #[test]
+    fn an_asked_device_import_keeps_its_save_with_the_machine_and_restarts_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (device, local) = device(dir.path(), vec![found(NodeServer::Stopped, 1)]);
+        assert_eq!(device.take(Take::Import), Taken::Restarting);
+        assert_eq!(local.restarts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            kept_save(&device.engine_dir).unwrap(),
+            Some(KeptSave {
+                machine: "m1".into(),
+                save: save(1),
+            })
+        );
+        assert_eq!(
+            asked(&device.engine_dir).unwrap(),
+            Some(Asked { resume: true })
+        );
+        assert!(matches!(device.look_first().look, Look::Offer(_)));
+        assert_eq!(local.restarts.load(Ordering::SeqCst), 1);
+    }
+
+    // D-8, B20: the operator's own Herdr on a device is never stopped: its
+    // import leaves its conversations waiting.
     #[test]
     fn a_device_s_own_herdr_is_imported_and_never_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        let (device, _, _) = device(dir.path(), vec![found(NodeServer::Other, 1)], false, false);
+        let (device, _) = device(dir.path(), vec![found(NodeServer::Other, 1)]);
         assert_eq!(device.take(Take::Import), Taken::Restarting);
         assert_eq!(
             asked(&device.engine_dir).unwrap(),

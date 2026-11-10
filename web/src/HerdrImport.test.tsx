@@ -109,3 +109,10 @@ it("draws nothing while there is no save", async () => {
   expect(document.querySelector("[data-herdr-import-line], [data-herdr-import-settings]")).toBeNull();
 });
 
+it("imports a device's save under the device's name, from its line and from its Settings group", async () => {
+  const events = await mount(null, [found({ kind: "import", device: "d1" })], [{ id: "d1", label: "Studio", kind: "remote" }]);
+  expect(document.querySelector("[data-herdr-import-line=import][data-herdr-import-device=d1]")?.textContent).toContain("Studio");
+  await act(async () => button("[data-herdr-import-import]")!.click());
+  await act(async () => button("[data-herdr-import-settings-import]")!.click());
+  expect(sent(events)).toEqual([{ action: "import", device: "d1" }, { action: "import", device: "d1" }]);
+});

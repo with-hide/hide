@@ -369,6 +369,18 @@ impl Runtime {
         let machine = Arc::clone(&self.herdr_import.places[&None].machine);
         self.ingest_herdr_save_of(&None, &machine, seen)
     }
+
+    /// The device's import answered.
+    pub(super) fn ingest_device_herdr_take(
+        &mut self,
+        device: &str,
+        take: Take,
+        taken: Taken,
+    ) -> bool {
+        let place = Some(device.to_owned());
+        let machine = Arc::clone(&self.herdr_import.places[&place].machine);
+        self.ingest_herdr_take_of(&place, &machine, take, taken)
+    }
 }
 
 const KIND_IMPORT: &str = "import";

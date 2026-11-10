@@ -111,10 +111,7 @@ impl Runtime {
                         local,
                     })
                 });
-                let seen = match mover.as_ref().map(|mover| mover.look_first()) {
-                    Some((seen, _)) => Some(seen),
-                    None => None,
-                };
+                let seen = mover.as_ref().map(|mover| mover.look_first());
                 let opened = home
                     .ok_or_else(|| "the device's node named no home".to_owned())
                     .and_then(|home| {

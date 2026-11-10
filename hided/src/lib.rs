@@ -162,7 +162,7 @@ pub struct RunningDaemon {
     /// Told when a Herdr save's import is asked for: the supervisor starts
     /// the core role again, which imports it before the engine opens (PRD
     /// engine-bundle-4-herdr-removal D-7).
-    pub(crate) herdr_restart: Arc<tokio::sync::Notify>,
+    pub(crate) import_restart: Arc<tokio::sync::Notify>,
     /// Told when the role ends, before the core stops, so the role's sockets
     /// close (`AppState::role_ended`).
     role_ended: tokio::sync::watch::Sender<bool>,
@@ -663,13 +663,13 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // The save the core offers on the screen is imported when the operator
     // asks, and the core role starts again with it (PRD
     // engine-bundle-4-herdr-removal D-7, D-8).
-    let herdr_restart = Arc::new(tokio::sync::Notify::new());
+    let import_restart = Arc::new(tokio::sync::Notify::new());
     {
         let env = env.clone();
-        let herdr_restart = Arc::clone(&herdr_restart);
+        let import_restart = Arc::clone(&import_restart);
         let core = Arc::clone(&core);
         tokio::task::spawn_blocking(move || {
-            let machine = herdr_transition::LocalMachine::new(&env, herdr_restart);
+            let machine = herdr_transition::LocalMachine::new(&env, import_restart);
             if let Err(reason) = core.set_herdr_import(Arc::new(machine)) {
                 hide_core::diagnostic!(serde_json::json!({
                     "component": "herdr_transition",
@@ -693,7 +693,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         core,
         move_gate,
         role_ended,
-        herdr_restart,
+        import_restart,
         own: None,
     })
 }

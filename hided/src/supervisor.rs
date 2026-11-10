@@ -140,14 +140,14 @@ async fn core_turn(
         Request(MoveRequest),
         Release(Release),
         LeaseEnded,
-        HerdrRestart,
+        ImportRestart,
     }
     let gate = Arc::clone(&running.move_gate);
-    let herdr_restart = Arc::clone(&running.herdr_restart);
+    let import_restart = Arc::clone(&running.import_restart);
     let event = tokio::select! {
         () = running.shutdown.ended() => Event::Stop,
         () = seat.stop.ended() => Event::Stop,
-        () = herdr_restart.notified() => Event::HerdrRestart,
+        () = import_restart.notified() => Event::ImportRestart,
         Some(asked) = requests.recv() => match asked {
             Asked::Window(request) => Event::Request(request),
             Asked::Release(release) => Event::Release(release),
@@ -184,7 +184,7 @@ async fn core_turn(
         // A Herdr save's import was asked for: the core role starts again
         // and imports it before its engine opens; the pane holders run on
         // (PRD engine-bundle-4-herdr-removal D-7).
-        Event::HerdrRestart => {
+        Event::ImportRestart => {
             log("herdr_import.restart", json!({}));
             stop_core(&env.state_dir, running).await;
             Ok(Some(Role::Core(

@@ -303,6 +303,31 @@ mod tests {
     use futures_util::FutureExt;
     use hide_core::herdr_import::Machine;
 
+    fn registered(state: &Path, node: &str, socket: &Path) {
+        let ledger = hide_core::delivery::ledger::from_bytes(
+            json!({
+                "version": 1, "next_id": 2, "letters": [], "watches": [],
+                "agents": [{
+                    "id": "agent-1", "name": "agent-1", "machine": node,
+                    "host_scope": socket.to_string_lossy(), "native_machine": node,
+                    "session": "s1", "instance": "term_1", "terminal_id": "term_1",
+                    "pane": "w1:p1", "parent": null, "project": "/work",
+                    // The actor carries its session's digest, SHA-256 of `s1`.
+                    "actor": {
+                        "pane_id": "w1:p1", "name": "agent-1", "kind": "claude", "device_id": node,
+                        "session": "e8bc163c82eee18733288c7d4ac636db3a6deb013ef2d37b68322be20edc45cc",
+                    },
+                    "ended": false,
+                }],
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        hide_core::delivery::ledger::save(&hide_kit::layout::delivery_ledger(state), &ledger)
+            .unwrap();
+    }
+
     /// A machine whose Herdr save is a real Herdr 0.9.5 save in `dir`, with
     /// no server on its socket; nothing here reaches this host's Herdr.
     fn place(dir: &Path) -> (Place, PathBuf) {
@@ -324,6 +349,49 @@ mod tests {
             },
         };
         (place, state)
+    }
+
+    // D-10, B18: a device's asked import is made at the next start before any
+    // link is up: its registration keeps the device's id as its scope and takes
+    // its pane's id, the kept save is consumed, and a later start imports
+    // nothing again while this machine's own save is still offered.
+    #[test]
+    fn a_device_s_asked_import_is_made_at_the_next_start_with_the_save_its_node_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let (place, state) = place(dir.path());
+        registered(&state, "m1", Path::new("d1"));
+        let engine_dir = hide_kit::layout::device_engine_dir(&state, "d1").unwrap();
+        herdr_import::keep_save(
+            &engine_dir,
+            &herdr_import::KeptSave {
+                machine: "m1".into(),
+                save: place.fetch(),
+            },
+        )
+        .unwrap();
+        herdr_import::ask(&engine_dir, herdr_import::Asked { resume: true }).unwrap();
+
+        devices_before_core(&state);
+        assert_eq!(
+            herdr_import::moved(&engine_dir).unwrap(),
+            ["w1".to_owned(), "w2".to_owned()].into()
+        );
+        assert_eq!(herdr_import::kept_save(&engine_dir).unwrap(), None);
+        let ledger =
+            hide_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
+        assert_eq!(
+            (
+                ledger.agents[0].host_scope.as_str(),
+                ledger.agents[0].instance.as_str()
+            ),
+            ("d1", "w1:p1")
+        );
+        devices_before_core(&state);
+        assert_eq!(herdr_import::asked(&engine_dir).unwrap(), None);
+        assert!(matches!(
+            before_core_at(&place, &state, "mac"),
+            Look::Offer(_)
+        ));
     }
 
     // D-8: a Herdr started again on the socket after the move was asked

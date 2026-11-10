@@ -200,3 +200,41 @@ fn a_cut_agent_is_told_once_it_shows_and_given_up_on_when_it_never_does() {
     runtime.drive_transition_letters(1_000 + 10 * 60 * 1000 + 1);
     assert!(runtime.transition_letters_owed().is_empty());
 }
+
+/// D-10, B18: a device's save is offered under its name, imported only with
+/// its link, and this machine's offer is never the device's.
+#[test]
+fn a_device_s_save_is_offered_under_its_name_and_goes_with_its_link() {
+    let mut runtime = installed();
+    assert!(runtime.install_device_herdr_import(
+        "d1",
+        Arc::new(StandIn),
+        offered(Server::Other, None)
+    ));
+    let status = &serde_json::to_value(runtime.snapshot()).unwrap()["status"];
+    assert_eq!(status["herdr_import"], serde_json::Value::Null);
+    assert_eq!(
+        status["herdr_import_devices"],
+        serde_json::json!([{
+            "kind": "import", "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
+            "waiting": 0, "herdr_running": true, "failure": null, "reason": null, "refused": [],
+            "device": "d1",
+        }])
+    );
+    // This machine offers nothing, so its import is not the device's.
+    assert!(!act(&mut runtime, "import"));
+    let device_import = event(
+        "herdr_import",
+        serde_json::json!({"action": "import", "device": "d1"}),
+    );
+    assert!(runtime.dispatch_json(&device_import));
+    let devices = |runtime: &Runtime| {
+        serde_json::to_value(runtime.snapshot()).unwrap()["status"]["herdr_import_devices"].clone()
+    };
+    assert_eq!(devices(&runtime)[0]["stage"], "moving");
+    runtime.ingest_device_herdr_take("d1", Take::Import, Taken::Restarting);
+    assert_eq!(devices(&runtime)[0]["stage"], "moving");
+    assert!(runtime.retire_device_herdr_import("d1"));
+    assert_eq!(devices(&runtime), serde_json::json!([]));
+    assert!(!runtime.dispatch_json(&device_import));
+}
