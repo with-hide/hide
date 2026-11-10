@@ -93,6 +93,9 @@ case "$command" in
         # A failing test fails this script, and so the build command.
         (cd "$project/HideShell" && xcodebuild test -scheme HideShell -destination "id=$id" \
             -derivedDataPath "$derived_tests" -clonedSourcePackagesDirPath "$packages")
+        # The push core the app and its notification extension share: the RFC 8291 vector, the notice, the words.
+        (cd "$project/HidePushCore" && xcodebuild test -scheme HidePushCore -destination "id=$id" \
+            -derivedDataPath "$derived_tests" -clonedSourcePackagesDirPath "$packages")
         # The app's own controller, hosted in the app on the simulator: it is what proves the app installs the gate.
         xcodebuild test -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppTests \

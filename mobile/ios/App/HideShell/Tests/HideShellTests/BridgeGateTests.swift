@@ -95,16 +95,16 @@ final class BridgeGateTests: XCTestCase {
         XCTAssertEqual(verdict([:]), .refuse("malformed"))
     }
 
-    /// The list a page may call is Capacitor's console and the app's own three plugins, by the names their classes carry.
+    /// The list a page may call is Capacitor's console and the app's own four plugins, by the names their classes carry.
     func testTheShippedPluginListIsTheConsoleAndTheAppsOwnPlugins() {
-        let own = [HideKeychainPlugin().jsName, HideScannerPlugin().jsName, HideAppPlugin().jsName]
+        let own = [HideKeychainPlugin().jsName, HideScannerPlugin().jsName, HideAppPlugin().jsName, HidePushPlugin().jsName]
         XCTAssertEqual(BridgeGate.appPlugins, Set(["Console"] + own))
     }
 
     /// A frame that is not the app's main frame reaches none of the app's plugins, and neither does a foreign origin.
     func testNoFrameButTheMainFrameReachesAnAppPlugin() {
         let gate = BridgeGate(inner: Recorder())
-        for plugin in ["HideKeychain", "HideScanner", "HideApp"] {
+        for plugin in ["HideKeychain", "HideScanner", "HideApp", "HidePush"] {
             let call: [String: Any] = ["type": "message", "pluginId": plugin, "methodName": "list", "callbackId": "1", "options": [:]]
             XCTAssertEqual(gate.verdict(isMainFrame: false, scheme: "capacitor", host: "localhost", body: call), .refuse("not_main_frame"), plugin)
             XCTAssertEqual(gate.verdict(isMainFrame: true, scheme: "https", host: "app.withhide.dev", body: call), .refuse("foreign_origin"), plugin)

@@ -147,6 +147,6 @@ final class ShellViewControllerTests: XCTestCase {
         shell.keychain.onRead = { if $0 == "main-final" { finished.fulfill() } }
         wait(for: [finished], timeout: 30)
         XCTAssertEqual(shell.keychain.calls.sorted(), ["main", "main-final"])
-        XCTAssertTrue(BridgeGate.appPlugins.isSuperset(of: ["HideKeychain", "HideScanner", "HideApp"]))
+        XCTAssertTrue(BridgeGate.appPlugins.isSuperset(of: ["HideKeychain", "HideScanner", "HideApp", "HidePush"]))
     }
 }

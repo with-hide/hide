@@ -11,7 +11,8 @@ let package = Package(
         .library(name: "HideShell", targets: ["HideShell"])
     ],
     dependencies: [
-        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.6.0")
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.6.0"),
+        .package(path: "../HidePushCore")
     ],
     targets: [
         .target(
@@ -19,7 +20,8 @@ let package = Package(
             // Capacitor's headers import Cordova, so a target that links one links both, as CapApp-SPM does.
             dependencies: [
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
-                .product(name: "Cordova", package: "capacitor-swift-pm")
+                .product(name: "Cordova", package: "capacitor-swift-pm"),
+                .product(name: "HidePushCore", package: "HidePushCore")
             ]
         ),
         .testTarget(

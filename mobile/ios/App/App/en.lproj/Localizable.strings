@@ -1,0 +1,5 @@
+/* The only text Apple and the phone's lock screen carry for a notification this phone cannot open: it names nothing. */
+"hide-notification" = "Hide has news";
+"push.action.reply" = "Reply";
+"push.action.send" = "Send";
+"push.action.placeholder" = "Your reply";
