@@ -10,7 +10,10 @@ $RUNNER_TEMP/agent-clis), and the script prints one `<kind>=<program>` line
 per CLI; with GITHUB_PATH set it puts each program's folder on the PATH of
 the later steps, and with GITHUB_OUTPUT set it writes the same lines as the
 step's outputs. npm installs run no package's install scripts but those of
-a row that names why it needs them (`install_scripts`). A CLI that answers
+a row that names why it needs them (`install_scripts`). A download is asked
+again while its failure is transient, inside a fixed budget, and the grok
+installer is downloaded to a file before it runs, so a failed download ends
+the step with its own error. A CLI that answers
 another version than the table's fails the install, so a vendor release moves
 the pin in a pull request before a lane measures it. So does a CLI whose
 `--help` lists no full-access option its adapter declares
@@ -26,6 +29,7 @@ the access they give in the prompt input it renders (`FULL_ACCESS_PROOF`).
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -37,6 +41,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 CHECKOUT = Path(__file__).resolve().parents[1]
@@ -47,6 +53,20 @@ WINDOWS = os.name == "nt"
 # Where each pinned release comes from: the vendor's installer, or its release files.
 GROK_INSTALLER = "https://x.ai/cli/install.sh"
 OMP_RELEASES = "https://github.com/can1357/oh-my-pi/releases/download"
+# A download that failed on a rate limit, a server fault or a connection that
+# dropped is asked again up to this many times, after these waits, and no
+# attempt starts once the budget is spent. The install steps run under a
+# ten-minute limit, so the budget leaves the rest of a step for the other
+# CLIs' downloads and for the checks after them.
+DOWNLOAD_RETRY_DELAYS = (2, 5, 15)
+DOWNLOAD_BUDGET_SECONDS = 180
+# How long one socket read may wait, and a transfer that keeps arriving is not
+# cut by it: the omp binary is over 200 MB.
+DOWNLOAD_ATTEMPT_SECONDS = 60
+# The answers a second ask may get differently: a rate limit, a request that
+# timed out, and every server fault. A 403, a 404 and a URL that answers
+# nothing are the same on the second ask.
+RETRY_STATUSES = frozenset({408, 425, 429}) | frozenset(range(500, 600))
 
 
 def table():
@@ -100,13 +120,21 @@ def npm(kinds, rows, prefix):
 
 def grok(row, prefix):
     """Grok's installer takes the version as its argument and the folder as
-    GROK_BIN_DIR; on Windows it runs under Git Bash in the same form."""
+    GROK_BIN_DIR; on Windows it runs under Git Bash in the same form. The
+    installer is downloaded to a file and run from there: piping it into Bash
+    hid its download's failure behind the pipeline's last command, so a curl
+    that got a 500 ended the step as a missing program later."""
     folder = prefix / "grok"
-    # Already on PATH means the installer never tries ~/.local/bin or
-    # /usr/local/bin links. Set this inside Bash so Git Bash converts its
-    # inherited Windows PATH before the Unix path is prepended.
-    run([bash(), "-c", f'export PATH="$GROK_BIN_DIR:$PATH"; curl -fsSL {GROK_INSTALLER} | bash -s "$0"', row["version"]],
-        {"GROK_BIN_DIR": folder.as_posix() if WINDOWS else str(folder)})
+    installer = fetch(GROK_INSTALLER)
+    with tempfile.TemporaryDirectory() as temporary:
+        script = Path(temporary) / "install.sh"
+        script.write_bytes(installer)
+        # Already on PATH means the installer never tries ~/.local/bin or
+        # /usr/local/bin links. Set this inside Bash so Git Bash converts its
+        # inherited Windows PATH before the Unix path is prepended.
+        run([bash(), "-c", 'export PATH="$GROK_BIN_DIR:$PATH"; exec bash "$0" "$1"',
+             script.as_posix(), row["version"]],
+            {"GROK_BIN_DIR": folder.as_posix() if WINDOWS else str(folder)})
     return folder / ("grok.exe" if WINDOWS else "grok")
 
 
@@ -141,8 +169,42 @@ def target():
 
 
 def fetch(url):
-    with urllib.request.urlopen(url, timeout=300) as answer:
-        return answer.read()
+    """The bytes at `url`, asked again while the failure is transient: a rate
+    limit, a server fault, or a connection that dropped or timed out. No
+    attempt starts once DOWNLOAD_BUDGET_SECONDS is spent, and a refusal the
+    next ask would answer the same way (403, 404, a URL nothing answers) stops
+    at once. The step ends with the download's own error; a file that arrives
+    and does not match its pin is the caller's to refuse, since no retry can
+    repair it."""
+    end = time.monotonic() + DOWNLOAD_BUDGET_SECONDS
+    attempts = len(DOWNLOAD_RETRY_DELAYS) + 1
+    for attempt in range(1, attempts + 1):
+        # One socket read waits this long; a transfer that keeps arriving is
+        # not cut by it, and none may wait past the budget.
+        wait_for_read = min(DOWNLOAD_ATTEMPT_SECONDS, end - time.monotonic())
+        try:
+            with urllib.request.urlopen(url, timeout=wait_for_read) as answer:
+                return answer.read()
+        except (OSError, http.client.HTTPException) as error:
+            if not transient(error):
+                raise SystemExit(f"{url} could not be downloaded: {error}")
+            if attempt == attempts:
+                raise SystemExit(f"{url} could not be downloaded in {attempts} attempts: {error}")
+            wait = DOWNLOAD_RETRY_DELAYS[attempt - 1]
+            if time.monotonic() + wait >= end:
+                raise SystemExit(f"{url} could not be downloaded in {attempt} attempt"
+                                 f"{'s' if attempt > 1 else ''} inside {DOWNLOAD_BUDGET_SECONDS} s: {error}")
+            time.sleep(wait)
+
+
+def transient(error):
+    """Whether asking the same URL again may get a different answer: a rate
+    limit, a server fault, or a connection that dropped, reset or timed out.
+    A 403, a 404 and a bad URL say the same thing however often they are
+    asked, so a retry only spends the step's minutes."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in RETRY_STATUSES
+    return True
 
 
 def agy(row, prefix):

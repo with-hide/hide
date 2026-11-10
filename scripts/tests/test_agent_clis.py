@@ -2,7 +2,9 @@
 install fails here, not on a runner."""
 
 from pathlib import Path
+import contextlib
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -12,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -21,6 +24,46 @@ from agent_journey import clis  # noqa: E402
 spec = importlib.util.spec_from_file_location("install_agent_clis", SCRIPTS / "install-agent-clis.py")
 install = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(install)
+
+URL = "https://example.invalid/releases/v1.2.3/omp-linux-x64"
+
+
+class Clock:
+    """The clock a download runs on: it moves only when the code sleeps or
+    when the test says an answer took time, so a budget is checked without
+    waiting for it."""
+
+    def __init__(self):
+        self.now = 100.0
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+class Answer:
+    """One HTTP answer, as `urlopen` returns it: a body read inside a `with`."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self):
+        return self.payload
+
+
+def status(code):
+    """The error a server's answer of `code` raises, as urlopen raises it."""
+    return urllib.error.HTTPError(URL, code, f"answer {code}", {}, io.BytesIO(b""))
 
 
 class Table(unittest.TestCase):
@@ -58,36 +101,46 @@ class Table(unittest.TestCase):
         self.assertFalse(clis.matches("1.0.4", "11.0.4"))
 
 
-class Install(unittest.TestCase):
+class Grok(unittest.TestCase):
+    def installer(self, root):
+        """A finite Bash installer fixture with the vendor's PATH condition,
+        and the file a run of it leaves as proof it ran."""
+        ran = root / "installer-ran"
+        script = root / "install.sh"
+        script.write_text(f'set -eu\n: > {str(ran)!r}\nmkdir -p "$GROK_BIN_DIR"\n'
+                          ': > "$GROK_BIN_DIR/grok"\n'
+                          'case ":$PATH:" in *":$GROK_BIN_DIR:"*) ;;\n'
+                          f'*) ln -s "$GROK_BIN_DIR/grok" {str(root / "outside-link")!r} ;; esac\n')
+        return script, ran
+
     @unittest.skipIf(os.name == "nt", "Unix installer link behavior")
     def test_native_installer_sees_its_target_on_path_and_leaves_no_other_link(self):
-        # The external download is a finite Bash installer fixture with the
-        # vendor's PATH condition. Run our actual entrypoint and Bash route.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            prefix, tools = root / "cache", root / "tools"
-            home = prefix / "home"
-            home.mkdir(parents=True)
-            tools.mkdir()
-            outside = root / "outside-link"
-            installer = ('set -eu\n'
-                         'mkdir -p "$GROK_BIN_DIR"\n'
-                         ': > "$GROK_BIN_DIR/grok"\n'
-                         'case ":$PATH:" in *":$GROK_BIN_DIR:"*) ;;\n'
-                         f'*) ln -s "$GROK_BIN_DIR/grok" {str(outside)!r} ;; esac\n')
-            curl = tools / "curl"
-            curl.write_text(f"#!{sys.executable}\nprint({installer!r})\n")
-            curl.chmod(0o700)
-            env = {"HOME": str(home), "PATH": os.pathsep.join((str(tools), "/usr/bin", "/bin")),
-                   "LC_ALL": "C"}
-            ran = subprocess.run([sys.executable, str(SCRIPTS / "install-agent-clis.py"), "grok",
-                                  "--prefix", str(prefix), "--private-fake"],
-                                 env=env, capture_output=True, text=True, timeout=10)
-            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            prefix = root / "cache"
+            (prefix / "home").mkdir(parents=True)
+            script, ran = self.installer(root)
+            with mock.patch.dict(os.environ, {"CI": "true", "HOME": str(prefix / "home")}), \
+                    mock.patch.object(install, "GROK_INSTALLER", script.as_uri()):
+                self.assertEqual(install.main(["grok", "--prefix", str(prefix), "--private-fake"]), 0)
+            self.assertTrue(ran.is_file(), "the installer never ran")
             self.assertTrue((prefix / "grok/grok").is_file())
-            self.assertFalse(outside.is_symlink())
+            self.assertFalse((root / "outside-link").is_symlink())
 
-    def install(self, answer):
+    def test_a_failed_download_stops_the_step_and_never_runs_the_installer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script, ran = self.installer(root)
+            with mock.patch.object(install, "GROK_INSTALLER", script.as_uri()), \
+                    mock.patch.object(install.urllib.request, "urlopen", side_effect=status(403)):
+                with self.assertRaises(SystemExit) as stopped:
+                    install.grok({"version": "1.0.52"}, root)
+            self.assertIn("403", str(stopped.exception))
+            self.assertFalse(ran.exists(), "the step ran the installer after its download failed")
+
+
+class Download(unittest.TestCase):
+    def install_pi(self, answer):
         """main() for Pi, its npm install replaced by a program that answers `answer`."""
         with tempfile.TemporaryDirectory() as temporary:
             program = Path(temporary) / "pi"
@@ -99,11 +152,76 @@ class Install(unittest.TestCase):
                 return install.main(["pi"])
 
     def test_the_pinned_version_installs(self):
-        self.assertEqual(self.install(clis.table()["pi"]["version"]), 0)
+        self.assertEqual(self.install_pi(clis.table()["pi"]["version"]), 0)
+
+    def fetch(self, answers, budget=None):
+        """What `fetch(URL)` returned and the clock it ran on, against a server
+        answering `answers` in turn."""
+        clock = Clock()
+        answered = iter(answers)
+
+        def urlopen(url, timeout=None):
+            answer = next(answered)
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer if isinstance(answer, Answer) else Answer(answer)
+
+        patches = [mock.patch.object(install.time, "monotonic", clock.monotonic),
+                   mock.patch.object(install.time, "sleep", clock.sleep),
+                   mock.patch.object(install.urllib.request, "urlopen", urlopen)]
+        if budget is not None:
+            patches.append(mock.patch.object(install, "DOWNLOAD_BUDGET_SECONDS", budget))
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            return install.fetch(URL), clock
+
+    def test_a_download_that_answers_after_transient_failures_returns_the_bytes(self):
+        for answer in (status(429), status(503), ConnectionResetError("connection reset"),
+                       TimeoutError("timed out"), http.client.RemoteDisconnected("no answer")):
+            with self.subTest(answer=answer):
+                payload, clock = self.fetch([answer, answer, b"the file"])
+                self.assertEqual(payload, b"the file")
+                self.assertEqual(clock.slept, list(install.DOWNLOAD_RETRY_DELAYS[:2]))
+
+    def test_a_permanent_refusal_is_not_asked_again(self):
+        for answer in (status(403), status(404)):
+            with self.subTest(answer=answer):
+                with self.assertRaisesRegex(SystemExit, "could not be downloaded"):
+                    self.fetch([answer, b"the file"])
+
+    def test_a_download_that_keeps_failing_stops_on_its_own_error(self):
+        attempts = len(install.DOWNLOAD_RETRY_DELAYS) + 1
+        for answer in (status(500), ConnectionResetError("connection reset")):
+            with self.subTest(answer=answer):
+                with self.assertRaises(SystemExit) as stopped:
+                    self.fetch([answer] * attempts)
+                self.assertIn(f"{attempts} attempts", str(stopped.exception))
+                self.assertIn(str(answer), str(stopped.exception))
+
+    def test_a_file_that_does_not_match_its_pin_is_refused_without_asking_again(self):
+        row = {"version": "1.4.8", "installer": "agy",
+               "files": {install.target(): {"url": URL, "sha512": "0" * 128}}}
+        asked = []
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(install.urllib.request, "urlopen",
+                                  side_effect=lambda url, timeout: asked.append(url) or Answer(b"another release")):
+            with self.assertRaisesRegex(SystemExit, "does not match the sha512"):
+                install.agy(row, Path(temporary))
+        self.assertEqual(asked, [URL], "a hash mismatch asked the server for the file again")
+
+    def test_a_download_stops_when_the_next_wait_would_pass_its_budget(self):
+        # The budget bounds the waits: a wait that ends at it leaves no time
+        # for the attempt after it, and a second more lets that one start.
+        fits = sum(install.DOWNLOAD_RETRY_DELAYS)
+        for budget, attempts in ((fits - 1, 3), (fits, 3), (fits + 1, 4)):
+            with self.subTest(budget=budget):
+                with self.assertRaisesRegex(SystemExit, f"{attempts} attempts"):
+                    self.fetch([status(503)] * 5, budget=budget)
 
     def test_another_version_than_the_pin_fails_the_install(self):
         with self.assertRaises(SystemExit) as stopped:
-            self.install("9.9.9")
+            self.install_pi("9.9.9")
         self.assertIn("pi answered '9.9.9', agent-clis.json pins", str(stopped.exception))
 
     def install_kind(self, kind, help_text="", render=""):
