@@ -1052,8 +1052,8 @@ class Workflows(unittest.TestCase):
         # Native and WASM relay interoperability adds one job on each OS.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        # Every suite runs once, on the core's own engine, since Herdr's lanes
-        # went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
+        # Every suite runs once, on the core's own engine, since the Herdr lanes
+        # were removed (PRD engine-bundle-4-herdr-removal D-2).
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
         # for the device link's crates, its device test and the device kit
         # contract (with-hide/hide-private#501).
