@@ -3,3 +3,5 @@
 "push.action.reply" = "Reply";
 "push.action.send" = "Send";
 "push.action.placeholder" = "Your reply";
+"push.notice.title" = "Hide";
+"push.demo.sent" = "Sample reply sent. A real one goes to your computer.";

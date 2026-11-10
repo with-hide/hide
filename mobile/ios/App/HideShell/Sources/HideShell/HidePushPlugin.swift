@@ -20,12 +20,14 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "takeOpen", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "demoSample", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "takeReply", returnType: CAPPluginReturnPromise),
     ]
 
     private let keychain: PushKeychain
     private let token: PushToken
     private let inbox: PushOpenInbox
     private let center: () -> UNUserNotificationCenter
+    private let held: HeldReplies
     private var observer: NSObjectProtocol?
 
     public override init() {
@@ -33,10 +35,13 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
         token = .shared
         inbox = .shared
         center = { UNUserNotificationCenter.current() }
+        held = KeychainHeldReplies()
         super.init()
     }
 
-    public init(keychain: PushKeychain, token: PushToken, inbox: PushOpenInbox, center: @escaping () -> UNUserNotificationCenter) {
+    public init(keychain: PushKeychain, token: PushToken, inbox: PushOpenInbox, center: @escaping () -> UNUserNotificationCenter,
+                held: HeldReplies = KeychainHeldReplies()) {
+        self.held = held
         self.keychain = keychain
         self.token = token
         self.inbox = inbox
@@ -179,5 +184,15 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
                 if opened { call.resolve() } else { self.fail(call, "settings_unavailable") }
             }
         }
+    }
+
+    /// The text of a reply to this agent that did not arrive (kept an hour), handed over once to put back in the box it
+    /// was typed in. Only the page's own main frame can ask, and only for an agent it names.
+    @objc func takeReply(_ call: CAPPluginCall) {
+        guard let room = room(call), let device = call.getString("device_id"), let pane = call.getString("pane_id"),
+              !device.isEmpty, device.count <= 256, !pane.isEmpty, pane.count <= 512 else { call.resolve(["found": false]); return }
+        guard let text = held.take(room: room, deviceId: device, paneId: pane) else { call.resolve(["found": false]); return }
+        held.drop(room: room, deviceId: device, paneId: pane)
+        call.resolve(["found": true, "text": text])
     }
 }

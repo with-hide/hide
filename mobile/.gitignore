@@ -4,3 +4,4 @@ www/
 ios/relay/
 # SwiftPM build folders of the local packages (a package test run by hand).
 ios/App/*/.build/
+ios/App/HideShell/Frameworks/
