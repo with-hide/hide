@@ -1027,7 +1027,20 @@ else:raise RuntimeError("group_survived_reap")
         # The guardian adopts each as a zombie, and the cleanup reaps at most
         # MAX_DESCENDANTS + 1 in one pass, so a run that left more of them
         # unreaped failed its cleanup although everything had ended.
+        # The script is a native root under the guardian: each batch ends 20
+        # processes whose parent ended first, then waits for the state the
+        # next batch needs, the guardian holding none of them unreaped.
         script = ("import os,time\n"
+                  "guardian = os.getppid()\n"
+                  "def unreaped():\n"
+                  "    count = 0\n"
+                  "    for name in os.listdir('/proc'):\n"
+                  "        if name.isdigit():\n"
+                  "            try: stat = open('/proc/' + name + '/stat').read()\n"
+                  "            except OSError: continue\n"
+                  "            state, parent = stat[stat.rindex(')') + 2:].split()[:2]\n"
+                  "            count += state == 'Z' and int(parent) == guardian\n"
+                  "    return count\n"
                   "for batch in range(12):\n"
                   "    for _ in range(20):\n"
                   "        if os.fork() == 0:\n"
@@ -1037,7 +1050,11 @@ else:raise RuntimeError("group_survived_reap")
                   "    while True:\n"
                   "        try: os.wait()\n"
                   "        except ChildProcessError: break\n"
-                  "    time.sleep(0.3)\n")
+                  "    end = time.monotonic() + 10\n"
+                  "    while unreaped() and time.monotonic() < end:\n"
+                  "        time.sleep(0.05)\n"
+                  "    if unreaped():\n"
+                  "        os._exit(1)\n")
         with OwnedProcesses() as owner:
             code, _, _ = owner.run([sys.executable, "-c", script], env=dict(os.environ))
         self.assertEqual(code, 0)
