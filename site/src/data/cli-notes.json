@@ -307,7 +307,7 @@
     "example": "hide browser scroll browser-3 down"
   },
   "browser wait": {
-    "line": "Waits until a text or an element appears in the page, or disappears with --gone, and stops at a timeout.",
+    "line": "Waits until a text or an element appears in the page; with --gone and a selector it waits until that element disappears instead. It stops at a timeout.",
     "example": "hide browser wait browser-3 --text 'Welcome'"
   },
   "browser screenshot": {
@@ -366,7 +366,7 @@
     "example": "hide links branch main"
   },
   "links session": {
-    "line": "Shows the pull requests and sessions Hide has linked to one session.",
+    "line": "Shows the named session and the pull requests tied to it.",
     "example": "hide links session 03293c41-46c6-4326-98d0-31f2dcce4132"
   },
   "session list": {
