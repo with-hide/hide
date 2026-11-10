@@ -33,7 +33,7 @@ function fixture() {
   facts = join(root, 'facts');
   write(join(facts, 'info.json'), {
     CFBundleIdentifier: want.bundleId, CFBundleExecutable: 'App', CFBundleShortVersionString: '1.2.5', CFBundleVersion: '20261110120000',
-    CAPACITOR_DEBUG: 'false', MinimumOSVersion: '15.0', DTSDKName: 'iphoneos26.5', UIDeviceFamily: [1], UIBackgroundModes: ['remote-notification'],
+    CAPACITOR_DEBUG: 'false', MinimumOSVersion: '15.0', DTSDKName: 'iphoneos26.5', UIDeviceFamily: [1], ITSAppUsesNonExemptEncryption: false, UIBackgroundModes: ['remote-notification'],
   });
   write(join(facts, 'appex', APPEX, 'info.json'), {
     CFBundleIdentifier: extension.bundleId, CFBundleExecutable: 'HideNotification', CFBundleShortVersionString: '1.2.5', CFBundleVersion: '20261110120000',
@@ -68,8 +68,15 @@ describe('the release gate on the signed app', () => {
   const spoil = {
     'a debug switch left on': [(app) => edit('info.json', (v) => { v.CAPACITOR_DEBUG = 'true'; }), 'CAPACITOR_DEBUG'],
     'an App Transport Security exception': [(app) => edit('info.json', (v) => { v.NSAppTransportSecurity = { NSAllowsArbitraryLoads: true }; }), 'App Transport Security'],
-    'an export compliance answer given by the app': [(app) => edit('info.json', (v) => { v.ITSAppUsesNonExemptEncryption = false; }), 'export compliance question'],
-    'an export compliance code given by the app': [(app) => edit('info.json', (v) => { v.ITSEncryptionExportComplianceCode = 'x'; }), 'export compliance question'],
+    'no export compliance answer in the app': [(app) => edit('info.json', (v) => { delete v.ITSAppUsesNonExemptEncryption; }), 'ITSAppUsesNonExemptEncryption'],
+    'an export compliance answer of true': [(app) => edit('info.json', (v) => { v.ITSAppUsesNonExemptEncryption = true; }), 'ITSAppUsesNonExemptEncryption'],
+    'an export compliance code in the app': [(app) => edit('info.json', (v) => { v.ITSEncryptionExportComplianceCode = 'x'; }), 'export compliance code'],
+    'another bundle id': [(app) => edit('info.json', (v) => { v.CFBundleIdentifier = 'me.example.other'; }), 'bundle id is'],
+    'another version': [(app) => edit('info.json', (v) => { v.CFBundleShortVersionString = '9.9.9'; }), 'version is'],
+    'an iPad build': [(app) => edit('info.json', (v) => { v.UIDeviceFamily = [1, 2]; }), 'iPhone only'],
+    'an older minimum iOS': [(app) => edit('info.json', (v) => { v.MinimumOSVersion = '13.0'; }), 'minimum iOS'],
+    'allowed navigation': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', server: { allowNavigation: ['https://example.test'] } }), 'allows no navigation'],
+    'cleartext traffic': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', server: { cleartext: true } }), 'server url'],
     'an older SDK': [(app) => edit('info.json', (v) => { v.DTSDKName = 'iphoneos18.5'; }), 'SDK'],
     'another build number': [(app) => edit('info.json', (v) => { v.CFBundleVersion = '1'; }), 'build number'],
     'Capacitor logging on': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'debug' }), 'logging'],

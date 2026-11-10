@@ -75,7 +75,8 @@ ensure_device() {
 
 case "$command" in
     guard)
-        others=$(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name "$slug" 2> /dev/null | sort || true)
+        # The machine's release lock and upload record (mini-release.sh) are files beside the branch folders, not branches.
+        others=$(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name "$slug" ! -name '.*' 2> /dev/null | sort || true)
         count=$(printf '%s' "$others" | grep -c . || true)
         if (( count >= max_other_branches )); then
             printf 'refusing: %s other branch folders already hold build state on this machine:\n%s\n' "$count" "$others" >&2

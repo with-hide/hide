@@ -69,8 +69,10 @@ describe('what the project builds for the store', () => {
     expect(want.entitlements['application-identifier']).toBe(`${want.teamId}.${want.bundleId}`);
   });
 
-  it('leaves the export compliance answer to the operator, and ships a privacy manifest in the app', () => {
-    expect(read('ios/App/App/Info.plist')).not.toMatch(/ITSAppUsesNonExemptEncryption|ITSEncryptionExportComplianceCode/);
+  it('states the operator\'s export compliance answer, and ships a privacy manifest in the app', () => {
+    const plist = read('ios/App/App/Info.plist');
+    expect(plist).toMatch(/<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/);
+    expect(plist).not.toContain('ITSEncryptionExportComplianceCode');
     expect(read('ios/App/App.xcodeproj/project.pbxproj')).toContain('PrivacyInfo.xcprivacy in Resources');
   });
 });
