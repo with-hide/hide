@@ -53,6 +53,7 @@ function run(title, command, commandArgs, options = {}) {
 
 run("the CLI reference reader finds every command of the real usage strings", "node", ["--test", "scripts/docs/*.test.mjs"]);
 mkdirSync(generated, { recursive: true });
+mkdirSync(join(content, "reference"), { recursive: true });
 run("guides and features hold each other", "node", ["scripts/docs/check-features.mjs", content, "--write", join(generated, "used-in.json")]);
 
 const cli = run("CLI reference from hide --help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
