@@ -13,8 +13,8 @@
       "expect": 39
     },
     "browser.spec.ts::browser: a page opens from an agent's pane, follows its area, moves without loading again, freezes under the palette and ends with its display": {
-      "lines": 212,
-      "expect": 56
+      "lines": 194,
+      "expect": 54
     },
     "browser.spec.ts::area cycle native: page input previews one exact area, releases once and cancels": {
       "lines": 161,
