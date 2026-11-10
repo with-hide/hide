@@ -178,7 +178,7 @@ export async function taskRow(page: Page, pane: string, goal: string): Promise<L
  * them waits out its whole timeout (with-hide/hide-private#130).
  */
 export async function hoverSettledTaskRow(row: Locator, state: string): Promise<void> {
-  await expect(row).toHaveAttribute("data-task-state", state, { timeout: 45_000 });
+  await expect(row).toHaveAttribute("data-task-state", state, { timeout: 45_000 }); // wait-ok: the core settles the task row in its group
   await row.hover();
 }
 
