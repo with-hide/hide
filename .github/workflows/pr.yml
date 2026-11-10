@@ -460,7 +460,9 @@ jobs:
         run: bash scripts/verify-web.sh web playwright-install
       - name: Check the guides, features and CLI reference, and build the site
         timeout-minutes: 10
-        run: node scripts/docs/check-all.mjs
+        # The hide just built above, from this checkout, is the one authority on which
+        # commands exist; --ci makes a missing binary a failure before anything is generated.
+        run: node scripts/docs/check-all.mjs --ci --hide "$GITHUB_WORKSPACE/target/debug/hide"
 
   # What differs on Windows (issue #293), as a required lane: the whole
   # workspace compiles for Windows, hided's pane bootstrap and end-to-end

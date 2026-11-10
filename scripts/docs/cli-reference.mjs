@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// The CLI reference's source of truth, read from the installed `hide` (docs-user-docs P0): every command
+// The CLI reference's source of truth is the help of ONE `hide` binary, which the caller names (CI: the one built from
+// this checkout in the same job): every command
 // `hide --help` lists, with the syntax and options of the ones `contracts/hide-cli.json` also describes.
 // A person writes one line and an example per command in the notes file; this fails on a command with no
 // note and on a note whose command is gone, then prints the reference as Markdown.
 // Usage: cli-reference.mjs <hide-binary> <contracts/hide-cli.json> <notes.json> > cli.md
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 const isArgument = (word) => /^[<\[(-]/.test(word) || word === "…";
 
@@ -78,45 +78,6 @@ export function commandsOf(help) {
   return commands;
 }
 
-/** A Rust string literal's value: `\n`, `\"`, `\\`, and a `\` at a line's end that swallows the next line's indent. */
-function rustString(raw) {
-  return raw.replace(/\\\n\s*|\\(.)/g, (whole, char) => (char === undefined ? "" : char === "n" ? "\n" : char === "t" ? "\t" : char));
-}
-const STRING = String.raw`"((?:[^"\\]|\\[\s\S])*)"`;
-
-/**
- * `hide --help` as the source writes it: `help_text()` in hided/src/cli.rs joins its own opening lines and, for each
- * element of its list, the usage of a command module (`crate::x::USAGE`), a constant of cli.rs
- * (`NAME_USAGE.trim_start_matches("usage: ")`) or a string, each line indented by two spaces. Reading it here makes the
- * source, not whichever `hide` happens to be installed, the authority on which commands exist.
- */
-export function sourceHelp(root) {
-  const dir = join(root, "hided/src");
-  const cli = readFileSync(join(dir, "cli.rs"), "utf8");
-  const start = cli.indexOf("fn help_text()");
-  if (start < 0) throw new Error("hided/src/cli.rs: fn help_text() not found; the CLI reference reads the commands from it");
-  const body = cli.slice(start, cli.indexOf("\n}\n", start));
-  const opening = body.match(new RegExp(`String::from\\(\\s*${STRING}`))?.[1];
-  const list = body.match(/for lines in \[([\s\S]*?)\] \{/)?.[1];
-  if (opening === undefined || list === undefined) throw new Error("hided/src/cli.rs: help_text() no longer has the shape the CLI reference reads (String::from(\"...\") and `for lines in [...]`)");
-  const constantOf = (file, name) => {
-    const text = readFileSync(file, "utf8");
-    const found = text.match(new RegExp(`const ${name}: &str = ${STRING};`));
-    if (!found) throw new Error(`${file}: const ${name} not found`);
-    return rustString(found[1]);
-  };
-  const lines = [rustString(opening)];
-  const element = new RegExp(`crate::(\\w+)::USAGE|([A-Z_]+)\\.trim_start_matches\\("usage: "\\)|${STRING}`, "g");
-  let count = 0;
-  for (const found of list.matchAll(element)) {
-    count++;
-    const usage = found[1] ? constantOf(join(dir, `${found[1]}.rs`), "USAGE") : found[2] ? constantOf(join(dir, "cli.rs"), found[2]).replace(/^usage: /, "") : rustString(found[3]);
-    lines.push(usage.split("\n").map((line) => `  ${line}`).join("\n") + "\n");
-  }
-  if (count === 0) throw new Error("hided/src/cli.rs: help_text()'s list is empty to the CLI reference");
-  return lines.join("");
-}
-
 /**
  * The problems between the commands and the notes, naming which source found each: a command with no note, and a
  * note whose command the source no longer has. `sources` maps a label to a `Map` of commands; the first is the authority
@@ -128,11 +89,11 @@ export function noteProblems(sources, notes) {
   for (const [label, commands] of entries) {
     for (const name of commands.keys()) if (!notes[name]) missing.set(name, [...(missing.get(name) ?? []), label]);
   }
-  const authority = entries[0][1];
+  const [[authorityLabel, authority]] = entries;
   const stale = Object.keys(notes).filter((name) => !authority.has(name));
   const problems = [];
   if (missing.size) problems.push(`commands with no note (${missing.size}): ${[...missing].map(([name, labels]) => `${name} [${labels.join(" + ")}]`).join(", ")}`);
-  if (stale.length) problems.push(`notes for commands that are gone (${stale.length}): ${stale.join(", ")}`);
+  if (stale.length) problems.push(`notes for commands that are gone (${stale.length}): ${stale.join(", ")} [${authorityLabel}]`);
   return problems;
 }
 
@@ -144,18 +105,14 @@ if (!notesPath) throw new Error("usage: cli-reference.mjs <hide-binary> <hide-cl
 const help = execFileSync(hide, ["--help"], { encoding: "utf8" });
 const contract = new Map(JSON.parse(readFileSync(contractPath, "utf8")).commands.map((command) => [command.command, command]));
 const notes = JSON.parse(readFileSync(notesPath, "utf8"));
-const root = process.env.HIDE_DOCS_SOURCE_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), "../..");
-const fromSource = commandsOf(sourceHelp(root));
-const fromBinary = commandsOf(help);
-if (fromSource.size === 0) throw new Error("no command found in hided/src; the CLI reference cannot hold the commands to their notes");
-// The source is the authority; the installed hide is a second reader and may be older or newer than it.
-const problems = noteProblems({ "source": fromSource, "hide --help": fromBinary }, notes);
+const commands = commandsOf(help);
+if (commands.size === 0) throw new Error(`${hide} --help listed no command; the reference cannot hold the commands to their notes`);
+const problems = noteProblems({ [hide]: commands }, notes);
 if (problems.length) {
   console.error(problems.join("\n"));
   process.exit(1);
 }
 
-const commands = fromSource;
 const byFirstWord = new Map();
 for (const [name, info] of commands) {
   const first = name.split(" ")[0];
@@ -180,5 +137,5 @@ for (const [first, list] of byFirstWord) {
   }
 }
 console.log(out.join("\n"));
-console.error(`ok: ${fromSource.size} commands from the source (${fromBinary.size} from the installed hide --help), ${[...commands.keys()].filter((n) => contract.has(n)).length} also in the contract`);
+console.error(`ok: ${commands.size} commands from ${hide} --help, ${[...commands.keys()].filter((n) => contract.has(n)).length} also in the contract`);
 }

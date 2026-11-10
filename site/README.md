@@ -31,13 +31,13 @@ From the repository root:
 
 ```sh
 bash scripts/verify-web.sh install docs          # the web shell's packages and the site's own
-node scripts/docs/check-all.mjs --hide <a built hide>
+node scripts/docs/check-all.mjs --hide target/debug/hide
 ```
 
 The site is pinned to pnpm 10.34.9 (`packageManager` in `package.json`, and the docs lane's `pnpm/action-setup`): run pnpm from inside `site/` (`cd site && pnpm install --frozen-lockfile`) so it switches to that version; a machine whose default is pnpm 12 fails with `ERR_PNPM_BAD_PM_VERSION` when it is pointed at `site/` from outside with `--dir`.
 
-`check-all` is the docs lane's command (`docs/TESTING.md`, The user docs): it checks that guides and features name each other, generates the CLI reference from the source of `hide --help` (`help_text()` in `hided/src/cli.rs`, so the answer does not depend on which `hide` is installed) and `contracts/hide-cli.json` (failing on a command with no note, and on a note for a gone command), builds the live parts and builds the site into `site/dist/`.
-`--hide` names a second reader of the commands, a `hide` whose `--help` lists them, such as `/Applications/hide.app/Contents/Resources/hide` or a debug build; the default is `target/debug/hide`.
+`check-all` is the docs lane's command (`docs/TESTING.md`, The user docs): it checks that guides and features name each other, generates the CLI reference from the `--help` of one `hide` binary and `contracts/hide-cli.json` (failing on a command with no note, and on a note for a gone command), builds the live parts and builds the site into `site/dist/`.
+`--hide <path>` (or `HIDE_BIN`) names the one `hide` whose `--help` owns which commands exist; the default is `target/debug/hide`, a build of this checkout (`bash scripts/verify-cargo.sh build -p hided --bin hide`). An installed app's `hide`, such as `/Applications/hide.app/Contents/Resources/hide`, is accepted but may be older than this commit, so `check-all` says so: a local pass with it is a limited check, and CI, which builds `hide` from the commit and passes it with `--ci`, is the gate.
 `--checks-only` runs the first two steps for a quick loop.
 For writing pages with a reload, run `check-all` once (it writes the generated files and builds the live parts), then `cd site && pnpm dev`; the live frames load only from the built site, so check them with the preview below.
 The download-policy tests stay a plain `node` run:
