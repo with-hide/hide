@@ -67,6 +67,13 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   It does not see a hand-written `new Promise((resolve) => setTimeout(resolve, ms))`, which is the same mistake and is not allowed.
   Clippy refuses `std::thread::sleep` in Rust (see [Writing a Rust test](#writing-a-rust-test)).
   Wait for the state the next step needs: a diagnostic `kind` with its subject ID, a snapshot field, an engine answer, the bytes in a pane's input log.
+- No new timed wait enters a test unannounced: `scripts/check-timed-waits.py` (the `policy` lane, `python3 scripts/check-timed-waits.py` locally) counts a `timeout:` override in `web/e2e` and `desktop/e2e`, and a `thread::sleep` or `tokio::time::sleep` in Rust test code, per file against `scripts/timed-waits-baseline.json`.
+  A file with more of them than its baseline fails, and a file the baseline does not list may have none.
+  The baseline holds counts and never line numbers, so moving a line, or a change that removes waits, cannot fail it; after removing waits, `python3 scripts/check-timed-waits.py --lower` brings the numbers down, and nothing raises them: CI runs the check with `--base HEAD^1` and fails a baseline number higher than the base commit's for that file (0 for a file it does not list, the old file's number for one `git` shows renamed, whose key you move by hand).
+  A sleep imported by name (`use tokio::time::sleep;` then `sleep(d)`, also as an alias or through a glob) is counted at its calls within the import's brace scope.
+  Blocks inherit their enclosing scope, modules inherit through `use super::*`, and a local function with the same name shadows an inherited timer; an import in another scope never turns an unrelated function's calls into waits.
+  A wait that waits for a named state ends its line with `// wait-ok: <the state it waits for>` (a long first start on a cold runner, the next poll of a pid file); the reason is read in review, and an annotated wait is not counted.
+  The check does not see a wait spelled another way (a hand-written `setTimeout` promise, `Atomics.wait`), which is the same mistake and is not allowed either.
 - Wait for the readiness the next step actually depends on.
   A healthy HTTP answer is not a subscribed socket, a delivered first snapshot, or a terminal that accepts input.
 - A row the snapshot shows is not a state the core has acted on.
@@ -323,6 +330,9 @@ A piece that another open change is still building is marked as pending with the
    - A diagnostic `kind`, read from the snapshot frames the page receives (`observeDiagnostics` in the same file; `recordWire` in `web/e2e/s7.spec.ts`).
      Wait for `pane.focus.followed`, not for "a moment after the click".
    - What the fixture can read from the real systems: the bytes in a pane's input log, an engine answer, a file the core wrote.
+   - What the daemon published or logged, through `web/e2e/daemon-actions.ts`: `withControl(daemon, (control) => control.until(read, what, ms))` waits for a snapshot field and returns it (`tabsOf`, `corePaneFocus` and `agentIn` are the reads), and `untilLogged(daemon, match, count, what)` waits for the core's own structured log (`loggedCount` counts it) to hold `count` records with the fields of `match`.
+     The log is the signal for a decision whose outcome is that nothing happens: the daemon logs `push.skipped` with its `reason` for a notice it does not push, so `pushSkippedByMode` in `web/e2e/mobile.spec.ts` takes `loggedCount` before the action, waits for one more record, and then asserts the push list, instead of sleeping three seconds and hoping a push would have arrived by then.
+     Take the count before the action and wait for it to grow; a count taken after can already include the record you wait for.
    When there is nothing to wait for, `web/e2e/wait.ts` has the only sleeps a spec may use, one per reason:
    - `animationsFinished(page)` for the colour transitions before a capture; it waits for the page's finite animations, not for a time.
    - `quietFor(page, ms, why)` for a window in which something must not happen (nothing is sent, the row does not move); `why` states the claim.

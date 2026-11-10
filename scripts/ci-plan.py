@@ -423,6 +423,7 @@ POLICY_ONLY = (
     "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh",
     "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
+    "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-agent-folders.sh",
