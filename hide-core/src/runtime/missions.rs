@@ -142,8 +142,8 @@ pub struct AnswerView {
 }
 
 /// Why a waiting answer is not typed yet, in the words the operator can act
-/// on: the Conductor works, the operator's own typing is in its input, or a
-/// menu of its own waits; every other wait ends on its own and has no word.
+/// on: the Conductor works, the operator's own typing is in its input, the
+/// quiet period after either, or a menu of its own waits; every other wait ends on its own and has no word.
 /// `Forced` is the press of `지금 보내기`, until the doorbell types it or
 /// finds text in the input and gives the earlier reason back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -151,6 +151,9 @@ pub struct AnswerView {
 pub enum AnswerHold {
     Working,
     Typing,
+    /// The quiet period after the Conductor's last work or input: the input is
+    /// empty, but a press may not be wanted yet, so it says what happened.
+    Recent,
     Approval,
     Other,
     Forced,

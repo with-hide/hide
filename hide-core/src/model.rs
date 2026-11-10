@@ -10216,6 +10216,7 @@ mod wire_enum_tests {
             let holds = [
                 AnswerHold::Working,
                 AnswerHold::Typing,
+                AnswerHold::Recent,
                 AnswerHold::Approval,
                 AnswerHold::Other,
                 AnswerHold::Forced,
@@ -10224,6 +10225,7 @@ mod wire_enum_tests {
                 match variant {
                     AnswerHold::Working
                     | AnswerHold::Typing
+                    | AnswerHold::Recent
                     | AnswerHold::Approval
                     | AnswerHold::Other
                     | AnswerHold::Forced => {}

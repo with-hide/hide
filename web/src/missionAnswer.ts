@@ -55,7 +55,7 @@ export function answerView(mission: AnswerSource, device: string | null, pressed
   const answer = mission.answer?.key === key ? mission.answer : null;
   const resending = pressed?.resend === true && answer?.state === "unconfirmed";
   const shown = answer && !resending ? { text: answer.text, state: answer.state, hold: answer.hold } : pressed ? { text: pressed.text, state: "sending" as const, hold: undefined } : null;
-  const sent: AnswerView["sent"] = shown ? { text: shown.text, state: shown.state, ...sentLine(shown.state, mission.answer_failed, shown.hold), canNow: shown.state === "waiting" && (shown.hold === "working" || shown.hold === "typing") } : null;
+  const sent: AnswerView["sent"] = shown ? { text: shown.text, state: shown.state, ...sentLine(shown.state, mission.answer_failed, shown.hold), canNow: shown.state === "waiting" && (shown.hold === "working" || shown.hold === "typing" || shown.hold === "recent") } : null;
   const gone = !mission.conductor.present;
   const offline = mission.stale;
   const unsupported = !mission.conductor.takes_answers;
@@ -76,6 +76,7 @@ export function answerView(mission: AnswerSource, device: string | null, pressed
 const HOLD_WORD: Record<MissionAnswerHold, MessageKey> = {
   working: "mission.banner.hold.working",
   typing: "mission.banner.hold.typing",
+  recent: "mission.banner.hold.recent",
   approval: "mission.banner.hold.approval",
   forced: "mission.banner.hold.forced",
   other: "mission.banner.waitingTurn",

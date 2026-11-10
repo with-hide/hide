@@ -117,7 +117,8 @@ impl Hold {
         use crate::runtime::missions::AnswerHold;
         match self {
             Self::Working => AnswerHold::Working,
-            Self::Draft | Self::Quiet | Self::ComposerUnread => AnswerHold::Typing,
+            Self::Draft | Self::ComposerUnread => AnswerHold::Typing,
+            Self::Quiet => AnswerHold::Recent,
             Self::Blocked | Self::AwaitingOperator => AnswerHold::Approval,
             _ => AnswerHold::Other,
         }
@@ -385,6 +386,10 @@ struct Tried {
     delay: u64,
     /// The bell failed rather than was refused.
     failed: bool,
+    /// The try was a mission answer pressed with `지금 보내기`: the press is
+    /// never held back by an ordinary try's backoff, and once tried it, and the
+    /// answer it falls back to when the input holds text, wait like any other.
+    forced: bool,
 }
 
 /// A pane's last bell: the episode it was typed in and the letter it rang
@@ -798,6 +803,7 @@ impl Doorbell {
                             retry_at: now.saturating_add(delay),
                             delay,
                             failed: false,
+                            forced: false,
                         },
                     );
                 }
@@ -840,6 +846,7 @@ impl Doorbell {
                             retry_at,
                             delay,
                             failed: true,
+                            forced: false,
                         },
                     );
                 }
@@ -906,12 +913,9 @@ impl Doorbell {
                 continue;
             };
             let episode = Episode::from(&observed);
-            if !work.forced
-                && self
-                    .answer_tried
-                    .get(&work.mission)
-                    .is_some_and(|last| last.episode == episode && now < last.retry_at)
-            {
+            if self.answer_tried.get(&work.mission).is_some_and(|last| {
+                last.episode == episode && now < last.retry_at && !(work.forced && !last.forced)
+            }) {
                 continue;
             }
             *count += 1;
@@ -938,6 +942,7 @@ impl Doorbell {
                             retry_at: now.saturating_add(RETRY_FIRST_MS),
                             delay: RETRY_FIRST_MS,
                             failed: false,
+                            forced: work.forced,
                         },
                     );
                 }
@@ -4608,6 +4613,24 @@ mod tests {
         bell.pass(&mut doorbell, start + RETRY_FIRST_MS);
         assert_eq!(bell.typed().len(), 1);
         assert_eq!(bell.attempts(), 1);
+    }
+
+    /// What an answer says it waits for: the quiet period after work is not
+    /// "something is typed", so the banner never claims text the input lacks.
+    #[test]
+    fn an_answers_hold_names_what_the_operator_can_see_or_lift() {
+        use crate::runtime::missions::AnswerHold;
+        for (hold, shown) in [
+            (Hold::Working, AnswerHold::Working),
+            (Hold::Draft, AnswerHold::Typing),
+            (Hold::ComposerUnread, AnswerHold::Typing),
+            (Hold::Quiet, AnswerHold::Recent),
+            (Hold::Blocked, AnswerHold::Approval),
+            (Hold::AwaitingOperator, AnswerHold::Approval),
+            (Hold::NotReady, AnswerHold::Other),
+        ] {
+            assert_eq!(hold.answer_hold(), shown, "{hold:?}");
+        }
     }
 
     /// A Bell whose only pending input is the operator's answer to a
