@@ -280,16 +280,16 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     run, owner = runtime.run, runtime.owner
     report["agents"].extend({"id": key} for key in measured)
     for key in measured:
-        unmeasured = ROUTES[rows[key]["herdr_kind"]].get("unmeasured")
+        unmeasured = ROUTES[rows[key]["agent_cli"]].get("unmeasured")
         if unmeasured:
             cells.settle_agent(table, key, unmeasured)
-    measured = [key for key in measured if "unmeasured" not in ROUTES[rows[key]["herdr_kind"]]]
-    kinds = [rows[key]["herdr_kind"] for key in measured]
+    measured = [key for key in measured if "unmeasured" not in ROUTES[rows[key]["agent_cli"]]]
+    kinds = [rows[key]["agent_cli"] for key in measured]
     known = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["known"]))
     roots = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["roots"]))
     shared = {operator / rel: form for kind in kinds for rel, form in ROUTES[kind]["shared"].items()}
     guard = ConfigGuard(run / "configuration-backup", known, roots, shared=shared)
-    executables = {key: shutil.which(rows[key]["herdr_kind"]) for key in measured}
+    executables = {key: shutil.which(rows[key]["agent_cli"]) for key in measured}
     sandbox = WriteSandbox(run, runtime.short, operator, runtime.state, checkout=runtime.checkout,
                            routing=operator_routing(os.environ),
                            executables=[runtime.hided.with_name(exe("hide-holder")),
@@ -301,7 +301,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         sandbox.verify(owner, {**clean_env(), "TMPDIR": str(run / "agent-tmp")}, Path(outside).resolve())
     ready = []
     for key in measured:
-        kind = rows[key]["herdr_kind"]
+        kind = rows[key]["agent_cli"]
         entry = ROUTES[kind]
         agent = next(row for row in report["agents"] if row["id"] == key)
         if not executables[key]:
@@ -392,7 +392,7 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
     node = shutil.which("node")
     if node:
         (runtime.bin / "node").symlink_to(Path(node).resolve())
-    fallback = [key for key in measured if fake_private.exception(rows[key], clis.table().get(rows[key]["herdr_kind"]))]
+    fallback = [key for key in measured if fake_private.exception(rows[key], clis.table().get(rows[key]["agent_cli"]))]
     guard = None
     legacy_ready = []
     if fallback:
@@ -403,13 +403,13 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
         for key in fallback:
             agent = next(agent for agent in report["agents"] if agent["id"] == key)
             agent["private_home"] = {"enabled": False,
-                                     "exception": fake_private.exception(rows[key], clis.table().get(rows[key]["herdr_kind"]))}
+                                     "exception": fake_private.exception(rows[key], clis.table().get(rows[key]["agent_cli"]))}
     ready = []
     for key in measured:
         if key in fallback:
             continue
         row = rows[key]
-        kind = row["herdr_kind"]
+        kind = row["agent_cli"]
         pin = clis.table().get(kind)
         agent = {"id": key}
         report["agents"].append(agent)
@@ -448,7 +448,7 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, 
     agents ready to measure."""
     ready = []
     for key in measured:
-        kind = rows[key]["herdr_kind"]
+        kind = rows[key]["agent_cli"]
         agent = {"id": key}
         report["agents"].append(agent)
         program = ci.executable(fixture_bin, kind)
@@ -666,12 +666,12 @@ def main(argv=None):
                 ready.remove(key)
             report["measured_project"] = register_measured(daemon, root)
             untrusted = repository(runtime, "repo-untrusted")
-            for kind in {rows[key]["herdr_kind"] for key in ready} & TRUST.keys():
+            for kind in {rows[key]["agent_cli"] for key in ready} & TRUST.keys():
                 path, write = TRUST[kind]
                 write(runtime.home / path, root)
             if fixture_bin:
                 for key in ready:
-                    ci.fixture_config(runtime, rows[key]["herdr_kind"])
+                    ci.fixture_config(runtime, rows[key]["agent_cli"])
                     for name, reason in ci.FIXTURE_UNIMITATED.items():
                         cells.settle(table, key, name, cells.NOT_MEASURED, reason)
             controller = Controller(runtime, args.controller_provider.resolve() if args.controller_provider else None)
@@ -688,12 +688,12 @@ def main(argv=None):
                                        if legacy and hasattr(runtime, "journey_sandboxes") else sandbox)
                 journey = Journey(runtime, daemon, controller, table, rows[key], root, agent, reader,
                                   branch=f"journey/{run_id}-{key}", created=report["created"],
-                                  sessions=(ROUTES[rows[key]["herdr_kind"]]["sessions"](operator, runtime.home)
+                                  sessions=(ROUTES[rows[key]["agent_cli"]]["sessions"](operator, runtime.home)
                                             if legacy else runtime.home),
-                                  route=({**route(rows[key]["herdr_kind"], runtime.home),
+                                  route=({**route(rows[key]["agent_cli"], runtime.home),
                                           **({"fake_env": agent["fake_env"]} if fake else {}),
                                           **({"key_env": agent["key_env"]} if agent.get("key_env") else {})} if legacy
-                                         else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
+                                         else {"args": [], "env": ci.route_names(rows[key]["agent_cli"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   composer_judge=composer_judge,
                                   model=rows[key]["model_flag"] and models.get(key), brief_start=not fixture_bin,
@@ -712,7 +712,7 @@ def main(argv=None):
                     if running is not None and len(running) > 1:
                         report.setdefault("product_findings", []).append(
                             f"{len(running)} OpenCode servers of the run ran after Sleep and Wake: {running}")
-                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if legacy else
+                untrusted_reason = (ROUTES[rows[key]["agent_cli"]]["untrusted"] if legacy else
                                     ci.FIXTURE_UNTRUSTED if fixture_bin else None)
                 if untrusted_reason:
                     cells.settle(table, key, "start_untrusted", cells.NOT_MEASURED,

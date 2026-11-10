@@ -23,7 +23,7 @@ spec.loader.exec_module(record)
 
 CONTRACT = load_contract(ROOT)
 AGENTS = [row["id"] for row in active_rows(CONTRACT)]
-KINDS = {row["id"]: row["herdr_kind"] for row in active_rows(CONTRACT)}
+KINDS = {row["id"]: row["agent_cli"] for row in active_rows(CONTRACT)}
 
 
 def agy_manifest(system, version="1.4.9"):

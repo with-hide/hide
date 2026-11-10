@@ -40,7 +40,7 @@ const state = (pending: boolean, agents: KitAgent[], providers: ReturnType<typeo
 });
 
 /** What the gate sent for the operator's choice: the sign-in probe it asks for while open is not part of it. */
-const choices = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => !["ai_settings", "first_run_draft", "herdr_profiles_list"].includes(event.kind));
+const choices = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => !["ai_settings", "first_run_draft", "machine_profiles_list"].includes(event.kind));
 
 const tile = (id: string, on: string) => document.querySelector(`[data-onboarding-tile="${id}:${on}"]`) as HTMLElement | null;
 const continueButton = () => document.querySelector("[data-onboarding-apply]") as HTMLButtonElement;

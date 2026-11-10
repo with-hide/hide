@@ -76,9 +76,9 @@ import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
 function engineRowLabel(state: string | null, t: TFunction<"translation">): string | null {
-  if (state === "unconfigured" || state === "socket_missing") return t("sidebar.herdrSocketMissing");
+  if (state === "unconfigured" || state === "socket_missing") return t("sidebar.engineSocketMissing");
   if (state === "not_connected" || state === "unreachable" || state === "stale") {
-    return t("sidebar.herdrNotResponding");
+    return t("sidebar.engineNotResponding");
   }
   return null;
 }

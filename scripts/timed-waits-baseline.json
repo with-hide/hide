@@ -60,7 +60,7 @@
     "web/e2e/agent-sleep.spec.ts": 9,
     "web/e2e/agent-tab-groups.spec.ts": 2,
     "web/e2e/agent-tab-names.spec.ts": 1,
-    "web/e2e/agents-follow-herdr.spec.ts": 6,
+    "web/e2e/agents-follow-engine.spec.ts": 6,
     "web/e2e/agents-tab.spec.ts": 10,
     "web/e2e/antigravity-hooks.spec.ts": 13,
     "web/e2e/app-update.spec.ts": 3,

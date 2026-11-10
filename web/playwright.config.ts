@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { testBrowserArgs } from "./e2e/browser-launch.cjs";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -41,7 +42,7 @@ export default defineConfig({
     // terminal renderer, so the shell runs the DOM renderer it falls back to
     // when WebGL is missing. A spec that does need WebGL sets its own
     // `launchOptions`.
-    launchOptions: { args: ["--disable-webgl"] },
+    launchOptions: { args: testBrowserArgs(["--disable-webgl"]) },
     // Wide enough for a pinned lane to dock beside Agent Views (PRD
     // right-lane B19); a test about a narrower body sets its own.
     viewport: { width: 1920, height: 1080 },

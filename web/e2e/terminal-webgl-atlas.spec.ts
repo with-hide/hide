@@ -13,9 +13,10 @@ import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { fixWebglAtlasSlots } from "../src/webglAtlasSlots";
+import { testBrowserArgs } from "./browser-launch.cjs";
 
 // WebGL is the subject; the suite's --disable-webgl would test the DOM renderer.
-test.use({ launchOptions: { args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] } });
+test.use({ launchOptions: { args: testBrowserArgs(["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]) } });
 
 const resolve = createRequire(import.meta.url).resolve;
 const ORIGIN = "http://atlas.test";

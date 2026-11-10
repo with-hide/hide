@@ -7,6 +7,11 @@
 
 const fs = require("node:fs");
 const { app } = require("electron");
+const { disabledTestFeatures } = require("../../web/e2e/browser-launch.cjs");
+
+// Merge the launcher's effective features before app readiness. An explicit
+// executable (the fused candidate) runs without Playwright's default loader.
+if (process.platform === "win32") app.commandLine.appendSwitch("disable-features", disabledTestFeatures(app.commandLine.getSwitchValue("disable-features")));
 
 const file = app.commandLine.getSwitchValue("hide-e2e-focus-report");
 if (!file) throw new Error("focus-guard.cjs needs --hide-e2e-focus-report=<file>");

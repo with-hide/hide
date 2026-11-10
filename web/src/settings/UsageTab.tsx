@@ -17,7 +17,7 @@ export function UsageTab({ actions }: { actions: Actions }) {
   const [now] = useState(Date.now);
   return <div data-usage-settings="true">
     {AGENT_ADAPTERS.filter(hasLimits).map((adapter) => {
-      const id = adapter.herdr_kind;
+      const id = adapter.agent_cli;
       const cell = agents?.find((row) => row.agent === id)?.limits;
       const hidden = preferences?.hidden.includes(id) ?? false;
       return <Group key={id} data-usage-agent={id}>
@@ -38,7 +38,7 @@ export function UsageTab({ actions }: { actions: Actions }) {
     })}
     <p className="mb-xl text-body text-muted-foreground">{t("usage.note")}</p>
     <Group title={t("usage.noLimits")} data-usage-unsupported="true">
-      {AGENT_ADAPTERS.filter((adapter) => !hasLimits(adapter)).map((adapter) => <Row key={adapter.id} label={<span className="flex items-center gap-sm"><AgentMark kind={adapter.herdr_kind} />{adapter.label}</span>} detail={<Note>{absenceReason(adapter, t)}</Note>} />)}
+      {AGENT_ADAPTERS.filter((adapter) => !hasLimits(adapter)).map((adapter) => <Row key={adapter.id} label={<span className="flex items-center gap-sm"><AgentMark kind={adapter.agent_cli} />{adapter.label}</span>} detail={<Note>{absenceReason(adapter, t)}</Note>} />)}
     </Group>
   </div>;
 }

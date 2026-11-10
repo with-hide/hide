@@ -38,7 +38,7 @@ it.each([
 
 // An agent whose mark is withdrawn moves to the manifest's `monogram` list and draws its initials there (docs/BRAND.md); today every adapter has a bundled mark.
 const MONOGRAMS: ReadonlySet<string> = new Set((manifest.monogram as { id: string }[]).map((row) => row.id));
-it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind, row.label]))("draws the logo or monogram of %s, never the neutral mark", (id, engineKind, label) => {
+it.each(AGENT_ADAPTERS.map((row) => [row.id, row.agent_cli, row.label]))("draws the logo or monogram of %s, never the neutral mark", (id, engineKind, label) => {
   const markup = renderToStaticMarkup(<AgentMark kind={engineKind} />);
   expect(markup).toContain(`data-agent-mark="${engineKind}"`);
   if (MONOGRAMS.has(id)) expect(markup).toContain(`>${monogram(label)}<`);
@@ -88,7 +88,7 @@ it("derives all seven supported phone starts and the existing default from the g
     { id: "agy", label: "Antigravity" },
   ]);
   expect(START_KINDS.map((row) => row.id)).toEqual(PROVIDER_KINDS);
-  expect(START_KINDS).toEqual(AGENT_ADAPTERS.filter((row) => row.can_start).map((row) => ({ id: row.herdr_kind, label: row.picker_label })));
+  expect(START_KINDS).toEqual(AGENT_ADAPTERS.filter((row) => row.can_start).map((row) => ({ id: row.agent_cli, label: row.picker_label })));
   expect(selectionOf(null, NO_CHOICE).kind).toBe("claude");
   expect(agentAdapter("future-agent")).toBeUndefined();
 });

@@ -2171,7 +2171,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
         "agent_definitions_read" => decode!(AgentDefinitionsReadPayload, AgentDefinitionsRead),
-        "herdr_profiles_list" => decode!(MachineProfilesListPayload, MachineProfilesList),
+        // `herdr_profiles_list` is the name an earlier build sent; an open screen of that build still sends it.
+        "machine_profiles_list" | "herdr_profiles_list" => {
+            decode!(MachineProfilesListPayload, MachineProfilesList)
+        }
         "machine_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),

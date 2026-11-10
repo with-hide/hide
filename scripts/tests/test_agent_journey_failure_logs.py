@@ -83,7 +83,7 @@ class FailedCell(unittest.TestCase):
         controller = SimpleNamespace(read_pane=lambda pane, lines=200: self.screen)
         self.table = {"claude": {name: cells.cell(cells.PENDING, "") for name in cells.CELLS}}
         self.record = {"id": "claude"}
-        journey = Measured(runtime, None, controller, self.table, {"id": "claude", "herdr_kind": "claude"}, None,
+        journey = Measured(runtime, None, controller, self.table, {"id": "claude", "agent_cli": "claude"}, None,
                            self.record, None, branch="journey/x-claude", created=[], sessions=self.run_dir,
                            route={}, composer_judge=None, failure_logs=FailureLogs(self.hided.output, **caps))
         journey.hided, journey.pane = self.hided, "w1:p1"

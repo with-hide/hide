@@ -222,7 +222,7 @@ class PrivateHome(unittest.TestCase):
         for row in contract:
             if row['fake_home']['status'] != 'proven':
                 continue
-            kind = row['herdr_kind']
+            kind = row['agent_cli']
             with self.subTest(kind=kind):
                 home = self.root / kind
                 env = fake_lane.configure(kind, home, 'http://127.0.0.1:12345', home / 'project', local=False)
@@ -250,9 +250,9 @@ class PrivateHome(unittest.TestCase):
         contract = json.loads((Path(__file__).resolve().parents[2] / 'contracts/agent-journey.json').read_text())
         kept_in_file = [row for row in contract
                         if row['fake_home']['status'] == 'proven' and row['fake_home']['auto_update']['kind'] == 'config']
-        self.assertEqual(sorted(row['herdr_kind'] for row in kept_in_file), ['codex', 'omp', 'opencode'])
+        self.assertEqual(sorted(row['agent_cli'] for row in kept_in_file), ['codex', 'omp', 'opencode'])
         for row in kept_in_file:
-            kind = row['herdr_kind']
+            kind = row['agent_cli']
             with self.subTest(kind=kind):
                 home = self.root / ('profile-' + kind)
                 account = fake_lane.profile_account(kind, home, 'http://127.0.0.1:12345', home / 'project')

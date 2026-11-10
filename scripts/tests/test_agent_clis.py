@@ -49,7 +49,7 @@ class Table(unittest.TestCase):
 
     def test_every_journey_agent_has_a_pin(self):
         contract = json.loads((SCRIPTS.parent / "contracts/agent-journey.json").read_text())
-        kinds = {row["herdr_kind"] for row in contract if row["id"] != "cursor"}
+        kinds = {row["agent_cli"] for row in contract if row["id"] != "cursor"}
         self.assertEqual(kinds - set(clis.table()), set())
 
     def test_a_version_matches_only_itself(self):
