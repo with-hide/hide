@@ -10,6 +10,8 @@ import importlib.util
 import io
 import json
 import os
+import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -30,8 +32,9 @@ URL = "https://example.invalid/releases/v1.2.3/omp-linux-x64"
 
 
 class Clock:
-    """The clock a download runs on: it moves only when the code sleeps, so a
-    retry's waits and its budget are checked without waiting for them."""
+    """The clock a download runs on: it moves when the code sleeps and when a
+    body arrives, so a retry's waits, its budget and the time a transfer takes
+    are checked without waiting for any of them."""
 
     def __init__(self):
         self.now = 100.0
@@ -44,12 +47,20 @@ class Clock:
         self.slept.append(seconds)
         self.now += seconds
 
+    def advance(self, seconds):
+        self.now += seconds
+
 
 class Answer:
-    """One HTTP answer, as `urlopen` returns it: a body read inside a `with`."""
+    """One HTTP answer, as `urlopen` returns it: a body read inside a `with` in
+    the pieces `fetch` asks for. Each piece takes `seconds` on the clock, and
+    the answer can raise the error a body still ends in partway through."""
 
-    def __init__(self, payload):
+    def __init__(self, payload=b"", clock=None, seconds=0.0, raises=None):
         self.payload = payload
+        self.clock = clock
+        self.seconds = seconds
+        self.raises = raises
 
     def __enter__(self):
         return self
@@ -57,8 +68,19 @@ class Answer:
     def __exit__(self, *_):
         return False
 
-    def read(self):
-        return self.payload
+    def read(self, size=-1):
+        # The piece takes its time either way, and a body that ends partway
+        # spends that time before it reports the failure.
+        if self.clock is not None:
+            self.clock.advance(self.seconds)
+        if self.raises is not None:
+            error, self.raises = self.raises, None
+            raise error
+        if size is None or size < 0:
+            piece, self.payload = self.payload, b""
+        else:
+            piece, self.payload = self.payload[:size], self.payload[size:]
+        return piece
 
 
 def status(code):
@@ -154,17 +176,26 @@ class Download(unittest.TestCase):
     def test_the_pinned_version_installs(self):
         self.assertEqual(self.install_pi(clis.table()["pi"]["version"]), 0)
 
-    def fetch(self, answers, budget=None):
+    def fetch(self, answers, budget=None, clock=None, asked=None):
         """What `fetch(URL)` returned and the clock it ran on, against a server
-        answering `answers` in turn."""
-        clock = Clock()
+        answering `answers` in turn: bytes for a whole body, an `Answer` for a
+        body with its own timing or failure, an exception for a refused ask.
+        Every answer reads on the same clock `fetch` itself runs on, and a
+        caller that expects the download to fail passes its own clock and
+        `asked` list, since nothing is returned to read the waits from."""
+        clock = clock or Clock()
         answered = iter(answers)
 
         def urlopen(url, timeout=None):
+            if asked is not None:
+                asked.append(url)
             answer = next(answered)
             if isinstance(answer, BaseException):
                 raise answer
-            return answer if isinstance(answer, Answer) else Answer(answer)
+            if not isinstance(answer, Answer):
+                answer = Answer(answer)
+            answer.clock = clock
+            return answer
 
         patches = [mock.patch.object(install.time, "monotonic", clock.monotonic),
                    mock.patch.object(install.time, "sleep", clock.sleep),
@@ -178,17 +209,30 @@ class Download(unittest.TestCase):
 
     def test_a_download_that_answers_after_transient_failures_returns_the_bytes(self):
         for answer in (status(429), status(503), ConnectionResetError("connection reset"),
-                       TimeoutError("timed out"), http.client.RemoteDisconnected("no answer")):
+                       TimeoutError("timed out"), http.client.RemoteDisconnected("no answer"),
+                       urllib.error.URLError(TimeoutError("timed out")),
+                       urllib.error.URLError(ConnectionRefusedError("connection refused"))):
             with self.subTest(answer=answer):
                 payload, clock = self.fetch([answer, answer, b"the file"])
                 self.assertEqual(payload, b"the file")
                 self.assertEqual(clock.slept, list(install.DOWNLOAD_RETRY_DELAYS[:2]))
 
     def test_a_permanent_refusal_is_not_asked_again(self):
-        for answer in (status(403), status(404)):
+        # A 403, a 404, a certificate of another name, a scheme urlopen does not
+        # know and a name that does not resolve answer the same on every ask, so
+        # the server is asked once and the step ends with that cause.
+        for answer in (status(403), status(404),
+                       urllib.error.URLError(ssl.SSLCertVerificationError("hostname mismatch")),
+                       urllib.error.URLError(ValueError("unknown url type: htp")),
+                       urllib.error.URLError(socket.gaierror("nodename nor servname provided"))):
             with self.subTest(answer=answer):
-                with self.assertRaisesRegex(SystemExit, "could not be downloaded"):
-                    self.fetch([answer, b"the file"])
+                asked, clock = [], Clock()
+                with self.assertRaises(SystemExit) as stopped:
+                    self.fetch([answer, b"the file"], clock=clock, asked=asked)
+                self.assertEqual(asked, [URL], "a permanent refusal asked the server again")
+                self.assertEqual(clock.slept, [])
+                self.assertIn("could not be downloaded", str(stopped.exception))
+                self.assertIn(str(getattr(answer, "reason", answer)), str(stopped.exception))
 
     def test_a_download_that_keeps_failing_stops_on_its_own_error(self):
         attempts = len(install.DOWNLOAD_RETRY_DELAYS) + 1
@@ -210,6 +254,32 @@ class Download(unittest.TestCase):
                 install.agy(row, Path(temporary))
         self.assertEqual(asked, [URL], "a hash mismatch asked the server for the file again")
 
+    def test_a_body_that_ends_partway_is_asked_again_unless_its_answer_is_final(self):
+        # A connection that dropped mid-body is transient; a 403 once the body
+        # started is the server's answer, and a 503 is worth asking again.
+        for error in (http.client.IncompleteRead(b"half", 10), http.client.RemoteDisconnected("gone"),
+                      status(503)):
+            with self.subTest(error=error):
+                payload, clock = self.fetch([Answer(b"half", raises=error), b"the file"])
+                self.assertEqual(payload, b"the file")
+                self.assertEqual(clock.slept, [install.DOWNLOAD_RETRY_DELAYS[0]])
+        clock = Clock()
+        with self.assertRaisesRegex(SystemExit, "could not be downloaded: .*403"):
+            self.fetch([Answer(b"half", raises=status(403)), b"the file"], clock=clock)
+        self.assertEqual(clock.slept, [], "a 403 in the body asked the server again")
+
+    def test_a_body_still_arriving_at_the_budget_fails_with_the_budget_as_the_reason(self):
+        # A server that keeps trickling bytes: each piece arrives in time and
+        # the request's own wait never expires, so only the deadline stops it.
+        piece = b"x" * install.DOWNLOAD_CHUNK_BYTES
+        trickle = Answer(piece * 40, seconds=install.DOWNLOAD_BUDGET_SECONDS / 10)
+        with self.assertRaisesRegex(SystemExit, f"inside {install.DOWNLOAD_BUDGET_SECONDS} s"):
+            self.fetch([trickle])
+        # A transfer that finishes inside the budget does finish.
+        payload, clock = self.fetch([Answer(b"the file", seconds=1.0)])
+        self.assertEqual(payload, b"the file")
+        self.assertLess(clock.now, 100.0 + install.DOWNLOAD_BUDGET_SECONDS)
+
     def test_a_download_stops_when_the_next_wait_would_pass_its_budget(self):
         # The budget bounds the waits: a wait that ends at it leaves no time
         # for the attempt after it, and a second more lets that one start.
@@ -218,6 +288,14 @@ class Download(unittest.TestCase):
             with self.subTest(budget=budget):
                 with self.assertRaisesRegex(SystemExit, f"{attempts} attempts"):
                     self.fetch([status(503)] * 5, budget=budget)
+
+    def test_a_request_with_no_time_left_is_never_sent(self):
+        # The budget bounds the whole download, so a download that has none is
+        # refused without asking the server, and the budget is its reason.
+        asked = []
+        with self.assertRaisesRegex(SystemExit, "inside 0 s"):
+            self.fetch([b"the file"], budget=0, asked=asked)
+        self.assertEqual(asked, [], "a download with no budget left asked the server")
 
     def test_another_version_than_the_pin_fails_the_install(self):
         with self.assertRaises(SystemExit) as stopped:

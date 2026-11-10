@@ -37,6 +37,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -54,19 +55,34 @@ WINDOWS = os.name == "nt"
 GROK_INSTALLER = "https://x.ai/cli/install.sh"
 OMP_RELEASES = "https://github.com/can1357/oh-my-pi/releases/download"
 # A download that failed on a rate limit, a server fault or a connection that
-# dropped is asked again up to this many times, after these waits, and no
-# attempt starts once the budget is spent. The install steps run under a
-# ten-minute limit, so the budget leaves the rest of a step for the other
-# CLIs' downloads and for the checks after them.
+# dropped is asked again up to this many times, after these waits. The budget
+# bounds the whole download, its waits included: no attempt starts once it is
+# spent, one request waits no longer than what it leaves, and the body is read
+# in pieces checked against it. The install steps run under a ten-minute limit,
+# so the budget leaves the rest of a step for the other CLIs' downloads and for
+# the checks after them.
 DOWNLOAD_RETRY_DELAYS = (2, 5, 15)
 DOWNLOAD_BUDGET_SECONDS = 180
-# How long one socket read may wait, and a transfer that keeps arriving is not
-# cut by it: the omp binary is over 200 MB.
+# How long one socket read may wait before the connection counts as stalled.
+# The omp binary is over 200 MB, so a transfer slower than about 1.2 MB/s does
+# not finish inside the budget; at that speed the step was close to its own
+# limit anyway.
 DOWNLOAD_ATTEMPT_SECONDS = 60
+# The body is read in pieces of this size, so a server that keeps trickling
+# bytes cannot outlast the budget.
+DOWNLOAD_CHUNK_BYTES = 1 << 16
 # The answers a second ask may get differently: a rate limit, a request that
 # timed out, and every server fault. A 403, a 404 and a URL that answers
 # nothing are the same on the second ask.
 RETRY_STATUSES = frozenset({408, 425, 429}) | frozenset(range(500, 600))
+# The connection failures a second ask may get past: a wait that timed out and
+# a connection that was dropped, reset, refused or ended partway through. Every
+# other failure of the operating system or of TLS says the same thing on the
+# second ask, a certificate the name does not match and a name that does not
+# resolve included.
+TRANSIENT_CONNECTIONS = (TimeoutError, ConnectionResetError, ConnectionRefusedError,
+                         ConnectionAbortedError, BrokenPipeError, ssl.SSLEOFError,
+                         http.client.IncompleteRead, http.client.RemoteDisconnected)
 
 
 def table():
@@ -170,21 +186,30 @@ def target():
 
 def fetch(url):
     """The bytes at `url`, asked again while the failure is transient: a rate
-    limit, a server fault, or a connection that dropped or timed out. No
-    attempt starts once DOWNLOAD_BUDGET_SECONDS is spent, and a refusal the
-    next ask would answer the same way (403, 404, a URL nothing answers) stops
-    at once. The step ends with the download's own error; a file that arrives
-    and does not match its pin is the caller's to refuse, since no retry can
-    repair it."""
+    limit, a server fault, or a connection that dropped or timed out. The budget
+    bounds the whole download, the waits between attempts included: no attempt
+    starts without time left, one request waits no longer than that leaves, and
+    the body is checked against it as it arrives, so a server that keeps
+    trickling bytes cannot outlast it. A refusal the next ask would answer the
+    same way (403, 404, a certificate of another name, a URL nothing answers)
+    stops at once with its own cause. The step ends with the download's own
+    error; a file that arrives and does not match its pin is the caller's to
+    refuse, since no retry can repair it."""
     end = time.monotonic() + DOWNLOAD_BUDGET_SECONDS
     attempts = len(DOWNLOAD_RETRY_DELAYS) + 1
     for attempt in range(1, attempts + 1):
-        # One socket read waits this long; a transfer that keeps arriving is
-        # not cut by it, and none may wait past the budget.
-        wait_for_read = min(DOWNLOAD_ATTEMPT_SECONDS, end - time.monotonic())
+        left = end - time.monotonic()
+        if left <= 0:
+            raise SystemExit(f"{url} could not be downloaded inside {DOWNLOAD_BUDGET_SECONDS} s")
         try:
-            with urllib.request.urlopen(url, timeout=wait_for_read) as answer:
-                return answer.read()
+            with urllib.request.urlopen(url, timeout=min(DOWNLOAD_ATTEMPT_SECONDS, left)) as answer:
+                body = bytearray()
+                for chunk in iter(lambda: answer.read(DOWNLOAD_CHUNK_BYTES), b""):
+                    body += chunk
+                    if time.monotonic() >= end:
+                        raise SystemExit(f"{url} could not be downloaded inside "
+                                         f"{DOWNLOAD_BUDGET_SECONDS} s: its body was still arriving")
+                return bytes(body)
         except (OSError, http.client.HTTPException) as error:
             if not transient(error):
                 raise SystemExit(f"{url} could not be downloaded: {error}")
@@ -199,12 +224,15 @@ def fetch(url):
 
 def transient(error):
     """Whether asking the same URL again may get a different answer: a rate
-    limit, a server fault, or a connection that dropped, reset or timed out.
-    A 403, a 404 and a bad URL say the same thing however often they are
-    asked, so a retry only spends the step's minutes."""
+    limit, a server fault, or a connection that dropped, reset, refused or
+    timed out. A 403, a 404, a certificate that names another host, an unknown
+    URL scheme and a name that does not resolve say the same thing however often
+    they are asked, so a retry only spends the step's minutes."""
     if isinstance(error, urllib.error.HTTPError):
         return error.code in RETRY_STATUSES
-    return True
+    if isinstance(error, urllib.error.URLError):
+        return isinstance(error.reason, TRANSIENT_CONNECTIONS)
+    return isinstance(error, TRANSIENT_CONNECTIONS)
 
 
 def agy(row, prefix):
