@@ -24,7 +24,7 @@ pub const DELIVERY_EXPIRY_MS: u64 = hide_agent_hooks::delivery::DELIVERY_EXPIRY_
 pub const ANSWER_WAIT_MS: u64 = 24 * 60 * 60 * 1_000;
 /// How long a pane rests, with no key Hide routed and no change of the
 /// engine's status, before the doorbell types into it or reads its composer.
-pub const INPUT_QUIET_MS: u64 = 10_000;
+pub const INPUT_QUIET_MS: u64 = 30_000;
 pub const TICK_MS: u64 = 60_000;
 pub const INACTIVITY_MS: u64 = 20 * 60_000;
 /// How long a watch waits before telling a pane observer that its target

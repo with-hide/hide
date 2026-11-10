@@ -4760,7 +4760,7 @@ mod tests {
         );
         assert_eq!(bell.reads(), 1);
         // A key in the quiet period is no rest yet.
-        key(start - 5_000);
+        key(start - 10_000);
         pass_logged(&bell, &mut doorbell, start + 2_000);
         assert_eq!(bell.reads(), 1);
         // Once it rests, the new draft is read: now the operator erased it.
