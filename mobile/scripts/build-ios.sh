@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Builds the Hide iOS app with the phone bundle inside it, on the Mac mini, and runs it in a simulator.
 #
-# Usage: build-ios.sh [build | run | clean]
+# Usage: build-ios.sh [build | release | run | clean]
+#   release  everything `build` does, then on the mini: archive, sign with the App Store Connect API key, check the
+#          signed app against mobile/release-expect.json, validate and upload it to TestFlight; the build number is the
+#          UTC time of the run, the version the repository's own (mobile/scripts/release-version.mjs). The key never
+#          leaves the mini (~/.config/hide-ios, mobile/release-env.json); a missing secret stops the command naming it
 #   build  (default) the phone bundle, `cap sync`, copy the project to the mini, build the app for the simulator
 #          and run the HideShell tests there; a failing test fails the command
 #   run    install the built app in a simulator of its own on the mini, launch it, wait, capture the screen
@@ -31,7 +35,12 @@ slug=$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')
 remote=hide-ios-build/$slug
 
 case "$command" in
-    build)
+    build | release)
+        # A release is the committed source: the build that reaches TestFlight must be one a person can find again.
+        if [[ "$command" == release && -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            printf 'release needs a clean working tree: commit or stash the tracked changes first\n' >&2
+            exit 1
+        fi
         if [[ "${HIDE_IOS_SKIP_PHONE_BUILD:-}" != 1 ]]; then
             bash scripts/verify-web.sh web build:phone
         fi
@@ -52,11 +61,23 @@ case "$command" in
         fi
         ;;
     clean) ;;
-    *) printf 'usage: %s [build | run | clean]\n' "$0" >&2; exit 2 ;;
+    *) printf 'usage: %s [build | release | run | clean]\n' "$0" >&2; exit 2 ;;
 esac
 
+# `release` runs the same build and Swift tests first: a build whose tests fail is never signed.
 ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
-    bash -s -- "$command" "$slug" < mobile/scripts/mini-ios.sh
+    bash -s -- "${command/release/build}" "$slug" < mobile/scripts/mini-ios.sh
+if [[ "$command" == release ]]; then
+    inputs=$(mktemp -d)
+    trap 'rm -rf "$inputs"' EXIT
+    node mobile/scripts/bundle-manifest.mjs "$inputs/bundle-manifest.json"
+    cp mobile/release-env.json mobile/release-expect.json mobile/scripts/check-release-app.sh "$inputs/"
+    rsync -a --delete "$inputs/" "$host:$remote/release-inputs/"
+    # The time is taken here, after the tests, so the number is as close to the upload as the command can make it.
+    read -r version build < <(node mobile/scripts/release-version.mjs)
+    printf 'release %s (build %s) from %s\n' "$version" "$build" "$(git rev-parse --short=8 HEAD)"
+    ssh "$host" bash -s -- "$slug" "$version" "$build" < mobile/scripts/mini-release.sh
+fi
 if [[ "$command" == run && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_IOS_CAPTURE"
 fi
