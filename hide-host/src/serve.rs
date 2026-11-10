@@ -1619,7 +1619,10 @@ pub fn handle_with_progress(
                     "this account's program search could not be read, so the agents' versions are unknown",
                 )
             })?;
-            to_value(hide_agent_hooks::Diagnosis::read(&home, &search))
+            // The records the hooks of this node's daemon wrote: the account's
+            // own folder, or the one its state folder keeps them in.
+            let records = hide_agent_hooks::route::records_root(&home, env.state.as_deref());
+            to_value(hide_agent_hooks::Diagnosis::read_at(&home, &search, &records))
         }
         Call::OwedConfirmations { pane } => {
             let home = env.home("HOME is not set, so the agent hooks keep no records")?;

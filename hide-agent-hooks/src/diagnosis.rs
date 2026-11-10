@@ -17,7 +17,7 @@ use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
 use crate::install::{HookStatus, InstallFailure, status};
-use crate::report::{ReportFailure, last_failure};
+use crate::report::{ReportFailure, last_failure_at};
 use crate::runtime::{AgentRuntime, HOOK_ENTRY_VERSION, HOOK_VERSION};
 
 /// Why Hide cannot say what a pane's agent has spawned.
@@ -270,13 +270,33 @@ pub struct Diagnosis {
 
 impl Diagnosis {
     /// Reads every runtime under `home`, each runtime's program found on
-    /// `search` ([`runtime_compatibility`]). It performs file reads and no
+    /// `search` ([`runtime_compatibility`]), and the last report failure the
+    /// hooks of the daemon this process asks recorded
+    /// ([`crate::route::records_folder`]). It performs file reads and no
     /// writes, so it is safe to call from a background reader.
     pub fn read(home: &Path, search: &OsStr) -> Self {
         Self::read_with_probe(home, |runtime| runtime_compatibility(runtime, search))
     }
 
+    /// [`read`](Self::read) for a daemon whose hook records are `records`,
+    /// as its node reads them for the state folder it serves.
+    pub fn read_at(home: &Path, search: &OsStr, records: &Path) -> Self {
+        Self::read_toward(
+            home,
+            |runtime| runtime_compatibility(runtime, search),
+            records,
+        )
+    }
+
     fn read_with_probe(home: &Path, probe: impl Fn(AgentRuntime) -> MemoryCompatibility) -> Self {
+        Self::read_toward(home, probe, &crate::route::records_folder(home))
+    }
+
+    fn read_toward(
+        home: &Path,
+        probe: impl Fn(AgentRuntime) -> MemoryCompatibility,
+        records: &Path,
+    ) -> Self {
         Self {
             runtimes: AgentRuntime::ALL
                 .into_iter()
@@ -289,7 +309,7 @@ impl Diagnosis {
                     memory_compatibility: probe(runtime),
                 })
                 .collect(),
-            last_report_failure: last_failure(home),
+            last_report_failure: last_failure_at(records),
         }
     }
 

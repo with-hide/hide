@@ -92,11 +92,11 @@ const UNKNOWN_SOURCE: &str = "unknown_read_source";
 pub(crate) struct Place {
     pub(crate) engine_dir: PathBuf,
     pub(crate) home: String,
-    /// The home whose Hide agent hook files this engine's panes write, when
-    /// those files are on the machine the core runs on: the daemon's own
-    /// engine. A device's engine has none; its panes' files are on the
+    /// The folder this daemon's panes keep their Hide agent hook records in,
+    /// when those records are on the machine the core runs on: the daemon's
+    /// own engine. A device's engine has none; its panes' records are on the
     /// device.
-    pub(crate) hooks_home: Option<PathBuf>,
+    pub(crate) hooks_records: Option<PathBuf>,
     pub(crate) node: Arc<dyn NodeLink>,
     /// Whether the machine `node` answers for runs Windows: a device's
     /// system, from its node's hello, never the core's own, since a Mac core
@@ -234,7 +234,7 @@ pub(crate) fn open_device(
         Place {
             engine_dir,
             home,
-            hooks_home: None,
+            hooks_records: None,
             node,
             windows,
             definitions,
@@ -4136,7 +4136,7 @@ mod tests {
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
             windows: cfg!(windows),
             home: wire(&home),
-            hooks_home: Some(home.clone()),
+            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
         }
@@ -6188,7 +6188,7 @@ mod tests {
             false => place(root.path()),
             // As `open_device` makes it.
             true => Place {
-                hooks_home: None,
+                hooks_records: None,
                 ..place(root.path())
             },
         };

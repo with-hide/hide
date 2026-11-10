@@ -139,11 +139,21 @@ pub struct Reporter<'a> {
 
 /// Where the counts live. Under Hide's own directory, never the runtime's.
 pub fn state_directory(home: &Path) -> PathBuf {
-    crate::route::pane_records(home).join("panes")
+    state_directory_in(&crate::route::records_folder(home))
+}
+
+/// [`state_directory`] in a records folder named directly: the daemon's own,
+/// as its node or a first run of its core reads it ([`crate::route::records_root`]).
+fn state_directory_in(records: &Path) -> PathBuf {
+    records.join("panes")
 }
 
 fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    crate::route::pane_file(&state_directory(home), pane_id)
+    record_path_in(&crate::route::records_folder(home), pane_id)
+}
+
+fn record_path_in(records: &Path, pane_id: &str) -> PathBuf {
+    crate::route::pane_file(&state_directory_in(records), pane_id)
 }
 
 /// How long one event waits for another event of the same pane to finish its
@@ -399,7 +409,13 @@ impl SessionRecord {
 /// The records of `pane_id`'s file, oldest first; none for a pane no hook
 /// wrote, or whose file cannot be read.
 pub fn records(home: &Path, pane_id: &str) -> Vec<SessionRecord> {
-    read_file(home, pane_id).map_or_else(
+    records_in(&crate::route::records_folder(home), pane_id)
+}
+
+/// [`records`] in a records folder named directly, as a first run of the
+/// core or the engine that reads them as `hook_records` resolves it.
+pub fn records_in(records: &Path, pane_id: &str) -> Vec<SessionRecord> {
+    read_file_in(records, pane_id).map_or_else(
         |_| Vec::new(),
         |file| file.sessions.iter().filter_map(SessionRecord::of).collect(),
     )
@@ -416,7 +432,12 @@ pub fn records(home: &Path, pane_id: &str) -> Vec<SessionRecord> {
 /// makes, or that holds no record of an agent and its version, is passed
 /// over.
 pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)> {
-    let Ok(entries) = fs::read_dir(state_directory(home)) else {
+    every_pane_in(&crate::route::records_folder(home), limit)
+}
+
+/// [`every_pane`] in a records folder named directly.
+pub fn every_pane_in(records: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)> {
+    let Ok(entries) = fs::read_dir(state_directory_in(records)) else {
         return Vec::new();
     };
     let mut panes = Vec::new();
@@ -438,7 +459,7 @@ pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)
         else {
             continue;
         };
-        let Ok(file) = read_file(home, &pane_id) else {
+        let Ok(file) = read_file_in(records, &pane_id) else {
             continue;
         };
         let records: Vec<SessionRecord> =
@@ -553,8 +574,12 @@ fn prefix_string<'a>(payload: &'a [u8], key: &str) -> Option<&'a str> {
 }
 
 fn read_file(home: &Path, pane_id: &str) -> io::Result<PaneFile> {
-    let _held = hold(home, hide_platform::fs::lock::Mode::Shared)?;
-    let raw = fs::read(record_path(home, pane_id))?;
+    read_file_in(&crate::route::records_folder(home), pane_id)
+}
+
+fn read_file_in(records: &Path, pane_id: &str) -> io::Result<PaneFile> {
+    let _held = hold_in(records, hide_platform::fs::lock::Mode::Shared)?;
+    let raw = fs::read(record_path_in(records, pane_id))?;
     PaneFile::decode(&raw).map_err(io::Error::from)
 }
 
@@ -595,11 +620,31 @@ pub fn apply(
     said: Said<'_>,
     transcript: Option<&Path>,
 ) -> io::Result<Applied> {
-    let path = record_path(home, pane_id);
+    apply_in(
+        &crate::route::records_folder(home),
+        pane_id,
+        change,
+        who,
+        said,
+        transcript,
+    )
+}
+
+/// [`apply`] in a records folder named directly, as a first run of the core,
+/// the engine's own restore or a test names the daemon it stands for.
+pub fn apply_in(
+    records: &Path,
+    pane_id: &str,
+    change: Change<'_>,
+    who: Reporter<'_>,
+    said: Said<'_>,
+    transcript: Option<&Path>,
+) -> io::Result<Applied> {
+    let path = record_path_in(records, pane_id);
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
     }
-    let held = hold(home, hide_platform::fs::lock::Mode::Exclusive)?;
+    let held = hold_in(records, hide_platform::fs::lock::Mode::Exclusive)?;
     let mut file = read_lenient(&path);
     let before = file.clone();
     let mut record = match file.sessions.iter().rposition(|record| record.is(who)) {
@@ -778,7 +823,14 @@ fn hold(
     home: &Path,
     mode: hide_platform::fs::lock::Mode,
 ) -> io::Result<hide_platform::fs::lock::Lock> {
-    let lock = hide_platform::fs::private::open_or_create_file(&lock_path(home))?;
+    hold_in(&crate::route::records_folder(home), mode)
+}
+
+fn hold_in(
+    records: &Path,
+    mode: hide_platform::fs::lock::Mode,
+) -> io::Result<hide_platform::fs::lock::Lock> {
+    let lock = hide_platform::fs::private::open_or_create_file(&lock_path_in(records))?;
     match hide_platform::fs::lock::lock_file(lock, mode, LOCK_WAIT, &|| false)? {
         hide_platform::fs::lock::Waited::Locked(held) => Ok(held),
         _ => Err(io::Error::new(
@@ -790,8 +842,8 @@ fn hold(
 
 /// The lock every count update holds. It sits beside the records' folder,
 /// so the sweep in [`retain`] never takes it for a record.
-fn lock_path(home: &Path) -> PathBuf {
-    crate::route::pane_records(home).join("panes.lock")
+fn lock_path_in(records: &Path) -> PathBuf {
+    records.join("panes.lock")
 }
 
 /// Drops a pane's record. Used by the diagnosis when a pane is gone.

@@ -293,11 +293,12 @@ fn plans(
 }
 
 /// Whether `resume`'s agent was cut off mid-turn: the last record its hook
-/// wrote in the pane's file under `home` for that agent, and for its
-/// conversation when both name one, says its turn was running or waiting on
-/// the operator. A pane no hook wrote, or an agent that rested, was not.
-fn was_cut(catalog: &Catalog, home: &Path, resume: &Resume) -> bool {
-    hide_agent_hooks::counters::records(home, &resume.pane)
+/// wrote in the pane's file under `records` (the daemon's hook records) for
+/// that agent, and for its conversation when both name one, says its turn was
+/// running or waiting on the operator. A pane no hook wrote, or an agent that
+/// rested, was not.
+fn was_cut(catalog: &Catalog, records: &Path, resume: &Resume) -> bool {
+    hide_agent_hooks::counters::records_in(records, &resume.pane)
         .iter()
         .rev()
         .find(|record| {
@@ -858,20 +859,21 @@ impl OwnEngine<'static> {
     /// Marks each resume whose agent's hook last said its turn was running or
     /// waiting on the operator in that conversation: the move or the
     /// machine's restart cut that turn off (D-22, B9). Read from the hook
-    /// files on this machine; a device's engine reads none (`hooks_home`).
+    /// records on this machine; a device's engine reads none
+    /// (`hooks_records`).
     fn mark_cut(&self, plans: &mut BTreeMap<String, Plan>) {
-        let Some(home) = self
+        let Some(records) = self
             .shared
             .place
             .as_ref()
-            .and_then(|place| place.hooks_home.as_deref())
+            .and_then(|place| place.hooks_records.as_deref())
         else {
             return;
         };
         let catalog = self.shared.definitions.get();
         for plan in plans.values_mut() {
             if let Plan::Resume(resume) = plan {
-                resume.cut = was_cut(&catalog, home, resume);
+                resume.cut = was_cut(&catalog, records, resume);
             }
         }
     }
@@ -1023,7 +1025,7 @@ impl OwnEngine<'static> {
             .shared
             .place
             .as_ref()
-            .is_some_and(|place| place.hooks_home.is_some());
+            .is_some_and(|place| place.hooks_records.is_some());
         if !local || resume.cut || resume.new_tab.is_some() || resume.session.is_none() {
             return false;
         }

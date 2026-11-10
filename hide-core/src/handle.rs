@@ -446,8 +446,10 @@ impl Core {
                 hide_kit::layout::hook_facts(directory),
                 || {
                     environment_home.as_deref().map_or_else(Vec::new, |home| {
-                        hide_agent_hooks::counters::every_pane(
-                            home,
+                        // The records the daemon's own hooks wrote, in the
+                        // folder this daemon's state folder keeps them in.
+                        hide_agent_hooks::counters::every_pane_in(
+                            &hide_agent_hooks::route::records_root(home, Some(directory)),
                             crate::agent_hooks::facts::PANE_LIMIT,
                         )
                     })

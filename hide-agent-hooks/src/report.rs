@@ -190,7 +190,14 @@ pub fn record_outcome(
 /// report has run. A file that cannot be read back is reported as a failure
 /// of its own rather than read as "no failure".
 pub fn last_failure(home: &Path) -> Option<ReportFailure> {
-    let path = failure_path(home);
+    last_failure_at(&crate::route::records_folder(home))
+}
+
+/// [`last_failure`] in a records folder named directly: the one a daemon's
+/// node, doctor and a test read, which is the folder the hook of the same
+/// daemon wrote to.
+pub fn last_failure_at(records: &Path) -> Option<ReportFailure> {
+    let path = records.join("last-report-failure.json");
     match fs::read(&path) {
         Ok(raw) => match serde_json::from_slice(&raw) {
             Ok(failure) => Some(failure),

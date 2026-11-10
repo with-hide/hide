@@ -658,7 +658,10 @@ impl EngineHandle {
         definitions: hide_agent_adapter::definition::Catalog,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
-        let hooks_home = home.clone();
+        // The records the daemon's panes' hooks write, read the rule the hooks
+        // and the node resolve: `~/.hide/agent-hooks` for a daemon on the
+        // default state folder, and the folder's own for one moved elsewhere.
+        let hooks_records = hide_agent_hooks::route::records_root(&home, Some(&state_dir));
         let home = hide_platform::path::to_wire(&home)
             .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
         // The choices this machine's agents were started with, which the
@@ -677,7 +680,7 @@ impl EngineHandle {
             own::Place {
                 engine_dir: scope.clone(),
                 home,
-                hooks_home: Some(hooks_home),
+                hooks_records: Some(hooks_records),
                 node,
                 // This machine's own node.
                 windows: cfg!(windows),

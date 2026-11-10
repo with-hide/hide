@@ -23,7 +23,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) const ARGUMENT: &str = "--state-dir-b64";
 pub(crate) const INSTALL_ARGUMENT: &str = "--install-b64";
 const STATE_VARIABLE: &str = "HIDE_STATE_DIR";
-const XDG_VARIABLE: &str = "XDG_STATE_HOME";
 /// The variable a pane names the Hide installation that started it by: a
 /// pane holder's pane carries its node's ([`APP_INSTALL`] or [`install_of_root`]), and a
 /// pane that names none (a Herdr pane, a plain terminal) is anyone's.
@@ -204,28 +203,22 @@ pub fn pane_install() -> Option<String> {
 /// The folder the hooks keep their records in for the daemon whose state
 /// folder is `state` (subagent counts, plan records, owed confirmations, the
 /// failure record and the log): `~/.hide/agent-hooks`, where every build so
-/// far kept them, while `state` is the account's own state folder; and
-/// `state/agent-hooks` for a daemon whose state folder is elsewhere, so a
+/// far kept them, while `state` is the state folder Hide keeps by default;
+/// and `state/agent-hooks` for a daemon whose state folder is elsewhere, so a
 /// Hide started with a state folder of its own reads and writes its records
 /// there rather than in the operator's `~/.hide` (docs/agent-hooks.md, Where
 /// the hooks keep their records). `None` reads the account's own folder.
 ///
 /// The choice is made by the folder, never by which variable named it: a
-/// daemon `hide connect` starts is handed the account's own state folder
-/// through `HIDE_STATE_DIR`, and that names no move. Hook, node and daemon
-/// agree because each asks [`crate::state_folder::state_dir`] about the
-/// daemon it serves, and the account's own folder is the one that daemon
-/// picks with no `HIDE_STATE_DIR`.
+/// daemon `hide connect` starts is handed its state folder through
+/// `HIDE_STATE_DIR`, and one naming the default folder moves nothing. A
+/// folder `XDG_STATE_HOME` chose is a move, and is judged here without
+/// reading that variable, so a hook that lost Hide's environment and one that
+/// kept it resolve the same folder from the same state folder. Hook, node and
+/// daemon agree because each asks [`state_dir`] about the daemon it serves.
 pub fn records_root(home: &Path, state: Option<&Path>) -> PathBuf {
-    let account = crate::state_folder::state_dir(
-        home,
-        None,
-        std::env::var(XDG_VARIABLE)
-            .ok()
-            .filter(|value| !value.is_empty())
-            .as_deref(),
-    );
-    match state.filter(|state| *state != account) {
+    let default = crate::state_folder::default_state_dir(home);
+    match state.filter(|state| *state != default) {
         Some(state) => state.join("agent-hooks"),
         None => account_records(home),
     }
@@ -246,10 +239,15 @@ pub fn account_records(home: &Path) -> PathBuf {
 /// [`records_root`] for the daemon this process asks ([`state_dir`]): what a
 /// hook writes beside its pane records, and what a node or a daemon reading
 /// them resolves the same way, since each runs with the environment that
-/// names its own state folder. A route that does not read leaves the
-/// account's own folder; the request itself fails as `record`.
+/// names its own state folder.
+///
+/// A route that does not read leaves the account's own folder, and the
+/// request itself fails as `record`. So does a state folder that is gone: an
+/// entry whose daemon was removed has none to write for, and a hook that
+/// created it again would rebuild a folder the operator took away.
 pub fn records_folder(home: &Path) -> PathBuf {
-    records_root(home, state_dir(home).ok().as_deref())
+    let state = state_dir(home).ok().filter(|state| state.is_dir());
+    records_root(home, state.as_deref())
 }
 
 /// The folder the hooks keep their records by pane in: the daemon's own for
@@ -264,7 +262,7 @@ pub fn pane_records(home: &Path) -> PathBuf {
 /// [`pane_records`] for the panes the installation `install` starts, as a
 /// node that starts them reads them; `None` for panes that name none.
 pub fn pane_records_of(home: &Path, install: Option<&str>) -> PathBuf {
-    records_of(records_folder(home), install)
+    records_of(&records_folder(home), install)
 }
 
 /// The file of `pane_id`'s record in `folder`. A pane id is in Herdr's shape
@@ -284,13 +282,12 @@ pub fn pane_file(folder: &Path, pane_id: &str) -> PathBuf {
     folder.join(format!("{safe}.json"))
 }
 
-fn records_of(records: PathBuf, pane: Option<&str>) -> PathBuf {
-    match pane {
-        Some(install) => match mark(install) {
-            Some(mark) => records.join("installs").join(mark),
-            None => records,
-        },
-        None => records,
+/// The records of the panes the installation `install` starts, under a
+/// records folder resolved for this process ([`records_folder`]).
+fn records_of(records: &Path, install: Option<&str>) -> PathBuf {
+    match install.and_then(mark) {
+        Some(mark) => records.join("installs").join(mark),
+        None => records.to_path_buf(),
     }
 }
 
@@ -464,11 +461,11 @@ mod tests {
     fn a_pane_of_another_installation_keeps_its_records_apart() {
         let home = Path::new("/home");
         let own = home.join(".hide").join("agent-hooks");
-        assert_eq!(records_of(own.clone(), None), own);
-        assert_eq!(records_of(own.clone(), Some(APP_INSTALL)), own);
-        let device = records_of(own.clone(), Some("root:/helper"));
+        assert_eq!(records_of(&own, None), own);
+        assert_eq!(records_of(&own, Some(APP_INSTALL)), own);
+        let device = records_of(&own, Some("root:/helper"));
         assert!(device.starts_with(own.join("installs")));
-        assert_ne!(device, records_of(own, Some("root:/other")));
+        assert_ne!(device, records_of(&own, Some("root:/other")));
     }
 
     /// A daemon whose state folder is the account's own keeps the records
@@ -478,10 +475,10 @@ mod tests {
     #[test]
     fn a_moved_state_folder_keeps_its_records_and_the_account_s_own_keeps_its_place() {
         let home = Path::new("/home");
-        let account = home.join(".hide").join("state");
+        let default = home.join(".hide").join("state");
         let own = home.join(".hide").join("agent-hooks");
         assert_eq!(records_root(home, None), own);
-        assert_eq!(records_root(home, Some(&account)), own);
+        assert_eq!(records_root(home, Some(&default)), own);
         let moved = Path::new("/elsewhere/state");
         assert_eq!(records_root(home, Some(moved)), moved.join("agent-hooks"));
         assert_eq!(records_in(moved), moved.join("agent-hooks"));
