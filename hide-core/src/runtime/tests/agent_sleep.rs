@@ -1931,6 +1931,41 @@ fn the_input_gate_follows_the_sleep_records_from_the_first_moment_of_the_end() {
     );
 }
 
+/// A restarted engine lists an agent only once its program shows again, so
+/// the first reads after a daemon start hold none for a pane that has one: the
+/// pane's last look, which keeps an old conversation from sleeping an agent the
+/// operator just read, must outlive them (with-hide/hide-private#682).
+#[test]
+fn a_read_that_lists_no_agent_for_a_pane_keeps_the_panes_last_look() {
+    let (mut runtime, checkout_id) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
+    let seen = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .ui_state
+            .agent_sleep
+            .stamps
+            .get(SLEEPER)
+            .map(|stamps| stamps.seen_at_unix_ms)
+    };
+    let looked = seen(&runtime).expect("the visit stamped the pane");
+    assert!(looked > 0);
+
+    runtime.ingest_session(Ok(session(None)));
+    assert_eq!(seen(&runtime), Some(looked), "the pane is still there");
+    runtime.ingest_session(Ok(session(Some(1))));
+    assert_eq!(seen(&runtime), Some(looked), "the agent is back");
+
+    let gone = tab_order_payload(CHECKOUT, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
+    runtime.ingest_session(Ok(gone));
+    assert_eq!(
+        seen(&runtime),
+        None,
+        "a pane the topology lost takes its stamp"
+    );
+}
+
 /// B12, D-12: a committed visit to the tab wakes the agent; another event
 /// in the same tab is not a visit, and a second wake starts nothing.
 #[test]
