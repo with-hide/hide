@@ -47,7 +47,7 @@ async function pair(page: import("@playwright/test").Page, relay: Awaited<Return
 test("QR clears its secret, pairs over Noise and uses the shared conversation, terminal and reply UI", async ({ page, relay }) => {
   // A camera/link can return to a root page that is already open (same-document navigation).
   await page.goto(relay.origin + "/");
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
   await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/#pair=/);
@@ -135,7 +135,7 @@ test("unsupported device shows both protocol versions and lets the user choose a
   await expect(page.getByText("Device", { exact: true })).toBeVisible();
   await expect(page.getByText("9", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Choose another device" }).click();
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
 });
 
 for (const [reason, copy] of [["code_expired", "expired"], ["phone_limit", "4"]]) {
