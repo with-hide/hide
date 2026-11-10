@@ -385,10 +385,9 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         true,
     );
     assert_eq!(answer, json!({"reported": true}));
-    let stored: Value = serde_json::from_slice(
-        &std::fs::read(machine.records().join("panes/w1_p1.json")).unwrap(),
-    )
-    .unwrap();
+    let stored: Value =
+        serde_json::from_slice(&std::fs::read(machine.records().join("panes/w1_p1.json")).unwrap())
+            .unwrap();
     assert_eq!(
         stored,
         json!({"sessions": [{"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,

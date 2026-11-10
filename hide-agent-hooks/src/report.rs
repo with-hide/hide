@@ -135,6 +135,19 @@ fn failure_path(home: &Path) -> PathBuf {
     crate::route::records_folder(home).join("last-report-failure.json")
 }
 
+/// The one outcome of an event that both kept its record and reported
+/// itself: a failure of either is the event's outcome, and both are named
+/// when both failed, so one step failing never hides the other
+/// (engineering rules 4 and 10).
+pub fn outcome(kept: Result<(), String>, reported: Result<(), String>) -> Result<(), String> {
+    match (kept, reported) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(kept), Ok(())) => Err(kept),
+        (Ok(()), Err(reported)) => Err(reported),
+        (Err(kept), Err(reported)) => Err(format!("{kept}; {reported}")),
+    }
+}
+
 /// Records the outcome of one report: a failure replaces the last one, a
 /// success clears it, so the file describes the hook's current state rather
 /// than its history.
@@ -164,8 +177,12 @@ pub fn record_outcome(
                     .unwrap_or(0),
             };
             // The file holds the hook's state now, which the next success
-            // clears; the log keeps every report that did not arrive.
-            let _ = crate::hook_log::append_line(
+            // clears; the log keeps every report that did not arrive. Both
+            // are written, and a log that could not be is named to the
+            // caller rather than dropped, since a failure record that is
+            // lost is the thing `doctor` and Settings exist to show
+            // (engineering rules 4 and 10).
+            let logged = crate::hook_log::append_line(
                 &crate::hook_log::log_path(home),
                 &serde_json::json!({
                     "component": "agent_hooks",
@@ -181,8 +198,32 @@ pub fn record_outcome(
             if let Some(parent) = path.parent() {
                 hide_platform::fs::private::create_dir_all(parent)?;
             }
-            fs::write(&path, serde_json::to_vec(&failure)?)
+            let recorded = fs::write(&path, serde_json::to_vec(&failure)?);
+            match (logged, recorded) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(log), Ok(())) => Err(log),
+                (Ok(()), Err(record)) => Err(record),
+                (Err(log), Err(record)) => Err(io::Error::other(format!(
+                    "the log could not be written ({log}) and neither could the record ({record})"
+                ))),
+            }
         }
+    }
+}
+
+/// [`record_outcome`], reporting a record that could not be written on
+/// standard error rather than leaving the hook silent: the agent runs the
+/// hook's process, and what it prints reaches the pane, so a hook whose
+/// records folder is refused still says why (engineering rule 10).
+pub fn record_and_say(
+    home: &Path,
+    pane_id: &str,
+    agent: &str,
+    event: &str,
+    outcome: &Result<(), String>,
+) {
+    if let Err(error) = record_outcome(home, pane_id, agent, event, outcome) {
+        eprintln!("hide-agent-hooks: the hook's report record was not written: {error}");
     }
 }
 

@@ -27,6 +27,7 @@ mod pi_extension;
 mod plan_record;
 mod pre_tool;
 mod programs;
+mod records_refused;
 mod session_start_probes;
 mod stand_in_daemon;
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
