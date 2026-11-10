@@ -264,10 +264,16 @@ export function tabGeometrySettled(rest: Rest, tab: string): boolean {
   return !operations.some((operation) => operation.scope_id === tab && GEOMETRY_PENDING.has(operation.phase));
 }
 
-/** Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it. */
+/**
+ * Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it and
+ * its tab's geometry line is empty: the core draws the close ahead of the engine, so a split or
+ * close sent next to the same tab would run beside it instead of behind it (`splitPane`).
+ */
 export async function closePane(control: HidedControl, pane: string): Promise<void> {
+  const { tab } = await control.until((rest) => ({ tab: tabOfPane(rest, pane) }), `the tab of ${pane}`);
   control.send("close_pane", { pane_id: pane, confirmed: true });
   await control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `the close of ${pane}`, 30_000);
+  if (tab) await control.until((rest) => tabGeometrySettled(rest, tab) || undefined, `the engine's confirmation of the close of ${pane} in ${tab}`, 30_000);
 }
 
 /** Gives `pane` the keyboard as the operator's click does, and waits until the core holds it there. */
