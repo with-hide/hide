@@ -1047,6 +1047,10 @@ pub(super) struct MissionAnswerPayload {
     /// Types an answer again that was typed without the engine confirming it.
     #[serde(default)]
     pub(super) resend: bool,
+    /// Sent from a phone (`hided`'s phone path), which a gate's record
+    /// names as where the answer came from (PRD mission-human-gate D-21).
+    #[serde(default)]
+    pub(super) phone: bool,
 }
 
 /// `mission_material`: the operator's `자료 요청` on the question with `key`:
@@ -4170,12 +4174,15 @@ impl Runtime {
                 }
                 self.set_conductor_settings(settings)
             }
-            Event::MissionAnswer(payload) => self.mission_answer_event(
+            Event::MissionAnswer(payload) => self.mission_answer_event_from(
                 &payload.mission,
                 payload.key,
-                payload.option,
-                payload.text,
-                payload.resend,
+                (payload.option, payload.text, payload.resend),
+                if payload.phone {
+                    crate::mission_criteria::GateVia::Phone
+                } else {
+                    crate::mission_criteria::GateVia::Card
+                },
             ),
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionMaterial(payload) => {

@@ -511,6 +511,7 @@ export function criterionName(line: MissionCriterion, t: TFunction<"translation"
   switch (line.kind) {
     case "own":
     case "defect":
+    case "human":
       return line.text ?? line.key;
     case "check":
       return t("mission.line.check");

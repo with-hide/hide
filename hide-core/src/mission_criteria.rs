@@ -1,7 +1,9 @@
 //! A mission node's finish lines (PRD mission-map-git-criteria D-09-D-16,
 //! D-21, D-23): the criteria the plan names for the node, the lines Hide
 //! adds (the plan's check command, the pull request's CI), the reviews and
-//! verifications other agents give, and the defects a later node found.
+//! verifications other agents give, the defects a later node found, and the
+//! one place the operator looks before the node is done (PRD
+//! mission-human-gate D-02, `human`).
 //!
 //! Each line keeps who recorded it. A line is recorded by its owner only:
 //! the node's worker for its own lines, the check command and its defects,
@@ -23,6 +25,11 @@ pub const CHECKER_LIMIT: usize = 5;
 pub const DEFECT_LIMIT: usize = 16;
 /// Reruns one commit gets after its check command or CI failed (D-14).
 pub const RERUN_LIMIT: u8 = 1;
+/// The longest text of a node's human gate, in characters (PRD
+/// mission-human-gate D-13): what to look at, which a card shows whole.
+pub const GATE_CHARS: usize = 80;
+/// The key of a node's one human line.
+pub const GATE_KEY: &str = "human";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,8 +42,34 @@ pub enum CriterionKind {
     Ci,
     Review,
     Verify,
-    /// A defect a later node found, which the node's worker fixes (D-21).
+    /// A defect a later node found, which the node's worker fixes (D-21),
+    /// or the operator's words that sent a gated node back to work.
     Defect,
+    /// The place the operator looks before the node is done (PRD
+    /// mission-human-gate D-02): passed only by the operator's answer
+    /// (`Runtime::settle_gate`), never by its owner's record or a skip.
+    Human,
+}
+
+/// Where the operator's answer to a human gate came from (PRD
+/// mission-human-gate D-21): the decision card, the phone, or the
+/// Conductor's pane, where it relays the operator's words.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateVia {
+    Card,
+    Phone,
+    Pane,
+}
+
+impl GateVia {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Card => "card",
+            Self::Phone => "phone",
+            Self::Pane => "pane",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -113,6 +146,16 @@ pub struct Recorded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     pub at_unix_ms: u64,
+}
+
+/// The operator as the one who recorded a line at `now`.
+pub(crate) fn operator(now: u64) -> Recorded {
+    Recorded {
+        role: Role::Operator,
+        name: "operator".to_owned(),
+        agent_id: None,
+        at_unix_ms: now,
+    }
 }
 
 /// Why the Conductor went past a line (D-13). `decision` names the
@@ -237,6 +280,15 @@ pub struct Criterion {
     /// before it, and a replan that keeps the line keeps it too.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fails_in_a_row: u32,
+    /// Where the operator answered from, on a human line they passed and on
+    /// a defect their answer to its gate wrote; the words are `evidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<GateVia>,
+    /// On a human line: the key of the mission's decision that asks it now
+    /// (`Runtime::raise_gates`), so the gate's state is read from the line
+    /// and the open decision together (PRD mission-human-gate D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<u64>,
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -286,6 +338,8 @@ impl Criterion {
             tally: None,
             found_by: None,
             fails_in_a_row: 0,
+            via: None,
+            asked: None,
         }
     }
 
@@ -302,9 +356,30 @@ impl Criterion {
         }
     }
 
-    /// Whether the line is one only the operator's answer goes past (D-13).
+    /// Whether the line is one only the operator's answer goes past (D-13):
+    /// the check command and the CI on an answered decision, a human gate
+    /// only by the operator's answer itself (`Runtime::settle_gate`).
     pub(crate) fn protected(&self) -> bool {
-        matches!(self.kind, CriterionKind::Check | CriterionKind::Ci)
+        matches!(
+            self.kind,
+            CriterionKind::Check | CriterionKind::Ci | CriterionKind::Human
+        )
+    }
+
+    /// The operator passes the node's human gate with `words` from `via`
+    /// (PRD mission-human-gate D-11, D-21); whether the line changed. The
+    /// one change a human line takes, made only by `Runtime::settle_gate`.
+    pub(crate) fn pass_gate(&mut self, words: String, via: GateVia, now: u64) -> bool {
+        if self.kind != CriterionKind::Human || self.state == CriterionState::Pass {
+            return false;
+        }
+        self.state = CriterionState::Pass;
+        self.skip = None;
+        self.evidence = Some(words);
+        self.via = Some(via);
+        self.asked = None;
+        self.by = Some(operator(now));
+        true
     }
 
     /// The state the line shows against `heads`: a check command passes
@@ -523,6 +598,7 @@ impl Criterion {
             CriterionKind::Ci | CriterionKind::Review | CriterionKind::Verify => {
                 Err("mission_criterion_not_yours".into())
             }
+            CriterionKind::Human => Err("mission_gate_operator_only".into()),
         }
     }
 
@@ -681,10 +757,11 @@ impl Criterion {
 
 /// The lines a plan makes of a node (B1-B3): its own criteria in order,
 /// the check command where the plan has one, the CI GitHub reported, the
-/// reviews and verifications it asks for, and the defects already found. A
-/// line the plan keeps the same keeps what was recorded on it; the check
-/// command's line keeps it only while the command is the same one
-/// (`same_check`), since a pass of one command is no pass of another.
+/// reviews and verifications it asks for, the human gate the node has
+/// (`set_gate` changes it, PRD mission-human-gate D-02), and the defects
+/// already found. A line the plan keeps the same keeps what was recorded on
+/// it; the check command's line keeps it only while the command is the same
+/// one (`same_check`), since a pass of one command is no pass of another.
 pub(crate) fn plan_lines(
     existing: &[Criterion],
     own: &[String],
@@ -752,6 +829,9 @@ pub(crate) fn plan_lines(
         line.count_failures(false);
         out.push(line);
     }
+    if let Some(gate) = of(CriterionKind::Human) {
+        out.push(gate.clone());
+    }
     out.extend(
         existing
             .iter()
@@ -761,12 +841,58 @@ pub(crate) fn plan_lines(
     out
 }
 
+/// The node's human gate, where it has one.
+pub fn gate(lines: &[Criterion]) -> Option<&Criterion> {
+    lines.iter().find(|line| line.kind == CriterionKind::Human)
+}
+
+/// The node's human gate made `text`, or taken away with none (PRD
+/// mission-human-gate D-15): the same text keeps the line as it stands, a
+/// new one is open, and it goes before the defects. Whether it changed.
+pub(crate) fn set_gate(lines: &mut Vec<Criterion>, text: Option<&str>) -> bool {
+    let at = lines
+        .iter()
+        .position(|line| line.kind == CriterionKind::Human);
+    match (at, text) {
+        (Some(at), Some(text)) if lines[at].text.as_deref() == Some(text) => false,
+        (None, None) => false,
+        (at, text) => {
+            if let Some(at) = at {
+                lines.remove(at);
+            }
+            if let Some(text) = text {
+                let mut line = Criterion::new(GATE_KEY, CriterionKind::Human);
+                line.text = Some(text.to_owned());
+                let place = lines
+                    .iter()
+                    .position(|line| line.kind == CriterionKind::Defect)
+                    .unwrap_or(lines.len());
+                lines.insert(place, line);
+            }
+            true
+        }
+    }
+}
+
 /// Adds a defect a later node found (B21) and answers its key; past
 /// `DEFECT_LIMIT` it is refused.
 pub(crate) fn add_defect(
     lines: &mut Vec<Criterion>,
     text: String,
     found_by: String,
+    by: Recorded,
+) -> Result<String, String> {
+    push_defect(lines, text, Some(found_by), by)
+}
+
+/// Adds a defect, found by a later node or, with `found_by` none, the
+/// operator's words that sent a gated node back to work (PRD
+/// mission-human-gate D-11), and answers its key; past `DEFECT_LIMIT` it is
+/// refused.
+pub(crate) fn push_defect(
+    lines: &mut Vec<Criterion>,
+    text: String,
+    found_by: Option<String>,
     by: Recorded,
 ) -> Result<String, String> {
     let defects = lines
@@ -785,7 +911,7 @@ pub(crate) fn add_defect(
     let key = format!("d{next}");
     let mut line = Criterion::new(key.clone(), CriterionKind::Defect);
     line.text = Some(text);
-    line.found_by = Some(found_by);
+    line.found_by = found_by;
     line.by = Some(by);
     lines.push(line);
     Ok(key)

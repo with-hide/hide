@@ -1396,7 +1396,7 @@ export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 export type MissionBlocked = "upstream_dropped";
 
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
-export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused"] as const;
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1432,7 +1432,7 @@ export type MissionLanding =
   | { state: "unread"; action: MissionLandingAction };
 
 /** A finish line's kind (`mission_criterion_kind`, PRD mission-map-git-criteria D-09-D-11, D-21). */
-export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect";
+export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect" | "human";
 /** A finish line's state as it stands now (`mission_criterion_state`); a check passed on an older commit reads open (B7). */
 export type MissionCriterionState = "open" | "pass" | "fail" | "skipped";
 /** Who recorded a line (`mission_recorded_role`, D-23). */
@@ -1466,8 +1466,27 @@ export type MissionCriterion = {
   checkers?: MissionChecker[];
   /** Of the checkers that decide the line, how many passed, as the core counts them; absent while one or none decides (`Tally`). */
   tally?: { passed: number; total: number };
-  /** The node whose work found a defect. */
+  /** The node whose work found a defect; absent on a defect the operator's answer to the node's gate wrote. */
   found_by?: string;
+  /** Where the operator answered from, on a passed gate (`human`) and on the defect their answer to it wrote (`mission_gate_via`, PRD mission-human-gate D-21). */
+  via?: MissionGateVia;
+  /** On a gate: the key of the decision that asks it now. */
+  asked?: number;
+};
+
+/** Where the operator's answer to a gate came from (`mission_gate_via`). */
+export type MissionGateVia = "card" | "phone" | "pane";
+/** Where a node's gate stands, derived by the core (`mission_gate_state`, PRD mission-human-gate D-09). */
+export type MissionGateState = "ahead" | "open" | "passed";
+/** The place the operator looks before a node is done (`GateView`): what to look at, the decision that asks it (`ask`, its question's key), since when it waits, when it has waited long (`오래 기다림`, compared with the clock), and once passed where the answer came from and the words. */
+export type MissionGate = {
+  state: MissionGateState;
+  look: string;
+  ask: number | null;
+  since_unix_ms: number | null;
+  long_wait_at_unix_ms: number | null;
+  via: MissionGateVia | null;
+  said: string | null;
 };
 
 /** What an external node watches (`External`). */
@@ -1629,6 +1648,8 @@ export type MissionNode = {
   waiting_on?: MissionWaitingOn | null;
   /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
   work?: MissionNodeWork | null;
+  /** The node's gate (PRD mission-human-gate); absent for a node without one. */
+  gate?: MissionGate;
 };
 
 /** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */

@@ -10104,6 +10104,7 @@ mod wire_enum_tests {
                 CriterionKind::Review,
                 CriterionKind::Verify,
                 CriterionKind::Defect,
+                CriterionKind::Human,
             ];
             for variant in criterion_kinds {
                 match variant {
@@ -10112,11 +10113,30 @@ mod wire_enum_tests {
                     | CriterionKind::Ci
                     | CriterionKind::Review
                     | CriterionKind::Verify
-                    | CriterionKind::Defect => {}
+                    | CriterionKind::Defect
+                    | CriterionKind::Human => {}
                 }
             }
             assert_wire(&contract, "mission_criterion_kind", &criterion_kinds);
             checked.insert("mission_criterion_kind");
+            use crate::mission_criteria::GateVia;
+            let vias = [GateVia::Card, GateVia::Phone, GateVia::Pane];
+            for variant in vias {
+                match variant {
+                    GateVia::Card | GateVia::Phone | GateVia::Pane => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_via", &vias);
+            checked.insert("mission_gate_via");
+            use crate::runtime::mission_gates::GateState;
+            let gate_states = [GateState::Ahead, GateState::Open, GateState::Passed];
+            for variant in gate_states {
+                match variant {
+                    GateState::Ahead | GateState::Open | GateState::Passed => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_state", &gate_states);
+            checked.insert("mission_gate_state");
             let criterion_states = [
                 CriterionState::Open,
                 CriterionState::Pass,
@@ -10232,6 +10252,7 @@ mod wire_enum_tests {
                 AttentionReason::ConductorFailed,
                 AttentionReason::WakeRefused,
                 AttentionReason::CloseRefused,
+                AttentionReason::HumanGate,
             ];
             for variant in reasons {
                 match variant {
@@ -10241,7 +10262,8 @@ mod wire_enum_tests {
                     | AttentionReason::UnplannedPr
                     | AttentionReason::ConductorFailed
                     | AttentionReason::WakeRefused
-                    | AttentionReason::CloseRefused => {}
+                    | AttentionReason::CloseRefused
+                    | AttentionReason::HumanGate => {}
                 }
             }
             assert_wire(&contract, "mission_attention_reason", &reasons);

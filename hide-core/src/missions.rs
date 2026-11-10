@@ -18,6 +18,10 @@
 //! refuses a node's done and a mission's close while a line is unmet
 //! (D-12). A mission read from a schema 1 book is `exempt` from that gate
 //! (D-19) and keeps the sentence it had as its node's one line.
+//!
+//! Since schema 4 a node may carry one `human` line, the place the operator
+//! looks before it is done (PRD mission-human-gate D-02); a schema 3 book
+//! has none and reads as it was.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -29,12 +33,16 @@ use crate::delivery::Actor;
 use crate::latest_file::read_capped;
 use crate::mission_criteria::{CheckInput, Criterion};
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 /// The schema before node criteria, read and converted (D-19).
 const SCHEMA_BEFORE_CRITERIA: u32 = 1;
 /// The schema before a node's three states and its pull request list (PRD
 /// mission-node-simple D-16).
 const SCHEMA_BEFORE_SIMPLE: u32 = 2;
+/// The schema before a node's human gate (PRD mission-human-gate D-02): a
+/// book of it has no `human` line and reads unchanged, but a build that knows
+/// only it cannot read a gate, so it reads no schema 4 book.
+const SCHEMA_BEFORE_GATES: u32 = 3;
 /// Answered decisions a mission keeps for a skip of a protected line; past
 /// this the oldest goes and is logged.
 pub const DECIDED_LIMIT: usize = 32;
@@ -255,13 +263,17 @@ pub enum AttentionReason {
     WakeRefused,
     /// Hide could not close the mission with every node finished (B19).
     CloseRefused,
+    /// A node's human gate waits on the operator and no Conductor stands to
+    /// ask it on its row (PRD mission-human-gate D-23): the mission's own
+    /// item, answered on the decision card.
+    HumanGate,
 }
 
 impl AttentionReason {
     /// A reason only the operator can settle goes to them at once (B26);
     /// the others ask the Conductor first (D-05).
     pub fn operator_first(self) -> bool {
-        matches!(self, Self::ConductorFailed)
+        matches!(self, Self::ConductorFailed | Self::HumanGate)
     }
 
     /// The operator's choices for a raise of this reason, in the order the
@@ -281,6 +293,8 @@ impl AttentionReason {
             Self::WorkerEnded | Self::PrClosed | Self::WakeRefused => &[Drop],
             Self::UnplannedPr => &[Attach],
             Self::ConductorFailed => &[Resume, Drop],
+            // Answered on the gate's decision card, never past it here.
+            Self::HumanGate => return Vec::new(),
         };
         let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
         let leave = leave.then_some(Leave).into_iter();
@@ -299,6 +313,7 @@ impl AttentionReason {
             Self::ConductorFailed => "conductor_failed",
             Self::WakeRefused => "wake_refused",
             Self::CloseRefused => "close_refused",
+            Self::HumanGate => "human_gate",
         }
     }
 }
@@ -639,6 +654,12 @@ pub enum WakeEvent {
     /// The operator asked for something to look at before answering the
     /// open question (`자료 요청`).
     MaterialAsked,
+    /// The operator passed a node's human gate (PRD mission-human-gate
+    /// D-11); its words are on the line.
+    GatePassed,
+    /// The operator's answer to a node's gate sent it back with their words
+    /// as a defect: to the Conductor, and to the node's worker (`to`).
+    GateFix,
 }
 
 impl WakeEvent {
@@ -659,6 +680,8 @@ impl WakeEvent {
             Self::Reopened => "reopened",
             Self::Warning => "warning",
             Self::MaterialAsked => "material_asked",
+            Self::GatePassed => "gate_passed",
+            Self::GateFix => "gate_fix",
         }
     }
 }
@@ -1982,6 +2005,16 @@ pub enum MissionCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decision: Option<u64>,
     },
+    /// The Conductor relays the operator's answer to `node`'s human gate,
+    /// given in its pane, with their words quoted (PRD mission-human-gate
+    /// D-21): `pass` passes it, otherwise the words go back as a defect.
+    Gate {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        pass: bool,
+        said: String,
+    },
     /// A later node found a defect in `node`: it works again with the
     /// defect as a line of its own (D-21, B21).
     Defect {
@@ -2062,6 +2095,13 @@ impl MissionCommand {
                     && valid_key(found_by)
                     && valid_text(line, LINE_LIMIT)
             }
+            // Words left out are the core's own refusal, with its way on.
+            Self::Gate {
+                mission,
+                node,
+                said,
+                ..
+            } => id_ok(mission) && valid_key(node) && said.len() <= LINE_LIMIT,
             Self::Decide {
                 mission,
                 line,
@@ -2180,6 +2220,17 @@ pub struct NodeInput {
     /// What a replan changed here and why (B18).
     #[serde(default)]
     pub change: Option<String>,
+    /// The place the operator looks before the node is done, in at most
+    /// `GATE_CHARS` characters (PRD mission-human-gate D-01, D-13): one
+    /// text, or a list a node may hold one of. Left out, a replan keeps the
+    /// gate the node has; `null` or an empty list takes it away, so a
+    /// gate left out is never written as `null`.
+    #[serde(
+        default,
+        deserialize_with = "gate_input",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub gate: Option<Vec<String>>,
 }
 
 /// A change to one node. An absent field is kept, `null` clears it, so a
@@ -2319,6 +2370,12 @@ fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::E
     })
 }
 
+/// A node's gate as the plan names it, present: one text, a list, or
+/// `null` for none.
+fn gate_input<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
+    lines(deserializer).map(Some)
+}
+
 fn null_is_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
@@ -2407,6 +2464,7 @@ pub(crate) fn apply_plan(
                 &node.key,
             ));
         }
+        check_gate(mission, node)?;
         check_checkers(node)?;
         if node.kind == NodeKind::Change && node.delivery.is_none() {
             return Err("mission_delivery_required".into());
@@ -2521,6 +2579,12 @@ pub(crate) fn apply_plan(
                 with_check && input.kind == NodeKind::Change,
                 same_check,
             );
+            if let Some(gate) = &input.gate {
+                crate::mission_criteria::set_gate(
+                    &mut node.criteria,
+                    gate.first().map(|text| text.trim()),
+                );
+            }
             if let Some(steps) = &input.steps {
                 node.steps = steps.iter().map(|step| step.trim().to_owned()).collect();
             }
@@ -2564,6 +2628,44 @@ fn valid_steps(steps: &[String]) -> bool {
         })
 }
 
+/// A node's gate as the plan names it (PRD mission-human-gate D-13, D-15):
+/// at most one, one line of at most `GATE_CHARS` characters, and none on a
+/// node already done, whose work the operator can no longer look at before
+/// it finishes; a mission made before node criteria gates nothing, so it
+/// takes none.
+fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
+    let Some(gate) = &node.gate else {
+        return Ok(());
+    };
+    let refused = |code: &str| Err(crate::coordination::refusal(code, &node.key));
+    if gate.len() > 1 {
+        return refused("mission_gate_too_many");
+    }
+    let text = gate.first().map(|text| text.trim());
+    if let Some(text) = text {
+        if text.is_empty() || text.chars().any(char::is_control) {
+            return refused("mission_gate_invalid");
+        }
+        if text.chars().count() > crate::mission_criteria::GATE_CHARS {
+            return refused("mission_gate_too_long");
+        }
+        if mission.exempt {
+            return refused("mission_gate_exempt");
+        }
+    }
+    let now = mission
+        .node(&node.key)
+        .and_then(|before| crate::mission_criteria::gate(&before.criteria))
+        .and_then(|line| line.text.as_deref());
+    let done = mission
+        .node(&node.key)
+        .is_some_and(|before| before.status == NodeStatus::Done);
+    if done && now != text {
+        return refused("mission_gate_node_done");
+    }
+    Ok(())
+}
+
 /// An external node names one pull request or branch and nothing a worker
 /// would do (B19); no other node names one.
 fn check_node_kind(node: &NodeInput) -> Result<(), String> {
@@ -2579,7 +2681,8 @@ fn check_node_kind(node: &NodeInput) -> Result<(), String> {
         && node.delivery.is_none()
         && node.criteria.is_empty()
         && node.steps.as_ref().is_none_or(Vec::is_empty)
-        && node.checks.is_empty();
+        && node.checks.is_empty()
+        && node.gate.as_ref().is_none_or(Vec::is_empty);
     if external != node.external.is_some() || (external && (!named || !bare)) {
         return Err(crate::coordination::refusal(
             "mission_external_invalid",
@@ -2995,6 +3098,28 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_nodes_unfinished" => {
             "Every node is done or dropped before the mission closes as done or merge_wait: finish them, drop them with hide mission node <key> --status dropped, or close as cancelled"
         }
+        "mission_gate_too_many" => {
+            "Give the node at most one gate (\"gate\": \"<what the operator looks at>\"): the one place they look before it is done"
+        }
+        "mission_gate_too_long" | "mission_gate_invalid" => {
+            "Write the gate as one line of at most 80 characters naming what the operator looks at, such as the map screen"
+        }
+        "mission_gate_exempt" => {
+            "A mission made before node criteria takes no gate: ask the operator with hide mission decide instead"
+        }
+        "mission_gate_node_done" => {
+            "A done node's gate cannot change, since the operator can no longer look before it finishes: put the check on a node not yet done"
+        }
+        "mission_gate_operator_only" => {
+            "A gate passes only on the operator's answer: they answer on the decision card or the phone, or you relay what they said in your pane with hide mission gate <node> --pass|--fix --said \"<their words>\""
+        }
+        "mission_gate_words_missing" => {
+            "Quote the operator's own words with --said \"<what they said>\"; a gate never passes or reopens without them"
+        }
+        "mission_gate_none" => "The node has no gate; hide mission show <node> lists its lines",
+        "mission_gate_not_open" => {
+            "The node's gate does not wait on the operator now: its other lines are not all met yet, or it already passed (hide mission show <node>)"
+        }
         "mission_defects_too_many" => {
             "The node holds 16 defects; ask the operator how to go on with it"
         }
@@ -3053,7 +3178,9 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         .and_then(|version| u32::try_from(version).ok())
         .ok_or("has no schema version")?;
     match from {
-        SCHEMA_VERSION => {}
+        // A schema 3 book holds no human line: every node reads with no
+        // gate, as it ran before.
+        SCHEMA_VERSION | SCHEMA_BEFORE_GATES => {}
         SCHEMA_BEFORE_SIMPLE => convert_before_simple(&mut value)?,
         SCHEMA_BEFORE_CRITERIA => {
             convert_before_criteria(&mut value)?;
@@ -3293,9 +3420,9 @@ impl MissionStore {
         Self { path }
     }
 
-    /// Reads the book at launch, before the runtime lock is taken. A schema
-    /// 1 book is converted, and the file it came from is copied aside once
-    /// before anything writes schema 2 over it.
+    /// Reads the book at launch, before the runtime lock is taken. An older
+    /// schema's book is converted, and the file it came from is copied aside
+    /// once before anything writes the current schema over it.
     pub(crate) fn restore(&self) -> Restored {
         match read_capped(&self.path, READ_CAP) {
             Ok(None) => Restored::Fresh,
@@ -3323,10 +3450,10 @@ impl MissionStore {
         let Some(directory) = self.path.parent() else {
             return Err("has no folder to keep its copy before conversion in".to_owned());
         };
-        let backup = if from == SCHEMA_BEFORE_CRITERIA {
-            hide_kit::layout::missions_before_criteria(directory)
-        } else {
-            hide_kit::layout::missions_before_simple(directory)
+        let backup = match from {
+            SCHEMA_BEFORE_CRITERIA => hide_kit::layout::missions_before_criteria(directory),
+            SCHEMA_BEFORE_SIMPLE => hide_kit::layout::missions_before_simple(directory),
+            _ => hide_kit::layout::missions_before_gates(directory),
         };
         let outcome = crate::latest_file::keep_first_copy(&backup, bytes);
         crate::diagnostic!(serde_json::json!({
@@ -3496,6 +3623,7 @@ pub(crate) mod tests {
             issues: Vec::new(),
             paths: Vec::new(),
             change: None,
+            gate: None,
         }
     }
 
@@ -4035,6 +4163,135 @@ pub(crate) mod tests {
         let saved = encode(&Arc::new(book.clone())).unwrap();
         let again = decode(&saved).unwrap();
         assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+    }
+
+    /// PRD mission-human-gate D-02, B12: a schema 3 book, written before a
+    /// node could carry a gate, reads with no gate and as it was, its file
+    /// copied aside once, and is written back as the current schema, which
+    /// reads the same again.
+    #[test]
+    fn a_schema_three_book_reads_with_no_gate_and_is_kept_aside_once() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([{"key": "fix", "title": "Fix it",
+            "kind": "change", "status": "working", "delivery": "pr",
+            "criteria": [{"key": "c1", "kind": "own", "text": "it works", "state": "pass"}]}]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 3, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let store = MissionStore::new(path.clone());
+        let Restored::Read(book) = store.restore() else {
+            panic!("a schema 3 book reads");
+        };
+        let node = &book.missions[0].nodes[0];
+        assert_eq!(node.status, NodeStatus::Working);
+        assert_eq!(
+            node.criteria
+                .iter()
+                .map(|line| (line.key.as_str(), line.state))
+                .collect::<Vec<_>>(),
+            [("c1", crate::mission_criteria::CriterionState::Pass)]
+        );
+        assert!(crate::mission_criteria::gate(&node.criteria).is_none());
+        let backup = hide_kit::layout::missions_before_gates(folder.path());
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        std::fs::write(&path, b"{\"schema_version\": 3, \"missions\": []}").unwrap();
+        assert!(matches!(store.restore(), Restored::Read(_)));
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            bytes,
+            "the first copy is kept"
+        );
+        let saved = encode(&Arc::new(book.clone())).unwrap();
+        let again = decode(&saved).unwrap();
+        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+    }
+
+    /// PRD mission-human-gate D-13, D-15, B3: a plan names at most one gate
+    /// per node, of at most 80 characters, on a node that is not done and
+    /// not outside; left out a replan keeps it, `null` takes it away, and
+    /// what is refused names its reason and the node.
+    #[test]
+    fn a_plan_names_one_short_gate_per_node_not_yet_done() {
+        let gated = |gate: serde_json::Value| {
+            let mut fix = serde_json::to_value(node("fix", NodeKind::Change, &[])).unwrap();
+            fix["gate"] = gate;
+            plan(vec![serde_json::from_value(fix).unwrap()])
+        };
+        let refused = |mission: &Mission, gate: serde_json::Value| {
+            crate::coordination::split_refusal(&apply_plan(mission, &gated(gate), 2).unwrap_err())
+                .0
+                .to_owned()
+        };
+        let base = mission();
+        let at = "가".repeat(crate::mission_criteria::GATE_CHARS);
+        let planned = apply_plan(&base, &gated(serde_json::json!(at)), 2).unwrap();
+        let line = crate::mission_criteria::gate(&planned.nodes[0].criteria).unwrap();
+        assert_eq!(
+            (line.key.as_str(), line.text.as_deref(), line.state),
+            (
+                "human",
+                Some(at.as_str()),
+                crate::mission_criteria::CriterionState::Open
+            )
+        );
+        assert_eq!(
+            refused(&base, serde_json::json!(format!("{at}가"))),
+            "mission_gate_too_long"
+        );
+        assert_eq!(
+            refused(&base, serde_json::json!(["the map", "the panel"])),
+            "mission_gate_too_many"
+        );
+        assert_eq!(
+            refused(&base, serde_json::json!("  ")),
+            "mission_gate_invalid"
+        );
+        let mut exempt = base.clone();
+        exempt.exempt = true;
+        assert_eq!(
+            refused(&exempt, serde_json::json!("the map")),
+            "mission_gate_exempt"
+        );
+        // Left out, a replan keeps it; null takes it away.
+        let kept =
+            apply_plan(&planned, &plan(vec![node("fix", NodeKind::Change, &[])]), 3).unwrap();
+        assert_eq!(kept.nodes[0].criteria, planned.nodes[0].criteria);
+        let cleared = apply_plan(&planned, &gated(serde_json::Value::Null), 3).unwrap();
+        assert!(crate::mission_criteria::gate(&cleared.nodes[0].criteria).is_none());
+        // A done node keeps the gate it has and takes no other.
+        let mut done = planned.clone();
+        done.nodes[0].status = NodeStatus::Done;
+        assert!(apply_plan(&done, &gated(serde_json::json!(at)), 3).is_ok());
+        assert_eq!(
+            refused(&done, serde_json::json!("the panel")),
+            "mission_gate_node_done"
+        );
+        assert_eq!(
+            refused(&done, serde_json::Value::Null),
+            "mission_gate_node_done"
+        );
+        // An outside node names nothing a person or a worker does.
+        let mut outside = serde_json::to_value(node("up", NodeKind::External, &[])).unwrap();
+        outside["delivery"] = serde_json::Value::Null;
+        outside["criteria"] = serde_json::json!([]);
+        outside["external"] = serde_json::json!({"pr": 4});
+        outside["gate"] = serde_json::json!("the map");
+        assert_eq!(
+            crate::coordination::split_refusal(
+                &apply_plan(
+                    &base,
+                    &plan(vec![serde_json::from_value(outside).unwrap()]),
+                    2
+                )
+                .unwrap_err()
+            )
+            .0,
+            "mission_external_invalid"
+        );
     }
 
     /// PRD mission-node-simple D-16, B26: a failed node of a closed

@@ -71,6 +71,7 @@ pub(crate) mod mission_brief;
 mod mission_cleanup;
 pub(crate) mod mission_criteria;
 pub(crate) mod mission_events;
+pub(crate) mod mission_gates;
 mod mission_health;
 pub(crate) mod mission_landing;
 mod mission_outside;

@@ -296,6 +296,19 @@ impl Runtime {
         if line.is_none() && shown.is_some_and(|(_, show)| !show.is_empty()) {
             return Err("mission_question_without_line".into());
         }
+        // A gate's decision is the operator's to answer (PRD
+        // mission-human-gate D-12): the Conductor's clear would read as their
+        // answer, so it is refused; a question of its own takes the decision,
+        // and the gate asks again once it is free.
+        let gate = super::mission_gates::gate_asked(mission).map(|node| node.key.clone());
+        if line.is_none()
+            && let Some(node) = &gate
+        {
+            return Err(crate::coordination::refusal(
+                "mission_gate_operator_only",
+                node,
+            ));
+        }
         let current = mission.question.as_ref();
         let same = mission.decision == line
             && current.is_some_and(|question| {
@@ -375,6 +388,16 @@ impl Runtime {
         }
         let cleared_after_answer = line.is_none() && mission.decision.is_some();
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        if let Some(line) = gate
+            .and_then(|key| target.nodes.iter_mut().find(|node| node.key == key))
+            .and_then(|node| {
+                node.criteria
+                    .iter_mut()
+                    .find(|line| line.kind == crate::mission_criteria::CriterionKind::Human)
+            })
+        {
+            line.asked = None;
+        }
         // Clearing a decision is the Conductor saying the operator answered
         // it (PRD mission-map-git-criteria B12).
         if cleared_after_answer {
@@ -414,6 +437,7 @@ impl Runtime {
     /// Conductor has since changed its question, when no Conductor or no
     /// device is there to read it; the same question answered again keeps
     /// the first answer.
+    #[cfg(test)]
     pub(super) fn answer_mission(
         &mut self,
         id: &str,
@@ -421,6 +445,25 @@ impl Runtime {
         option: Option<u8>,
         text: Option<String>,
         resend: bool,
+    ) -> Result<bool, String> {
+        self.answer_mission_from(
+            id,
+            key,
+            (option, text, resend),
+            crate::mission_criteria::GateVia::Card,
+        )
+    }
+
+    /// `answer_mission` from the card or, with `via` the phone, from a
+    /// phone: a gate's decision goes to the one entry that settles a gate
+    /// (`settle_gate`, PRD mission-human-gate D-21), with no Conductor
+    /// needed to read it; every other decision's answer as before.
+    pub(super) fn answer_mission_from(
+        &mut self,
+        id: &str,
+        key: u64,
+        (option, text, resend): (Option<u8>, Option<String>, bool),
+        via: crate::mission_criteria::GateVia,
     ) -> Result<bool, String> {
         let now = super::memory::now_ms();
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
@@ -430,6 +473,15 @@ impl Runtime {
         let current = mission.question.as_ref().map_or(0, |question| question.key);
         if current != key {
             return Err("mission_decision_changed".into());
+        }
+        if let Some(node) = super::mission_gates::gate_asked(mission).map(|node| node.key.clone()) {
+            if resend {
+                return Ok(false);
+            }
+            if self.mission_stale(mission) {
+                return Err("mission_device_disconnected".into());
+            }
+            return self.answer_gate(id, &node, (option, text), via);
         }
         let answered = mission.answer.as_ref().filter(|answer| answer.key == key);
         // Sending again is the operator's own choice for an answer typed
@@ -508,6 +560,7 @@ impl Runtime {
     /// The banner's answer as one event: a refusal the operator can act on
     /// stays beside the question as its reason; one whose question changed
     /// draws the new question instead, and goes only to the log.
+    #[cfg(test)]
     pub(super) fn mission_answer_event(
         &mut self,
         mission: &str,
@@ -516,7 +569,23 @@ impl Runtime {
         text: Option<String>,
         resend: bool,
     ) -> bool {
-        match self.answer_mission(mission, key, option, text, resend) {
+        self.mission_answer_event_from(
+            mission,
+            key,
+            (option, text, resend),
+            crate::mission_criteria::GateVia::Card,
+        )
+    }
+
+    /// `mission_answer_event` from the card, or from a phone.
+    pub(super) fn mission_answer_event_from(
+        &mut self,
+        mission: &str,
+        key: u64,
+        (option, text, resend): (Option<u8>, Option<String>, bool),
+        via: crate::mission_criteria::GateVia,
+    ) -> bool {
+        match self.answer_mission_from(mission, key, (option, text, resend), via) {
             Ok(changed) => changed,
             Err(code) => {
                 crate::diagnostic!(json!({

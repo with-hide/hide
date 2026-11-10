@@ -271,13 +271,23 @@ pub(super) fn settle(mission: &str, node: &mut MissionNode, by: &str) {
 }
 
 /// Goes past each of `node`'s lines named in `keys`, as the operator's own
-/// decision, with the time it was made (D-15).
+/// decision, with the time it was made (D-15); a gate among them is passed
+/// as their answer from the card, the one way a gate passes (PRD
+/// mission-human-gate D-12).
 fn skip_lines(node: &mut MissionNode, keys: &[String], now: u64) {
     for line in node
         .criteria
         .iter_mut()
         .filter(|line| keys.contains(&line.key))
     {
+        if line.kind == crate::mission_criteria::CriterionKind::Human {
+            line.pass_gate(
+                "운영자 판단".to_owned(),
+                crate::mission_criteria::GateVia::Card,
+                now,
+            );
+            continue;
+        }
         line.skip(
             "운영자 판단".to_owned(),
             None,
@@ -511,6 +521,7 @@ impl Runtime {
         let mut changed = false;
         for id in ids {
             changed |= self.mission_health(&id, now);
+            changed |= self.raise_gates(&id, now);
         }
         // A review's failure or a push moves a node's warnings now; the
         // quiet that only time makes is the minute decision's.
