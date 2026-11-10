@@ -53,6 +53,22 @@ def _record_refused(error):
                              "the pane's count could not be stored"))
 
 
+def pane_cause(runtime, pane):
+    """The cause the hook recorded for `pane`, when its last outcome is that
+    pane's, or None.
+
+    A turn the row never reads as idle is the turn's own failure, and a hook
+    that could not keep the record the turn and the counts are read from
+    wrote that down for the pane it ran in. Naming it is what makes the cell
+    say why rather than only that the row stayed working; another pane's
+    outcome explains nothing here and stays unnamed.
+    """
+    failure = last_failure(runtime)
+    if failure is None or not pane or failure.get("pane_id") != pane:
+        return None
+    return cause(failure)
+
+
 def cause(failure):
     """One named cause for a cell's reason, from the hook's own record."""
     error = str(failure.get("error") or "").strip()

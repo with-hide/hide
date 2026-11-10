@@ -358,7 +358,13 @@ class Journey:
                 events = read.get("events", [])
                 verdict = cells.turn_verdict(observed, events, value, after(events))
             if verdict[0] == cells.PASS or time.monotonic() > end:
-                return verdict, read, observed
+                # A turn that never reads idle is a turn whose record never
+                # moved, and a hook whose record write was refused wrote down
+                # for this pane why: the cell says it rather than only that the
+                # row stayed working (hook_records.py).
+                cause = None if verdict[0] == cells.PASS else hook_records.pane_cause(self.runtime, self.pane)
+                return (cells.Verdict(verdict[0], verdict[1] + "; " + cause, cells.kind(verdict))
+                        if cause else verdict), read, observed
             if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
                 raise Cancelled("run_cancelled")
 

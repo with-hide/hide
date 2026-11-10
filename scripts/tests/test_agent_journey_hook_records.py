@@ -119,6 +119,52 @@ class JourneyStarts(unittest.TestCase):
             self.assertTrue(journey.identity_refused("start_untrusted"))
             self.assertEqual(journey.table["claude-code"]["start_untrusted"], cell)
 
+    def test_a_turn_that_never_reads_idle_names_the_record_the_hook_could_not_keep(self):
+        # The turn and the counts are read from the pane's record, so a refused
+        # record write is what leaves a row working: the cell says which pane
+        # and why instead of only that the row never read idle.
+        with tempfile.TemporaryDirectory() as root:
+            failure(Path(root), "the pane's count could not be changed: Permission denied (os error 13)",
+                    pane="h4:p2")
+            journey = self.journey(root)
+            journey.pane = "h4:p2"
+            journey.reference = {"kind": "id", "value": "session-1"}
+            journey.conversation = lambda: {"session": "session-1", "path": "p", "events": [
+                {"role": "user", "kind": "human", "text": "Reply with exactly TOKEN", "at": 1000},
+                {"role": "assistant", "text": "TOKEN", "at": 2000}]}
+            journey.daemon = SimpleNamespace(activities=lambda pane, since: [("working", 1500)])
+            verdict, _, _ = journey.wait_turn(0, "TOKEN", seconds=0)
+            self.assertEqual(verdict[0], cells.FAIL)
+            self.assertEqual(verdict[1], "row never read idle after the answer; "
+                                         "hook_record_refused (h4:p2, SessionStart): "
+                                         "the pane's count could not be changed: Permission denied (os error 13)")
+
+    def test_another_panes_record_explains_no_turn_of_this_one(self):
+        with tempfile.TemporaryDirectory() as root:
+            failure(Path(root), "the pane's count could not be changed: denied", pane="h4:p2")
+            journey = self.journey(root)
+            journey.pane = "h9:p2"
+            journey.reference = {"kind": "id", "value": "session-1"}
+            journey.conversation = lambda: {"session": "session-1", "path": "p", "events": [
+                {"role": "user", "kind": "human", "text": "Reply with exactly TOKEN", "at": 1000},
+                {"role": "assistant", "text": "TOKEN", "at": 2000}]}
+            journey.daemon = SimpleNamespace(activities=lambda pane, since: [("working", 1500)])
+            verdict, _, _ = journey.wait_turn(0, "TOKEN", seconds=0)
+            self.assertEqual(verdict, (cells.FAIL, "row never read idle after the answer"))
+
+    def test_a_turn_that_reads_idle_carries_no_cause_even_with_a_record_on_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            failure(Path(root), "the pane's count could not be changed: denied", pane="h4:p2")
+            journey = self.journey(root)
+            journey.pane = "h4:p2"
+            journey.reference = {"kind": "id", "value": "session-1"}
+            journey.conversation = lambda: {"session": "session-1", "path": "p", "events": [
+                {"role": "user", "kind": "human", "text": "Reply with exactly TOKEN", "at": 1000},
+                {"role": "assistant", "text": "TOKEN", "at": 2000}]}
+            journey.daemon = SimpleNamespace(activities=lambda pane, since: [("stopped", 2500), ("working", 1500)])
+            verdict, _, _ = journey.wait_turn(0, "TOKEN", seconds=0)
+            self.assertEqual(verdict, (cells.PASS, "row read working, then idle after the answer"))
+
     def test_with_no_identity_refusal_the_next_start_is_measured_as_its_own(self):
         with tempfile.TemporaryDirectory() as root:
             journey = self.journey(root)
