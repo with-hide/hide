@@ -10465,4 +10465,23 @@ fn a_node_not_started_is_raised_twenty_minutes_after_it_was_first_seen() {
         again.iter().any(|letter| !first.contains(letter)),
         "{first:?} then {again:?}"
     );
+    // A full cap takes it off with its waiting letter; once a place is
+    // free it stands again from then, as a new one.
+    let full = held + 22 * minute;
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(super::super::mission_health::lower_not_started(
+        mission, full
+    ));
+    assert_eq!(raised(&runtime), None);
+    assert!(letters(&runtime).is_empty(), "its letter went with it");
+    runtime.stall_missions(full + minute);
+    runtime.stall_missions(full + 21 * minute - 1);
+    assert_eq!(raised(&runtime), None);
+    assert!(runtime.stall_missions(full + 21 * minute));
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+    let third = letters(&runtime);
+    assert!(
+        third.iter().all(|letter| !again.contains(letter)),
+        "{again:?} then {third:?}"
+    );
 }

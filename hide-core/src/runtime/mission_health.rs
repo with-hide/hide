@@ -217,17 +217,56 @@ pub(super) fn conductor_unanswered(mission: &Mission) -> bool {
     })
 }
 
+/// A key naming `attention`'s raise, its letter or its reaching the
+/// operator: a stall's carries the raise's count, since the same stall that
+/// went and stands again is a new one (`AttentionReason::stall`).
+fn stall_named(key: String, attention: &crate::missions::Attention) -> String {
+    if attention.reason.stall() {
+        format!("{key}:{}", attention.key)
+    } else {
+        key
+    }
+}
+
+/// Takes off each `not_started` raise of `mission` and its waiting letter,
+/// for a mission whose cap is full: a node waiting for a place owes no
+/// start, and stands again as a new stall once a place is free. Whether
+/// one went.
+pub(super) fn lower_not_started(mission: &mut Mission, now: u64) -> bool {
+    let id = mission.id.clone();
+    let mut lowered = false;
+    for node in &mut mission.nodes {
+        let Some(cause) = node
+            .attention
+            .as_ref()
+            .filter(|attention| attention.reason == AttentionReason::NotStarted)
+            .map(crate::missions::Attention::cause)
+        else {
+            continue;
+        };
+        settle(&id, node, "hide");
+        node.handled.retain(|handled| *handled != cause);
+        lowered = true;
+    }
+    if lowered {
+        mission.updated_at_unix_ms = now;
+        prune_attention_wakes(mission);
+    }
+    lowered
+}
+
 /// A Conductor that took the mission over is asked first again for what
 /// reached the operator because its predecessor did not answer (B15): its
 /// own ten minutes start now, so the old timeout never hands it on.
 pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
     let mut asked = Vec::new();
     for node in &mut mission.nodes {
-        let Some(key) = node
-            .attention
-            .as_ref()
-            .map(|attention| act_key(node, &format!("raise:{}", attention.cause())))
-        else {
+        let Some(key) = node.attention.as_ref().map(|attention| {
+            stall_named(
+                act_key(node, &format!("raise:{}", attention.cause())),
+                attention,
+            )
+        }) else {
             continue;
         };
         let Some(attention) = node.attention.as_mut() else {
@@ -556,12 +595,10 @@ impl Runtime {
                 // again after a restart makes the same key, and one asked
                 // again of a Conductor that took over is its own act (B27).
                 let Some(key) = node.attention.as_ref().map(|attention| {
-                    let key = act_key(node, &format!("operator:{}:{asked}", attention.cause()));
-                    if attention.reason.stall() {
-                        format!("{key}:{}", attention.key)
-                    } else {
-                        key
-                    }
+                    stall_named(
+                        act_key(node, &format!("operator:{}:{asked}", attention.cause())),
+                        attention,
+                    )
                 }) else {
                     continue;
                 };
@@ -733,24 +770,7 @@ impl Runtime {
             // `not_started` already raised goes, to stand again once a place
             // is free.
             if cap_full {
-                let id = mission.id.clone();
-                let mission = &mut self.missions.book.missions[index];
-                for node in &mut mission.nodes {
-                    let Some(cause) = node
-                        .attention
-                        .as_ref()
-                        .filter(|attention| attention.reason == AttentionReason::NotStarted)
-                        .map(crate::missions::Attention::cause)
-                    else {
-                        continue;
-                    };
-                    settle(&id, node, "hide");
-                    node.handled.retain(|handled| *handled != cause);
-                    mission.updated_at_unix_ms = now;
-                    changed = true;
-                }
-                // Its letter, if still waiting, goes with it.
-                prune_attention_wakes(mission);
+                changed |= lower_not_started(&mut self.missions.book.missions[index], now);
             }
             let mission = &self.missions.book.missions[index];
             let operator_waits: Vec<bool> = mission
