@@ -26,7 +26,13 @@ function useWholePage(box: RefObject<HTMLDivElement | null>): number {
     const grow = () => {
       const scroller = element.querySelector<HTMLElement>("[data-mission-scroll]");
       const hidden = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
-      if (hidden > 0) setHeight((now) => now + hidden);
+      if (hidden <= 0) return;
+      // The height this page needs is read from what is drawn now, not added to the last one asked for: the observers
+      // can fire again before the box has the height just asked for, and each stale call asks for the same number.
+      const frame = element.parentElement;
+      const chrome = frame ? frame.getBoundingClientRect().height - element.getBoundingClientRect().height : 0;
+      const needed = Math.ceil(element.getBoundingClientRect().height + hidden + chrome);
+      setHeight((now) => Math.max(now, needed));
     };
     grow();
     const resized = new ResizeObserver(grow);
