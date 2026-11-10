@@ -280,7 +280,7 @@ jobs:
             python3 scripts/e2e-shard.py check --table web/e2e/shard-durations.json --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
             args+=(--test-list "$shard_file")
           fi
-          bash scripts/verify-web.sh web e2e "${args[@]}" --repeat-each 20 --retries 0
+          bash scripts/verify-web.sh web e2e "${args[@]}"
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

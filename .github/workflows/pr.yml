@@ -131,8 +131,7 @@ jobs:
       # This pull request's earlier runs and the plan records they kept.
       actions: read
     outputs:
-      # Temporary isolated close-subtree repetition; reverted after evidence.
-      lanes: ${{ '["policy","checks","web-e2e"]' }}
+      lanes: ${{ steps.plan.outputs.lanes }}
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
@@ -777,8 +776,7 @@ jobs:
       # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
       # six at most 641.9 s. Six is the smallest count within 720 s.
       # Test-work weights exclude setup/queues; the step still caps at 20 min.
-      shards: 5
-      grep: "close-subtree.spec.ts"
+      shards: 6
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
   # docs/TESTING.md), in `remote-mailbox.yml`. It has its own job because it was
