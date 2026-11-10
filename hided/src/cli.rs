@@ -2728,12 +2728,35 @@ fn runtime_prepare(home: &Path) -> Result<(), String> {
 /// Ends the daemon `daemon` and starts the next, when `daemon` is still the
 /// one this state folder names. A daemon that was stopped or replaced since
 /// the request was made is never touched, and nothing is started for it.
+/// The check, the stop and the start all happen under `connect.lock`, the
+/// boundary discovery uses, so a successor another `hide connect` starts
+/// between them is never ended or replaced by this stale request; the
+/// replacement is a start of the daemon beside this program, not a discovery
+/// that could replace a successor of another build.
 fn restart(env: &Env, daemon: u32, started: u64) -> Result<(), String> {
-    if let Some(state) = daemon_to_restart(&env.state_dir, daemon, started)? {
-        stop_daemon(&env.state_dir, &state)?;
-        connect_json(env)?;
+    restart_under_lock(&env.state_dir, daemon, started, &|state| {
+        stop_daemon(&env.state_dir, state)?;
+        let spawned_at = unix_ms();
+        let mut child = spawn_daemon(env, false)?;
+        let healthy = wait_healthy(env, &mut child, spawned_at);
+        // The daemon outlives this command; nothing waits for it.
+        std::mem::forget(child);
+        healthy.map(|_| ()).map_err(|error| error.detail())
+    })
+}
+
+fn restart_under_lock(
+    state_dir: &Path,
+    daemon: u32,
+    started: u64,
+    replace: &dyn Fn(&DaemonState) -> Result<(), String>,
+) -> Result<(), String> {
+    let _serialized = state_file::lock_connect(state_dir)
+        .map_err(|error| format!("the connect lock: {error}"))?;
+    match daemon_to_restart(state_dir, daemon, started)? {
+        Some(state) => replace(&state),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// The state of the daemon `hide restart` may end: the one this folder names
@@ -3476,6 +3499,47 @@ mod tests {
         );
         daemon.kill().unwrap();
         daemon.wait().unwrap();
+    }
+
+    /// A successor that takes the folder while a restart waits for the
+    /// connect lock is never replaced by it; the daemon that asked is.
+    #[cfg(unix)]
+    #[test]
+    fn a_restart_waiting_for_the_lock_leaves_a_successor_alone() {
+        let mut old = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut successor = Command::new("sleep").arg("30").spawn().unwrap();
+        let started = process::start_time(old.id()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        state_file::write_state(dir.path(), &recorded(old.id(), Some(started))).unwrap();
+        let replaced = std::sync::atomic::AtomicUsize::new(0);
+        let lock = state_file::lock_connect(dir.path()).unwrap();
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                restart_under_lock(dir.path(), old.id(), started, &|_| {
+                    replaced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+            });
+            // The successor's connect wins the lock and records itself.
+            let theirs = process::start_time(successor.id()).unwrap();
+            state_file::write_state(dir.path(), &recorded(successor.id(), Some(theirs))).unwrap();
+            drop(lock);
+            waiting.join().unwrap().unwrap();
+        });
+        assert_eq!(replaced.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        state_file::write_state(dir.path(), &recorded(old.id(), Some(started))).unwrap();
+        restart_under_lock(dir.path(), old.id(), started, &|state| {
+            assert_eq!(state.pid, old.id());
+            replaced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(replaced.load(std::sync::atomic::Ordering::SeqCst), 1);
+        for child in [&mut old, &mut successor] {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
     }
 
     #[test]
