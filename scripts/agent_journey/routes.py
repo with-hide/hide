@@ -6,6 +6,8 @@ from pathlib import Path
 
 from agent_live_check.protection import ProtectionError, write_private
 
+from . import hook_records
+
 
 def operator_routing(environment):
     """Inherited operator routes, before the private environment replaces them."""
@@ -17,6 +19,35 @@ def operator_routing(environment):
                 raise ProtectionError("operator_routing_must_be_absolute")
             routes.append(path / suffix if suffix else path)
     return routes
+
+
+def allow_hook_records(sandbox, runtime):
+    """Let the hooks inside the sandbox keep their records where this candidate reads them.
+
+    A pane's hook records (its counts, its turn, its plan and the record of a
+    report that failed) sit beside the state folder of the daemon it asks
+    (`hide_agent_hooks::route::records_root`), which for this run's candidate
+    is `<state>/agent-hooks` and not the operator's `~/.hide`
+    (`scripts/agent_journey/hook_records.py`). The profile hides the whole run
+    from the agent, so without this a hook reports its session - which is what
+    a spawn waits for - and can keep nothing else: its counts stay absent and
+    its turn never moves, so a row never reads idle after the answer, and a
+    refused record leaves no file for the run to name as the cause.
+
+    This opens that one folder and nothing else of the controller's state: the
+    credentials, the mailbox and the core's own files stay denied, and so does
+    the operator's `~/.hide` outside the sandbox.
+    """
+    records = hook_records.folder(runtime)
+    quote = lambda value: json.dumps(str(value), ensure_ascii=True)
+    sandbox.rules.extend([
+        # The record's parent is this daemon's state folder, which the profile
+        # denies whole; its metadata is what a hook lstat's on the way in.
+        f"(allow file-read-metadata (literal {quote(records.parent)}))",
+        f"(allow file-read* file-write* (subpath {quote(records)}))"])
+    replacement = sandbox.profile.with_suffix(".next")
+    write_private(replacement, ("\n".join(sandbox.rules) + "\n").encode())
+    replacement.replace(sandbox.profile)
 
 
 def allow_hook_route(sandbox, runtime):

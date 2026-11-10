@@ -9,6 +9,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey.local import allow_one_shot_references, operator_trust
+from agent_journey.routes import allow_hook_records
 from agent_live_check.protection import ProtectionError
 
 
@@ -65,6 +66,41 @@ class OneShotReferences(unittest.TestCase):
             read = subprocess.run(["/usr/bin/sandbox-exec", "-f", str(profile), "/bin/cat", str(references / name)],
                                   capture_output=True, text=True, timeout=10)
             self.assertEqual(read.returncode == 0, readable, f"{name}: {read.stderr.strip()}")
+
+
+@unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file(), "the write sandbox is macOS's")
+class HookRecords(unittest.TestCase):
+    def test_the_rule_opens_the_candidates_records_folder_and_nothing_else_of_the_state(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name).resolve()
+        home, state = root / "daemon-home", root / "state"
+        home.mkdir()
+        state.mkdir()
+        # The candidate's own state folder, so the records sit beside it
+        # (`hide_agent_hooks::route::records_root`).
+        (state / "hided.json").write_text("{}")
+        profile = root / "guard.sb"
+        sandbox = type("Sandbox", (), {"profile": profile,
+                                       "rules": ["(version 1)", "(allow default)",
+                                                 f"(deny file-read* file-write* (subpath {json.dumps(str(state))}))"]})()
+        allow_hook_records(sandbox, type("Runtime", (), {"home": home, "state": state})())
+        records = state / "agent-hooks" / "panes"
+        # A hook creates the folder on its first record, keeps its record and
+        # the lock beside it, and reads both back.
+        write = subprocess.run(["/usr/bin/sandbox-exec", "-f", str(profile), "/bin/sh", "-c",
+                                f"mkdir -p {json.dumps(str(records))} && printf '{{}}' > {json.dumps(str(records / 'h1_p1.json'))}"
+                                f" && printf '' >> {json.dumps(str(state / 'agent-hooks/panes.lock'))}"],
+                               capture_output=True, text=True, timeout=10)
+        self.assertEqual(write.returncode, 0, write.stderr.strip())
+        self.assertEqual((records / "h1_p1.json").read_text(), "{}")
+        # The rest of this daemon's state stays denied, read and written: its
+        # core's files, its mailbox and its pane credentials are not a hook's.
+        for path in (state / "hided.json", state / "core-state.json", state / "pane-capabilities/own.json"):
+            touched = subprocess.run(["/usr/bin/sandbox-exec", "-f", str(profile), "/bin/sh", "-c",
+                                      f"cat {json.dumps(str(path))}; printf x > {json.dumps(str(path))}"],
+                                     capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(touched.returncode, 0, f"{path.name} was reachable")
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ from .contract import load_contract
 from .failure import FailureLogs, drop_on_pass
 from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
-from .routes import allow_hook_route, operator_routing
+from .routes import allow_hook_records, allow_hook_route, operator_routing
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
                     disable_hide_ai, opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
@@ -652,6 +652,7 @@ def main(argv=None):
         failure_logs = FailureLogs(runtime.output("hided"))
         if sandbox:
             for current in getattr(runtime, "journey_sandboxes", [sandbox]):
+                allow_hook_records(current, runtime)
                 allow_hook_route(current, runtime)
                 allow_one_shot_references(current, runtime)
         if ready:
