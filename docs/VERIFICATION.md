@@ -208,7 +208,8 @@ Those errors remain failures with exit 2; missing process confirmation retains t
 An unseen double-fork descendant that clears its marker and leaves the owned group may escape attribution; record this limitation in the PR's Review section.
 This ownership boundary follows the explicitly recorded B8/D-09 scope decision; it does not claim complete workstation process attribution.
 Linux fixture supervision uses a child subreaper and validates its procfs namespace and visibility before using process identities.
-The subreaper keeps an adopted process that ended as a zombie until the run's cleanup; a desktop's init reaps the same process at once.
+The subreaper reaps an adopted process that ended as a zombie on each poll of the run (`reap_adopted`), as a desktop's init reaps the same process at once, so the final cleanup's reap pass (at most 129 children) only meets what ended in the cleanup itself.
+The native root is the exception: it is only looked at (`WNOWAIT`) and stays unreaped until the cleanup's own wait, because it reserves the run's process group.
 On Windows each child starts suspended and joins a job object of its own before it runs, so everything it starts is in the job (`scripts/agent_live_check/windows.py`, after hide-platform's `process`).
 The job holds the same caps, measured as Linux and macOS measure them: 128 processes, which the job itself refuses, and 2 GiB of resident memory, the working set of every process in the job summed every 0.1 s as a guardian sums RSS, so the three systems judge a run by one measure.
 This replaces the committed memory #1327 capped on Windows: Windows counts every page a process committed, touched or not, so that cap ended a run Linux and macOS pass within theirs.
