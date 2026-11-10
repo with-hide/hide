@@ -2,8 +2,7 @@
 //!
 //! The engine's `agent.start` types the agent's command into the pane
 //! only while the pane's shell alone holds the terminal: the foreground
-//! process group is the shell's own and has no other member (as in Herdr v0.9.1,
-//! `available_pane_shell_from_job`). It does not wait for that state, it
+//! process group is the shell's own and has no other member. It does not wait for that state, it
 //! refuses with `agent_pane_busy`, and no event announces the moment the
 //! state is reached. A pane Hide has just made, a new worktree's, a fork's
 //! split or a restored tab, is still running its shell's startup files then,

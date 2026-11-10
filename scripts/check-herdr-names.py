@@ -10,16 +10,20 @@ its number and one reason. This check fails when:
 - a listed file names more than its number, so a new name arrived;
 - a listed file names fewer, so its number must come down (the ratchet only goes down);
 - a listed file names nothing any more, or names a reason the list does not define;
-- a tracked text file cannot be read, or is too large to count (see MAX_BYTES).
+- a tracked path under the root `agents/` folder exists (that folder is local-only);
+- git cannot read the index, which is reported with git's own message.
 
-The folder name `herdr-ide` is a path component, not Herdr, so the exact folder
-name is removed before counting when no letter, digit, underscore or hyphen is
-attached to it: `herdr-ide/` and `~/projects/herdr-ide` are not counted, while
-`herdr-ide-foo`, `herdr-identity` and `herdr_ide` are.
+The text is read from git's index with `git grep --cached`, never from the
+working tree: no path is opened, so a file replaced on disk by a FIFO or a link
+changes nothing, and no size limit is needed because git streams the blobs.
+Binary blobs are skipped by git (`-I`). The root `agents/` folder is left out of
+the search by the pathspec, and a tracked path under it is reported instead.
 
-Only tracked regular files are read. A tracked symlink or submodule is not
-followed, so a link cannot pull in an untracked file (such as the local-only
-root `agents/` folder). Binary files (a NUL byte) are skipped.
+The folder name `herdr-ide` is exempt only as a whole path component: it is not
+counted when no word character, `-`, `.` or `+` touches it on either side, so
+`herdr-ide/x` and `~/projects/herdr-ide` are not counted, while `herdr-ide.foo`,
+`herdr-ide+foo`, `herdr-ide-foo`, `herdr-identity` and `herdr_ide` are.
+`herdr-ide.git` is counted too, since it is a name with a suffix, not a folder.
 
 The guard's own three files are not scanned, because they must name the word.
 CONTRIBUTING.md, CI gates, owns the rule and the reasons; this is its check.
@@ -27,9 +31,7 @@ CONTRIBUTING.md, CI gates, owns the rule and the reasons; this is its check.
 Usage: scripts/check-herdr-names.py   (run from anywhere in the checkout)
 """
 import json
-import os
 import re
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -41,26 +43,22 @@ GUARD = {
     ALLOWLIST,
     'scripts/tests/test_check_herdr_names.py',
 }
-# 8 MiB: the largest tracked file today is a 4.8 MB GIF, so the cap only fires on
-# a new large text file. It also bounds what one file costs in memory: a file is
-# counted and discarded before the next one is read.
-MAX_BYTES = 8 * 1024 * 1024
-CHUNK = 64 * 1024
 NAME = re.compile(r'herdr', re.IGNORECASE)
-FOLDER = re.compile(r'(?<![\w-])herdr-ide(?![\w-])', re.IGNORECASE)
+FOLDER = re.compile(r'(?<![\w.+-])herdr-ide(?![\w.+-])', re.IGNORECASE)
 SHOWN = 5
-SYMLINK_MODE = '120000'
-SUBMODULE_MODE = '160000'
+NAMESPACE = 'agents'
 
 
 def names_in(text):
-    """Line numbers and count of Herdr names in `text`; the folder name is removed first."""
-    lines = [
-        number
-        for number, line in enumerate(text.split('\n'), 1)
-        if NAME.search(FOLDER.sub('', line))
-    ]
-    return len(NAME.findall(FOLDER.sub('', text))), lines
+    """Count and line numbers of the Herdr names in `text`; the folder name is removed first."""
+    count = 0
+    lines = []
+    for number, line in enumerate(text.split('\n'), 1):
+        found = len(NAME.findall(FOLDER.sub('', line)))
+        if found:
+            count += found
+            lines.append(number)
+    return count, lines
 
 
 def where(lines):
@@ -69,49 +67,8 @@ def where(lines):
     return f'lines {shown}{more}'
 
 
-def scan(path, cap=MAX_BYTES):
-    """Count the names in one tracked file. Returns ('binary', None), ('count', (n, lines)) or ('error', message).
-
-    A file is read with O_NOFOLLOW, so a link cannot send the read elsewhere.
-    A file over `cap` is only counted when it has no NUL byte; it is otherwise an error.
-    """
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-    except OSError as error:
-        return 'error', f'cannot be read ({error.strerror or error})'
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode):
-            return 'error', 'is not a regular file'
-        if info.st_size > cap:
-            with os.fdopen(os.dup(descriptor), 'rb') as handle:
-                while True:
-                    chunk = handle.read(CHUNK)
-                    if not chunk:
-                        break
-                    if b'\0' in chunk:
-                        return 'binary', None
-            return 'error', (
-                f'is {info.st_size} bytes, over the {cap}-byte cap, and is not binary; '
-                'the check cannot count its names: split it or keep it out of git'
-            )
-        data = b''
-        while True:
-            chunk = os.read(descriptor, CHUNK)
-            if not chunk:
-                break
-            data += chunk
-        if b'\0' in data:
-            return 'binary', None
-        return 'count', names_in(data.decode('utf-8', errors='replace'))
-    except OSError as error:
-        return 'error', f'cannot be read ({error.strerror or error})'
-    finally:
-        os.close(descriptor)
-
-
 def check(results, allowlist):
-    """Return errors for `results` ({path: ('count', (n, lines)) or ('error', message)}) against `allowlist`."""
+    """Return errors for `results` ({path: (count, lines)}) against `allowlist`."""
     reasons = allowlist['reasons']
     listed = allowlist['files']
     errors = []
@@ -128,11 +85,7 @@ def check(results, allowlist):
     for path in sorted(results):
         if path in GUARD:
             continue
-        kind, value = results[path]
-        if kind == 'error':
-            errors.append(f'{path}: {value}. Fix the file, or remove it from git if it does not belong.')
-            continue
-        names, lines = value
+        names, lines = results[path]
         entry = listed.get(path)
         if entry is None:
             if names:
@@ -156,39 +109,53 @@ def check(results, allowlist):
     return errors
 
 
-def tracked_entries(root):
-    """(mode, path) of every tracked entry, from the index; the root `agents/` namespace is left out."""
-    listing = subprocess.run(
-        ['git', 'ls-files', '-s', '-z'], cwd=root, capture_output=True, check=True
-    ).stdout.decode('utf-8').split('\0')
-    entries = []
-    for record in listing:
+def git(root, arguments, ok_codes=(0,)):
+    """Run git in `root`. Returns (stdout, None), or (None, message) with git's own message on failure."""
+    completed = subprocess.run(['git', *arguments], cwd=root, capture_output=True)
+    if completed.returncode not in ok_codes:
+        message = completed.stderr.decode('utf-8', errors='replace').strip()
+        return None, f'git {arguments[0]} failed: {message or "exit " + str(completed.returncode)}'
+    return completed.stdout.decode('utf-8', errors='replace'), None
+
+
+def scan_index(root):
+    """Return (results, problems) from git's index: results maps each tracked path outside `agents/` to (count, lines)."""
+    listing, failure = git(root, ['ls-files', '-z'])
+    if failure:
+        return {}, [failure]
+    problems = []
+    paths = [p for p in listing.split('\0') if p]
+    results = {}
+    for path in paths:
+        if path == NAMESPACE or path.startswith(NAMESPACE + '/'):
+            problems.append(f'{path}: is tracked under the root {NAMESPACE}/ folder, which is local-only; untrack it')
+        elif path not in GUARD:
+            results[path] = (0, [])
+    # `git grep --cached` searches the index's blobs. -I skips binary blobs; -z
+    # puts a NUL after the path and after the line number; exit status 1 is no match.
+    found, failure = git(root, [
+        'grep', '--cached', '-I', '-n', '-i', '-z', '-e', 'herdr', '--',
+        '.', f':(exclude){NAMESPACE}',
+    ], ok_codes=(0, 1))
+    if failure:
+        return results, problems + [failure]
+    for record in found.split('\n'):
         if not record:
             continue
-        meta, path = record.split('\t', 1)
-        mode = meta.split(' ')[0]
-        if path.startswith('agents/'):
+        path, number, text = record.split('\0', 2)
+        if path not in results:
             continue
-        entries.append((mode, path))
-    return entries
-
-
-def collect(root, entries, cap=MAX_BYTES):
-    """Scan the tracked entries under `root`. Links, submodules and binary files are left out."""
-    results = {}
-    for mode, path in entries:
-        if mode in (SYMLINK_MODE, SUBMODULE_MODE):
-            continue
-        kind, value = scan(Path(root) / path, cap)
-        if kind == 'binary':
-            continue
-        results[path] = (kind, value)
-    return results
+        hits, _ = names_in(text)
+        if hits:
+            count, lines = results[path]
+            results[path] = (count + hits, lines + [int(number)])
+    return results, problems
 
 
 def main():
     allowlist = json.loads((ROOT / ALLOWLIST).read_text(encoding='utf-8'))
-    errors = check(collect(ROOT, tracked_entries(ROOT)), allowlist)
+    results, problems = scan_index(ROOT)
+    errors = problems + check(results, allowlist)
     if errors:
         for error in errors:
             print(f'error: {error}', file=sys.stderr)

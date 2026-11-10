@@ -1,13 +1,15 @@
-"""The Herdr-name ratchet must fail a new name and a growing count, and must not miscount.
+"""The Herdr-name ratchet must fail a new name and a growing count, and must read git's index.
 
-The ratchet exists so that the names Hide keeps on purpose stay the only ones,
-and so that the count only goes down. A check that passes a new name, counts
-the folder name as Herdr, hides a name next to the folder name, or follows a
-link out of the checkout protects nothing; these tests hold each end.
+The ratchet keeps the names Hide keeps on purpose as the only ones, and the
+count only goes down. A check that counts the folder name as Herdr, hides a
+name next to it, or opens a working-tree file (a FIFO hangs it, a link points it
+outside the checkout) protects nothing; these tests hold each end. Temporary git
+repositories are used for the index tests, never the real checkout.
 """
 import importlib.util
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,8 +28,8 @@ def allowlist(files):
 
 
 def counted(texts):
-    """Results as `collect` gives them, for texts already in memory."""
-    return {path: ('count', CHECK.names_in(text)) for path, text in texts.items()}
+    """Results as `scan_index` gives them, for texts already in memory."""
+    return {path: CHECK.names_in(text) for path, text in texts.items()}
 
 
 def count(text):
@@ -89,22 +91,36 @@ class TheListHoldsOnlyTheRatchet(unittest.TestCase):
         self.assertIn('does not define', errors[0])
 
 
-class TheFolderNameIsRemovedOnlyWhenWhole(unittest.TestCase):
-    def test_the_folder_name_as_a_path_component_is_not_counted(self):
+class TheFolderNameIsExemptOnlyAsAWholeComponent(unittest.TestCase):
+    def test_the_folder_name_as_a_whole_path_component_is_not_counted(self):
         for text in [
             'cd ~/.hide/worktrees/herdr-ide/feature-x',
             'HERDR-IDE/x',
-            'herdr-ide/',
+            'herdr-ide/x',
+            '/r/herdr-ide',
             '~/projects/herdr-ide',
             'the herdr-ide folder',
         ]:
             with self.subTest(text=text):
                 self.assertEqual(count(text), 0)
 
-    def test_a_name_attached_to_the_folder_name_is_counted(self):
-        for text in ['herdr-ide-foo', 'herdr-identity', 'herdr_ide', 'x-herdr-ide', 'herdr-ide2']:
+    def test_a_name_touching_the_folder_name_is_counted(self):
+        for text in [
+            'herdr-ide.foo',
+            '/tmp/herdr-ide.foo/x',
+            'herdr-ide+foo',
+            'herdr-ide-foo',
+            'herdr-identity',
+            'herdr_ide',
+            'x-herdr-ide',
+            'herdr-ide2',
+        ]:
             with self.subTest(text=text):
                 self.assertEqual(count(text), 1)
+
+    def test_herdr_ide_dot_git_is_counted_as_a_name_with_a_suffix(self):
+        # A clone named `herdr-ide.git` is a suffixed name, not the folder, so it counts.
+        self.assertEqual(count('git@host:herdr-ide.git'), 1)
 
     def test_the_folder_name_beside_a_real_name_counts_only_the_real_name(self):
         self.assertEqual(count('herdr-ide and herdr'), 1)
@@ -123,86 +139,78 @@ class TheGuardFilesAreNotScanned(unittest.TestCase):
                 self.assertEqual(CHECK.check(counted({path: 'herdr herdr'}), allowlist({})), [])
 
 
-class ReadingStaysInsideTheCheckout(unittest.TestCase):
+class ReadingComesFromTheIndex(unittest.TestCase):
+    """Every test builds a temporary git repository; the working tree is changed on purpose."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        subprocess.run(['git', 'init', '-q'], cwd=self.root, check=True)
+        (self.root / 'kept.txt').write_text('herdr\n', encoding='utf-8')
+        subprocess.run(['git', 'add', 'kept.txt'], cwd=self.root, check=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def results(self):
+        results, problems = CHECK.scan_index(self.root)
+        return results, problems
+
+    def test_a_tracked_file_replaced_by_a_fifo_or_a_link_gives_the_same_result(self):
+        before, problems = self.results()
+        self.assertEqual(problems, [])
+        self.assertEqual(before['kept.txt'][0], 1)
+        # A FIFO with no writer would hang any reader; a link would send a reader to an
+        # untracked file under agents/. Neither is opened, so both change nothing.
         (self.root / 'agents').mkdir()
         (self.root / 'agents' / 'local.txt').write_text('herdr local only\n', encoding='utf-8')
-        (self.root / 'kept.txt').write_text('herdr\n', encoding='utf-8')
+        os.remove(self.root / 'kept.txt')
+        os.mkfifo(self.root / 'kept.txt')
+        after_fifo, problems = self.results()
+        self.assertEqual(problems, [])
+        self.assertEqual(after_fifo, before)
+        os.remove(self.root / 'kept.txt')
+        os.symlink(self.root / 'agents' / 'local.txt', self.root / 'kept.txt')
+        after_link, problems = self.results()
+        self.assertEqual(problems, [])
+        self.assertEqual(after_link, before)
 
-    def tearDown(self):
-        self.tmp.cleanup()
+    def test_a_tracked_path_under_the_local_agents_folder_is_reported(self):
+        (self.root / 'agents').mkdir()
+        (self.root / 'agents' / 'note.txt').write_text('herdr\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '-f', 'agents/note.txt'], cwd=self.root, check=True)
+        results, problems = self.results()
+        self.assertNotIn('agents/note.txt', results)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn('agents/note.txt', problems[0])
+        self.assertIn('untrack it', problems[0])
 
-    def test_a_tracked_symlink_is_not_followed_into_the_untracked_agents_folder(self):
-        os.symlink(self.root / 'agents' / 'local.txt', self.root / 'link.txt')
-        results = CHECK.collect(self.root, [('120000', 'link.txt'), ('100644', 'kept.txt')])
-        self.assertNotIn('link.txt', results)
-        self.assertEqual(results['kept.txt'][1][0], 1)
-        self.assertEqual(CHECK.check(results, allowlist({'kept.txt': {'max': 1, 'reason': 'import'}})), [])
+    def test_a_binary_blob_is_skipped_by_git(self):
+        (self.root / 'bin.dat').write_bytes(b'herdr\0herdr')
+        subprocess.run(['git', 'add', 'bin.dat'], cwd=self.root, check=True)
+        results, _ = self.results()
+        self.assertEqual(results['bin.dat'][0], 0)
 
-    def test_a_symlink_to_a_file_outside_the_checkout_is_not_read(self):
-        outside = Path(self.tmp.name + '-outside.txt')
-        outside.write_text('herdr\n', encoding='utf-8')
-        try:
-            os.symlink(outside, self.root / 'escape.txt')
-            results = CHECK.collect(self.root, [('120000', 'escape.txt')])
-            self.assertEqual(results, {})
-        finally:
-            outside.unlink()
+    def test_a_staged_change_is_what_is_counted(self):
+        (self.root / 'kept.txt').write_text('herdr herdr herdr\n', encoding='utf-8')
+        subprocess.run(['git', 'add', 'kept.txt'], cwd=self.root, check=True)
+        (self.root / 'kept.txt').write_text('nothing\n', encoding='utf-8')
+        results, _ = self.results()
+        self.assertEqual(results['kept.txt'][0], 3)
 
-    def test_a_submodule_entry_is_not_read(self):
-        self.assertEqual(CHECK.collect(self.root, [('160000', 'kept.txt')]), {})
-
-    def test_a_tracked_file_that_cannot_be_read_is_a_reported_failure(self):
-        results = CHECK.collect(self.root, [('100644', 'missing.txt')])
-        self.assertEqual(results['missing.txt'][0], 'error')
-        errors = CHECK.check(results, allowlist({}))
-        self.assertEqual(len(errors), 1, errors)
-        self.assertIn('missing.txt: cannot be read', errors[0])
-
-    def test_a_directory_in_the_index_is_a_reported_failure_not_a_traceback(self):
-        (self.root / 'dir').mkdir()
-        results = CHECK.collect(self.root, [('100644', 'dir')])
-        errors = CHECK.check(results, allowlist({}))
-        self.assertEqual(len(errors), 1, errors)
-        self.assertIn('dir: ', errors[0])
-
-
-class LargeFilesAreBoundedAndBinaryOnesSkipped(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def test_a_file_over_the_cap_without_a_nul_byte_fails_with_a_clear_message(self):
-        (self.root / 'big.txt').write_text('herdr ' * 100, encoding='utf-8')
-        results = CHECK.collect(self.root, [('100644', 'big.txt')], cap=64)
-        errors = CHECK.check(results, allowlist({}))
-        self.assertEqual(len(errors), 1, errors)
-        self.assertIn('over the 64-byte cap', errors[0])
-        self.assertIn('big.txt', errors[0])
-
-    def test_a_file_over_the_cap_with_a_nul_byte_is_binary_and_skipped(self):
-        (self.root / 'big.bin').write_bytes(b'herdr' * 50 + b'\0' + b'x' * 300)
-        results = CHECK.collect(self.root, [('100644', 'big.bin')], cap=64)
+    def test_a_git_failure_is_reported_with_gits_message(self):
+        with tempfile.TemporaryDirectory() as bare:
+            results, problems = CHECK.scan_index(Path(bare))
         self.assertEqual(results, {})
-
-    def test_a_small_file_with_a_nul_byte_is_binary_and_skipped(self):
-        (self.root / 'small.bin').write_bytes(b'herdr\0herdr')
-        self.assertEqual(CHECK.collect(self.root, [('100644', 'small.bin')]), {})
-
-    def test_a_file_at_the_cap_is_counted(self):
-        (self.root / 'edge.txt').write_text('herdr', encoding='utf-8')
-        results = CHECK.collect(self.root, [('100644', 'edge.txt')], cap=5)
-        self.assertEqual(results['edge.txt'][1][0], 1)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn('git ls-files failed', problems[0])
+        self.assertIn('not a git repository', problems[0].lower())
 
 
 class TheTreeAsItIsPasses(unittest.TestCase):
     def test_every_listed_reason_is_defined_and_no_file_is_off_the_list(self):
-        errors = CHECK.check(CHECK.collect(ROOT, CHECK.tracked_entries(ROOT)), ALLOWLIST)
+        results, problems = CHECK.scan_index(ROOT)
+        errors = problems + CHECK.check(results, ALLOWLIST)
         self.assertEqual(errors, [], '\n'.join(errors))
 
     def test_the_allowlist_gives_a_reason_to_every_entry(self):
