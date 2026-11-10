@@ -64,6 +64,8 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_start.shell_unreadable", "coreError.agent.shellUnreadable"],
   ["agent_start.line_unchecked", "coreError.agent.lineUnchecked"],
   ["agent_start.refused_by_engine", "coreError.agent.refusedByEngine"],
+  // Kept for a launch an earlier build stored before the engine name (core-state.json, `Resume::Failed.reason`).
+  ["agent_start.refused_by_herdr", "coreError.agent.refusedByEngine"],
   ["agent_start.unconfirmed", "coreError.agent.unconfirmed"],
   ["agent_start.prompt_not_typed", "coreError.agent.promptNotTyped"],
   ["agent_start.not_saved", "coreError.agent.notSaved"],
