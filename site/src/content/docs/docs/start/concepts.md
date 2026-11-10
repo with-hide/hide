@@ -20,7 +20,7 @@ More: [Tasks and status](/docs/features/tasks-status/).
 
 <iframe src="/embed/docs-embed.html?part=status-colors&theme=dark" title="The four state colors, live component" height="220" loading="lazy"></iframe>
 
-Yellow is your turn: an agent asks you something. Green is done and not looked at yet, blue is working, and grey is seen, with nothing waiting.
+Yellow is your turn: an agent asks you something. Green is confirmed done and not looked at yet, blue is working, and grey is seen, with nothing waiting.
 
 More: [Tasks and status](/docs/features/tasks-status/).
 
@@ -52,7 +52,7 @@ More: PR list (the page is planned as `pr-list`).
 
 <iframe src="/embed/docs-embed.html?part=view-slot&theme=dark" title="The lane's tabs for files, diffs and pages, live component" height="420" loading="lazy"></iframe>
 
-A file, a diff or a web page that you or an agent opens shows as a tab in the lane on the right, beside the agent and never over it. A pull request's card or a session's record opens in the lane's **View** slot, in front of those tabs.
+A file, a diff or a web page that you or an agent opens shows as a tab in the lane on the right. Pin the lane and it stays beside the agents when the window has room; unpinned, or in a narrow window, it is drawn over them. A pull request's card or a session's record opens in the lane's **View** slot, in front of those tabs.
 
 More: Files and editor (the page is planned as `files-editor`).
 

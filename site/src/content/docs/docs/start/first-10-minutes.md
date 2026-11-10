@@ -55,7 +55,7 @@ Pull requests need `gh` 2.72.0 or later, signed in.
 ## What you will see
 
 - Three rows in the Tasks list, blue while the agents work.
-- A row turns yellow when its agent asks you something, and green when it finishes and you have not looked yet.
+- A row turns yellow when its agent asks you something, and green when hide has confirmed it finished and you have not looked yet. A plain dot on a stopped row you have not read does not confirm the work is done; open it to see.
 - After you ask for it, the row you like carries a PR mark and number.
 
 ## If it goes wrong

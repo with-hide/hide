@@ -10,7 +10,7 @@ It reads what each agent is doing and tells you which one needs you, so you answ
 
 ## Who it is for
 
-You use agent command-line tools such as Claude Code or Codex, and you want more than one running on your repositories at once.
+You use agent command-line tools, and you want more than one running on your repositories at once.
 hide works with the CLIs you already signed in to.
 It asks for no new API key and runs no hosted service, and it never asks you for an agent's credentials.
 
@@ -28,7 +28,7 @@ The mark on the row says whose move it is.
 
 Look at the yellow one.
 That is an agent asking you something, and it is the only state you have to act on.
-Green means finished and not looked at yet, blue means at work, and grey means you looked and nothing is waiting.
+Green means confirmed finished and not looked at yet, blue means at work, and grey means you looked and nothing is waiting.
 
 ## Pick a way in
 

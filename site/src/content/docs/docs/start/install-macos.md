@@ -45,7 +45,7 @@ macOS asks for permission to show notifications when you choose **Turn on notifi
 
 hide never asks for an agent's credentials.
 Each CLI keeps its own sign-in, so install the CLI and sign in to it in a terminal before you launch hide.
-In the **Choose your agents** step each agent shows **Ready**, **Not signed in** or **Not installed**.
+In the **Choose your agents** step each agent shows a state, for example **Checking…**, **Ready**, **Not signed in**, **Not installed** or **Update needed**. **Installed** means the CLI is found, but hide does not check that agent's sign-in, so sign in to it yourself.
 For pull requests, sign in to `gh` the same way (`gh auth login`).
 
 ## The `hide` command

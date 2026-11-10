@@ -34,7 +34,7 @@ Practice is a list of five flows. Pick only the ones you need.
 | 5. The project at a glance | The right lane: counts, the last 7 days, Explorer and Hide AI. |
 
 A guide dims everything but the part a step is about, rings it, and says what to do and which keys do it.
-Press Enter and the guide does the step for you; press the keys yourself and it moves on as soon as you finish.
+Press Enter and the guide does the step for you; press the keys yourself and it moves on as soon as you finish. A few steps wait for the practice world to finish, such as the Conductor reading and planning in the mission flow: the button says **Waiting…** and Enter does nothing until the world is done, then the button turns to **Next** and Enter moves on.
 Every step after the first has **Back**, and the bubble's lower left has **Exit**.
 
 Keys in practice are your own: the ones your system uses, and any you set in Settings.
