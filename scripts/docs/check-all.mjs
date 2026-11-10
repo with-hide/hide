@@ -9,7 +9,8 @@
 //   2b. the Keyboard shortcuts page is generated from web/src/shortcuts.ts, imported as it stands, and fails when a
 //      command of the registry has no row or lacks its keys on a system (shortcuts-reference.mjs);
 //   3. the live parts the pages frame are built (web `build:docs-embed`), then the site (`astro build`),
-//      which puts them at /embed/ and writes Pagefind's search index.
+//      which puts them at /embed/ and writes Pagefind's search index. Between the two, check-still.mjs loads
+//      every part in Chromium and fails unless it is byte-identical 120 s apart under reduced motion.
 // Usage: check-all.mjs (--hide <binary> | HIDE_BIN=<binary>) [--ci] [--checks-only]
 //   --hide / HIDE_BIN  the `hide` whose `--help` is the one authority for which commands exist (missing notes, notes for
 //                      gone commands, the generated cli.md). It must be built from THIS commit: CI builds it in the job
@@ -65,6 +66,7 @@ writeFileSync(join(content, "reference/shortcuts.md"), shortcuts);
 
 if (!checksOnly) {
   run("build the live parts the pages frame", "bash", ["scripts/verify-web.sh", "web", "build:docs-embed"]);
+  run("every live part holds one still picture under reduced motion", "node", ["web/src/docs/check-still.mjs"]);
   run("build the site", "bash", ["scripts/verify-web.sh", "site", "build"]);
 }
 console.log("\ncheck-all: ok");

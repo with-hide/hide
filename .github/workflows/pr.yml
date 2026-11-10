@@ -459,6 +459,11 @@ jobs:
       - name: Build the hide CLI whose help the reference reads
         timeout-minutes: 15
         run: bash scripts/verify-cargo.sh build -p hided --bin hide
+      # check-all loads every live part in Chromium (web/src/docs/check-still.mjs); the same step the web e2e lane
+      # uses, with no `--with-deps` for the reason its comment gives.
+      - name: Install Playwright Chromium
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh web playwright-install
       - name: Check the guides, features and CLI reference, and build the site
         timeout-minutes: 10
         # The hide just built above, from this checkout, is the one authority on which
