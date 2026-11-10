@@ -726,7 +726,7 @@ It refuses a working tree with tracked changes, runs everything `build` runs (th
 
 It exits non-zero with the reason at the first failure, prints the end of the redacted log when a tool fails, and removes the archive, the export, the unpacked ipa and the derived data on every way out, including an interrupt or a dropped connection.
 Only the redacted log stays, as `~/hide-ios-build/<branch>/release.log`, and `clean` removes it with the branch's folder.
-The command stops before it starts when the mini has less than 15 GB free; a release run needs about 1 GB.
+The command stops before it starts when the mini has less than 15 GB free; a whole run took about 6 minutes and the mini's free disk fell by about 1 GB (2026-11-10: 24 GB to 23 GB), most of the time in the Swift tests, Apple's validation and the upload.
 
 **Version and build number.**
 The version is the numeric part of the repository's own (`HIDE_VERSION`, else the newest `v<version>` tag, as `desktop/scripts/build-identity.mjs` resolves it for the desktop app), so `0.4.0-rc.1` and `0.4.0-main.<commit>` are both `0.4.0`.
