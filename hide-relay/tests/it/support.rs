@@ -470,7 +470,9 @@ pub struct TestKey {
 }
 
 impl TestKey {
-    /// The key as Apple ships a `.p8`: PEM around the PKCS#8 DER.
+    /// The key as Apple ships a `.p8`: PEM around the PKCS#8 DER. Only the
+    /// key-file test reads it, and that test needs Unix file modes.
+    #[cfg(unix)]
     pub fn pem(&self) -> String {
         use base64::{Engine, engine::general_purpose::STANDARD};
         let base64 = STANDARD.encode(&self.pkcs8);
