@@ -1,0 +1,24 @@
+See and answer your computer's coding agents from your phone.
+Hide for iPhone works together with Hide on your Mac, Windows or Linux computer, a free desktop program from withhide.dev.
+
+Your coding agents keep working on your own computer. Hide on your phone shows which one needs you, lets you read the conversation and reply, and tells you the moment a question comes in.
+
+WHAT YOU CAN DO
+- See every agent in one list: needs you, working, done.
+- Read an agent's conversation and reply from wherever you are.
+- Get a notification when an agent asks you something. Notifications are encrypted and opened on your phone, and you can reply right from the notification.
+- Follow a mission: its steps, its pull requests and the one decision that waits on you.
+- Check a pull request's status and reviews, then merge it, or hand it to an agent.
+- Open the pages and images your agent made, right in the app.
+- Start a new agent on your computer.
+
+HOW IT CONNECTS
+In Hide on your computer, open Settings > Mobile and scan its QR code with this app. The connection goes through a relay and is end-to-end encrypted, so the relay cannot read it. There is no account to make, and the app has no ads. Your agents, code and files stay on your computer: the phone shows agents, conversations and results in its own screens and runs no code.
+
+NO COMPUTER NEARBY?
+Tap "Try the demo" on the first screen to look around every screen with sample data. Nothing is sent or saved.
+
+WORKS WITH THE AGENTS YOU ALREADY USE
+Hide runs the coding agents installed on your computer, such as Claude Code, Codex and OpenCode, and this app shows them. Hide is an independent project and is not affiliated with, endorsed by or sponsored by the makers of these agents.
+
+Hide for iPhone is free. Get Hide for your computer at withhide.dev. Questions? withhide.dev/support

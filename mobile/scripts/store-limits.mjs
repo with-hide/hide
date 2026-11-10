@@ -7,9 +7,12 @@ export const LIMITS = { name: 30, subtitle: 30, promotional_text: 170, keywords:
 /** The review notes field of App Review information. */
 export const REVIEW_NOTES_LIMIT = 4000;
 
+/** The coding agents Hide works with, by the names their makers use: a description may name them only with the independence line. */
+export const AGENT_NAMES = ['claude code', 'claude', 'codex', 'opencode', 'grok', 'antigravity', 'chatgpt'];
+
 /** Other companies' products: never in the name, the subtitle, the keywords or a screenshot's words (guidelines 2.3.7, 4.1(c), 5.2). */
 export const THIRD_PARTY_NAMES = [
-  'claude', 'anthropic', 'codex', 'chatgpt', 'gpt', 'openai', 'gemini', 'copilot', 'cursor', 'opencode', 'grok', 'antigravity',
+  ...AGENT_NAMES.filter((name) => !name.includes(' ')), 'anthropic', 'gpt', 'openai', 'gemini', 'copilot', 'cursor',
   'github', 'tailscale', 'iphone', 'ipad', 'apple', 'ios',
   '클로드', '앤트로픽', '코덱스', '챗gpt', '오픈ai', '제미나이', '깃허브',
 ];
