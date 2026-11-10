@@ -513,7 +513,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     frame = requestAnimationFrame(press);
     return () => cancelAnimationFrame(frame);
   }, [pick, fixture]);
-  // `hint=role`: the first checker beside a card takes focus, which opens its hover, the role's line under the agent and its state.
+  // `hint=role`: the first checker beside a card takes focus, which opens its hover, the role's name under the agent and its state.
   const roleHint = params.get("hint") === "role";
   useEffect(() => {
     if (!roleHint) return;

@@ -53,7 +53,7 @@ function Satellite({ mission, line, onSelect, actions }: { mission: Mission; lin
   const status = useCheckerStatus(kind, checker);
   const device = useMissionDeviceName(checker.machine);
   const label = [agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent, run?.text, device, status].filter(Boolean).join(" · ");
-  // The hover says what the role does under the agent and its state; a reader of the name hears the same line as its description.
+  // The hover names the role under the agent and its state; a reader of the name hears the same name as its description.
   const role = t(`mission.role.${kind}`);
   return (
     <CheckerPopover mission={mission} kind={kind} checker={checker} actions={actions} hint={`${label}\n${role}`} onNode={onSelect}>
