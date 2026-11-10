@@ -256,6 +256,10 @@ jobs:
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
+          # TEMPORARY repeat run for the session-ledger node; reverted before the pull request is ready.
+          if [ "$RUNNER_OS" != Linux ] || [ "${SHARD%/*}" != 1 ]; then echo "repeat run is on Linux shard 1"; exit 0; fi
+          bash scripts/verify-web.sh web e2e --retries 0 --repeat-each 20 --grep "the 태스크 list groups the device|세션 닫기 in a task|the 태스크 list opens a five-level tree"
+          exit 0
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
