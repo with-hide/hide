@@ -1,6 +1,6 @@
 {
   "status": {
-    "line": "Shows whether Hide is running, with its process, its port and how many windows are connected to it.",
+    "line": "Shows whether Hide is running, with its process, its port and how many clients are connected to it.",
     "example": "hide status"
   },
   "stop": {
@@ -75,7 +75,7 @@
     "example": "hide agent show here"
   },
   "agent ask-human": {
-    "line": "Tells Hide that a step needs a person, such as a sign-in or a permission, so the operator is asked and the agent stops until it is done.",
+    "line": "Tells the operator that a step needs a person, such as a sign-in or a permission; you then end your turn and wait for the letter that says it is done.",
     "example": "hide agent ask-human auth https://github.com/login"
   },
   "agent end": {
@@ -131,15 +131,15 @@
     "example": "hide device list"
   },
   "device add": {
-    "line": "Adds a computer you reach over SSH as a device, so Hide can use its folders, Git and terminals.",
+    "line": "Registers a computer you reach over SSH as a device; its folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices.",
     "example": "hide device add mini --name 'Mac mini'"
   },
   "device remove": {
-    "line": "Forgets a device; its panes and agents keep running there.",
+    "line": "Forgets a device and takes Hide's helper off it when the operator had allowed it; its panes and agents keep running there.",
     "example": "hide device remove mini"
   },
   "device retry": {
-    "line": "Tries to connect a device again, and with --wait waits until it connects or the attempt fails.",
+    "line": "Starts a new attempt to connect a device, which may ask the operator; with --wait it waits until the device connects, needs the operator, or the attempt fails.",
     "example": "hide device retry mini --wait"
   },
   "mission help": {
@@ -175,7 +175,7 @@
     "example": "hide mission gate fix-1487 --pass --said 'looks good'"
   },
   "mission start": {
-    "line": "Starts a planned mission once the operator has approved its plan, so its nodes begin.",
+    "line": "Moves a planned mission from Planning to Running once the operator has approved its plan; the Conductor then starts the workers.",
     "example": "hide mission start"
   },
   "mission decide": {
@@ -183,7 +183,7 @@
     "example": "hide mission decide --line 'Ship the lens fix in this pull request?' --option yes --option no"
   },
   "mission delay": {
-    "line": "Holds new starts for a mission with a reason, such as usage near a limit, until you clear it with --clear.",
+    "line": "Records why new starts are held for a mission, such as usage near a limit; holding them is the Conductor's job, and --clear removes the reason.",
     "example": "hide mission delay --line 'Usage is close to the limit.'"
   },
   "mission close": {
@@ -223,7 +223,7 @@
     "example": "hide task node spec --status done --file docs/spec.md"
   },
   "task approve": {
-    "line": "Approves a plan that was sent to the operator for review, so the work can go on.",
+    "line": "Records that the operator approved the plan you put up for review, so your writes, commits and pushes are allowed again.",
     "example": "hide task approve"
   },
   "task drop": {
@@ -390,7 +390,7 @@
     "example": "hide memory search Project"
   },
   "memory add": {
-    "line": "Saves a decision the operator made as a Project Memory card, so later agents follow it.",
+    "line": "Sends a decision the operator made to Project Memory, which writes it as a card that later agents can read.",
     "example": "hide memory add 'Use the staging database for migration tests.'"
   },
   "memory forget": {
@@ -417,7 +417,7 @@
     "line": "Records why a Project Memory card was skipped when moving cards into documents."
   },
   "memory stale": {
-    "line": "Reports that a Project Memory card no longer matches what the operator said, so Hide stops giving it to agents until it is analyzed or released.",
+    "line": "Reports that a Project Memory card no longer matches what the operator said, so Hide holds it back from agents until the session is analyzed, the hold is released or its time runs out.",
     "example": "hide memory stale m508 'The operator moved the issue template.'"
   },
   "memory release": {
