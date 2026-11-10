@@ -42,17 +42,6 @@ def last_failure(runtime):
     return value if isinstance(value, dict) else None
 
 
-def _record_refused(error):
-    """Whether the hook's sentence is the records folder refusing a write.
-
-    The two record paths say so in their own words (`hide-agent-hooks`:
-    the count could not be changed or stored); every other outcome is the
-    report not reaching the core.
-    """
-    return error.startswith(("the pane's count could not be changed",
-                             "the pane's count could not be stored"))
-
-
 def pane_cause(runtime, pane):
     """The cause the hook recorded for `pane`, when its last outcome is that
     pane's, or None.
@@ -70,11 +59,27 @@ def pane_cause(runtime, pane):
 
 
 def cause(failure):
-    """One named cause for a cell's reason, from the hook's own record."""
+    """One named cause for a cell's reason, from the hook's own record.
+
+    `hook_record_refused` when the pane's record could not be written,
+    `hook_report_failed` when only the report did not reach the core,
+    `hook_record_and_report_failed` when both did (each sentence is kept in
+    the record), and `hook_failure_unknown_kind` for a record whose kind an
+    earlier build never wrote, with its own sentence kept as it is rather
+    than read for words.
+    """
     error = str(failure.get("error") or "").strip()
     if not error:
         return None
-    name = "hook_record_refused" if _record_refused(error) else "hook_report_failed"
+    kind = failure.get("kind")
+    if kind == "record":
+        name = "hook_record_refused"
+    elif kind == "record_and_report":
+        name = "hook_record_and_report_failed"
+    elif kind == "report":
+        name = "hook_report_failed"
+    else:
+        name = "hook_failure_unknown_kind"
     pane = failure.get("pane_id") or "no pane"
     event = failure.get("event") or "no event"
     return f"{name} ({pane}, {event}): {error}"

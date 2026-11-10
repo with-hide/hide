@@ -37,11 +37,18 @@ def runtime(root, *, relocated=True):
     return SimpleNamespace(run=root, probe=root / "probe", home=home, state=state)
 
 
-def failure(root, error, *, pane="h4:p2", event="SessionStart", relocated=True):
+def failure(root, error, *, pane="h4:p2", event="SessionStart", relocated=True, kind="record"):
+    """A hook's last outcome as the hook writes it.
+
+    `kind` is the step that failed (`record`, `report`, `record_and_report`);
+    a record an earlier build wrote has none, which `legacy` asks for.
+    """
     folder = hook_records.folder(runtime(root, relocated=relocated))
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "last-report-failure.json").write_text(json.dumps(
-        {"pane_id": pane, "agent": "claude-code", "event": event, "error": error, "at_unix_ms": 1}))
+    record = {"pane_id": pane, "agent": "claude-code", "event": event, "error": error, "at_unix_ms": 1}
+    if kind is not None:
+        record["kind"] = kind
+    (folder / "last-report-failure.json").write_text(json.dumps(record))
     return folder
 
 
@@ -64,11 +71,43 @@ class Records(unittest.TestCase):
 
     def test_a_report_that_never_reached_the_core_is_its_own_named_cause(self):
         with tempfile.TemporaryDirectory() as root:
-            failure(Path(root), "unavailable")
+            failure(Path(root), "unavailable", kind="report")
             cause = hook_records.identity_cause(runtime(Path(root)), None)
             self.assertTrue(cause.startswith("hook_report_failed (h4:p2, SessionStart): "), cause)
             # A record of another pane explains no start of this one.
             self.assertIn("names pane h4:p2, not h2:p2", hook_records.identity_cause(runtime(Path(root)), "h2:p2"))
+
+    def test_both_steps_failing_is_named_as_both_and_keeps_each_sentence(self):
+        with tempfile.TemporaryDirectory() as root:
+            failure(Path(root),
+                    "the pane's count could not be changed: denied; "
+                    "The hook could not reach Hide: unavailable",
+                    kind="record_and_report")
+            self.assertEqual(
+                hook_records.identity_cause(runtime(Path(root)), "h4:p2"),
+                "hook_record_and_report_failed (h4:p2, SessionStart): "
+                "the pane's count could not be changed: denied; "
+                "The hook could not reach Hide: unavailable")
+
+    def test_a_report_carrying_count_wording_stays_a_report(self):
+        # The same sentence an old build wrote for a refused record is what
+        # one plugin path writes for a report that never arrived, so the cell
+        # must read the kind and never the words.
+        with tempfile.TemporaryDirectory() as root:
+            failure(Path(root), "the pane's count could not be stored: denied", kind="report")
+            cause = hook_records.identity_cause(runtime(Path(root)), "h4:p2")
+            self.assertTrue(cause.startswith("hook_report_failed (h4:p2, SessionStart): "), cause)
+
+    def test_a_record_without_a_kind_is_named_unknown_and_keeps_its_sentence(self):
+        # An earlier build's record holds no kind, and its plugin's turn path
+        # wrote refused records into it too, so guessing from the sentence is
+        # how a record failure used to read as a report failure.
+        with tempfile.TemporaryDirectory() as root:
+            failure(Path(root), "the pane's record could not be changed: denied", kind=None)
+            self.assertEqual(
+                hook_records.identity_cause(runtime(Path(root)), "h4:p2"),
+                "hook_failure_unknown_kind (h4:p2, SessionStart): "
+                "the pane's record could not be changed: denied")
 
     def test_no_record_is_named_rather_than_read_as_a_clean_bill(self):
         with tempfile.TemporaryDirectory() as root:
