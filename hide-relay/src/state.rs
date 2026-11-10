@@ -43,14 +43,6 @@ pub(crate) enum Role {
     Device(String),
     Phone(String, u32),
 }
-impl Role {
-    fn room(&self) -> Option<&str> {
-        match self {
-            Self::Pending => None,
-            Self::Device(room) | Self::Phone(room, _) => Some(room),
-        }
-    }
-}
 pub(crate) struct Outbound {
     pub message: Message,
     // Separate budgets reserve lifecycle capacity while one FIFO preserves
@@ -80,34 +72,110 @@ impl Room {
         Ok(self.phones.get(&connection).copied())
     }
 }
+/// A room's spending in its 24-hour window: forwarded bytes, push request
+/// bytes included, and push requests. One record, so every daily count
+/// starts and ends together and lives no longer than the room's record.
 struct Usage {
     started: Duration,
     bytes: u64,
+    pushes: PushWindow,
+    pushes_minute: PushWindow,
+}
+impl Usage {
+    fn new(now: Duration) -> Self {
+        Self {
+            started: now,
+            bytes: 0,
+            pushes: PushWindow {
+                started: now,
+                ..PushWindow::default()
+            },
+            pushes_minute: PushWindow {
+                started: now,
+                ..PushWindow::default()
+            },
+        }
+    }
+    fn roll(&mut self, now: Duration) {
+        if now.saturating_sub(self.started) >= DAY {
+            *self = Self::new(now);
+        }
+    }
 }
 struct Rate {
     started: Duration,
     count: usize,
 }
 
+/// A fixed push window: its start, the requests counted in it, and whether
+/// its cap was already logged, so a sender past a cap costs one log line per
+/// window rather than one per request.
+#[derive(Default)]
+struct PushWindow {
+    started: Duration,
+    count: usize,
+    logged: bool,
+}
+impl PushWindow {
+    fn roll(&mut self, now: Duration, length: Duration) {
+        if now.saturating_sub(self.started) >= length {
+            *self = Self {
+                started: now,
+                ..Self::default()
+            };
+        }
+    }
+    /// `Ok` counts one request; `Err` says whether this refusal is the
+    /// window's first, the one that is logged.
+    fn spend(&mut self, cap: usize) -> Result<(), bool> {
+        if self.count >= cap {
+            return Err(!std::mem::replace(&mut self.logged, true));
+        }
+        self.count += 1;
+        Ok(())
+    }
+}
+
+/// What the push caps answer for one request.
+pub(crate) enum PushCap {
+    Allowed,
+    /// Over the named cap; `log` is true for the first refusal in its window.
+    Over {
+        cap: &'static str,
+        log: bool,
+    },
+}
+
 pub(crate) struct State {
     stopping: bool,
     limits: Limits,
+    push: PushLimits,
+    /// Whether this relay has Apple's key, and so forwards push requests.
+    push_enabled: bool,
     next_socket: u64,
     peers: HashMap<u64, Peer>,
     rooms: HashMap<String, Room>,
     usage: HashMap<String, Usage>,
     rates: HashMap<IpAddr, Rate>,
+    /// The relay's own per-second push count, and when its concurrency cap
+    /// was last logged.
+    push_second: PushWindow,
+    concurrent_logged: Option<Duration>,
 }
 impl State {
-    pub fn new(limits: Limits) -> Self {
+    pub fn new(limits: Limits, push: PushLimits, push_enabled: bool) -> Self {
         Self {
             stopping: false,
             limits,
+            push,
+            push_enabled,
             next_socket: 0,
             peers: HashMap::new(),
             rooms: HashMap::new(),
             usage: HashMap::new(),
             rates: HashMap::new(),
+            push_second: PushWindow::default(),
+            concurrent_logged: None,
         }
     }
 
@@ -180,10 +248,9 @@ impl State {
         if !self.usage.contains_key(&hello.room) && self.usage.len() >= self.limits.room_records {
             return Err(Rejection::cap(Refusal::ConnectionLimit, "room_records"));
         }
-        self.usage.entry(hello.room.clone()).or_insert(Usage {
-            started: now,
-            bytes: 0,
-        });
+        self.usage
+            .entry(hello.room.clone())
+            .or_insert_with(|| Usage::new(now));
         self.peer_mut(id)?.role = Role::Device(hello.room.clone());
         self.rooms.insert(
             hello.room,
@@ -194,7 +261,12 @@ impl State {
                 phones: HashMap::new(),
             },
         );
-        self.control(id, ServerMessage::Registered)
+        self.control(
+            id,
+            ServerMessage::Registered {
+                push: self.push_enabled,
+            },
+        )
     }
 
     pub fn join(&mut self, id: u64, room: String) -> Result<(), Rejection> {
@@ -263,27 +335,7 @@ impl State {
             }
             _ => return Err(invalid()),
         };
-        let usage = self.usage.get_mut(&room).ok_or(invalid())?;
-        if now.saturating_sub(usage.started) >= DAY {
-            *usage = Usage {
-                started: now,
-                bytes: 0,
-            };
-        }
-        let size = bytes.len() as u64;
-        if size
-            > self
-                .limits
-                .bytes_per_room_per_day
-                .saturating_sub(usage.bytes)
-        {
-            return Err(Rejection::cap(
-                Refusal::DailyLimit,
-                "bytes_per_room_per_day",
-            ));
-        }
-        usage.bytes += size;
-        self.peer_mut(id)?.bytes += size;
+        self.charge(id, &room, bytes.len() as u64, now)?;
         match target {
             Some(target) => match self.send(target, Message::Binary(bytes.into())) {
                 Ok(()) => Ok(Vec::new()),
@@ -306,6 +358,88 @@ impl State {
         }
     }
 
+    /// Charges `size` bytes to the room's daily budget and the peer's count;
+    /// past the budget the sender is refused, as for any forwarded frame.
+    fn charge(&mut self, id: u64, room: &str, size: u64, now: Duration) -> Result<(), Rejection> {
+        let usage = self.usage.get_mut(room).ok_or(invalid())?;
+        usage.roll(now);
+        if size
+            > self
+                .limits
+                .bytes_per_room_per_day
+                .saturating_sub(usage.bytes)
+        {
+            return Err(Rejection::cap(
+                Refusal::DailyLimit,
+                "bytes_per_room_per_day",
+            ));
+        }
+        usage.bytes += size;
+        self.peer_mut(id)?.bytes += size;
+        Ok(())
+    }
+
+    /// Counts one push request of `size` bytes from device socket `id`: its
+    /// bytes against the room's daily byte budget like any frame (`Err`, which
+    /// closes the socket, past it), then the relay's per-second cap and the
+    /// room's minute and day caps. Every request that gets here is counted, a
+    /// malformed one included, so neither a room nor a flood of over-cap
+    /// requests spends the relay without a ceiling.
+    pub fn push_cap(&mut self, id: u64, size: u64, now: Duration) -> Result<PushCap, Rejection> {
+        let room = match &self.peers.get(&id).ok_or(invalid())?.role {
+            Role::Device(room) => room.clone(),
+            _ => {
+                return Err(Rejection::new(
+                    Refusal::InvalidMessage,
+                    "invalid_transition",
+                ));
+            }
+        };
+        self.charge(id, &room, size, now)?;
+        let over = |cap, log| Ok(PushCap::Over { cap, log });
+        self.push_second.roll(now, Duration::from_secs(1));
+        // The relay's own cap is checked first and not spent by a refusal,
+        // so one noisy room cannot hold the whole relay at its ceiling.
+        if self.push_second.count >= self.push.per_second {
+            return over(
+                "pushes_per_second",
+                self.push_second.spend(self.push.per_second).unwrap_err(),
+            );
+        }
+        let usage = self.usage.get_mut(&room).ok_or(invalid())?;
+        usage.pushes_minute.roll(now, PUSH_MINUTE);
+        if usage.pushes_minute.count >= self.push.per_room_per_minute {
+            let log = usage
+                .pushes_minute
+                .spend(self.push.per_room_per_minute)
+                .unwrap_err();
+            return over("pushes_per_room_per_minute", log);
+        }
+        if let Err(log) = usage.pushes.spend(self.push.per_room_per_day) {
+            return over("pushes_per_room_per_day", log);
+        }
+        usage.pushes_minute.count += 1;
+        self.push_second.count += 1;
+        Ok(PushCap::Allowed)
+    }
+
+    /// Whether the concurrency cap's refusal at `now` is logged: once a
+    /// second at most.
+    pub fn log_concurrent_cap(&mut self, now: Duration) -> bool {
+        if self
+            .concurrent_logged
+            .is_some_and(|at| now.saturating_sub(at) < Duration::from_secs(1))
+        {
+            return false;
+        }
+        self.concurrent_logged = Some(now);
+        true
+    }
+
+    pub fn set_push_limits(&mut self, push: PushLimits) {
+        self.push = push;
+    }
+
     pub fn close_phone(&mut self, id: u64, connection: u32) -> Result<Vec<Event>, Rejection> {
         let target = match self.role(id)? {
             Role::Device(room) => self.rooms.get(&room).ok_or(invalid())?.phone(connection)?,
@@ -320,11 +454,6 @@ impl State {
 
     pub fn role(&self, id: u64) -> Result<Role, Rejection> {
         self.peers.get(&id).map(|p| p.role.clone()).ok_or(invalid())
-    }
-    pub fn room(&self, id: u64) -> Option<String> {
-        self.peers
-            .get(&id)
-            .and_then(|p| p.role.room().map(str::to_owned))
     }
     fn peer_mut(&mut self, id: u64) -> Result<&mut Peer, Rejection> {
         self.peers.get_mut(&id).ok_or(invalid())
@@ -356,15 +485,11 @@ impl State {
             return Vec::new();
         };
         peer.end.send_replace(Some(end));
-        let mut event = Event::new("peer_closed", peer.role.room().map(str::to_owned), None);
+        let mut event = Event::new("peer_closed", None);
         event.size = Some(peer.bytes);
         let mut events = vec![event];
         if let End::Refused(error) = end {
-            events.push(Event::new(
-                error.event,
-                peer.role.room().map(str::to_owned),
-                error.cap,
-            ));
+            events.push(Event::new(error.event, error.cap));
         }
         match peer.role {
             Role::Pending => {}
@@ -383,7 +508,7 @@ impl State {
                     entry.phones.remove(&connection);
                     let device = entry.device;
                     let Some(capacity) = peer.departure_capacity.take() else {
-                        events.push(Event::new("departure_capacity_missing", Some(room), None));
+                        events.push(Event::new("departure_capacity_missing", None));
                         events.extend(self.remove(
                             device,
                             End::Refused(Rejection::new(
@@ -425,11 +550,13 @@ impl State {
         self.rooms.clear();
         self.usage.clear();
         self.rates.clear();
+        self.push_second = PushWindow::default();
+        self.concurrent_logged = None;
         peers
             .into_values()
             .map(|peer| {
                 peer.end.send_replace(Some(End::Restart));
-                Event::new("peer_closed", peer.role.room().map(str::to_owned), None)
+                Event::new("peer_closed", None)
             })
             .collect()
     }

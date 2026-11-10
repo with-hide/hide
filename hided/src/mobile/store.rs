@@ -124,6 +124,32 @@ pub struct PushSubscription {
     pub auth: String,
 }
 
+/// An iOS app phone's notifications: the APNs device token and the key hided
+/// encrypts the body with, both given inside the paired phone's encrypted
+/// session. The token is Apple's address for the install, the key is the
+/// phone's; neither is a credential to this daemon (`docs/RELAY_PROTOCOL.md`,
+/// Push relay).
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ApnsRegistration {
+    /// Hex, as Apple issues it (`admission::token_valid`).
+    pub token: String,
+    /// Which of Apple's two push services carries it, as the relay names it.
+    pub environment: hide_relay_protocol::admission::PushEnvironment,
+    /// The phone's P-256 public key, base64url: the same shape a Web Push
+    /// subscription's `p256dh` has, so one encryption path serves both.
+    pub p256dh: String,
+    /// The 16-byte authentication secret, base64url.
+    pub auth: String,
+}
+
+/// Never printed: a `Debug` of a phone record would otherwise carry the
+/// device token.
+impl std::fmt::Debug for ApnsRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ApnsRegistration([redacted])")
+    }
+}
+
 /// The core address a phone was paired at: the tailnet name of the exposure
 /// whose code it scanned (PRD core-host-node-move B17, amendment 12). A phone
 /// keeps its credential in its home-screen app, which belongs to that address,
@@ -152,8 +178,20 @@ pub struct PhoneRecord {
     pub notifications: Notifications,
     #[serde(default)]
     pub push: Option<PushSubscription>,
+    /// An iOS app phone's registration, which stands instead of `push`: the
+    /// app cannot receive Web Push, and a phone has one way at a time.
+    #[serde(default)]
+    pub apns: Option<ApnsRegistration>,
     #[serde(default)]
     pub origin: PhoneOrigin,
+}
+
+impl PhoneRecord {
+    /// Whether this phone can be sent a notice: a Web Push subscription or
+    /// an iOS app's registration.
+    pub fn reachable(&self) -> bool {
+        self.push.is_some() || self.apns.is_some()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -249,6 +287,7 @@ mod tests {
                 last_seen_ms: 2,
                 notifications: Notifications::On,
                 push: None,
+                apns: None,
                 origin: PhoneOrigin::Paired("mac.tailnet.ts.net".into()),
             }],
         };
