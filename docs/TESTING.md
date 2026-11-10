@@ -299,6 +299,8 @@ A piece that another open change is still building is marked as pending with the
    These synthetic native-format records prove session reading and continuation, while `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` exercise the integrations themselves.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
+   The screen-state setters in `fixture-agents.ts` first read whether the requested state already holds, including a question supplied by a prepared transcript, and send no input when it does.
+   Otherwise a wait can finish on the old state before the synthetic key's input report moves the keyboard, undoing the next tab selection (`close-subtree.spec.ts`, with-hide/hide-private#444).
   The native stand-ins write `terminal-ready-<pane>` only after configuring their terminal and drawing their first screen; `waitForAgentInput` waits for that mark before a command trigger or a session-report key.
   Before a start in an existing pane, `prepareAgentInput` removes the previous program's mark; `agentRunner` does this before Reopen, and `startAgentIn` before a typed start.
   The Reopen journey holds the resumed program's session reporter before terminal setup and proves the previous readiness cannot admit its hook command.

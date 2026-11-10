@@ -1,6 +1,6 @@
 // The words for why a kit part or an agent's piece is in its state, why a
 // machine's kit does not run at all, and why Hide declined to connect a saved
-// machine (`herdr_profile_refusal`): the core sends `why.cause` with the one value its sentence
+// machine (`profile_refusal`): the core sends `why.cause` with the one value its sentence
 // names, and `unavailable` and `connect_refusal` as codes (docs/LOCALIZATION.md,
 // Translation boundary). The kit's own English sentence stays in the log and the
 // `hide` CLI; `kitWhy.ts` picks one of these by code, and a cause missing here

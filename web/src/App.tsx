@@ -338,7 +338,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
   const front = useShellStore((s) => frontCheckout(s.rest)?.id ?? null);
   const hasView = useShellStore((s) => Boolean(s.rest?.workspace_view));
   const first = useShellStore((s) => startupScreen(s.rest, front !== null));
-  const restoring = useShellStore((s) => waitingForSavedWorkspace(s.rest) && s.rest?.status?.herdr?.state === "connected");
+  const restoring = useShellStore((s) => waitingForSavedWorkspace(s.rest) && s.rest?.status?.engine?.state === "connected");
   const loaded = useShellStore((s) => s.rest !== null);
   const remoteFront = useShellStore((s) => focusedRemoteDevice(s.rest) !== null);
   const opening = useUiStore((s) => s.opening);

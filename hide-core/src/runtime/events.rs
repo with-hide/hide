@@ -2172,7 +2172,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
         "agent_definitions_read" => decode!(AgentDefinitionsReadPayload, AgentDefinitionsRead),
         "herdr_profiles_list" => decode!(MachineProfilesListPayload, MachineProfilesList),
-        "herdr_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
+        "machine_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),

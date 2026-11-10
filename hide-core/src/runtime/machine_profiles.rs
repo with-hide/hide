@@ -547,7 +547,7 @@ mod tests {
         assert!(
             runtime.dispatch_json(
                 &serde_json::to_vec(&serde_json::json!({
-                    "schema_version": SCHEMA_VERSION, "kind":"herdr_profile_connect",
+                    "schema_version": SCHEMA_VERSION, "kind":"machine_profile_connect",
                     "payload":{"profile_id":profile,"host_consent":consent}
                 }))
                 .unwrap()

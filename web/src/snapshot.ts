@@ -129,7 +129,7 @@ export type AgentRow = {
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;
   /** The name the engine knows the agent by (`hide agent spawn --name`); absent when it was given none. */
-  herdr_name?: string;
+  given_name?: string;
   agent_kind: string;
   /** The checkout that physically owns this pane. */
   checkout_label?: string | null;
@@ -809,7 +809,7 @@ export type PaneRow = {
   ports?: number[];
   servers?: { host: string; port: number }[];
   id: string;
-  herdr_label: string | null;
+  engine_label: string | null;
   terminal_title: string | null;
   cwd: string;
   status_code: AgentStatusCode;
@@ -840,7 +840,7 @@ export type Tab = {
 
 export type StripTab = {
   id: string;
-  kind: "herdr" | "file" | "diff" | "session";
+  kind: "engine" | "file" | "diff" | "session";
   source_id: string;
   label: string;
   preview: boolean;
@@ -2067,8 +2067,6 @@ export type Device = {
   ssh_alias: string | null;
   /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
   wsl_distro?: string | null;
-  /** The engine socket the registration names on the device; null reads its default server. */
-  herdr_socket_path?: string | null;
   agent_count: number;
   test: { state: string; checked_at_unix_ms: number | null; stages: DeviceTestStage[] } | null;
   host?: DeviceHost;
@@ -2135,7 +2133,7 @@ export type MachineProfile = {
   wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;
   connect_state: string;
-  /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */
+  /** Why Hide declined to connect it (`profile_refusal`); a tried connection that failed has none. */
   connect_refusal: MachineProfileRefusal | null;
 };
 export type MachineProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: MachineProfile[]; truncated: boolean };
@@ -2379,7 +2377,6 @@ export type DeviceCatalog = {
 
 export type EngineStatus = {
   state?: string;
-  socket_path?: string | null;
   message?: string | null;
   expected_protocol?: number | null;
   received_protocol?: number | null;
@@ -3537,7 +3534,7 @@ export type SnapshotRest = {
   };
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
-    herdr?: EngineStatus;
+    engine?: EngineStatus;
     /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
     herdr_import?: HerdrImport | null;
     /** What each device of Hide's own engine offers, each naming its `device` (B18). */
@@ -3550,7 +3547,7 @@ export type SnapshotRest = {
     ssh_hosts?: SshHosts;
     /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
-    herdr_profiles?: MachineProfiles;
+    machine_profiles?: MachineProfiles;
     /** What Settings › Agents' last profile request came to; absent until one was made. */
     agent_profile_answer?: AgentProfileAnswer;
     /** The core's final automatic start choice for each project and agent. */

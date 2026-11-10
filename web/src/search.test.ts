@@ -189,8 +189,8 @@ describe("an agent by its Herdr name", () => {
   // Names as `hide agent spawn --name` gives them; mini's agent is that device's own.
   const named = (local: string | undefined, mini: string | undefined) => {
     const rest = structuredClone(TWO_DEVICES);
-    rest.navigator!.agents = [{ ...REST.navigator!.agents![0]!, herdr_name: local }, REST.navigator!.agents![1]!];
-    rest.status!.remote![0]!.session!.agents![0]!.herdr_name = mini;
+    rest.navigator!.agents = [{ ...REST.navigator!.agents![0]!, given_name: local }, REST.navigator!.agents![1]!];
+    rest.status!.remote![0]!.session!.agents![0]!.given_name = mini;
     return searchEntries(rest, t);
   };
   const agentIds = (entries: SearchEntry[], query: string) => filterEntries(entries, query).flatMap((entry) => (entry.kind === "agent" ? [entry.id] : []));

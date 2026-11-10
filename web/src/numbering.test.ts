@@ -15,7 +15,7 @@ function checkoutWith(tabs: string[], extra: { id: string; kind: "file" | "diff"
     id: "c1",
     workspace_id: "w1",
     strip: [
-      ...tabs.map((id) => ({ id: `herdr:${id}`, kind: "herdr" as const, source_id: id, label: id, preview: false })),
+      ...tabs.map((id) => ({ id: `engine:${id}`, kind: "engine" as const, source_id: id, label: id, preview: false })),
       ...extra.map((row) => ({ id: `${row.kind}:${row.id}`, kind: row.kind, source_id: row.id, label: row.id, preview: false })),
     ],
     tabs: tabs.map((id) => ({ id, label: id, panes: [] })),
