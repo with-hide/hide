@@ -1425,6 +1425,12 @@ pub(super) struct AiSettingsPayload {
     /// An agent to take out of that list.
     #[serde(default)]
     pub(super) fallback_remove: Option<String>,
+    /// The profile of the agent `provider`, `fallback_add` or
+    /// `fallback_remove` names, whichever the event carries: together they
+    /// name one item (PRD agent-profiles-phase2 D-07). Absent or empty is
+    /// the agent's built-in default.
+    #[serde(default)]
+    pub(super) profile: Option<String>,
     /// The connected device the agent `provider` or `fallback_add` names
     /// runs on, whichever the event carries; absent or empty is the core's
     /// own machine (PRD wsl-device B11).

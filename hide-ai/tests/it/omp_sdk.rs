@@ -355,7 +355,7 @@ fn real_sdk_preserves_the_background_provider_boundary() {
     let router = AiRouter::new(
         vec![Arc::new(OmpSdkBackend::new(config("bad-schema")))],
         RouterConfig {
-            priority: vec![ProviderId::OMP],
+            priority: vec![ProviderId::OMP.into()],
             max_invalid_output_attempts: 1,
             ..Default::default()
         },

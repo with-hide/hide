@@ -329,8 +329,9 @@ export type InUseAgent = { id: string; title: string; place: string; asleep: boo
  * PRD agent-profiles-phase2 B22, D-16): a project that starts with it, which
  * goes back to the agent's default, and the Settings › Mission candidates
  * that name it, which stay as a missing profile.
+ * Hide AI's Runs on or fallback item of it stays as a missing profile too, which Hide AI passes over (B21).
  */
-export type ProfileUse = { kind: "project"; name: string } | { kind: "candidates"; count: number };
+export type ProfileUse = { kind: "project"; name: string } | { kind: "candidates"; count: number } | { kind: "hide_ai" };
 
 /** A use's row: what it is, then what the delete does to it. */
 function useWords(use: ProfileUse, t: ReturnType<typeof useInterfaceTranslation>["t"]): { what: string; effect: string } {
@@ -339,6 +340,8 @@ function useWords(use: ProfileUse, t: ReturnType<typeof useInterfaceTranslation>
       return { what: use.name, effect: t("agentProfiles.use.projectEffect") };
     case "candidates":
       return { what: t("agentProfiles.use.candidates", { count: use.count }), effect: t("agentProfiles.use.candidatesEffect") };
+    case "hide_ai":
+      return { what: t("agentProfiles.use.hideAi"), effect: t("agentProfiles.use.hideAiEffect") };
   }
 }
 

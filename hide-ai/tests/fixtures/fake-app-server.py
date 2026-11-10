@@ -12,9 +12,10 @@ so a killed owner leaves no survivors. FAKE_ARGS_FILE records the argument
 vector when set, FAKE_INSTRUCTIONS_FILE the base instructions of the last
 thread/start, FAKE_TURN_FILE the parameters of the last turn/start, and
 FAKE_STARTED_FILE is created once a slow turn has
-started and is waiting. FAKE_ENV_FILE records, at `model/list`, the
-app-server's pid, the `CODEX_HOME` it runs under, the file its `auth.json`
-link points at, and the variables a profile or a wrapper set (`ENV_SEEN`); a wrapper that
+started and is waiting. FAKE_ENV_FILE records, at `model/list` and at
+`turn/start`, the app-server's pid, the `CODEX_HOME` it runs under, the file
+its `auth.json` link points at, and the variables a profile or a wrapper set
+(`ENV_SEEN`); a wrapper that
 sets FAKE_GATEWAY_MODEL makes `model/list` answer that model alone.
 interrupted_after_usage, stream_disconnected and stream_disconnected_500 end
 an already-started turn after it reported tokens without a usable answer.
@@ -40,6 +41,19 @@ if path := os.environ.get("FAKE_ARGS_FILE"):
 
 # The variables a profile or its wrapper set, recorded at `model/list`.
 ENV_SEEN = ["OPENAI_BASE_URL", "FAKE_WRAPPED"]
+
+def record_env():
+    if path := os.environ.get("FAKE_ENV_FILE"):
+        home = os.environ.get("CODEX_HOME")
+        auth = os.path.join(home, "auth.json") if home else None
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({
+                "pid": os.getpid(),
+                "CODEX_HOME": home,
+                "auth_link": os.readlink(auth) if auth and os.path.islink(auth) else None,
+                **{name: os.environ.get(name) for name in ENV_SEEN},
+            }, f)
+
 
 # Children started per thread, ended when this process does (atexit) or when
 # stdin reaches EOF - the same ownership the real app-server has over its tree.
@@ -113,16 +127,7 @@ for raw in sys.stdin:
         account = None if MODE == "no_account" else {"type": "chatgpt", "planType": "pro"}
         result(rid, {"account": account, "requiresOpenaiAuth": True})
     elif method == "model/list":
-        if path := os.environ.get("FAKE_ENV_FILE"):
-            home = os.environ.get("CODEX_HOME")
-            auth = os.path.join(home, "auth.json") if home else None
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "pid": os.getpid(),
-                    "CODEX_HOME": home,
-                    "auth_link": os.readlink(auth) if auth and os.path.islink(auth) else None,
-                    **{name: os.environ.get(name) for name in ENV_SEEN},
-                }, f)
+        record_env()
         gateway = os.environ.get("FAKE_GATEWAY_MODEL")
         models = ([] if MODE == "no_model"
                   else [{"id": gateway, "model": gateway}] if gateway
@@ -147,6 +152,7 @@ for raw in sys.stdin:
         if path := os.environ.get("FAKE_TURN_FILE"):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(params, f)
+        record_env()
         active_turn = "turn-1"
         result(rid, {"turn": {"id": active_turn, "status": "inProgress", "items": []}})
         notify("turn/started", {"threadId": "thread-1", "turn": {"id": active_turn, "status": "inProgress", "items": []}})

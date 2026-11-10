@@ -94,7 +94,7 @@ fn descendant_count_stays_bounded_across_many_requests() {
     // binary, and this test holds it until the variable is removed.
     unsafe { std::env::set_var("FAKE_MODE", "child_per_thread") };
     let config = RouterConfig {
-        priority: vec![ProviderId::CODEX],
+        priority: vec![ProviderId::CODEX.into()],
         // The descendant cap is what this test exercises; lift the request-rate
         // caps so 500 turns actually run instead of being rejected per minute.
         max_per_minute: 10_000,
@@ -304,7 +304,7 @@ fn real_codex_starts_no_mcp_children() {
     let router = AiRouter::new(
         vec![backend.clone()],
         RouterConfig {
-            priority: vec![ProviderId::CODEX],
+            priority: vec![ProviderId::CODEX.into()],
             ..RouterConfig::default()
         },
         Arc::new(NoopLogSink),

@@ -50,6 +50,7 @@ function profileUses(answer: AgentProfileAnswer): ProfileUse[] {
   return [
     ...(answer.projects ?? []).map((name): ProfileUse => ({ kind: "project", name })),
     ...(answer.candidates ? [{ kind: "candidates", count: answer.candidates } as const] : []),
+    ...(answer.hide_ai ? [{ kind: "hide_ai" } as const] : []),
   ];
 }
 

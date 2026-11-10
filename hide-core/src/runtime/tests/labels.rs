@@ -75,7 +75,7 @@ fn an_operator_submit_is_recorded_for_the_agent_pane_and_an_approval_enter_is_no
             None,
             std::sync::Weak::new(),
             &crate::node::test_node(),
-            std::sync::Arc::new(hide_node::Local::of_process()),
+            crate::ai::AiMachines::own(std::sync::Arc::new(hide_node::Local::of_process())),
             runtime.usage_gate(),
             runtime.ai_usage(),
         )
@@ -830,7 +830,7 @@ fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
             None,
             std::sync::Weak::new(),
             &crate::node::test_node(),
-            std::sync::Arc::new(hide_node::Local::of_process()),
+            crate::ai::AiMachines::own(std::sync::Arc::new(hide_node::Local::of_process())),
             runtime.usage_gate(),
             runtime.ai_usage(),
         )

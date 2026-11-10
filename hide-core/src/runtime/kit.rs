@@ -1257,6 +1257,7 @@ impl Runtime {
         self.device_kit_pending.remove(device_id);
         self.forget_start_passes(device_id);
         self.kit_states.remove(device_id);
+        self.refresh_ai_items();
         let left = |reason: &'static str| {
             crate::diagnostic!(serde_json::json!({
                 "component": "kit",
@@ -1765,6 +1766,7 @@ impl Runtime {
         let judged_now = pane_judgement_inputs(&snapshot);
         self.kit_states.insert(device_id.to_owned(), snapshot);
         self.refresh_start_profiles();
+        self.refresh_ai_items();
         self.refresh_device_snapshots();
         // A device's agent panes are judged against its kit.
         if device_id != self.node.as_str() {

@@ -104,7 +104,8 @@ A new agent is its declaration's `ai` row, one binding and one backend; the rout
 The backends run on a node, never inside the core: the core's routers hold a `NodeBackend` per provider (`hide-core/src/ai.rs`), which carries each probe, model list, request and measurement to the node of the machine the agent runs on as a call and reads the answer back.
 That machine is the core's own unless the operator placed the agent on a connected device (`AiMachines`, PRD wsl-device B11), whose node answers the same calls with the device's own logins, so no credential is copied between machines and usage counts on the device's account.
 A device's link is looked up each time its agent is asked (`Runtime::linked_node`, which never wakes a device): a device that is not connected answers `Unavailable` and is not woken, and once it connects again the same backend asks it through its next link (B13).
-A router holds what an agent answered for its availability window (30 s), so the label analyzer, which keeps its router across jobs, builds it again when the link of a device its agents are placed on changes, told by the link's host generation rather than by whether one is up (`AiMachines::reach`), so a drop and a reconnect between two jobs rebuild it too: the next label after the device is back runs there; suggestions and Memory build a router for each run.
+A router holds what an agent answered for its availability window (30 s), so the label analyzer, which keeps its router across jobs, builds it again when the link of a device its agents are placed on changes, told by the link's host generation rather than by whether one is up (`AiMachines::facts`), so a drop and a reconnect between two jobs rebuild it too: the next label after the device is back runs there; suggestions and Memory build a router for each run.
+The same facts carry the version of each profile item the order asks, as its machine lists it: when one is deleted or edited, the runtime tells the analyzer, which lets its router go at once on its own thread, even with no job to come (word that waits is not sent again, and the thread reads the profiles as they are when it takes it, so edits during a long request queue one word, not one each), so the old backends are released off the runtime's lock, and the next job asks the profile as it is now; a Memory pass that asks it stops, as a settings change stops it, and a profile no router asks changes nothing (B21).
 The release goes to the link the backend last asked, without a lookup, because a router can be dropped under the runtime's lock.
 The node keeps one real backend per core instance in a registry capped at 64 per link (a few routers, each with one backend per registered provider) (`hide-host/src/ai.rs`), refuses the next, and drops an instance when the core's `NodeBackend` is dropped or the link that asked for it ends, so a router rebuilt for a changed model choice ends the old child.
 GitHub reads stay on the core's own node: a device still refuses `Gh` and the usage reads (PRD wsl-device D-18).
@@ -325,9 +326,39 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 `usage_limit` is a percent from 1 to 100 or `"none"`, written only when it is not the default 90; a file without it reads 90, and any other value makes the file malformed, which is reported and not guessed around.
 
 `machines` maps an agent's id to the connected device it runs on, such as `{ "claude": "wsl-ubuntu" }` (PRD wsl-device B11); an agent with no entry runs on the core's own machine, and the field is written only when an agent runs on a device, so an older file runs everything on the core's machine.
-One agent runs on one machine, so Runs on and a fallback entry never name the same agent twice; `set_provider` keeps the place of an agent that moves from the fallback list to Runs on, and `place` sets or clears it.
-`routes_like` compares the places too, so moving an agent to another machine rebuilds a held router.
-An agent placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
+One item runs on one machine, so Runs on and a fallback entry never name the same item twice; `set_runs_on` keeps the place of an item that moves from the fallback list to Runs on, and `place` sets or clears it.
+`routes_like` compares the places too, so moving an item to another machine rebuilds a held router.
+An item placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
+
+### Agent items
+
+Runs on and each fallback entry name an item, an agent and the profile it runs as (`hide_ai::Item`, PRD agent-profiles-phase2 D-07), so two profiles of one agent are two places a request can go.
+The built-in default profile is the agent alone, and it is what every file written before profiles reads as.
+A profile item is written as its agent with a `profile` field beside it, and its model and machine go in maps keyed by agent, then profile:
+
+```json
+{
+  "provider": "claude",
+  "profile": "p-work",
+  "models": { "claude": "sonnet" },
+  "profile_models": { "claude": { "p-work": "opus" } },
+  "fallback": [{ "provider": "claude", "profile": "p-gw", "model": "glm-4.6" }, { "provider": "codex" }]
+}
+```
+
+A file of default items alone is written byte for byte as before: `profile`, `profile_models` and `profile_machines` are left out when empty.
+A Hide that predates items ignores those fields, so it reads Runs on as its agent's default and drops a fallback entry of the Runs on agent or of an agent already listed, and its next write drops the profiles; [INSTALL.md](INSTALL.md#what-each-system-supports) records that limit.
+A profile item with no model of its own takes its agent's registry default, never the default item's choice, because a profile can run another provider's models.
+Another item of the Runs on agent may be a fallback; `add_fallback` refuses only the Runs on item itself and an item already listed.
+`models_by_item()` and `machines_by_item()` are what backends are built with: every agent's default item, and each profile item of the order.
+
+A profile item runs on its machine as that profile: the core builds its `NodeBackend` with the profile in `BackendSpec::profile`, and the node resolves it as a start would (see [A profile's model list](#a-profiles-model-list)), so the request goes to that profile's account.
+Codex keeps Hide's private `CODEX_HOME` and links the `auth.json` of the item's account, so the request is that account's and never appears in its conversation list (B19).
+A profile item is asked only while its machine lists the profile (`ItemProfiles`, what each machine's profile list says, kept by the runtime): one its machine no longer lists, or a machine that lists no profiles, as an older node that would read no profile field and run the agent's default account, is answered `profile_missing` without asking the machine, and a delete that lands between the list and the call is refused by the node with `NotFound`, which the core reads the same way: the item cannot answer, the router passes over it, and the refusal says so (B6, B21).
+Any other refusal keeps the machine's own sentence, as a node at its cap of backends (`Unsupported`): the profile is there and the node is full.
+Such an item stays in the file and in the snapshot with `profile_missing`, dimmed on the screen as a missing profile, until the operator removes it; Hide never takes it out of the file.
+A core move asks the machine taking the core for a profile item as its agent with its model, once per pair, and refuses nothing for the profile itself: profiles stay with the machine they were made on, and one the new machine does not list is passed over there.
+Each connected device's items are its own profiles, read with its own logins; a device whose Hide keeps no profiles offers its agents' default items alone (B6).
 
 `enabled` is the Settings › Hide AI switch and is on when the field is absent.
 Off, `AiRouter::execute` returns `AiError::Disabled` at once and asks no provider anything, and a feature treats it as nothing to do, never as a failure.
@@ -335,7 +366,7 @@ Off, `AiRouter::execute` returns `AiError::Disabled` at once and asks no provide
 A provider the registry does not know is ignored wherever it appears, so a file written by a newer Hide still reads, and `models` keeps the keys it does not know.
 This includes retired `gemini-cli`, `gemini` and `cursor` ids: a saved retired choice becomes unchosen, with the internal default `claude` but request routing disabled until a supported agent is selected through the existing first-run or operator choice.
 Retired fallback entries are ignored, their raw per-provider model entries survive rewrites, and neither their program nor a replacement provider is asked a model request before that selection.
-`AiSettings` is the one owner of the rules: `set_provider` removes the chosen provider from `fallback` and adopts the model it had there, `add_fallback` refuses the chosen provider and a duplicate (`FallbackRefusal`), `remove_fallback` and `set_fallback_model` edit one entry, and `models_by_provider()` is the model of every provider for building backends.
+`AiSettings` is the one owner of the rules: `set_runs_on` removes the chosen item from `fallback` and adopts the model it had there, `add_fallback` refuses the chosen item and a duplicate (`FallbackRefusal`), `remove_fallback` and `set_fallback_model` edit one entry, and `models_by_item()` is the model of every item for building backends.
 
 `agent_summary` is the Settings › Hide AI › Features Agent summaries switch (PRD overview-request-view D-11), on when the field is absent.
 Off, the label analyzer asks nothing and cancels the request it is running, and no surface shows a label; worktree naming and Project Memory keep their own switches.
@@ -358,11 +389,12 @@ A session with no home directory to write to reports that on the tab for the sam
 Choosing a provider changes which provider is asked first and nothing else.
 Every feature, Project Memory included, asks the chosen provider and then the fallback list under the policy below, while the router's retry, cooldown, cancellation, duplicate-suppression, process, and budget rules apply to all of them.
 
-The Hide AI tab reads `status.background_ai`, one section the core publishes (`hide-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen) and its `device` (null on the core's own machine), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), then the rows of each connected device's agents with its `device_id`, the ordered `fallback` list with each entry's `device`, and `refusal`.
+The Hide AI tab reads `status.background_ai`, one section the core publishes (`hide-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen) with its `profile`, `profile_missing`, `model` and `device` (null on the core's own machine), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), then the rows of each connected device's agents with its `device_id`, the ordered `fallback` list with each entry's `profile`, `profile_missing` and `device`, and `refusal`.
+A row's `profile_models` carry each profile item's own `state`, `message`, `selectable`, `weekly` and `past_limit` beside its list, read with the profile's account, which is what Runs on and Add agent offer.
 An agent placed on a device that is not connected keeps a row whose state is `unavailable` with the code `device_not_connected`, and is not selectable until its device is back; a device's rows carry no weekly figure, since the usage reads are this machine's accounts.
 Every reason in it is a code the shell turns into words, never prose, an account, a path or a conversation, and the cause of a failed model-list read stays in the diagnostic log (B68) as an `ai.models.unavailable` record with the agent and a `reason=` code, written when the reason first appears or changes and not on every read.
-`ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an agent in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `device` (the connected device the `provider` or `fallback_add` agent runs on, absent or null for the core's own machine), `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable on that machine, or on a device that is not connected (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), a device Hide does not know (`ai_settings.unknown_device`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
-`refusal` is how the label analyzer last found the chosen agent (`AiStanding`, written on the analyzer's thread after each job): its reason class, the end of a usage limit when the agent said, and the listed agent a request made now would run on (`using`), or none when no listed agent can answer, which is the Runs on row's reason (B41, B42).
+`ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an item in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `profile` (the profile of whichever item the event names, absent for the built-in default), `device` (the connected device the `provider` or `fallback_add` agent runs on, absent or null for the core's own machine), `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable on that machine, or on a device that is not connected (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), a device Hide does not know (`ai_settings.unknown_device`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
+`refusal` is how the label analyzer last found the chosen item (`AiStanding`, written on the analyzer's thread after each job): its `profile`, its reason class (`profile_missing` among them), the end of a usage limit when the agent said, and the listed item a request made now would run on (`using` with `using_profile`), or none when no listed item can answer, which is the Runs on row's reason (B41, B42; PRD agent-profiles-phase2 B18).
 It is absent while the chosen agent answers and while Hide AI is off.
 
 With Hide AI off or no agent chosen, the label analyzer answers every job as stopped without asking anything and the runtime says `agent_summary()` is false, so rows show the session's own text and a turn is made once it is on again; worktree naming returns the dialog's own name; Project Memory analysis waits (the project stays enabled, its saved Memory and Sessions keep working).
@@ -643,7 +675,8 @@ Setting `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is documented to write at 1.25 times i
 
 ## Selection and fallback
 
-A request is asked of the chosen provider and then of each provider in the `fallback` list, in that order, once each, and of nothing else (`RouterConfig::priority` is exactly that list).
+A request is asked of the chosen item and then of each item in the `fallback` list, in that order, once each, and of nothing else (`RouterConfig::priority` is exactly that list of items).
+Everything the router keeps about who answered (availability, cooldown, the usage limit's readings, the degraded record, the last answer) is keyed by item, so another item of the same agent can answer when one cannot; a log record names a profile item's profile beside its agent.
 A provider that is registered and not on it is inspected for Settings and never asked, so a login the operator never meant to use is not spent.
 While nobody has chosen, the internal default is `claude` and request routing is disabled until the existing selection rule or the operator chooses a supported provider.
 
@@ -671,6 +704,7 @@ A text-mode CLI's failure it cannot classify is `CompletionUnknown` and ends the
 
 That move is sticky, so the reason outlives the request that found it.
 A provider under an account-wide cooldown is not asked for an answer and is not asked whether it is logged in either: the cooldown already answers, and probing a provider that cannot answer for hours is the poke stickiness exists to stop.
+A cooldown is the account's: items whose profiles run in one account on one machine share it (`RouterConfig::accounts`, a `SharedAccount` of the machine and the account, filled from each machine's profile list through `ItemProfiles`), since an account folder or name says which account only on the machine that keeps it, so the same path on two machines is two accounts; an item whose profile is in its agent's default account, which a wrapper or variables alone may point at another provider, is parked alone.
 An outage or a missing login is remembered by the availability cache for its window instead.
 When the cooldown expires the router drops that provider's cached availability with it, asks the provider once, and returns to it when it can answer; nobody has to tell the router the limit reset.
 Because a sticky failover has no second provider to try, `ai.fallback` never fires again, so entering and leaving failover each get their own event: `ai.provider.degraded` names the selected provider, its reason and the provider now active, and `ai.provider.recovered` names the return.
@@ -689,6 +723,7 @@ The routers for what the operator waits on (worktree names, issue intake review)
 `statuses()` and `availability()` stay ungated, so Settings still lists a past-limit agent as signed in; only `active` in `provider_state()` skips it.
 
 The figures are the weekly rows the toolbar's usage read already produces (`usage` through `weekly_reading()`, the seven-day account window with a percent and a future reset); no new read command exists.
+Each item is judged by its own account's figure: a default item by its agent's row, a profile item by its account's row (the same `profile_weekly` the catalog reads), and a profile in the agent's default account has no figure, so the limit never holds it back (PRD agent-profiles-phase2 D-07).
 Those rows are the core machine's accounts, so an agent placed on a device has no figure and is never held back by them: its usage counts on the device's account (PRD wsl-device B12).
 With no window attached the same reader also runs while a limit is set and Hide AI is on and either the order is paused (only a fresh figure can lift it) or an agent worked in the last 30 minutes, so labels are not judged by a figure that is days old; that is at most one read per agent every five minutes and none while nothing runs.
 Until the first read lands (one second after launch) an agent has no figure and is not limited.

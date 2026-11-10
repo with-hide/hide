@@ -7659,9 +7659,17 @@ pub struct BackgroundAiSnapshot {
     /// without a model, and the first agent that is switched on and signed in
     /// is chosen by itself (D-18, D-27).
     pub provider: Option<String>,
+    /// The profile of `provider`'s agent Runs on runs as; `None` is its
+    /// built-in default (PRD agent-profiles-phase2 D-07).
+    pub profile: Option<String>,
+    /// `profile` is one its machine no longer lists, or the machine keeps no
+    /// profiles (B6, B21): the screen dims it and Hide AI passes over it.
+    pub profile_missing: bool,
     /// The connected device `provider` runs on; `None` is the core's own
     /// machine (PRD wsl-device B11).
     pub device: Option<String>,
+    /// The model Runs on is asked for; empty is the CLI's own default.
+    pub model: String,
     /// Whether `provider` is a stored choice.
     pub chosen: bool,
     /// The `에이전트 요약` switch: agent labels are asked for and shown.
@@ -7788,6 +7796,19 @@ pub struct BackgroundAiProfileModels {
     pub model_labels: BTreeMap<String, String>,
     pub models_fixed: bool,
     pub models_unavailable_reason: Option<String>,
+    /// The profile's sign-in as its agent's row says it
+    /// (`BackgroundAiProviderSnapshot::state`), read with the profile's own
+    /// account; `profile_missing` is a profile its machine no longer lists.
+    pub state: String,
+    /// The provider layer's own reason code, when the state carries one.
+    pub message: Option<String>,
+    /// Whether Runs on and Add agent offer the item (D-15).
+    pub selectable: bool,
+    /// The weekly usage of the profile's own account; absent for a profile
+    /// with no figure of its own, which the usage limit never holds back.
+    pub weekly: Option<BackgroundAiWeekly>,
+    /// The weekly figure is at or past the usage limit.
+    pub past_limit: bool,
 }
 
 /// One agent's weekly usage: the share spent and when the window resets.
@@ -7818,6 +7839,10 @@ impl BackgroundAiProviderSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BackgroundAiFallbackSnapshot {
     pub provider: String,
+    /// The profile of the agent it runs as; `None` is its built-in default.
+    pub profile: Option<String>,
+    /// `profile` is one its machine no longer lists (B21).
+    pub profile_missing: bool,
     /// The connected device it runs on; `None` is the core's own machine.
     pub device: Option<String>,
     /// The model it is asked for; empty is the CLI's default.
@@ -7830,14 +7855,20 @@ pub struct BackgroundAiFallbackSnapshot {
 pub struct BackgroundAiRefusalSnapshot {
     /// The agent that cannot answer: Runs on.
     pub provider: String,
+    /// The profile Runs on runs as; `None` is the agent's built-in default.
+    pub profile: Option<String>,
     /// The router's availability class for it: `usage_limited`,
     /// `past_limit` (at or past the operator's usage limit), `needs_login`,
-    /// `not_installed`, `unavailable` or `unsupported`.
+    /// `not_installed`, `unavailable`, `unsupported` or `profile_missing`
+    /// (a profile its machine no longer lists, PRD agent-profiles-phase2
+    /// B21).
     pub reason: String,
     /// When a usage limit ends, as unix milliseconds, when the agent said.
     pub retry_at_ms: Option<u64>,
     /// The listed agent answering instead; absent when none can (B42).
     pub using: Option<String>,
+    /// The profile `using` runs as; `None` is its built-in default.
+    pub using_profile: Option<String>,
     /// For `past_limit`: the agent's weekly share and the limit it is past,
     /// so the screen says `past your 90% limit` from the core's own numbers.
     pub used_percent: Option<f64>,

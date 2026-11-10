@@ -153,6 +153,15 @@ fn run_coordinator(
                 crate::ai::AiReader::new(crate::ai::AiMachines {
                     own: Arc::clone(node),
                     devices: crate::runtime::device_links(context.runtime.clone()),
+                    // The runtime's own cell, which it keeps current; a
+                    // runtime gone already reads no profiles.
+                    profiles: context
+                        .runtime
+                        .upgrade()
+                        .and_then(|runtime| {
+                            runtime.lock().ok().map(|runtime| runtime.ai_profiles())
+                        })
+                        .unwrap_or_default(),
                 })
             })
         })

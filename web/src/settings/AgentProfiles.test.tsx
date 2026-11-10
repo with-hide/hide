@@ -124,11 +124,12 @@ it("edits only after the variables' values are read, and deletes after naming th
 
   await tab.click(tab.q("[data-profile-delete]"));
   expect(tab.changes().at(-1)?.change).toEqual({ op: "remove_check", id: "p-work" });
-  await tab.answer({ in_use: [], projects: ["blog"], candidates: 2 });
+  await tab.answer({ in_use: [], projects: ["blog"], candidates: 2, hide_ai: true });
   // What uses it, each with what the delete does: the project goes back to the default, the mission candidates stay as a missing profile (agent-profiles-phase2 B22).
   expect(tab.all("[data-profile-use]").map((row) => [row.dataset.profileUse, row.textContent])).toEqual([
     ["project", "blog · goes back to the agent default"],
     ["candidates", "2 mission worker candidates · stays as Missing profile"],
+    ["hide_ai", "Hide AI · stays as Missing profile and is passed over"],
   ]);
   await tab.click(tab.q("[data-profile-delete-confirm]"));
   expect(tab.changes().at(-1)?.change).toEqual({ op: "remove", id: "p-work" });
