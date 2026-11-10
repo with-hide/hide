@@ -30,6 +30,7 @@ describe.skipIf(process.platform !== 'darwin')('the release command on the build
       copyFileSync(join(mobile, file), target);
     }
     put(join(base(), 'release-inputs/bundle-manifest.json'), '{"schema":1,"files":{}}');
+    put(join(base(), 'release-inputs/relay-source.txt'), `${'a'.repeat(64)}\n`);
     put(join(base(), 'ios/App/App/App.entitlements'), '<plist/>');
     stub('codesign', 'exit 0');
     put(keyPath(), `-----BEGIN PRIVATE KEY-----\n${SECRET_LINE}\n-----END PRIVATE KEY-----\n`);

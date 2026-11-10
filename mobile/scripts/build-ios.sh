@@ -90,6 +90,9 @@ if [[ "$command" == release ]]; then
     trap 'rm -rf "$inputs"' EXIT
     node mobile/scripts/bundle-manifest.mjs "$inputs/bundle-manifest.json"
     cp mobile/release-env.json mobile/release-expect.json mobile/scripts/check-release-app.sh "$inputs/"
+    # The digest of the relay protocol sources of this checkout, taken now and not from the library's own folder: the
+    # release check compares it with the one inside the signed app, so a library built from other sources is refused.
+    bash scripts/build-relay-ios.sh --digest > "$inputs/relay-source.txt"
     rsync -a --delete "$inputs/" "$host:$remote/release-inputs/"
     # The time is taken here, after the tests, so the number is as close to the upload as the command can make it.
     read -r version build < <(node mobile/scripts/release-version.mjs)

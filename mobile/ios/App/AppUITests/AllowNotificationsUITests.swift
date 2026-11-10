@@ -7,7 +7,7 @@ import XCTest
 final class AllowNotificationsUITests: XCTestCase {
     func testAllowTheNotificationQuestion() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["HIDE_DEBUG_TAPS"] = ProcessInfo.processInfo.environment["TEST_RUNNER_HIDE_DEBUG_TAPS"] ?? ""
+        app.launchEnvironment["HIDE_DEBUG_TAPS"] = ProcessInfo.processInfo.environment["HIDE_DEBUG_TAPS"] ?? ""
         app.launch()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.alerts.buttons["Allow"]

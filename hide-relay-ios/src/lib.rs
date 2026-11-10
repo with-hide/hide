@@ -334,14 +334,30 @@ static SOURCE: &str = match option_env!("HIDE_RELAY_IOS_SOURCE") {
     None => "unrecorded",
 };
 
-/// The marker `hide-relay-ios-source:<digest>`, a NUL-ended string that lives for the whole process.
+const MARK_PREFIX: &str = "hide-relay-ios-source:";
+const MARK_LEN: usize = MARK_PREFIX.len() + SOURCE.len() + 1;
+
+/// The marker `hide-relay-ios-source:<digest>` and a NUL, laid out at compile time so the whole text is in the binary the
+/// app is linked into (a release check searches the signed app for it) and not assembled when the app runs.
+#[used]
+static MARK: [u8; MARK_LEN] = {
+    let mut out = [0u8; MARK_LEN];
+    let (prefix, digest) = (MARK_PREFIX.as_bytes(), SOURCE.as_bytes());
+    let mut at = 0;
+    while at < prefix.len() {
+        out[at] = prefix[at];
+        at += 1;
+    }
+    let mut from = 0;
+    while from < digest.len() {
+        out[at + from] = digest[from];
+        from += 1;
+    }
+    out
+};
+
+/// The marker as a NUL-ended string that lives for the whole process.
 #[unsafe(no_mangle)]
 pub extern "C" fn hide_relay_source() -> *const u8 {
-    static MARK: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
-    MARK.get_or_init(|| {
-        std::ffi::CString::new(format!("hide-relay-ios-source:{SOURCE}"))
-            .expect("no NUL in a digest")
-    })
-    .as_ptr()
-    .cast()
+    MARK.as_ptr()
 }

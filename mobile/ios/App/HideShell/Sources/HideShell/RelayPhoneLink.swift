@@ -31,7 +31,12 @@ public final class RelayPhoneLink: PhoneLink {
         return URL(string: (bundle.object(forInfoDictionaryKey: "HideRelayURL") as? String) ?? defaultURL)
     }
 
+    /// The marker the library carries (`hide-relay-ios-source:<digest>`): read at every start so the linker keeps it in the
+    /// app, where the release check looks for it.
+    public static var librarySource: String { String(cString: hide_relay_source()) }
+
     public init(url: URL) {
+        _ = Self.librarySource
         self.url = url
         self.session = URLSession(configuration: .ephemeral)
     }
