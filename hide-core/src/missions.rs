@@ -4134,9 +4134,9 @@ pub(crate) mod tests {
         assert_eq!(planned.checkers, Some(recorded));
     }
 
-    /// A question's View link recorded before links kept their View reads
-    /// with nothing kept and writes back as it was, without a schema raise
-    /// (PRD mission-human-gate D-20).
+    /// A question's View link recorded before links kept their View, or
+    /// before they kept its agent, reads with nothing kept and writes back as
+    /// it was, without a schema raise (PRD mission-human-gate D-20).
     #[test]
     fn a_view_link_recorded_before_links_kept_their_view_reads_as_it_was() {
         let recorded = serde_json::json!({
@@ -4162,6 +4162,33 @@ pub(crate) mod tests {
             serde_json::json!({"kind": "diff", "label": "a.rs", "address": "/repo/a.rs", "committed": true})
         );
         assert_eq!(serde_json::from_value::<ViewLink>(written).unwrap(), kept);
+
+        // A link kept before it kept its View's agent reads with none and
+        // writes back as it was; one that kept it keeps every field.
+        let before_opener = serde_json::json!({
+            "device_id": "local", "checkout_path": "/repo", "display_id": "d3", "at_unix_ms": 10,
+            "kept": {"kind": "file", "label": "notes.md", "address": "/repo/notes.md"},
+        });
+        let read: ViewLink = serde_json::from_value(before_opener.clone()).unwrap();
+        assert_eq!(read.kept.as_ref().unwrap().opener, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), before_opener);
+        let opener = serde_json::json!({
+            "device_id": "mini", "terminal_id": "t-4", "session": "s-digest", "resume": "s-1",
+            "provider": "claude", "name": "dev-a",
+        });
+        let mut with_opener = before_opener;
+        with_opener["kept"]["opener"] = opener.clone();
+        let read: ViewLink = serde_json::from_value(with_opener.clone()).unwrap();
+        let kept_opener = read.kept.as_ref().unwrap().opener.as_ref().unwrap();
+        assert_eq!(
+            (
+                kept_opener.device_id.as_str(),
+                kept_opener.terminal_id.as_str(),
+                kept_opener.session.as_deref()
+            ),
+            ("mini", "t-4", Some("s-digest"))
+        );
+        assert_eq!(serde_json::to_value(&read).unwrap(), with_opener);
     }
 
     #[test]
