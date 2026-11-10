@@ -201,7 +201,8 @@ test("the device list marks a device that refuses its status check as disconnect
 
 test("the in-app link scanner adds a device and CSP refuses external scripts", async ({ page, relay }) => {
   await page.goto(relay.origin);
-  await page.getByRole("button", { name: "Connect another device" }).click();
+  // No computer yet: the first screen's big button opens the browser's scan and paste page.
+  await page.getByRole("button", { name: "Scan QR code", exact: true }).click();
   await page.getByRole("textbox", { name: "Paste QR link" }).fill(relay.qr);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
@@ -297,7 +298,7 @@ test("hosted push registers and removes only the device scope while keeping the 
   await page.getByRole("button", { name: "Remove device", exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).last().click();
   await expect(page).toHaveURL(relay.origin + "/");
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   await expect.poll(scopes).toEqual(["/"]);
 });
 

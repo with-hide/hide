@@ -125,7 +125,7 @@ function ReachedDevices({ t, devices }: { t: TFunction; devices: readonly PhoneD
 }
 
 /** A chosen device while its bundle opens: the blinking owl holds the wait (the start page has no log, so a failed drawing goes to the console). */
-export function DeviceConnecting({ t, name, error, onChoose }: { t: TFunction; name: string; error: "qrError" | "storage" | "loadError" | "limit" | null; onChoose: () => void }) {
+export function DeviceConnecting({ t, name, error, onChoose }: { t: TFunction; name: string; error: "qrError" | "cameraError" | "storage" | "loadError" | "limit" | null; onChoose: () => void }) {
   return <Landing>
     <MovingOwl motion={blink} still={blinkStill} scene="phone_connecting" className="size-(--size-brand-owl)"
       onUnavailable={(asset) => console.error(JSON.stringify({ event: "brand_owl.unavailable", scene: "phone_connecting", asset }))} />

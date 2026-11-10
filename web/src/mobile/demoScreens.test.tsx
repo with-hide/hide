@@ -5,7 +5,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { stop, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
-import { SettingsScreen, PRIVACY_POLICY_URL } from "./SettingsScreen";
+import { SettingsScreen } from "./SettingsScreen";
+import { PRIVACY_POLICY_URL } from "./SettingsParts";
 import { setTab, openMission, usePhone } from "./store";
 import { blockNetwork, type NetworkGuard } from "./demoNetworkGuard";
 
