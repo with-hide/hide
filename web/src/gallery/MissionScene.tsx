@@ -19,7 +19,7 @@
 // none for no-conductor, which offers 이어받기 there), the summary beside the
 // map while no node is picked, and the checkers as satellites beside their
 // cards; done leads with its result tiles and pull requests (PRD mission-tool
-// B12-B21). `pick=<node>` opens that node's panel, `width` narrows the slot
+// B12-B21). `hint=role` focuses the first checker beside its card so its role hint is open. `pick=<node>` opens that node's panel, `width` narrows the slot
 // and `scale` sets the text size. The
 // Conductor pane's head with its mission chip and pinned popover (PRD
 // mission-pane-chip, mission-plan-visibility) is `pane-running`,
@@ -513,6 +513,20 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     frame = requestAnimationFrame(press);
     return () => cancelAnimationFrame(frame);
   }, [pick, fixture]);
+  // `hint=role`: the first checker beside a card takes focus, which opens its hover, the role's line under the agent and its state.
+  const roleHint = params.get("hint") === "role";
+  useEffect(() => {
+    if (!roleHint) return;
+    let frame = 0;
+    let left = 120;
+    const focus = () => {
+      const mark = document.querySelector<HTMLElement>("[data-node-satellite]");
+      if (mark) mark.focus();
+      else if ((left -= 1) > 0) frame = requestAnimationFrame(focus);
+    };
+    frame = requestAnimationFrame(focus);
+    return () => cancelAnimationFrame(frame);
+  }, [roleHint, fixture]);
   const width = Number(params.get("width") ?? (state === "settings" ? 900 : 1080));
   return (
     <TooltipProvider>

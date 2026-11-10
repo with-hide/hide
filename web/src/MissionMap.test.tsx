@@ -595,6 +595,23 @@ it("tethers each agent checking a node to its card's right side as a satellite, 
   } finally { await map.unmount(); }
 });
 
+it("says what each role does: a reviewer and a verifier satellite carry their role's line as hover and description, and the worker's mark on a card carries its own", async () => {
+  const nodes = [
+    node("core", { status: "working", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, criteria: [line("review", "review", { checkers: [checker("codex", "open", "agent-7")] }), line("verify", "verify", { checkers: [checker("claude", "open", "agent-8")] })] }),
+  ];
+  const map = await mount({ items: [mission({ nodes })] });
+  try {
+    const marks = [...map.q('[data-dependency-node="core"]')!.querySelectorAll<HTMLElement>("[data-node-satellite]")];
+    expect(marks.map((one) => one.getAttribute("aria-description"))).toEqual([
+      "Reads the code, finds problems, and rules pass or fail.",
+      "Runs it for real and confirms it works.",
+    ]);
+    await act(async () => marks[1]!.focus());
+    expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain("Runs it for real and confirms it works.");
+    expect(card(map, "core").querySelector("[data-node-worker-mark]")).not.toBeNull();
+  } finally { await map.unmount(); }
+});
+
 it("shows on the card and in the panel how long a node took from its events, and no number without them or while the device is gone (B4, B28, B35)", async () => {
   // The page reads its own clock, so the test holds it.
   const now = Math.floor(Date.now() / 60_000) * 60_000;
