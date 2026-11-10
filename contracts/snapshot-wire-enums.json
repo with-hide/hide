@@ -21,6 +21,7 @@
   "mission_check_rule": ["all", "majority"],
   "mission_recorded_role": ["worker", "checker", "conductor", "hide", "operator"],
   "mission_answer_state": ["sending", "waiting", "unconfirmed"],
+  "mission_answer_hold": ["working", "typing", "approval", "other", "forced"],
   "mission_event_kind": ["planned", "replanned", "node", "retried", "pr_opened", "pr_merged", "landed", "asked", "answered", "answer_undelivered", "answer_unconfirmed", "reported", "cancelled", "skipped", "reopened", "strength", "hide", "hide_closed", "raised", "raised_to_operator", "resolved"],
   "mission_answer_source": ["banner", "conversation"],
   "mission_decision_view_by": ["conductor", "worker"],

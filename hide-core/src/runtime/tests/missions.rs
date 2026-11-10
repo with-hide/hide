@@ -13,6 +13,7 @@ use crate::model::{
     PullRequestSnapshot, ReviewDecision,
 };
 use crate::runtime::delivery::tests::{authority, fixture};
+use crate::runtime::missions::AnswerHold;
 use crate::sidebar::SessionSnapshotPayload;
 use serde_json::{Value, json};
 
@@ -2645,7 +2646,7 @@ fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
     let due = runtime.mission_answers_due();
     assert_eq!(due.len(), 1);
     assert!(due[0].line.contains("Which base?") && due[0].line.ends_with("#1503"));
-    runtime.mission_answer_held("mission-1");
+    runtime.mission_answer_held("mission-1", AnswerHold::Other);
     runtime.refresh_missions();
     assert_eq!(
         runtime.snapshot.missions.items[0]
@@ -2673,6 +2674,63 @@ fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
         runtime.missions.events["mission-1"].events[2].source,
         Some(crate::mission_events::AnswerSource::Banner)
     );
+}
+
+/// A held answer shows what it waits for, and `지금 보내기` forces it once: the
+/// doorbell then judges it as a forced letter, and only an answer the
+/// doorbell holds can be pressed.
+#[test]
+fn a_held_answer_shows_its_reason_and_is_forced_once() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    let now = |runtime: &mut Runtime| runtime.mission_answer_now("mission-1", 1);
+    assert!(!now(&mut runtime), "nothing to press before an answer");
+    assert!(runtime.mission_answer_event("mission-1", 1, Some(2), None, false));
+    assert!(!now(&mut runtime), "an answer the doorbell has not held");
+    assert!(!runtime.mission_answers_due()[0].forced);
+    assert!(runtime.mission_answer_held("mission-1", AnswerHold::Working));
+    assert!(
+        !runtime.mission_answer_held("mission-1", AnswerHold::Working),
+        "the same reason changes nothing"
+    );
+    assert!(runtime.mission_answer_held("mission-1", AnswerHold::Typing));
+    runtime.refresh_missions();
+    let hold = |runtime: &Runtime| {
+        runtime.snapshot.missions.items[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .hold
+    };
+    assert_eq!(hold(&runtime), Some(AnswerHold::Typing));
+    assert!(
+        !runtime.mission_answer_now("mission-1", 9),
+        "another question"
+    );
+    assert!(now(&mut runtime));
+    assert!(!now(&mut runtime), "a second press finds it forced");
+    runtime.refresh_missions();
+    assert_eq!(hold(&runtime), Some(AnswerHold::Forced));
+    assert!(runtime.mission_answers_due()[0].forced);
+    // Text in the input sends it back to its reason, as a forced letter goes
+    // back to an ordinary one.
+    runtime.mission_answer_unforced("mission-1");
+    runtime.refresh_missions();
+    assert_eq!(hold(&runtime), Some(AnswerHold::Typing));
+    assert!(!runtime.mission_answers_due()[0].forced);
+    // A typed answer leaves nothing forced behind.
+    assert!(now(&mut runtime));
+    runtime.mission_answer_typing("mission-1", 1);
+    runtime.mission_answer_sent("mission-1", 1, Ok(()));
+    assert!(runtime.mission_answers_due().is_empty());
+    assert!(runtime.missions.answers_forced.is_empty());
 }
 
 /// An answer held on a Conductor's session Hide cannot read says why on the
@@ -2708,7 +2766,7 @@ fn an_answer_held_on_an_unreadable_conductor_session_says_why() {
         runtime.refresh_missions();
         runtime.snapshot.missions.items[0].answer_failed
     };
-    runtime.mission_answer_held("mission-1");
+    runtime.mission_answer_held("mission-1", AnswerHold::Other);
     assert_eq!(
         observe(&mut runtime, true),
         Some(AnswerFailure::SessionUnreadable)
@@ -2817,7 +2875,7 @@ fn closing_a_mission_ends_its_decision_and_records_an_answer_never_typed() {
     )
     .unwrap();
     assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
-    runtime.mission_answer_held("mission-1");
+    runtime.mission_answer_held("mission-1", AnswerHold::Other);
     command(
         &mut runtime,
         "sender",

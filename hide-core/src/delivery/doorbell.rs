@@ -22,7 +22,6 @@ use super::Actor;
 use super::ledger::{BELLS, Ledger, Letter, State};
 use super::worker::{Client, Effect, Rang, now};
 
-const QUIET_MS: u64 = 30_000;
 /// How long a recipient works on without a rest, counted from the later of
 /// the letter's arrival and the start of its work, before the letter is
 /// delivered to it mid-turn (PRD letters-to-busy-agents D-04). A letter sent
@@ -111,6 +110,19 @@ pub(crate) enum Hold {
 }
 
 impl Hold {
+    /// What an operator reads of a held answer (`AnswerHold`): the holds a
+    /// press of `지금 보내기` can lift, and a menu the Conductor itself waits
+    /// at; the rest end on their own.
+    fn answer_hold(self) -> crate::runtime::missions::AnswerHold {
+        use crate::runtime::missions::AnswerHold;
+        match self {
+            Self::Working => AnswerHold::Working,
+            Self::Draft | Self::Quiet | Self::ComposerUnread => AnswerHold::Typing,
+            Self::Blocked | Self::AwaitingOperator => AnswerHold::Approval,
+            _ => AnswerHold::Other,
+        }
+    }
+
     fn code(self) -> &'static str {
         match self {
             Self::Kind => "kind_not_belled",
@@ -244,8 +256,8 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
     if observation.unsent_draft() {
         return Err(Hold::Draft);
     }
-    if now.saturating_sub(observation.last_input_at_unix_ms) < QUIET_MS
-        || now.saturating_sub(projected.changed_at(observation)) < QUIET_MS
+    if now.saturating_sub(observation.last_input_at_unix_ms) < super::INPUT_QUIET_MS
+        || now.saturating_sub(projected.changed_at(observation)) < super::INPUT_QUIET_MS
     {
         return Err(Hold::Quiet);
     }
@@ -894,10 +906,11 @@ impl Doorbell {
                 continue;
             };
             let episode = Episode::from(&observed);
-            if self
-                .answer_tried
-                .get(&work.mission)
-                .is_some_and(|last| last.episode == episode && now < last.retry_at)
+            if !work.forced
+                && self
+                    .answer_tried
+                    .get(&work.mission)
+                    .is_some_and(|last| last.episode == episode && now < last.retry_at)
             {
                 continue;
             }
@@ -911,6 +924,12 @@ impl Doorbell {
                     }
                 }
                 Ok(Outcome::Held(reason)) => {
+                    if work.forced
+                        && reason == Hold::ComposerUnread
+                        && let Ok(mut guard) = owner.lock()
+                    {
+                        guard.mission_answer_unforced(&work.mission);
+                    }
                     self.answer_hold(owner, &work, reason);
                     self.answer_tried.insert(
                         work.mission.clone(),
@@ -1044,7 +1063,7 @@ impl Doorbell {
                 "mission":work.mission,"pane_id":work.conductor.pane_id,"reason":reason.code()}));
         }
         if let Ok(mut guard) = owner.lock() {
-            guard.mission_answer_held(&work.mission);
+            guard.mission_answer_held(&work.mission, reason.answer_hold());
         }
     }
 
@@ -1802,7 +1821,9 @@ fn type_answer(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(unclear) = clear_to_type(engine, observed, false).map_err(SendFailure::NotTyped)? {
+    if let Err(unclear) =
+        clear_to_type(engine, observed, work.forced).map_err(SendFailure::NotTyped)?
+    {
         return Ok(Outcome::Held(unclear.hold()));
     }
     {
@@ -4716,7 +4737,7 @@ mod tests {
         );
         assert_eq!(bell.reads(), 1);
         // A key in the quiet period is no rest yet.
-        key(start - 10_000);
+        key(start - 5_000);
         pass_logged(&bell, &mut doorbell, start + 2_000);
         assert_eq!(bell.reads(), 1);
         // Once it rests, the new draft is read: now the operator erased it.

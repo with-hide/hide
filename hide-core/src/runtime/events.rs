@@ -1047,6 +1047,10 @@ pub(super) struct MissionAnswerPayload {
     /// Types an answer again that was typed without the engine confirming it.
     #[serde(default)]
     pub(super) resend: bool,
+    /// Types the answer now, past the Conductor's work and a draft that
+    /// reads empty (`지금 보내기`).
+    #[serde(default)]
+    pub(super) now: bool,
 }
 
 /// `mission_material`: the operator's `자료 요청` on the question with `key`:
@@ -4169,6 +4173,9 @@ impl Runtime {
                     settings.map_flow = map_flow;
                 }
                 self.set_conductor_settings(settings)
+            }
+            Event::MissionAnswer(payload) if payload.now => {
+                self.mission_answer_now(&payload.mission, payload.key)
             }
             Event::MissionAnswer(payload) => self.mission_answer_event(
                 &payload.mission,

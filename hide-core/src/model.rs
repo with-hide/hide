@@ -10212,6 +10212,25 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_state", &states);
             checked.insert("mission_answer_state");
+            use crate::runtime::missions::AnswerHold;
+            let holds = [
+                AnswerHold::Working,
+                AnswerHold::Typing,
+                AnswerHold::Approval,
+                AnswerHold::Other,
+                AnswerHold::Forced,
+            ];
+            for variant in holds {
+                match variant {
+                    AnswerHold::Working
+                    | AnswerHold::Typing
+                    | AnswerHold::Approval
+                    | AnswerHold::Other
+                    | AnswerHold::Forced => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_hold", &holds);
+            checked.insert("mission_answer_hold");
             use crate::mission_events::{AnswerSource, EventKind};
             let kinds = [
                 EventKind::Planned,
