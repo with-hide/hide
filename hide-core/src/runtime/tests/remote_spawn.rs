@@ -1201,7 +1201,7 @@ fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_start
     assert_eq!(
         crate::coordination::shell_starting_detail(detail.expect("a detail")),
         (Some(1), Some("Last login: today")),
-        "the reason, with how long the shell was waited for and what it shows last"
+        "the reason, with the wait the shell was given (300 ms, read as 1 s) and what it shows last"
     );
     assert_eq!(spawner.count("start_agent"), 0, "nothing was typed");
     assert_eq!(spawner.count("close_pane"), 1, "the tab it opened closed");

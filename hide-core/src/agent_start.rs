@@ -671,8 +671,12 @@ impl Shell<'_> {
                 // Whichever of the three it waited on (its first prompt, the
                 // terminal, a line editor that would cut the line), the shell
                 // had not finished starting; the diagnostic above keeps which.
+                // The refusal names the wait the shell was given, which is
+                // what the operator can act on (a 30 s wait reads 30 s), not
+                // the clock past it: a poll that slept on or a stalled runner
+                // makes the elapsed time a different, unrepeatable number.
                 return Err(StartError::ShellStarting {
-                    waited: started.elapsed(),
+                    waited: deadline.saturating_duration_since(started),
                     screen: self.last_screen_line(),
                 });
             }
@@ -1182,7 +1186,7 @@ mod tests {
             panic!("a shell that never holds the terminal is not a start");
         };
         assert_eq!(screen.as_deref(), Some("Last login: today"));
-        assert!(waited >= Duration::from_millis(300), "{waited:?}");
+        assert_eq!(waited, Duration::from_millis(300), "the wait the shell was given");
         assert!(!fake.methods().contains(&"start_agent"));
     }
 
