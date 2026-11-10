@@ -68,6 +68,7 @@ h1, h2, h3, h4 { font-weight: 600; letter-spacing: -0.01em; }
 /* A live part from the app, framed. */
 iframe[src*="/embed/"] {
   width: 100%;
+  min-height: 8rem;
   border: 1px solid var(--sl-color-hairline);
   border-radius: 14px;
   background: transparent;

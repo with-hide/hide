@@ -34,10 +34,12 @@ bash scripts/verify-web.sh install docs          # the web shell's packages and 
 node scripts/docs/check-all.mjs --hide <a built hide>
 ```
 
-`check-all` is the docs lane's command (`docs/TESTING.md`, The user docs): it checks that guides and features name each other, generates the CLI reference from `hide --help` and `contracts/hide-cli.json` (failing on a command with no note and on a note for a gone command), builds the live parts and builds the site into `site/dist/`.
-`--hide` names the `hide` whose `--help` lists the commands, such as `/Applications/hide.app/Contents/Resources/hide` or a debug build; the default is `target/debug/hide`.
+The site is pinned to pnpm 10.34.9 (`packageManager` in `package.json`, and the docs lane's `pnpm/action-setup`): run pnpm from inside `site/` (`cd site && pnpm install --frozen-lockfile`) so it switches to that version; a machine whose default is pnpm 12 fails with `ERR_PNPM_BAD_PM_VERSION` when it is pointed at `site/` from outside with `--dir`.
+
+`check-all` is the docs lane's command (`docs/TESTING.md`, The user docs): it checks that guides and features name each other, generates the CLI reference from the source of `hide --help` (`help_text()` in `hided/src/cli.rs`, so the answer does not depend on which `hide` is installed) and `contracts/hide-cli.json` (failing on a command with no note, and on a note for a gone command), builds the live parts and builds the site into `site/dist/`.
+`--hide` names a second reader of the commands, a `hide` whose `--help` lists them, such as `/Applications/hide.app/Contents/Resources/hide` or a debug build; the default is `target/debug/hide`.
 `--checks-only` runs the first two steps for a quick loop.
-For writing pages with a reload, run `check-all` once (it writes the generated files and builds the live parts), then `pnpm --dir site dev`; the live frames load only from the built site, so check them with the preview below.
+For writing pages with a reload, run `check-all` once (it writes the generated files and builds the live parts), then `cd site && pnpm dev`; the live frames load only from the built site, so check them with the preview below.
 The download-policy tests stay a plain `node` run:
 
 ```sh
@@ -45,7 +47,7 @@ node --test site/tests/downloads.test.mjs
 ```
 
 Use Node.js 22.7 or later, which recognizes the browser ES module in `public/downloads.js` without a package manifest of its own.
-To preview the built site, run `pnpm --dir site preview --host 127.0.0.1 --port 4399` and open `http://127.0.0.1:4399/` and `/docs/`.
+To preview the built site, run `cd site && pnpm preview --host 127.0.0.1 --port 4399` and open `http://127.0.0.1:4399/` and `/docs/`.
 Browser modules require HTTP; opening `index.html` through `file:` is not the preview procedure.
 Check desktop at 1440 pixels and mobile at 390 pixels, in dark and light, including keyboard navigation, text wrapping, manual OS and processor selection, loading, unavailable and retry states on the landing, and search and the theme switch in the docs.
 Run evidence belongs under ignored `agents/runs/`, never in this directory or a commit.

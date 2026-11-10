@@ -370,5 +370,69 @@
   "memory show": {
     "line": "Placeholder note for hide memory show; the CLI notes replace it.",
     "example": "hide memory show"
+  },
+  "links issue": {
+    "line": "Placeholder note for hide links issue; the CLI notes replace it.",
+    "example": "hide links issue"
+  },
+  "links branch": {
+    "line": "Placeholder note for hide links branch; the CLI notes replace it.",
+    "example": "hide links branch"
+  },
+  "links session": {
+    "line": "Placeholder note for hide links session; the CLI notes replace it.",
+    "example": "hide links session"
+  },
+  "memory search": {
+    "line": "Placeholder note for hide memory search; the CLI notes replace it.",
+    "example": "hide memory search"
+  },
+  "memory add": {
+    "line": "Placeholder note for hide memory add; the CLI notes replace it.",
+    "example": "hide memory add"
+  },
+  "memory forget": {
+    "line": "Placeholder note for hide memory forget; the CLI notes replace it.",
+    "example": "hide memory forget"
+  },
+  "memory undo": {
+    "line": "Placeholder note for hide memory undo; the CLI notes replace it.",
+    "example": "hide memory undo"
+  },
+  "memory placed": {
+    "line": "Placeholder note for hide memory placed; the CLI notes replace it.",
+    "example": "hide memory placed"
+  },
+  "memory building": {
+    "line": "Placeholder note for hide memory building; the CLI notes replace it.",
+    "example": "hide memory building"
+  },
+  "memory unbuilt": {
+    "line": "Placeholder note for hide memory unbuilt; the CLI notes replace it.",
+    "example": "hide memory unbuilt"
+  },
+  "memory outdated": {
+    "line": "Placeholder note for hide memory outdated; the CLI notes replace it.",
+    "example": "hide memory outdated"
+  },
+  "memory skipped": {
+    "line": "Placeholder note for hide memory skipped; the CLI notes replace it.",
+    "example": "hide memory skipped"
+  },
+  "memory stale": {
+    "line": "Placeholder note for hide memory stale; the CLI notes replace it.",
+    "example": "hide memory stale"
+  },
+  "memory release": {
+    "line": "Placeholder note for hide memory release; the CLI notes replace it.",
+    "example": "hide memory release"
+  },
+  "memory recheck": {
+    "line": "Placeholder note for hide memory recheck; the CLI notes replace it.",
+    "example": "hide memory recheck"
+  },
+  "mission gate": {
+    "line": "Placeholder note for hide mission gate; the CLI notes replace it.",
+    "example": "hide mission gate"
   }
 }

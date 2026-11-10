@@ -667,6 +667,26 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("docs", self.lanes(path))
 
+    def test_a_change_to_each_file_that_owns_help_text_plans_the_docs_lane(self):
+        # `hide --help` is what the CLI reference reads, so a command added in any of its owners
+        # needs its note in the same pull request, not first on main.
+        for path in ci.HELP_SOURCES:
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertIn("docs", result["lanes"])
+                self.assertFalse(result["full"])
+        # A sibling that owns no help text does not.
+        for path in ("hided/src/browser_routes.rs", "hided/src/profile_cli.rs", "hided/src/server.rs"):
+            with self.subTest(path=path):
+                self.assertNotIn("docs", self.lanes(path))
+
+    def test_help_text_owners_are_the_modules_cli_rs_joins(self):
+        source = (ROOT / "hided/src/cli.rs").read_text()
+        body = source[source.index("fn help_text()"):]
+        body = body[:body.index("\n}\n")]
+        joined = {f"hided/src/{name}.rs" for name in re.findall(r"crate::(\w+)::USAGE", body)}
+        self.assertEqual(joined | {"hided/src/cli.rs"}, set(ci.HELP_SOURCES))
+
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
         want = {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
         for path in ("web/e2e/pane-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):

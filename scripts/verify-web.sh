@@ -38,7 +38,10 @@ if (( $# > 0 )); then
             # that no other lane installs.
             1:docs)
                 pnpm install --frozen-lockfile --filter hide-web...
-                exec pnpm --dir site install --frozen-lockfile
+                # From inside `site/`, so pnpm reads that project's `packageManager` pin and
+                # switches to it; `--dir` from here would run the machine's own pnpm against it.
+                cd site
+                exec pnpm install --frozen-lockfile
                 ;;
             *)
                 printf 'usage: %s install [--ignore-scripts | holder | docs]\n' "$0" >&2
@@ -58,7 +61,8 @@ if (( $# > 0 )); then
             ;;
         site)
             [[ "$action" == build && $# == 0 ]] || { printf 'site supports build only\n' >&2; exit 2; }
-            exec pnpm --dir site build
+            cd site
+            exec pnpm build
             ;;
         relay-protocol)
             [[ "$action" == typecheck && $# == 0 ]] || { printf 'relay-protocol supports typecheck only\n' >&2; exit 2; }
