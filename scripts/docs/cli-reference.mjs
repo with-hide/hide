@@ -89,11 +89,11 @@ export function noteProblems(sources, notes) {
   for (const [label, commands] of entries) {
     for (const name of commands.keys()) if (!notes[name]) missing.set(name, [...(missing.get(name) ?? []), label]);
   }
-  const authority = entries[0][1];
+  const [[authorityLabel, authority]] = entries;
   const stale = Object.keys(notes).filter((name) => !authority.has(name));
   const problems = [];
   if (missing.size) problems.push(`commands with no note (${missing.size}): ${[...missing].map(([name, labels]) => `${name} [${labels.join(" + ")}]`).join(", ")}`);
-  if (stale.length) problems.push(`notes for commands that are gone (${stale.length}): ${stale.join(", ")}`);
+  if (stale.length) problems.push(`notes for commands that are gone (${stale.length}): ${stale.join(", ")} [${authorityLabel}]`);
   return problems;
 }
 
