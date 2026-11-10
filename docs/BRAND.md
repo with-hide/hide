@@ -65,7 +65,7 @@ It never speaks for an agent, never stands in for a status mark, and never signa
 Copy beside it describes keeping work in view, never watching people or agents.
 Inside the app the character appears only where a PRD puts it, because the shell's states belong to its status marks (design principle 13).
 
-The current poses are in `site/assets/owls/`.
+The current poses are in `site/public/assets/owls/`.
 Each takes part in one clear action that belongs to what it is doing, and under it the owl rises and settles on its own breath and blinks while its eyes are open:
 
 | Pose | Where | Scene | Motion |
@@ -108,7 +108,7 @@ The logo signals this approach, while the interface continues to use its establi
 
 The connecting desktop status page and the phone start page, while a chosen device opens, show `owl-blink`: the app icon's owl, which blinks, glances, turns and slips out of its tile and back in a three-second loop.
 It is a self-animating SVG with no player, converted from its Lottie source frame by frame, so a jump in the source stays a jump and never a slide across the tile.
-On the desktop it sits above the lowercase hide wordmark and brand line, which sit above a thin indeterminate bar and the host's localized connecting sentence; `build.mjs` copies the two files from `site/assets/owls/` beside the status page.
+On the desktop it sits above the lowercase hide wordmark and brand line, which sit above a thin indeterminate bar and the host's localized connecting sentence; `build.mjs` copies the two files from `site/public/assets/owls/` beside the status page.
 Ready navigation never waits for a loop, and failure hides the connecting scene and preserves the existing recovery actions.
 The owl shows its still, and the bar pauses, under reduced motion, in a hidden document or an offscreen scene; a missing moving drawing falls back to the still, a missing still hides the owl, and either records `brand_owl.unavailable` once (the host's log on the desktop, the console on the phone's start page, which has no log).
 

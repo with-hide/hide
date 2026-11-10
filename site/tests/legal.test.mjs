@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 // The two pages App Store Connect points at: a privacy policy and a support page.
 // They are static files with no build step, so this reads them as text and checks
 // the properties a link, a reviewer or a search engine depends on.
-const page = name => readFileSync(fileURLToPath(new URL(`../${name}.html`, import.meta.url)), "utf8");
+const page = name => readFileSync(fileURLToPath(new URL(`../public/${name}.html`, import.meta.url)), "utf8");
 const index = page("index");
 const privacy = page("privacy");
 const support = page("support");
@@ -100,8 +100,8 @@ test("the usage-statistics table has one row per event hide-core sends, in each 
 });
 
 test("the docs that own the events and the relay logs name the page that states them", () => {
-  assert.match(repoFile("docs/ARCHITECTURE.md"), /site\/privacy\.html/);
-  assert.match(repoFile("docs/RELAY_PROTOCOL.md"), /site\/privacy\.html/);
+  assert.match(repoFile("docs/ARCHITECTURE.md"), /site\/public\/privacy\.html/);
+  assert.match(repoFile("docs/RELAY_PROTOCOL.md"), /site\/public\/privacy\.html/);
 });
 
 test("the policy's relay journal retention is not shorter than what the deploy keeps", () => {

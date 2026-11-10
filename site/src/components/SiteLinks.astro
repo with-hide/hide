@@ -1,0 +1,20 @@
+---
+// The header's right side: the way back to the landing page, the download and the source,
+// so the landing and the docs read as one site.
+---
+<nav class="site-links" aria-label="hide site">
+  <a href="/">hide</a>
+  <a class="download" href="/#download">Download</a>
+  <a href="https://github.com/with-hide/hide">GitHub</a>
+</nav>
+<style>
+  .site-links { display: flex; gap: 1rem; align-items: center; font-size: var(--sl-text-sm); }
+  .site-links a { color: var(--sl-color-gray-2); text-decoration: none; }
+  .site-links a:hover { color: var(--sl-color-white); }
+  .site-links .download {
+    padding: 0.2rem 0.8rem; border-radius: 999px; font-weight: 600;
+    background: var(--sl-color-text-accent); color: var(--sl-color-black);
+  }
+  .site-links .download:hover { color: var(--sl-color-black); filter: brightness(1.08); }
+  @media (max-width: 50rem) { .site-links a:not(.download) { display: none; } }
+</style>

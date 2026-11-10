@@ -54,6 +54,7 @@ LANES = (
     "policy",
     "rust",
     "checks",
+    "docs",
     "relay-protocol",
     "os-contract",
     "os-contract-macos",
@@ -232,7 +233,7 @@ READERS = (
     # changing the hero with no web-e2e run).
     ("README.md", {"web-e2e"}, set()),
     ("design/brand/hide-icon-blinking.svg", {"web-e2e"}, set()),
-    ("site/assets/video/kick-conductor.gif", {"web-e2e"}, set()),
+    ("site/public/assets/video/kick-conductor.gif", {"web-e2e"}, set()),
     # web/src/settings.test.ts, theme.test.ts and web/e2e/theme.spec.ts read the tokens.
     ("design/tokens.json", {"checks", "web-e2e"}, set()),
     # web/src/shortcutsDoc.test.ts checks the guide's chord table.
@@ -251,8 +252,9 @@ READERS = (
     # hide-agent-adapter's contract test; web/src/agentAdapters.ts imports it
     # into the shell, which plans what a web shell file plans.
     ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e"}, {"hide-agent-adapter"}),
-    # hided's `cli_contract` test.
-    ("contracts/hide-cli.json", {"rust"}, {"hided"}),
+    # hided's `cli_contract` test, and the user docs' CLI reference, which reads the
+    # commands it describes (`scripts/docs/cli-reference.mjs`).
+    ("contracts/hide-cli.json", {"rust", "docs"}, {"hided"}),
     # policy's test_agent_journey_cells shares the hook's prompt identity examples.
     ("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", {"policy"}, set()),
     # hide-agent-adapter's contract test.
@@ -422,7 +424,7 @@ def pull_request_macos(result, entries, root=ROOT):
 # Paths no `pr.yml` lane reads: `policy` alone. Its script suite and the
 # repository invariants are what reads them.
 POLICY_ONLY = (
-    "agents/*", "site/*",
+    "agents/*",
     ".gitignore", "web/.gitignore", "desktop/.gitignore",
     # hide's own license and copyright notice; no build or package reads them.
     "LICENSE", "NOTICE",
@@ -514,6 +516,25 @@ LIVE_CHECK_LANES = JOURNEY_LANES
 SYSTEM_TESTS = (
     ("scripts/tests/test_agent_live_windows.py", JOURNEY_LANES),
 )
+# The user docs lane: `scripts/docs/check-all.mjs` over `site/`, the live parts it
+# frames and the `hide` this checkout builds (docs/TESTING.md, The user docs).
+DOCS_LANES = {"docs"}
+# The files that own the text `hide --help` prints (`help_text` in hided/src/cli.rs): its own
+# inline lines and the links, memory, file, diff, browser and view usages, and the `USAGE`
+# of each command module it joins. The docs lane reads the commands from that text, so a command
+# added in any of them needs its note in the same pull request. The test
+# `help_text_owners_are_the_modules_cli_rs_joins` keeps this list equal to what `help_text` names.
+HELP_SOURCES = (
+    "hided/src/cli.rs",
+    "hided/src/delivery_cli.rs",
+    "hided/src/agent_cli.rs",
+    "hided/src/ps_cli.rs",
+    "hided/src/device_cli.rs",
+    "hided/src/mission_cli.rs",
+    "hided/src/plan_cli.rs",
+    "hided/src/pane_cli.rs",
+    "hided/src/session_cli.rs",
+)
 NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
     ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
@@ -553,6 +574,11 @@ NAMED_LANES = (
     ("contracts/agent-journey.json", JOURNEY_LANES | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
+    # The user docs' scripts and the build of the live parts they frame; the parts
+    # import the web shell's own components, which is why a `web/src` change plans `docs` too.
+    ("scripts/docs/*", DOCS_LANES),
+    ("web/docs-embed.html", DOCS_LANES),
+    ("web/docs-embed.config.ts", DOCS_LANES),
     ("web/playwright.config.ts", {"checks", "web-e2e", "windows-e2e"}),
     ("desktop/playwright.config.ts", DESKTOP_E2E_LANES),
     ("desktop/vitest.config.ts", DESKTOP_E2E_LANES),
@@ -665,6 +691,9 @@ def classify(path, status, crates, root):
     if parts[0] == "design":
         # design-contract.yml checks the library; no pr.yml lane reads it.
         return set(), f"design library: {path}", set()
+    if parts[0] == "site":
+        # One Astro project: the landing page in `public/` and the user docs, built by `docs`.
+        return set(DOCS_LANES), f"site: {path}", set()
     if is_unit_test(path.as_posix()):
         return {"checks", "windows-check"}, f"registered desktop unit test: {path}", set()
     crate = crates.get(parts[0])
@@ -689,6 +718,9 @@ def classify(path, status, crates, root):
             lanes.add("remote-mailbox-arm")
         if crate["name"] in WSL_CRATES or path.as_posix() in WSL_CRATE_FILES:
             lanes.add("windows-wsl")
+        # `hide --help` lists the commands the CLI reference holds a note for.
+        if path.as_posix() in HELP_SOURCES:
+            lanes.update(DOCS_LANES)
         if crate["name"] in OS_CRATES:
             lanes.update(OS_LANES)
         if crate["name"] in AGY_CRATES:
@@ -717,6 +749,10 @@ def classify(path, status, crates, root):
             return {"checks", "web-e2e"}, f"phone page: {path}", set()
         if parts[1] in ("src", "public") or path.as_posix() == "web/index.html":
             lanes = {"checks", "web-e2e"}
+            # The user docs build their live parts from the shell's own components; a unit
+            # test is not among them.
+            if not re.search(r"\.test\.tsx?$", path.name):
+                lanes.add("docs")
             if path.as_posix() in SHARED_WEB:
                 lanes.update(SHARED_WEB_LANES)
                 return lanes, f"web shared with the desktop host: {path}", set()

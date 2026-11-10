@@ -1,19 +1,46 @@
-# hide introduction site
+# hide site: the introduction page and the user docs
 
-This directory contains the static introduction-site source prepared for issue #338 and the intended `withhide.dev` domain.
-It has no build step, packages, framework, webfont service, cookies, or application environment variables.
+This directory is one Astro project for `withhide.dev`: the introduction page, prepared for issue #338, and the user docs at `/docs`.
+The page itself has no framework, webfont service, cookies, or application environment variables: it is plain HTML, CSS and scripts in `public/`, which the build copies to the site's root unchanged, so `index.html` is served at `/` byte for byte and every relative path in it (`./assets/...`) still resolves.
+The docs are Starlight (`src/content/docs/docs/`), which serves `/docs/*`; no build step touches the landing.
 Vercel Web Analytics records visitors and page views through the deferred `/_vercel/insights/script.js` script in `index.html`, using Vercel's plain-HTML integration without an npm package.
 Web Analytics must be enabled for the hosting project and the site redeployed before Vercel serves the insights routes; no API key belongs in the page.
 Local static previews do not serve these Vercel routes, so an analytics-script 404 there is expected and does not prevent the site from working.
 After deployment, verify a successful insights script load and page-view POST in the browser's Network panel, then confirm the visit in the project's Analytics dashboard.
 Bricolage Grotesque (headings and body) and Geist Mono (labels and drawn panels) are served from `assets/fonts/` under the SIL Open Font License (`OFL-BricolageGrotesque.txt`, `OFL-Geist.txt`), copied unchanged from the `@fontsource-variable/bricolage-grotesque` 5.3.0 and `geist` 1.4.2 npm packages.
-Serving this directory locally does not publish it or configure the domain.
+Building or serving the site locally does not publish it or configure the domain.
 `llms.txt` lists the guides an agent reads to use or build hide, as links to their Markdown on the main branch; it names guides, never a release or a figure, so it changes only when a guide is added, renamed or retired.
 
-## Preview and checks
+## Layout
 
-From the repository root, run the focused download-policy tests and the
-checks on the privacy and support pages:
+| Path | What it is |
+| --- | --- |
+| `public/` | The introduction page exactly as before: `index.html`, `styles.css`, `scenes.js`, `site.js`, `one-terminal.js`, `downloads.js`, `llms.txt`, `vercel.json` and `assets/`. Every other path in this README that names `index.html` or `assets/` means this folder. |
+| `src/content/docs/docs/{start,guides,features,reference}/` | The docs, in the four sidebar groups. The folder carries the `docs/` prefix, so a page's address is its path under it. |
+| `src/data/cli-notes.json` | One human line and an example per `hide` command, which the generated CLI page needs. |
+| `src/components/`, `src/styles/owl-field.css` | The header, the "Used in guides" list and the theme: the landing's Owl Field variables (`public/styles.css`) mapped onto Starlight's, in dark and light, with the landing's two fonts from `public/assets/fonts/`. |
+| `scripts/add-embed.mjs` | Copies the live parts to `dist/embed/` after the site builds. |
+
+The pictures in the docs are the product's own components, not screenshots: `web/docs-embed.html?part=<id>`, built by `web/docs-embed.config.ts`, framed at `/embed/docs-embed.html?part=<id>&theme=dark|light&lang=en`; a small script in the page head keeps each frame on the page's theme.
+A guide names the features it uses in a `features: [id, ...]` header, and a feature page's "Used in guides" list is generated from those headers, never typed.
+`site/` is a pnpm root of its own (`pnpm-workspace.yaml`, `pnpm-lock.yaml`), not a member of the repository's web, desktop and mobile workspace, so Astro is installed by no other lane and their frozen installs do not change.
+
+## Build and checks
+
+From the repository root:
+
+```sh
+bash scripts/verify-web.sh install docs          # the web shell's packages and the site's own
+node scripts/docs/check-all.mjs --hide target/debug/hide
+```
+
+The site is pinned to pnpm 10.34.9 (`packageManager` in `package.json`, and the docs lane's `pnpm/action-setup`): run pnpm from inside `site/` (`cd site && pnpm install --frozen-lockfile`) so it switches to that version; a machine whose default is pnpm 12 fails with `ERR_PNPM_BAD_PM_VERSION` when it is pointed at `site/` from outside with `--dir`.
+
+`check-all` is the docs lane's command (`docs/TESTING.md`, The user docs): it checks that guides and features name each other, generates the CLI reference from the `--help` of one `hide` binary and `contracts/hide-cli.json` (failing on a command with no note, and on a note for a gone command), builds the live parts and builds the site into `site/dist/`.
+`--hide <path>` (or `HIDE_BIN`) names the one `hide` whose `--help` owns which commands exist; the default is `target/debug/hide`, a build of this checkout (`bash scripts/verify-cargo.sh build -p hided --bin hide`). An installed app's `hide`, such as `/Applications/hide.app/Contents/Resources/hide`, is accepted but may be older than this commit, so `check-all` says so: a local pass with it is a limited check, and CI, which builds `hide` from the commit and passes it with `--ci`, is the gate.
+`--checks-only` runs the first two steps for a quick loop.
+For writing pages with a reload, run `check-all` once (it writes the generated files and builds the live parts), then `cd site && pnpm dev`; the live frames load only from the built site, so check them with the preview below.
+The download-policy tests and the checks on the privacy and support pages stay a plain `node` run:
 
 ```sh
 node --test site/tests/downloads.test.mjs site/tests/legal.test.mjs
@@ -22,21 +49,31 @@ node --test site/tests/downloads.test.mjs site/tests/legal.test.mjs
 `privacy.html` and `support.html` are the two pages the App Store listing points at
 as its privacy policy URL and support URL. Each carries an English and a Korean body
 in one file, linked from the footer and from each other's header, and each states
-only what the shipped code does: [`privacy.html`](privacy.html) is the authority for
+only what the shipped code does: [`public/privacy.html`](public/privacy.html) is the authority for
 what the desktop app, this site, the relay, the phone app and Hide AI send, and a
 change to any of those changes this page in the same release.
 
-Use Node.js 22.7 or later, which recognizes the browser ES module in `downloads.js` without a package manifest.
-For a local preview, choose a free loopback port and serve only this directory:
-
-```sh
-python3 -m http.server 8080 --bind 127.0.0.1 --directory site
-```
-
-Open `http://127.0.0.1:8080/` in the browser and stop the server with Ctrl+C when finished.
+Use Node.js 22.7 or later, which recognizes the browser ES module in `public/downloads.js` without a package manifest of its own.
+To preview the built site, run `cd site && pnpm preview --host 127.0.0.1 --port 4399` and open `http://127.0.0.1:4399/` and `/docs/`.
 Browser modules require HTTP; opening `index.html` through `file:` is not the preview procedure.
-Check desktop at 1440 pixels and mobile at 390 pixels, including keyboard navigation, text wrapping, manual OS and processor selection, loading, unavailable and retry states.
-Run evidence belongs under ignored `agents/runs/public-readiness/site-338/`, never in this directory or a commit.
+Check desktop at 1440 pixels and mobile at 390 pixels, in dark and light, including keyboard navigation, text wrapping, manual OS and processor selection, loading, unavailable and retry states on the landing, and search and the theme switch in the docs.
+Run evidence belongs under ignored `agents/runs/`, never in this directory or a commit.
+
+## Deploying
+
+Vercel is not linked to GitHub; the operator alone says when production changes, and it is deployed by hand from a scratch copy of the build, never from this checkout.
+`vercel.json` ships inside the build, because it is in `public/`.
+
+1. Build from the commit to publish: the two commands under Build and checks. The result is `site/dist/`.
+2. Copy it to a scratch folder outside the repository: `scratch=$(mktemp -d) && cp -R site/dist/. "$scratch"`.
+3. In the scratch folder, link it to the `withhide` project under team `yansfils-projects` (`vercel link --yes --project withhide --scope yansfils-projects`).
+4. A preview is `vercel deploy`, which gives a unique URL and moves no domain; production is `vercel deploy --prod`, run only when the operator says.
+5. Delete the `.vercel/` and `.env.local` the link wrote, and the scratch folder.
+6. Open `/`, `/docs/`, `/docs/reference/cli/` and `/embed/docs-embed.html?part=task-row` on the deployment.
+
+Vercel's own build does not run: the project has no framework preset and serves the files as uploaded.
+Web Analytics records the landing as before; the docs pages load no analytics script.
+
 
 ## Download policy
 

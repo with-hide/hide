@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { heroOffer, validateRelease } from "../downloads.js";
+import { heroOffer, validateRelease } from "../public/downloads.js";
 
 // The installers a release carries (PRD auto-update D-35), each with its checksum.
 const base = "https://github.com/with-hide/hide/releases";
