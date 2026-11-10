@@ -393,14 +393,15 @@ impl OwnEngine<'_> {
     fn await_attempt(&self, finish: attempt::Finish<'_, '_>, by: Instant) -> attempt::Outcome {
         let (pane, id) = (finish.pane().to_owned(), finish.attempt().to_owned());
         loop {
-            let look = if self.check().is_ok() {
+            let running = self.running().is_ok();
+            let look = if running {
                 self.topology().look_attempt(&pane, &id)
             } else {
                 None
             };
             let decided = match look {
                 Some(attempt::Look::Ended) => break,
-                None if self.check().is_err() => Some(attempt::Outcome::Unconfirmed {
+                None if !running => Some(attempt::Outcome::Unconfirmed {
                     why: attempt::ENGINE_STOPPED,
                 }),
                 None => Some(attempt::Outcome::Unconfirmed {
@@ -516,14 +517,23 @@ impl OwnEngine<'_> {
 
     /// Whether a call may run: the engine runs and every gate lets it.
     fn check(&self) -> Result<(), EngineError> {
+        self.running()?;
+        for gate in &self.gates {
+            (gate.before)()?;
+            (gate.at_send)()?;
+        }
+        Ok(())
+    }
+
+    /// Whether the engine runs. A wait that sends nothing asks this alone:
+    /// the gates guard a request's send, and a gate that closes after the
+    /// request was sent (a wake's record goes once the woken agent shows)
+    /// says nothing of whether the engine stopped.
+    fn running(&self) -> Result<(), EngineError> {
         if self.shared.stopped.load(Ordering::Acquire) {
             return Err(EngineError::NotRunning(
                 "the core's own engine has stopped".to_owned(),
             ));
-        }
-        for gate in &self.gates {
-            (gate.before)()?;
-            (gate.at_send)()?;
         }
         Ok(())
     }
@@ -5401,6 +5411,43 @@ mod tests {
             "{refused:?}"
         );
         assert!(asked.elapsed() < Duration::from_secs(10));
+    }
+
+    /// A gate that closes once a start's line is typed (a wake's record goes
+    /// when the woken agent shows) is no reason to end the start: the wait
+    /// sends nothing, so its executor still gets its profile and the start
+    /// reads as started.
+    #[test]
+    fn a_gate_that_closes_after_a_start_was_typed_does_not_end_its_attempt() {
+        use hide_node_link::panes::AgentExecEvent;
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let gated = OwnEngine {
+            shared: Arc::clone(&engine.shared),
+            gates: vec![Gate::both({
+                let open = Arc::clone(&open);
+                move || {
+                    if open.load(Ordering::Acquire) {
+                        Ok(())
+                    } else {
+                        Err(EngineError::Transport("the intent was superseded".into()))
+                    }
+                }
+            })],
+            saver: None,
+        };
+        start_played(&gated, &holders, &start, WAIT, |attempt| {
+            assert_eq!(
+                engine.exec_attempt(&pane, attempt).unwrap(),
+                checked(attempt)
+            );
+            open.store(false, Ordering::Release);
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            reads(&holders, EXECUTOR, 41, words(&["claude", "--model", "x"]));
+        })
+        .unwrap();
     }
 
     /// A start whose waiter goes before anything decided it ends its
