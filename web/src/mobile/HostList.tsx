@@ -7,8 +7,8 @@ import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 import { MovingOwl } from "../components/moving-owl";
-import blink from "../../../site/assets/owls/owl-blink.svg";
-import blinkStill from "../../../site/assets/owls/owl-blink-still.svg";
+import blink from "../../../site/public/assets/owls/owl-blink.svg";
+import blinkStill from "../../../site/public/assets/owls/owl-blink-still.svg";
 import type { PhoneDevice } from "./protocol";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */

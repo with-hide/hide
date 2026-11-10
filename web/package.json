@@ -13,6 +13,7 @@
     "gen:types": "node scripts/gen-types.mjs",
     "test": "pnpm prepare:relay && vitest run",
     "e2e": "pnpm build && bash ../scripts/verify-web.sh web e2e",
+    "build:docs-embed": "vite build --config docs-embed.config.ts",
     "build:phone": "pnpm prepare:relay && node scripts/build-phone.mjs",
     "prepare:relay": "bash ../scripts/build-relay-wasm.sh"
   },

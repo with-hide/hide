@@ -21,13 +21,13 @@ MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "pack
 # `package`, `agent-clis` and `holder-restart`, which are planned by their own
 # paths only.
 FULL = [
-    "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
     "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "remote-mailbox-arm",
     "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
-    "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
     "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox",
     "remote-mailbox-arm", "desktop-e2e", "package",
 ]
@@ -103,7 +103,7 @@ class Selection(unittest.TestCase):
         self.assertTrue({"web-e2e", "windows-e2e"} <= set(plan("desktop/src/main/wirePath.ts")["lanes"]))
         self.assertTrue({"checks", "web-e2e"} <= set(plan("design/tokens.json")["lanes"]))
         # The README e2e spec reads the README, its logo and its hero picture.
-        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/assets/video/kick-conductor.gif"):
+        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/public/assets/video/kick-conductor.gif"):
             with self.subTest(path=path):
                 self.assertIn("web-e2e", plan(path)["lanes"])
         # A guide a test reads is more than documentation.
@@ -117,7 +117,7 @@ class Selection(unittest.TestCase):
         result = plan("web/src/components/ui/button.tsx", "web/src/Overview.tsx")
         # hide-core's structure tests scan the shell's sources, and the
         # desktop suite drives the same shell inside the app.
-        self.assertEqual(set(result["lanes"]), {"policy", "checks", "web-e2e", "desktop-e2e", "rust"})
+        self.assertEqual(set(result["lanes"]), {"policy", "checks", "docs", "web-e2e", "desktop-e2e", "rust"})
         self.assertEqual(result["rust_packages"], ["hide-core"])
         # The phone page is served by hided, and the app never loads it.
         for path in ("web/mobile.html", "web/public/m/sw.js"):
@@ -474,7 +474,7 @@ class Selection(unittest.TestCase):
             (("hide-core/src/lib.rs", "desktop/src/main/index.ts"),
              ["policy", "rust", "checks", "os-contract", "agent-journey", "windows-check", "windows-e2e",
               "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e"]),
-            (("web/src/Overview.tsx",), ["policy", "rust", "checks", "web-e2e", "desktop-e2e"]),
+            (("web/src/Overview.tsx",), ["policy", "rust", "checks", "docs", "web-e2e", "desktop-e2e"]),
             (("docs/TESTING.md",), ["policy"]),
             (("mystery/file.txt",), FULL),
             (("desktop/scripts/package.mjs", "mystery/file.txt"), PACKAGED),
@@ -636,7 +636,7 @@ class NamedPaths(unittest.TestCase):
 
     def test_paths_no_lane_reads_plan_policy_alone(self):
         for path in (
-            "site/index.html", "agents/prd/x/prd.md",
+            "agents/prd/x/prd.md",
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
             ".github/ISSUE_TEMPLATE/bug.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml", ".github/APPROVED_CONTRIBUTORS",
             "scripts/tests/test_ci_plan.py", "scripts/check-harness-ignore-anchor.sh",
@@ -645,12 +645,27 @@ class NamedPaths(unittest.TestCase):
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
             "scripts/merge-order.py", "scripts/pull_requests.py",
-            "contracts/README.md", "site/README.md",
+            "contracts/README.md",
         ):
             with self.subTest(path=path):
                 result = plan(path)
                 self.assertEqual(result["lanes"], ["policy"])
                 self.assertFalse(result["full"])
+
+    def test_the_user_docs_lane_reads_the_site_the_parts_the_shell_and_the_cli_list(self):
+        for path in ("site/public/index.html", "site/src/content/docs/docs/guides/x.md", "site/README.md", "site/astro.config.mjs",
+                     "scripts/docs/check-all.mjs", "web/docs-embed.html", "web/docs-embed.config.ts", "web/src/docs/embed.tsx",
+                     "web/src/components/session-row.tsx", "contracts/hide-cli.json", "hided/src/cli.rs"):
+            with self.subTest(path=path):
+                self.assertIn("docs", self.lanes(path))
+        # Only the site, its scripts and the parts' build plan `docs` alone with policy.
+        for path in ("site/public/index.html", "site/src/content/docs/docs/guides/x.md", "scripts/docs/lib.mjs", "web/docs-embed.html"):
+            with self.subTest(path=path):
+                self.assertEqual(plan(path)["lanes"], ["policy", "docs"])
+        # A unit test and a crate other than the CLI's help are not what the docs build reads.
+        for path in ("web/src/new.test.ts", "hide-core/src/lib.rs", "docs/UI_BEHAVIOR.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("docs", self.lanes(path))
 
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
         want = {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
@@ -784,7 +799,7 @@ class NamedPaths(unittest.TestCase):
             "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["hide-core"]),
             "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["hide-core"]),
             "contracts/agent-adapters.json": ({"policy", "rust", "checks", "web-e2e", "desktop-e2e"}, ["hide-agent-adapter"]),
-            "contracts/hide-cli.json": ({"policy", "rust"}, ["hided"]),
+            "contracts/hide-cli.json": ({"policy", "rust", "docs"}, ["hided"]),
             "contracts/usage-coverage.json": ({"policy", "rust"}, ["hide-agent-adapter"]),
         }
         sources = code_sources()
@@ -810,6 +825,9 @@ class NamedPaths(unittest.TestCase):
                         read.add("checks")
                     elif source.startswith("web/src/"):
                         read |= {"checks", "web-e2e", "desktop-e2e"}
+                    elif source.startswith("scripts/docs/"):
+                        # The user docs' CLI reference reads the commands the contract describes.
+                        read.add("docs")
                     else:
                         read.add(f"unplanned reader: {source}")
                 self.assertEqual(read, (lanes - {"policy"}) | {f"crate:{name}" for name in packages})
@@ -840,8 +858,8 @@ class NamedPaths(unittest.TestCase):
         self.assertTrue({"rust", "windows-check"} <= self.lanes("hide-core/README.md"))
 
     def test_a_named_path_does_not_narrow_a_plan_that_has_another_reason(self):
-        self.assertEqual(self.lanes("site/index.html", "web/src/Overview.tsx"), self.lanes("web/src/Overview.tsx"))
-        self.assertEqual(plan("site/index.html", "Cargo.lock")["lanes"], FULL)
+        self.assertEqual(self.lanes("agents/prd/x/prd.md", "web/src/Overview.tsx"), self.lanes("web/src/Overview.tsx"))
+        self.assertEqual(plan("agents/prd/x/prd.md", "Cargo.lock")["lanes"], FULL)
 
     def test_no_script_named_as_unread_is_called_by_a_lane(self):
         # The claim behind POLICY_ONLY's scripts: nothing but `policy` (and a
@@ -867,10 +885,10 @@ class NamedPaths(unittest.TestCase):
 
 
 def code_sources():
-    """Each Rust, web and desktop source's code with comment lines left out, by path, with its crate."""
+    """Each Rust, web, desktop and user docs source's code with comment lines left out, by path, with its crate."""
     crate_of = {directory: crate["name"] for directory, crate in CRATES.items()}
     sources = {}
-    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e", "desktop/scripts"]:
+    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e", "desktop/scripts", "scripts/docs"]:
         for source in (ROOT / folder).rglob("*"):
             if source.suffix not in (".rs", ".ts", ".tsx", ".mjs", ".js") or "node_modules" in source.parts:
                 continue
@@ -1054,7 +1072,9 @@ class Workflows(unittest.TestCase):
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
         # for the device link's crates, its device test and the device kit
         # contract (with-hide/hide-private#501).
-        self.assertLessEqual(most, 51, "a run starts more jobs than the suites and native SDK contracts need")
+        # The user docs lane adds one, planned for `site/`, the web shell's
+        # sources, `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
+        self.assertLessEqual(most, 52, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1088,7 +1108,7 @@ class MacosOnPullRequests(unittest.TestCase):
         before = plan("web/src/Overview.tsx")
         self.assertIn("desktop-e2e", before["lanes"])
         result = pr_plan("web/src/Overview.tsx")
-        self.assertEqual(result["lanes"], ["policy", "rust", "checks", "web-e2e"])
+        self.assertEqual(result["lanes"], ["policy", "rust", "checks", "docs", "web-e2e"])
         self.assertNoMacos(result)
         self.assertIn("macOS jobs: skipped", ci.summary(result))
 
@@ -1183,7 +1203,7 @@ class MacosOnPullRequests(unittest.TestCase):
             pr.commit("topic", "web", {"web/src/x.ts": "two\n"})
             pr.check_out_merge()
             result = pr.plan(None)
-            self.assertEqual(result["lanes"], ["policy", "rust", "checks", "web-e2e"])
+            self.assertEqual(result["lanes"], ["policy", "rust", "checks", "docs", "web-e2e"])
             self.assertFalse(result["macos"]["runs"])
             pr.commit("topic", "platform", {"hide-platform/src/a.rs": '#[cfg(target_os = "macos")]\nfn a() {}\n'})
             pr.check_out_merge()
@@ -1556,11 +1576,11 @@ class LastGreenRun(unittest.TestCase):
             self.assertIn(why, str(caught.exception))
 
     def test_only_a_path_no_lane_but_policy_reads_is_left_out_of_the_comparison(self):
-        for name in ("docs/ARCHITECTURE.md", "CONTRIBUTING.md", "design/hide-ui.lib.pen", "site/index.html",
+        for name in ("docs/ARCHITECTURE.md", "CONTRIBUTING.md", "design/hide-ui.lib.pen",
                      "scripts/tests/test_ci_plan.py"):
             self.assertTrue(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         for name in ("docs/UI_BEHAVIOR.md", "AGENTS.md", "hided/README.md", "web/src/App.tsx", "Cargo.lock",
-                     "contracts/conpty.json", "web/e2e/cmdk.spec.ts", "unknown/file"):
+                     "contracts/conpty.json", "web/e2e/cmdk.spec.ts", "unknown/file", "site/public/index.html"):
             self.assertFalse(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         self.assertFalse(ci.reads_no_lane("T", "docs/ARCHITECTURE.md", CRATES, ROOT))
 

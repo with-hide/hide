@@ -42,3 +42,10 @@ __pycache__/
 /hide-relay-protocol/pkg/
 
 /web/phone-dist/
+
+# The user docs' build: Astro's type cache, the "Used in guides" and CLI reference files
+# `scripts/docs/check-all.mjs` generates, and the embedded parts' build.
+/site/.astro/
+/site/src/generated/
+/web/docs-embed-dist/
+/site/src/content/docs/docs/reference/cli.md
