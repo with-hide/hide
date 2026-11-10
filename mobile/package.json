@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "bundles": "node scripts/assemble.mjs",
+    "pin": "node scripts/pin-bundles.mjs",
     "sync": "node scripts/assemble.mjs && cap sync ios",
     "test": "vitest run",
     "build": "bash scripts/build-ios.sh"
