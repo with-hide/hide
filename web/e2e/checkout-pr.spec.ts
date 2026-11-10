@@ -17,7 +17,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { focusTab, openProject, openWorktree, withControl } from "./daemon-actions";
 import { startAgentInProject } from "./fixture-agents";
-import { startHided, type Daemon } from "./hided-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { chooseTheme, countSent, enterWorkspace, openOtherCheckouts, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -101,9 +101,12 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     daemon = await startHided(engine, "checkout-pr", undefined, { PATH: `${fakeGh(engine.root, url)}${path.delimiter}${engine.fixturePath}` });
     const sent = countSent(page);
     // The core lists a linked worktree once a client shows its repository.
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workspaceAt(engine, daemon, repo, "메인 체크아웃 정리");
     await workspaceAt(engine, daemon, worktree, "PR 카드 구현", true);
+    // Setup focuses each new agent. Open the page only after setup, with no
+    // resumed Workspace, so the external-open assertion starts on Main.
+    daemon = await asFirstRun(daemon);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });

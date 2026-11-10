@@ -14,8 +14,9 @@ import { startFixture } from "./engine-fixture";
 import { CLAUDE_FULL_ACCESS } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
+import { testBrowserArgs } from "./browser-launch.cjs";
 
-test.use({ launchOptions: { args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] } });
+test.use({ launchOptions: { args: testBrowserArgs(["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]) } });
 test.describe.configure({ timeout: 120_000 });
 
 // The session the fixture's second agent runs (`engine-fixture.ts`).

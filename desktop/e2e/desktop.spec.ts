@@ -292,6 +292,11 @@ test("failure: a missing CLI shows its reason and Retry attaches once it exists"
   await bareHome();
   const cli = path.join(run.root, "bin", fixtureExecutable("hide"));
   ({ app } = await launch({ ...run.env, HIDE_CLI_PATH: cli }));
+  // The test loader installs its own Chromium defaults. Check the effective
+  // list after the preload, before exercising Retry's loopback navigation.
+  const disabledFeatures = await app.evaluate(({ app }) => app.commandLine.getSwitchValue("disable-features").split(","));
+  expect(disabledFeatures).toEqual(expect.arrayContaining(["PaintHolding", "Translate"]));
+  if (process.platform === "win32") expect(disabledFeatures).toContain("TcpPortRandomizationWin");
   const page = await app.firstWindow();
   // B2, B3: one screen, the reason category, and Retry; the tried path is logged.
   await expect(page.locator("#reason")).toHaveText("The hide command was not found.", { timeout: 20_000 });

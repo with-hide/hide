@@ -7,6 +7,11 @@
 
 const fs = require("node:fs");
 const { app } = require("electron");
+const { disabledTestFeatures } = require("../../web/e2e/browser-launch.cjs");
+
+// Playwright's Electron loader appends its defaults before this preload runs.
+// Merge here, before app readiness, so that loader cannot overwrite the fix.
+if (process.platform === "win32") app.commandLine.appendSwitch("disable-features", disabledTestFeatures(app.commandLine.getSwitchValue("disable-features")));
 
 const file = app.commandLine.getSwitchValue("hide-e2e-focus-report");
 if (!file) throw new Error("focus-guard.cjs needs --hide-e2e-focus-report=<file>");
