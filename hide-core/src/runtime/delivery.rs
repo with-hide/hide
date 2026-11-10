@@ -1484,29 +1484,30 @@ impl Runtime {
             if let Some(admission) = plan {
                 *intent = crate::coordination::plan_intent(&admission.link);
             }
-            // A node's worker named by no `--profile` starts as its plan
-            // shows it (PRD agent-profiles-phase2 D-02).
-            if profile.is_none() {
-                *profile = self.planned_profile(&actor, machine.as_deref(), kind, intent)?;
-            }
             let ledger = self.delivery_state()?;
+            let finished =
+                crate::coordination::earlier_spawn(&ledger, &actor, parent.as_deref(), intent)
+                    .is_some_and(|record| record.completed);
             let worker = crate::runtime::missions::SpawnWorker {
                 machine: machine.as_deref(),
                 kind,
                 profile: profile.as_deref(),
                 repo,
                 launch,
-                finished: crate::coordination::earlier_spawn(
-                    &ledger,
-                    &actor,
-                    parent.as_deref(),
-                    intent,
-                )
-                .is_some_and(|record| record.completed),
+                finished,
             };
             // The item the candidates judge is picked once, here, and the
-            // start takes it (PRD agent-profiles-phase2 D-08, B13).
-            let mut picked = None;
+            // start takes it (PRD agent-profiles-phase2 D-08, B13). A node's
+            // worker named by no `--profile` starts as its plan shows it
+            // (D-02): that item is the pick, while the spawn keeps the
+            // arguments its caller sent, so the same command asked again is
+            // the same spawn, and one that finished answers its worker before
+            // the plan or the profiles are read again (engineering 11).
+            let mut picked = if profile.is_none() && !finished {
+                self.planned_request(&actor, machine.as_deref(), kind, intent)?
+            } else {
+                None
+            };
             if plan.is_some() {
                 self.plan_candidates_admit(&actor, &worker, &mut picked)?;
             }

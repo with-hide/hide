@@ -285,11 +285,9 @@ fn kept_worker(spawner: &Spawner) -> Value {
     json!(runtime.missions.book.missions[0].nodes[0].worker)
 }
 
-/// The model a plan names for an agent whose candidate keeps the CLI's
-/// default, as `hide agent catalog` offers it.
-fn codex_default_model() -> &'static str {
-    crate::missions::cli_default_model("codex").expect("codex takes a model")
-}
+/// The model a plan names for Codex when its candidate keeps the CLI's
+/// default: the one `hide agent catalog` offers as `cli_default_model`.
+const CODEX_DEFAULT_MODEL: &str = "gpt-5.6-luna";
 
 /// A plan names its worker's profile by the name `--profile` takes, and the
 /// book keeps that profile's id. A name the machine does not list is refused
@@ -298,7 +296,7 @@ fn codex_default_model() -> &'static str {
 #[test]
 fn a_plan_names_its_workers_profile_and_is_held_to_the_candidates() {
     let spawner = conducting(vec![codex(Some("p-work"))]);
-    let model = codex_default_model();
+    let model = CODEX_DEFAULT_MODEL;
     plan_worker(
         &spawner,
         json!({"agent": "codex", "profile": "work", "model": model}),
@@ -334,7 +332,7 @@ fn a_plan_names_its_workers_profile_and_is_held_to_the_candidates() {
 /// bytes a build before plan profiles wrote and reads.
 #[test]
 fn a_plan_of_the_built_in_default_keeps_the_bytes_it_kept_before_profiles() {
-    let model = codex_default_model();
+    let model = CODEX_DEFAULT_MODEL;
     let spawner = conducting(vec![codex(None)]);
     plan_worker(
         &spawner,
@@ -385,7 +383,7 @@ fn a_nodes_worker_named_by_no_profile_starts_as_its_plan_names_it() {
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
-        json!({"agent": "codex", "profile": "work", "model": codex_default_model()}),
+        json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL}),
     )
     .unwrap();
     {
@@ -409,7 +407,7 @@ fn a_nodes_worker_named_by_another_profile_starts_with_it_when_a_candidate_admit
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
-        json!({"agent": "codex", "profile": "work", "model": codex_default_model()}),
+        json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL}),
     )
     .unwrap();
     spawner
@@ -426,7 +424,7 @@ fn mission_show_names_a_planned_workers_item() {
     let spawner = conducting(vec![codex(Some("p-work"))]);
     plan_worker(
         &spawner,
-        json!({"agent": "codex", "profile": "work", "model": codex_default_model()}),
+        json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL}),
     )
     .unwrap();
     let show = |spawner: &Spawner| {
@@ -464,7 +462,7 @@ fn a_nodes_worker_planned_on_the_default_does_not_take_its_conductors_profile() 
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
-        json!({"agent": "codex", "model": codex_default_model()}),
+        json!({"agent": "codex", "model": CODEX_DEFAULT_MODEL}),
     )
     .unwrap();
     {
@@ -500,4 +498,112 @@ fn a_nodes_worker_planned_on_the_default_does_not_take_its_conductors_profile() 
         .spawn_mission(node_worker(&mission, None), |_| {})
         .expect("the planned default starts");
     assert_eq!(node_started_profile(&spawner, &mission), None);
+}
+
+/// This machine's profile `p-work` now goes by `name`, or is gone for none.
+fn work_becomes(spawner: &Spawner, name: Option<&str>) {
+    let mut runtime = spawner.runtime.lock().unwrap();
+    let node = runtime.node.to_string();
+    let mut kit = runtime.kit_state(&node);
+    let profiles = &mut kit.profiles.as_mut().unwrap().profiles;
+    match name {
+        Some(name) => profiles[0].name = name.into(),
+        None => profiles.clear(),
+    }
+    runtime.kit_states.insert(node, kit);
+}
+
+/// A node that started keeps the profiles its worker and its reviewer were
+/// planned with: the plan file it was planned from, asked again after `work`
+/// was renamed and after it was removed, is taken, and the book still names
+/// `p-work` for both.
+#[test]
+fn a_started_nodes_replan_keeps_its_profiles_after_one_is_renamed_or_removed() {
+    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let worked = json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL});
+    let replan = |spawner: &Spawner| {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        let context = authority(&spawner.actor).context;
+        let op: MissionCommand = serde_json::from_value(json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr",
+             "worker": worked, "checks": [{"as": "review", "by": [worked]}]},
+        ]}}))
+        .unwrap();
+        runtime
+            .mission_command(crate::node::TEST_NODE, "sender", &context, op)
+            .map(|_| ())
+    };
+    let kept = |spawner: &Spawner| {
+        let runtime = spawner.runtime.lock().unwrap();
+        let node = &runtime.missions.book.missions[0].nodes[0];
+        let reviewer = node
+            .criteria
+            .iter()
+            .find(|line| line.key == "review")
+            .and_then(|line| line.checkers.first())
+            .map(|checker| checker.worker.profile.clone());
+        (node.worker.as_ref().unwrap().profile.clone(), reviewer)
+    };
+    let work = Some(hide_agent_adapter::ProfileId("p-work".into()));
+    replan(&spawner).expect("the work worker and reviewer are planned");
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        let context = authority(&spawner.actor).context;
+        let op: MissionCommand = serde_json::from_value(
+            json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+        )
+        .unwrap();
+        runtime
+            .mission_command(crate::node::TEST_NODE, "sender", &context, op)
+            .expect("the node starts");
+    }
+    work_becomes(&spawner, Some("team"));
+    replan(&spawner).expect("a started node's renamed profile does not refuse the replan");
+    assert_eq!(kept(&spawner), (work.clone(), Some(work.clone())));
+    work_becomes(&spawner, None);
+    replan(&spawner).expect("a started node's removed profile does not refuse the replan");
+    assert_eq!(kept(&spawner), (work.clone(), Some(work)));
+}
+
+/// The node's worker started with no `--profile` answers that same worker
+/// when the same command is asked again: after `work` was renamed, after it
+/// was removed, and after the plan moved the node to the built-in default,
+/// nothing starts again. Asked with a `--profile` it did not send, the same
+/// intent is still a conflict.
+#[test]
+fn a_nodes_worker_asked_again_answers_its_worker_after_its_profile_or_plan_moved() {
+    let spawner = conducting(vec![codex(Some("p-work")), codex(None)]);
+    let mission = mission_id(&spawner);
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL}),
+    )
+    .unwrap();
+    let worker = spawner
+        .spawn_mission(node_worker(&mission, None), |_| {})
+        .expect("the planned item starts");
+    assert_eq!(
+        node_started_profile(&spawner, &mission).as_deref(),
+        Some("work")
+    );
+    let again = |spawner: &Spawner| {
+        spawner
+            .spawn_mission(node_worker(&mission, None), |_| {})
+            .map(|answer| answer["id"].clone())
+    };
+    work_becomes(&spawner, Some("team"));
+    assert_eq!(again(&spawner), Ok(worker["id"].clone()), "after a rename");
+    work_becomes(&spawner, None);
+    assert_eq!(again(&spawner), Ok(worker["id"].clone()), "after a removal");
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "model": CODEX_DEFAULT_MODEL}),
+    )
+    .expect("the node moves to the built-in default");
+    assert_eq!(again(&spawner), Ok(worker["id"].clone()), "after a replan");
+    assert_eq!(spawner.count("start_agent"), 1, "nothing started again");
+    assert_eq!(
+        spawner.spawn_mission(node_worker(&mission, Some("default")), |_| {}),
+        Err("intent_conflict".to_owned())
+    );
 }

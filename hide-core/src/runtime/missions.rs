@@ -2516,8 +2516,9 @@ impl Runtime {
     /// on the mission's machine, none for the built-in default (PRD
     /// agent-profiles-phase2 D-08); a name that machine does not list for
     /// that agent is refused with the node and the name
-    /// (`mission_profile_unknown`). An agent Hide does not start keeps what
-    /// it names, for the plan's own check to refuse the agent.
+    /// (`mission_profile_unknown`). A node that started keeps the ids its
+    /// workers have, and an agent Hide does not start keeps what it names,
+    /// for the plan's own check to refuse the agent.
     pub(super) fn plan_profiles(
         &self,
         mission: &Mission,
@@ -2525,11 +2526,38 @@ impl Runtime {
     ) -> Result<(), String> {
         let profiles = self.machine_profiles(&mission.device_id);
         for node in &mut plan.nodes {
+            // A node that started keeps the items its workers and checkers
+            // were judged with, as `plan_candidates` holds it to nothing new:
+            // each the plan names again, of the same agent, keeps the profile
+            // id the book has, so a profile renamed or removed since does not
+            // refuse a replan of work that ran.
+            let kept = mission.node(&node.key).filter(|kept| kept.started());
             let workers = node
                 .worker
                 .iter_mut()
-                .chain(node.checks.iter_mut().flat_map(|check| check.by.iter_mut()));
-            for worker in workers {
+                .map(|worker| (worker, kept.and_then(|kept| kept.worker.as_ref())))
+                .chain(node.checks.iter_mut().flat_map(|check| {
+                    let line = kept.and_then(|kept| {
+                        kept.criteria
+                            .iter()
+                            .find(|line| line.kind == check.kind.kind())
+                    });
+                    check.by.iter_mut().enumerate().map(move |(at, worker)| {
+                        (
+                            worker,
+                            line.and_then(|line| line.checkers.get(at))
+                                .map(|checker| &checker.worker),
+                        )
+                    })
+                }));
+            for (worker, before) in workers {
+                if let Some(before) = before.filter(|before| {
+                    hide_agent_adapter::canonical_kind(&before.agent)
+                        == hide_agent_adapter::canonical_kind(&worker.agent)
+                }) {
+                    worker.profile.clone_from(&before.profile);
+                    continue;
+                }
                 let Some(name) = worker.profile.take() else {
                     continue;
                 };
@@ -2658,20 +2686,20 @@ impl Runtime {
         }
     }
 
-    /// The `--profile` a spawn of a node's worker takes when it names none
-    /// (PRD agent-profiles-phase2 D-02): the item the plan names for that
-    /// node's worker, the built-in default for none, when the spawn starts
-    /// that agent on the mission's machine, whose profiles the plan names;
-    /// otherwise none, and the start picks as any spawn does. A profile the
-    /// machine no longer lists is refused by name (`profile_gone`), so the
-    /// worker never starts in another account than the plan shows.
-    pub(crate) fn planned_profile(
+    /// The item a spawn of a node's worker starts with when it names no
+    /// `--profile` (PRD agent-profiles-phase2 D-02): the one the plan names
+    /// for that node's worker, the built-in default for none, when the spawn
+    /// starts that agent on the mission's machine, whose profiles the plan
+    /// names; otherwise none, and the start picks as any spawn does. A
+    /// profile the machine no longer lists is refused (`profile_gone`), so
+    /// the worker never starts in another account than the plan shows.
+    pub(crate) fn planned_request(
         &self,
         actor: &Actor,
         machine: Option<&str>,
         kind: &str,
         intent: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<crate::launch::Request>, String> {
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return Ok(None);
         };
@@ -2689,14 +2717,14 @@ impl Runtime {
         }
         let target = worker.target();
         if target.profile.is_default() {
-            return Ok(Some(target.profile.0));
+            return Ok(Some(crate::launch::Request::new(kind, None)));
         }
         crate::launch::listed(
             kind,
             &target.profile,
             self.machine_profiles(&mission.device_id),
         )
-        .map(|(_, name)| Some(name))
+        .map(|named| Some(crate::launch::Request::new(kind, Some(named))))
         .ok_or_else(|| {
             format!(
                 "{}: the plan starts this worker with a profile this machine no longer lists; replan the node with a profile hide agent catalog lists",
