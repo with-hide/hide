@@ -61,10 +61,13 @@ ok "the app allows no navigation" '((.server // {}).allowNavigation // []) == []
 ok "Capacitor leaves the notification center to the app" '((.ios // {}).handleApplicationNotifications) == false' "$app/capacitor.config.json"
 ok "the web view cannot be inspected" '((.ios // {}).webContentsDebuggingEnabled // false) == false' "$app/capacitor.config.json"
 
-# The binary: the debug pairing hook is compiled out, and the bridge gate is compiled in.
+# The binary: the debug pairing, tapping and clock hooks are compiled out, and the bridge gate is compiled in.
 executable=$(jq -r .CFBundleExecutable "$facts/info.json")
 if [[ -f "$app/$executable" ]]; then
-    ! grep -aq 'HIDE_DEBUG_PAIR_LINK' "$app/$executable" || fail "the debug pairing hook is in the binary"
+    # Each debug-only input of the simulator checks is read from one variable: none of the names may survive into a release.
+    for hook in pairing:HIDE_DEBUG_PAIR_LINK tapping:HIDE_DEBUG_TAPS clock:HIDE_DEBUG_NOW; do
+        ! grep -aq "${hook#*:}" "$app/$executable" || fail "the debug ${hook%%:*} hook is in the binary"
+    done
     grep -aq 'BridgeGate' "$app/$executable" || fail "the bridge gate is not in the binary"
 else
     fail "the app has no executable named $executable"
