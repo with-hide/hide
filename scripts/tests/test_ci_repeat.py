@@ -45,6 +45,8 @@ class Budget(unittest.TestCase):
         self.assertEqual(12 * repeat.repeats(12), 120)
         # Web and Rust tests share the one budget: 3 web + 47 Rust tests are 50 tests, 4 runs each.
         self.assertEqual(repeat.repeats(3 + 47), 4)
+        # A selected helper module lists no test, so it adds nothing: 20 web tests and a helper are N = 20.
+        self.assertEqual(repeat.repeats(20 + 0), 10)
 
     def test_no_changed_test_runs_nothing_and_a_negative_count_is_refused(self):
         self.assertEqual(repeat.repeats(0), 0)
@@ -80,7 +82,7 @@ class Detection(unittest.TestCase):
 
     def test_a_tests_it_module_is_a_changed_rust_test_selected_by_its_name(self):
         found = repeat.select(entries("hided/tests/it/handshake.rs"), CRATE_DIRS)
-        self.assertEqual(found["rust"], [{"package": "hided", "module": "handshake", "path": "hided/tests/it/handshake.rs"}])
+        self.assertEqual(found["rust"], [{"package": "hided", "module": "handshake"}])
         self.assertEqual(found["web"], [])
 
     def test_a_module_in_a_folder_is_named_with_its_parents_and_mod_rs_is_its_folder(self):
@@ -118,58 +120,39 @@ class Detection(unittest.TestCase):
             with self.subTest(folder=folder.relative_to(ROOT).as_posix()):
                 self.assertIn(folder.parent.parent.name, CRATE_DIRS)
 
-    def test_a_real_module_selects_and_counts_the_tests_it_declares(self):
-        found = repeat.select(entries("hided/tests/it/handshake.rs"), CRATE_DIRS)["rust"]
-        self.assertGreater(repeat.rust_test_count(found, ROOT), 0)
+
+NEXTEST_LIST = {
+    "rust-build-meta": {},
+    "test-count": 5,
+    "rust-suites": {
+        "hided::it": {
+            "testcases": {
+                "handshake::a": {"ignored": False, "filter-match": {"status": "matches"}},
+                "handshake::b": {"ignored": False, "filter-match": {"status": "matches"}},
+                "handshake::slow": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "seat::other": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            },
+        },
+        "hided": {"testcases": {"lib_test": {"ignored": False, "filter-match": {"status": "matches"}}}},
+    },
+}
 
 
 class RustCount(unittest.TestCase):
-    def test_the_count_is_the_test_attributes_of_the_module_and_of_a_folder_beside_it(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            tests = root / "tests/it"
-            (tests / "alpha").mkdir(parents=True)
-            (tests / "plain.rs").write_text("#[test]\nfn a() {}\n// #[test]\n#[tokio::test]\nasync fn b() {}\nmod inline {\n    #[test]\n    fn c() {}\n}\n")
-            (tests / "alpha.rs").write_text("#[test]\nfn d() {}\n")
-            (tests / "alpha" / "inner.rs").write_text("#[test]\nfn e() {}\n#[test]\nfn f() {}\n")
-            (tests / "folder").mkdir()
-            (tests / "folder" / "mod.rs").write_text("#[test]\nfn g() {}\n")
-            (tests / "folder" / "child.rs").write_text("#[test]\nfn h() {}\n")
+    """N counts the tests nextest would run, not the ones the source seems to declare."""
 
-            def count(path):
-                return repeat.rust_test_count([{"package": "p", "module": "m", "path": path}], root)
+    def test_the_count_is_the_tests_whose_filter_matched(self):
+        self.assertEqual(repeat.nextest_listed(json.dumps(NEXTEST_LIST)), 3)
 
-            self.assertEqual(count("tests/it/plain.rs"), 3)
-            self.assertEqual(count("tests/it/alpha.rs"), 3)
-            self.assertEqual(count("tests/it/folder/mod.rs"), 2)
+    def test_a_filterset_that_matches_nothing_counts_zero(self):
+        empty = {"rust-suites": {"hided::it": {"testcases": {"x": {"filter-match": {"status": "mismatch"}}}}}}
+        self.assertEqual(repeat.nextest_listed(json.dumps(empty)), 0)
+        self.assertEqual(repeat.nextest_listed(json.dumps({"rust-suites": {}})), 0)
 
-    def test_a_cfg_attr_test_counts_and_a_module_with_none_counts_as_one(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            tests = root / "tests/it"
-            tests.mkdir(parents=True)
-            (tests / "wasm.rs").write_text(
-                '#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]\n'
-                '#[cfg_attr(not(target_arch = "wasm32"), test)]\nfn a() {}\n'
-                '#[cfg_attr(not(target_arch = "wasm32"), test)]\nfn b() {}\n#[cfg(test)]\nmod inline {}\n')
-            (tests / "helper.rs").write_text("//! A stand-in program, no test.\npub fn run() {}\n")
-
-            def count(*names):
-                return repeat.rust_test_count([{"package": "p", "module": name, "path": f"tests/it/{name}.rs"} for name in names], root)
-
-            self.assertEqual(count("wasm"), 2)
-            self.assertEqual(count("helper"), 1)
-            self.assertEqual(count("wasm", "helper"), 3)
-
-    def test_the_real_modules_the_review_found_count_above_zero(self):
-        for path, minimum in (("hide-platform/tests/it/stand_ins.rs", 1), ("hide-relay-protocol/tests/it/admission.rs", 5)):
-            with self.subTest(path=path):
-                found = repeat.select(entries(path), CRATE_DIRS)["rust"]
-                self.assertGreaterEqual(repeat.rust_test_count(found, ROOT), minimum)
-
-    def test_a_changed_file_that_is_missing_is_refused_not_counted_as_zero(self):
-        with self.assertRaises(OSError):
-            repeat.rust_test_count([{"package": "p", "module": "m", "path": "tests/it/missing.rs"}], Path("/nonexistent-root"))
+    def test_output_that_is_no_nextest_list_is_refused(self):
+        for text in ("", "not json", "{}", json.dumps({"rust-suites": []})):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                repeat.nextest_listed(text)
 
 
 class Playwright(unittest.TestCase):
@@ -221,7 +204,7 @@ class Resolve(unittest.TestCase):
 
     def test_a_pull_request_hands_over_the_selection_and_waits_for_the_count(self):
         web = json.dumps(["web/e2e/s3.spec.ts"])
-        rust = json.dumps([{"package": "hided", "module": "handshake", "path": "hided/tests/it/handshake.rs"}])
+        rust = json.dumps([{"package": "hided", "module": "handshake"}])
         work = repeat.resolve("pull_request", web, rust, "", "linux")
         self.assertEqual((work["web"], work["runner"], work["repeat"], work["counted"]), (["web/e2e/s3.spec.ts"], "linux", 0, True))
         self.assertEqual(len(work["rust"]), 1)
@@ -279,14 +262,14 @@ class Command(unittest.TestCase):
         self.assertEqual(outputs["os"], "windows")
         self.assertEqual(outputs["web"], "web/e2e/s3.spec.ts")
         self.assertEqual(json.loads(outputs["rust"]), [{"package": "hided", "module": "handshake"}])
-        self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"]), ("10", "false", "false"))
+        self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"], outputs["rust-count-needed"]), ("10", "false", "false", "false"))
 
     def test_a_pull_request_resolves_with_its_rust_count_and_no_repeat_yet(self):
-        rust = json.dumps([{"package": "hided", "module": "handshake", "path": "hided/tests/it/handshake.rs"}], separators=(",", ":"))
+        rust = json.dumps([{"package": "hided", "module": "handshake"}], separators=(",", ":"))
         result, outputs = self.run_script("resolve", "--event", "pull_request", "--web", '["web/e2e/s3.spec.ts"]', "--rust", rust)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"]), ("", "true", "true"))
-        self.assertGreater(int(outputs["rust-count"]), 0)
+        self.assertEqual((outputs["repeat"], outputs["counted"]), ("", "true"))
+        self.assertEqual((outputs["web-count-needed"], outputs["rust-count-needed"]), ("true", "true"))
 
     def test_a_refusal_is_one_line_and_a_failed_exit(self):
         result, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--web", "nothing.spec.ts", "--repeat", "5")
@@ -297,6 +280,8 @@ class Command(unittest.TestCase):
     def test_the_commands_the_jobs_pipe_through(self):
         result, _ = self.run_script("count-listed", stdin="Listing tests:\n  a\nTotal: 4 tests in 1 file\n")
         self.assertEqual(result.stdout.strip(), "4")
+        result, _ = self.run_script("count-nextest", stdin=json.dumps(NEXTEST_LIST))
+        self.assertEqual(result.stdout.strip(), "3")
         result, _ = self.run_script("spec-patterns", "web/e2e/s3.spec.ts")
         self.assertEqual(result.stdout.strip(), r"web/e2e/s3\.spec\.ts$")
         result, _ = self.run_script("nextest-filters", "--rust", json.dumps([{"package": "hided", "module": "seat"}]))

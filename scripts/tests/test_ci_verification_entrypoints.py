@@ -409,7 +409,7 @@ if name == 'playwright' and '--list' in args:
         inputs = {"HIDE_TEST_HOLDER_BIN": "holder", "HIDE_E2E_WSL_DISTRO": "distro", "HIDE_BUILD_ORDER": "7",
                   "HIDE_VT_ZIG_CACHE": "zig", "HIDE_HOLDER_CONPTY": "conpty", "HIDE_VERSION": "1.2.3",
                   "HIDE_AGY_BINARY": "agy"}
-        for mode in (("test",), ("test-scoped", "-p", "hide-kit"), ("nextest", "-p", "hide-kit"), ("check", "--workspace")):
+        for mode in (("test",), ("test-scoped", "-p", "hide-kit"), ("nextest", "-p", "hide-kit"), ("nextest-list", "-p", "hide-kit"), ("check", "--workspace")):
             with self.subTest(mode=mode[0]):
                 self.record.unlink(missing_ok=True)
                 self.assertEqual(self.run_entry("verify-cargo.sh", *mode, **pane, **inputs).returncode, 0)

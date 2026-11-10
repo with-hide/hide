@@ -17,7 +17,8 @@ tests, a fixture at the top of the file):
   helpers every module shares, is no test, and a deleted file has none left.
 
 The budget is one number for the whole pull request: `BUDGET` test runs. Each
-test runs `repeats(N)` times, N being the changed tests of both kinds:
+test runs `repeats(N)` times, N being the tests that will run, counted by the
+tools that run them (`playwright test --list`, `cargo nextest list`), of both kinds:
 `clamp(floor(BUDGET / N), MIN_REPEAT, MAX_REPEAT)`. A pull request that
 changes more than `BUDGET / MIN_REPEAT` tests runs over the budget, because a
 repeat below three shows too little.
@@ -46,8 +47,6 @@ WEB_SPEC = re.compile(r"^web/e2e/[^/]+\.spec\.ts$")
 RUST_MODULE = re.compile(r"^(?P<crate>.+)/tests/it/(?P<module>.+)\.rs$")
 # Helpers every module of the binary shares, and the file that declares the modules.
 RUST_SHARED = ("support", "main")
-# `#[test]`, `#[tokio::test]` and `#[cfg_attr(<condition>, test)]`, the form a test takes when it also runs as a wasm test.
-RUST_TEST = re.compile(r"^\s*#\[(?:(?:tokio::)?test\b|cfg_attr\([^\]]*,\s*test\)\])", re.MULTILINE)
 
 PACKAGE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MODULE = re.compile(r"^[a-z0-9_]+(?:::[a-z0-9_]+)*$")
@@ -66,7 +65,7 @@ def repeats(total):
 
 
 def rust_module(path, crate_dirs):
-    """The `{package, module, path}` a `tests/it` file declares, or None for a file that is no test module."""
+    """The `{package, module}` a `tests/it` file declares, or None for a file that is no test module."""
     match = RUST_MODULE.match(path)
     if not match:
         return None
@@ -78,7 +77,7 @@ def rust_module(path, crate_dirs):
         return None
     if parts[-1] == "mod":
         parts = parts[:-1]
-    return {"package": package, "module": "::".join(parts), "path": path}
+    return {"package": package, "module": "::".join(parts)}
 
 
 def select(entries, crate_dirs):
@@ -99,29 +98,20 @@ def select(entries, crate_dirs):
     return {"web": web, "rust": rust}
 
 
-def rust_files(module, root=ROOT):
-    """The files of one selected module: its own, and a folder of children beside it."""
-    path = root / module["path"]
-    folder = path.parent if path.name == "mod.rs" else path.with_suffix("")
-    files = [path] if path.name != "mod.rs" else []
-    if folder.is_dir():
-        files += sorted(folder.rglob("*.rs"))
-    return files
+def nextest_listed(text):
+    """The tests `cargo nextest list --message-format json` says the filterset runs.
 
-
-def rust_test_count(modules, root=ROOT):
-    """Tests the selected Rust modules declare, counted from their test attributes.
-
-    Counted from the source because the count has to exist before anything
-    builds. A module that declares tests with a macro is counted short, an
-    `#[ignore]` test is counted although nextest skips it, and a module that
-    declares none (a helper file in the `tests/it` folder) counts as one, so a
-    selected module never makes the pull request's count, and so its repeat,
-    zero; the lane prints what it ran.
+    A test counts when its filter matched; an ignored test does not match
+    unless the run asks for ignored tests, which this lane never does.
     """
+    suites = json.loads(text).get("rust-suites")
+    if not isinstance(suites, dict):
+        raise ValueError("the nextest list has no rust-suites")
     return sum(
-        max(1, sum(len(RUST_TEST.findall(file.read_text(encoding="utf-8"))) for file in rust_files(module, root)))
-        for module in modules
+        1
+        for suite in suites.values()
+        for case in suite.get("testcases", {}).values()
+        if case.get("filter-match", {}).get("status") == "matches"
     )
 
 
@@ -215,14 +205,13 @@ def main():
     resolve_parser.add_argument("--runner", default="linux")
     budget_parser = sub.add_parser("budget", help="the repeat for a pull request's changed tests")
     budget_parser.add_argument("--web", type=int, required=True, help="Playwright tests, from `playwright test --list`")
-    budget_parser.add_argument("--rust", type=int, required=True, help="Rust tests, from the source")
+    budget_parser.add_argument("--rust", type=int, required=True, help="Rust tests, from `cargo nextest list`")
     sub.add_parser("count-listed", help="count the tests of `playwright test --list` output on stdin")
     pattern_parser = sub.add_parser("spec-patterns", help="one Playwright file filter per line for each spec")
     pattern_parser.add_argument("specs", nargs="+")
     filter_parser = sub.add_parser("nextest-filters", help="one `package<TAB>filterset` line per package")
     filter_parser.add_argument("--rust", required=True, help="the JSON list of modules")
-    count_parser = sub.add_parser("count-rust", help="the Rust tests the JSON list of modules declares")
-    count_parser.add_argument("--rust", required=True)
+    sub.add_parser("count-nextest", help="count the tests of `cargo nextest list --message-format json` output on stdin")
     args = parser.parse_args()
 
     try:
@@ -236,10 +225,10 @@ def main():
                 "repeat": work["repeat"] or "",
                 "counted": str(work["counted"]).lower(),
                 "web-count-needed": str(work["counted"] and bool(work["web"])).lower(),
-                "rust-count": rust_test_count(work["rust"]) if work["counted"] else 0,
+                "rust-count-needed": str(work["counted"] and bool(work["rust"])).lower(),
             })
-        elif args.command == "count-rust":
-            print(rust_test_count(json.loads(args.rust)))
+        elif args.command == "count-nextest":
+            print(nextest_listed(sys.stdin.read()))
         elif args.command == "count-listed":
             print(listed_tests(sys.stdin.read()))
         elif args.command == "budget":
