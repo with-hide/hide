@@ -211,18 +211,15 @@ case "$command" in
             [[ "$(cat "$marker")" == done ]] || { printf 'store-shots: %s %s: %s\n' "$lang" "$file" "$(cat "$marker")" >&2; exit 1; }
             target=$shots/store/$lang-$file.png
             if [[ "$capture" == notification ]]; then
-                # The banner arrives about 2 s after the last press: a capture taken before it and one after must differ at the top.
+                # The banner arrives about 2 s after the last press: a capture taken before it and one after must differ (nothing else on that screen moves).
                 xcrun simctl io "$id" screenshot "$shots/store/before-banner.png" 2>&1 | tail -1
                 sleep 4
                 xcrun simctl io "$id" screenshot "$target" 2>&1 | tail -1
-                for one in "$shots/store/before-banner.png" "$target"; do
-                    sips --cropToHeightWidth 450 1206 --cropOffset 0 0 "$one" --out "$one.top.png" > /dev/null
-                done
-                if [[ "$(shasum "$shots/store/before-banner.png.top.png" | cut -d' ' -f1)" == "$(shasum "$target.top.png" | cut -d' ' -f1)" ]]; then
+                if [[ "$(shasum "$shots/store/before-banner.png" | cut -d' ' -f1)" == "$(shasum "$target" | cut -d' ' -f1)" ]]; then
                     printf 'store-shots: %s %s: no notification banner in the capture\n' "$lang" "$file" >&2
                     exit 1
                 fi
-                rm -f "$shots/store/before-banner.png" "$shots/store/before-banner.png.top.png" "$target.top.png"
+                rm -f "$shots/store/before-banner.png"
             else
                 sleep 4
                 xcrun simctl io "$id" screenshot "$target" 2>&1 | tail -1
