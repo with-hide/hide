@@ -92,7 +92,10 @@ class TheListHoldsOnlyTheRatchet(unittest.TestCase):
 
 
 class TheFolderNameIsExemptOnlyAsAWholeComponent(unittest.TestCase):
-    def test_the_folder_name_as_a_whole_path_component_is_not_counted(self):
+    """Exempt only between a line start, whitespace, a quote, a backtick, `(` or `~`
+    and a line end, whitespace, a quote, a backtick, `)`, `,`, `:`, `;` or `]`."""
+
+    def test_the_folder_name_as_a_whole_component_is_not_counted(self):
         for text in [
             'cd ~/.hide/worktrees/herdr-ide/feature-x',
             'HERDR-IDE/x',
@@ -100,27 +103,33 @@ class TheFolderNameIsExemptOnlyAsAWholeComponent(unittest.TestCase):
             '/r/herdr-ide',
             '~/projects/herdr-ide',
             'the herdr-ide folder',
+            '"herdr-ide"',
+            '`herdr-ide`',
+            '(herdr-ide)',
+            'herdr-ide, herdr-ide: herdr-ide; herdr-ide]',
         ]:
             with self.subTest(text=text):
                 self.assertEqual(count(text), 0)
 
     def test_a_name_touching_the_folder_name_is_counted(self):
         for text in [
+            '/r/herdr-ide@foo/x',
+            '/r/herdr-ide=foo/x',
             'herdr-ide.foo',
-            '/tmp/herdr-ide.foo/x',
             'herdr-ide+foo',
             'herdr-ide-foo',
             'herdr-identity',
             'herdr_ide',
             'x-herdr-ide',
             'herdr-ide2',
+            'herdr-ide.git',
+            'git@host:herdr-ide.git',
+            'herdr-ide%20x',
+            '[herdr-ide]',
+            'herdr-ide#x',
         ]:
             with self.subTest(text=text):
                 self.assertEqual(count(text), 1)
-
-    def test_herdr_ide_dot_git_is_counted_as_a_name_with_a_suffix(self):
-        # A clone named `herdr-ide.git` is a suffixed name, not the folder, so it counts.
-        self.assertEqual(count('git@host:herdr-ide.git'), 1)
 
     def test_the_folder_name_beside_a_real_name_counts_only_the_real_name(self):
         self.assertEqual(count('herdr-ide and herdr'), 1)
