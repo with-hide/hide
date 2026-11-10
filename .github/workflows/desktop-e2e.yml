@@ -151,7 +151,7 @@ jobs:
           SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          args=(--repeat-each 10 --retries 0 --no-deps)
+          args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # Dealt and checked as in web-e2e.yml. `--no-deps`: Playwright runs
