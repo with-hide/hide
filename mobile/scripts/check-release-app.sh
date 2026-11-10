@@ -42,8 +42,10 @@ ok "iPhone only" '.UIDeviceFamily == [1]' "$facts/info.json"
 ok "minimum iOS is $min_os" ".MinimumOSVersion == \"$min_os\"" "$facts/info.json"
 ok "built with the $sdk SDK" "(.DTSDKName // \"\") | startswith(\"$sdk\")" "$facts/info.json"
 
-# Export compliance: the app carries its own encryption (docs/RELAY_PROTOCOL.md), and says so rather than being asked.
-ok "ITSAppUsesNonExemptEncryption is true" '.ITSAppUsesNonExemptEncryption == true' "$facts/info.json"
+# Export compliance: the app carries its own encryption (docs/RELAY_PROTOCOL.md), so the answer is the operator's, given
+# in App Store Connect's questionnaire. A key in the app would answer for them (and `true` without the code Apple issues
+# after reviewing documents is refused at validation, error 90592), so no build carries one until the operator decides.
+ok "the app answers no export compliance question itself" '(has("ITSAppUsesNonExemptEncryption") or has("ITSEncryptionExportComplianceCode")) | not' "$facts/info.json"
 
 # No debug left in: Capacitor's own debug switch, an ATS exception, a web view anyone can inspect, a remote page.
 ok "CAPACITOR_DEBUG is not on" '((.CAPACITOR_DEBUG // "") | tostring | ascii_downcase) as $v | ($v != "true" and $v != "yes" and $v != "1")' "$facts/info.json"
