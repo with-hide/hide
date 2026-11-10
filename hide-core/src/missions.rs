@@ -2678,6 +2678,11 @@ pub(crate) fn apply_plan(
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
+            // A node planned as outside work loses its hold: outside work
+            // moves it, and no hold can stop that.
+            if node.kind == NodeKind::External {
+                node.hold = None;
+            }
             node.depends_on.clone_from(&input.depends_on);
             node.delivery = input.delivery;
             node.worker.clone_from(&input.worker);
@@ -2917,6 +2922,13 @@ pub(crate) fn apply_patch(
         ));
     }
     if let Some(Some(hold)) = &patch.hold {
+        // An outside node moves on outside work, which no hold can stop.
+        if node.kind == NodeKind::External {
+            return Err(crate::coordination::refusal(
+                "mission_external_invalid",
+                &node.key,
+            ));
+        }
         if !valid_line(&Some(hold.why.clone()), LINE_LIMIT)
             || !(1..=DELAY_LIMIT_MINUTES).contains(&hold.for_minutes)
         {

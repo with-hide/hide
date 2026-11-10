@@ -728,6 +728,15 @@ impl Runtime {
     /// or a restart starts its clock again. Run in the minute decision, the
     /// only clock a stall needs. A mission whose device does not answer is
     /// left as it is (B29). Whether the book changed.
+    /// A hold set, lifted or ended is a move on the mission (`node` none)
+    /// or on one node: whatever stood before it is counted again from the
+    /// next judgment, even when no judgment ran while it held.
+    pub(super) fn restart_stall_clock(&mut self, mission: &str, node: Option<&str>) {
+        self.missions
+            .stall_clock
+            .retain(|(of, at, _), _| of != mission || node.is_some_and(|node| at != node));
+    }
+
     pub(crate) fn stall_missions(&mut self, now: u64) -> bool {
         let ledger = self.delivery_state().ok();
         let closed: Vec<String> = self.closed_registration_ids().into_iter().collect();
@@ -735,6 +744,7 @@ impl Runtime {
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &mut self.missions.book.missions[index];
+            let mut delay_ended = false;
             if mission.delay.is_some() {
                 let moved = match mission.delay_until_unix_ms {
                     None => {
@@ -749,6 +759,7 @@ impl Runtime {
                         }));
                         mission.delay = None;
                         mission.delay_until_unix_ms = None;
+                        delay_ended = true;
                         true
                     }
                     Some(_) => false,
@@ -759,7 +770,7 @@ impl Runtime {
                 }
             }
             // A node's hold ends by itself too.
-            let mut lifted = false;
+            let mut lifted = Vec::new();
             for node in &mut mission.nodes {
                 if node
                     .hold
@@ -771,12 +782,19 @@ impl Runtime {
                         "mission": mission.id, "node": node.key,
                     }));
                     node.hold = None;
-                    lifted = true;
+                    lifted.push(node.key.clone());
                 }
             }
-            if lifted {
+            if !lifted.is_empty() {
                 mission.updated_at_unix_ms = now;
                 changed = true;
+            }
+            let id = mission.id.clone();
+            if delay_ended {
+                self.restart_stall_clock(&id, None);
+            }
+            for key in &lifted {
+                self.restart_stall_clock(&id, Some(key));
             }
             let mission = &self.missions.book.missions[index];
             if self.mission_stale(mission) {

@@ -10546,3 +10546,105 @@ fn a_held_node_raises_no_stall_cannot_start_and_ends_by_itself() {
     .unwrap_err();
     assert!(refused.contains("mission_node_started"), "{refused}");
 }
+
+/// A hold, on a node or the whole mission, set and lifted between two
+/// judgments still counts the stall again from then: the clock that stood
+/// before it is not reused.
+#[test]
+fn a_hold_set_and_lifted_between_judgments_counts_the_stall_again() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    let raised = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .attention
+            .as_ref()
+            .map(|attention| attention.reason)
+    };
+    let t0 = crate::runtime::unix_milliseconds();
+    runtime.stall_missions(t0);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "delay", "line": null})).unwrap();
+    runtime.stall_missions(t0 + 20 * minute);
+    assert_eq!(raised(&runtime), None);
+    for patch in [
+        json!({"hold": {"why": "tonight", "for_minutes": 30}}),
+        json!({"hold": null}),
+    ] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": patch}),
+        )
+        .unwrap();
+    }
+    runtime.stall_missions(t0 + 39 * minute);
+    runtime.stall_missions(t0 + 58 * minute);
+    assert_eq!(raised(&runtime), None);
+    runtime.stall_missions(t0 + 59 * minute);
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+}
+
+/// A held node's worker is not spawned, and outside work is never held:
+/// a hold on an outside node is refused, and replanning a held node as
+/// outside work drops its hold.
+#[test]
+fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let hold = json!({"hold": {"why": "tonight", "for_minutes": 30}});
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": hold}),
+    )
+    .unwrap();
+    let refused = prepare_spawn_of(
+        &mut runtime,
+        &conductor,
+        None,
+        "mission-1:docs",
+        Some("Write it."),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_node_held"), "{refused}");
+    command(&mut runtime, "sender", json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+         "criteria": ["the parser keeps v1 files"],
+         "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]},
+        {"key": "docs", "title": "Docs", "kind": "external", "external": {"branch": "feat/docs"}},
+    ]}}))
+    .unwrap();
+    let docs = runtime.missions.book.get("mission-1").unwrap().nodes[1].clone();
+    assert_eq!((docs.key.as_str(), docs.hold), ("docs", None));
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": hold}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_external_invalid"), "{refused}");
+}

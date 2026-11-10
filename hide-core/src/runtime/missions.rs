@@ -1819,6 +1819,11 @@ impl Runtime {
                         self.follow_mission_outside(&id);
                     }
                 }
+                // A hold set or lifted is the Conductor's move on the node:
+                // whatever stood before it is counted again from now.
+                if patch.hold.is_some() {
+                    self.restart_stall_clock(&id, Some(&node));
+                }
                 // What the Conductor just did may follow a pull request it
                 // pushed: its project is read again within the read's own
                 // spacing (D-09, B23).
@@ -2101,6 +2106,7 @@ impl Runtime {
         target.delay_until_unix_ms = until;
         if changed {
             target.updated_at_unix_ms = now;
+            self.restart_stall_clock(&id, None);
             self.save_missions();
         }
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))
@@ -2509,6 +2515,11 @@ impl Runtime {
         // run its first turn (delivery.md, session_unread).
         if !briefed && node.is_some() {
             return Err("mission_brief_missing".into());
+        }
+        // A held node's worker waits for the hold to be lifted, as a start
+        // by `hide mission node` does (`apply_patch`).
+        if let Some(node) = node.filter(|node| node.hold.is_some()) {
+            return Err(crate::coordination::refusal("mission_node_held", &node.key));
         }
         let worker_machine = machine.unwrap_or(actor.device_id.as_str());
         if worker_machine != mission.device_id {

@@ -295,7 +295,7 @@ No move is owed while a delay holds the mission, a decision waits on the operato
 A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
 Each clock starts when Hide first sees the node stand there, so lifting a delay, freeing a place, answering a decision or restarting Hide starts it again, and an update raises nothing at once.
 Each stall is raised once while it stands and goes when its move comes or none is owed; if it stands again later, that is a new one.
-To hold on purpose: a node that waits on a pull request outside the mission depends on an `external` node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started, at most 24h; it cannot start until `--no-hold` or its end, and no stall is raised on it); the whole mission is held with `hide mission delay`. There is no silent wait.
+To hold on purpose: a node that waits on a pull request outside the mission depends on an `external` node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started and not `external`, at most 24h; neither it nor its worker's spawn starts until `--no-hold` or its end, and no stall is raised on it; the stall clock starts again when the hold ends); the whole mission is held with `hide mission delay`. There is no silent wait.
 
 ### Finish lines
 

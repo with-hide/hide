@@ -1096,7 +1096,14 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--no-checks", &["--checks"]),
             optional("--reviewer", Key),
             optional("--verifier", Key),
-            cleared("--hold", Text, &["--no-hold"]),
+            Opt {
+                name: "--hold",
+                value: Some(Text),
+                required: false,
+                requires: &["--for"],
+                conflicts: &["--no-hold"],
+                repeats: None,
+            },
             Opt {
                 name: "--for",
                 value: Some(Span),

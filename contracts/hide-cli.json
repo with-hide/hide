@@ -5860,7 +5860,9 @@
                     ],
                     "name": "--hold",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--for"
+                    ],
                     "value": {
                         "type": "text"
                     }
@@ -6661,7 +6663,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e78ac08e0ed728fcac8ac9bd891dc603d87032b43cace592107cb21212c79d39",
+    "digest": "sha256:4e8ea0391258bab90f95cea28b8ff25eb58106a7970de15a081af2306fc781f7",
     "envelopes": {
         "agent": {
             "answer": "value",
