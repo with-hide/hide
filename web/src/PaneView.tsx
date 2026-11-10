@@ -20,7 +20,7 @@ import { LookButton, StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneDeskReturn } from "./DeskScreen";
-import { PaneAskMark, PaneForkMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
+import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
@@ -437,6 +437,7 @@ export const PaneView = memo(function PaneView({
         {/* The views chip gives way below the tight breakpoint too: the View area already shows what it lists. The ask and the letters after it stay, since the operator acts on them here. */}
         {agentKind ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={title} actions={actions} /></span> : null}
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
+        {agentKind ? <PaneOpenAsksMark paneId={paneId} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>

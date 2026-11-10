@@ -1024,7 +1024,7 @@ fn letter_between(
 /// it, and the questions letter turns put to the operator since it, on this
 /// machine's row and a device's alike.
 #[test]
-fn the_card_shows_the_answer_the_letters_and_the_questions_since_the_request() {
+fn the_card_shows_the_answer_and_the_letters_since_the_request() {
     const LEAD: &str = "w1:p1";
     const DEVICE: &str = "remote:mini:pane:w2:p1";
     let mut shown = rows(&[(LEAD, "idle"), (DEVICE, "idle")]);
@@ -1052,23 +1052,6 @@ fn the_card_shows_the_answer_the_letters_and_the_questions_since_the_request() {
             more: true,
             at_unix_ms: ASKED + 500,
         }];
-        facts.asked = vec![
-            crate::labels::store::AskedTurn {
-                offset: 5,
-                line: "요청 전 질문".into(),
-                at_unix_ms: ASKED - 1,
-            },
-            crate::labels::store::AskedTurn {
-                offset: 30,
-                line: "닫은 탭 결함 어떻게 할지 정해 주세요".into(),
-                at_unix_ms: ASKED + 2_000,
-            },
-            crate::labels::store::AskedTurn {
-                offset: 50,
-                line: "머지할까요?".into(),
-                at_unix_ms: ASKED + 3_500,
-            },
-        ];
     }
     let ledger = crate::delivery::ledger::Ledger {
         letters: vec![
@@ -1102,16 +1085,6 @@ fn the_card_shows_the_answer_the_letters_and_the_questions_since_the_request() {
     let letters = lead.letters.as_ref().unwrap();
     assert_eq!((letters.total, letters.progress), (1, 1));
     assert_eq!(letters.recent[0].line.as_deref(), Some("디스크가 찼습니다"));
-    assert_eq!(
-        lead.asked
-            .iter()
-            .map(|asked| (asked.line.as_str(), asked.current))
-            .collect::<Vec<_>>(),
-        vec![
-            ("닫은 탭 결함 어떻게 할지 정해 주세요", false),
-            ("머지할까요?", true)
-        ]
-    );
     // A device's agent is read from the same ledger by its scoped pane id.
     let device = shown[1].request.as_ref().unwrap();
     assert_eq!(

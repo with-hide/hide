@@ -112,7 +112,7 @@ export function leadWord(t: TFunction<"translation">, agent: Pick<AgentRow, "sta
 }
 
 /** What `lineText` reads off a row: a desktop row, or the phone's. */
-export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode; descendant_counts?: { working: number } | null; background_left?: number | null; children_left?: number | null; look?: { count: number } | null };
+export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode; descendant_counts?: { working: number } | null; background_left?: number | null; children_left?: number | null; look?: { count: number } | null; open_asks?: { items: readonly unknown[] } | null; ask_subject?: AskSubject };
 
 /**
  * A line in its three parts, so a narrow row cuts only the sentence: the word
@@ -120,7 +120,17 @@ export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode;
  * (`끝남 · … · 백그라운드 2`, status-marks B27) and the children still working under it
  * (`끝남 · … · 자식 2개 작업 중`). Empty parts are null.
  */
-export type LineParts = { lead: string | null; text: string | null; tail: string | null };
+export type LineParts = { lead: string | null; text: string | null; tail: string | null; /** The `?N` the line ends with (`openAsksCount`), 0 for none. */ asks?: number };
+
+/**
+ * How many questions the agent put to the operator still wait, for the `?N`
+ * a row's line ends with, while none of them is the row's ask: once one is
+ * laid, the line says it and counts the rest (`외 N건`) (status-model.md, A
+ * question still waiting).
+ */
+export function openAsksCount(agent: Pick<LineAgent, "open_asks" | "ask_subject">): number {
+  return agent.ask_subject?.cause === "open_ask" ? 0 : agent.open_asks?.items.length ?? 0;
+}
 
 /**
  * The sentence as a row draws it. A read row's news and a kept line lead with
@@ -138,7 +148,8 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
   const word = leadWord(t, agent);
   const looks = line.look === undefined ? (agent.look ? t("agents.line.lookTail", { count: agent.look.count }) : null) : line.look > 1 ? t("agents.line.lookOthers", { count: line.look - 1 }) : null;
   const tail = [leftTail(t, agent), looks].filter(Boolean).join(" · ") || null;
-  const parts = (lead: string | null, text: string | null): LineParts => ({ lead, text: text || null, tail });
+  const asks = openAsksCount(agent);
+  const parts = (lead: string | null, text: string | null): LineParts => ({ lead, text: text || null, tail, ...(asks ? { asks } : {}) });
   switch (line.mode) {
     case "vanished":
       return parts(statusText(t, "stopped"), t("agents.line.vanished"));
@@ -163,8 +174,8 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
 
 /** The line as one string, its parts joined: what a tooltip, a phone row or a test reads. */
 export function lineText(t: TFunction<"translation">, agent: LineAgent, line: RowLine): string {
-  const { lead, text, tail } = lineParts(t, agent, line);
-  return [lead, text, tail].filter(Boolean).join(" · ");
+  const { lead, text, tail, asks } = lineParts(t, agent, line);
+  return [lead, text, tail, asks ? t("openAsks.mark", { count: asks }) : null].filter(Boolean).join(" · ");
 }
 
 /**

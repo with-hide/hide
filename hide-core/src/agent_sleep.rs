@@ -783,6 +783,7 @@ mod tests {
             laid_since_unix_ms: None,
             laid_more: 0,
             laid_asks: std::collections::BTreeSet::new(),
+            open_asks: None,
             human_turn: None,
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),

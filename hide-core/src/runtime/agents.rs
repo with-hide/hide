@@ -2926,6 +2926,9 @@ impl Runtime {
     pub(super) fn refresh_background_ai(&mut self) {
         let settings = self.ai_settings.clone().unwrap_or_default();
         self.memory_ai_settings_changed(&settings);
+        // Whether the sessions' open questions are asked follows summaries.
+        self.plans.asks_edit += 1;
+        self.refresh_plan_reviews();
         let mut providers = if self.background_ai_providers.is_empty() {
             crate::model::BackgroundAiSnapshot::unread().providers
         } else {

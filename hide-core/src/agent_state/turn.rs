@@ -947,6 +947,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
             crate::model::AskSubject::MissionDecision { line, .. } => first_line_cut(line),
             crate::model::AskSubject::MissionAttention { node, .. } => first_line_cut(node),
             crate::model::AskSubject::HumanTurn { place, .. } => first_line_cut(place),
+            crate::model::AskSubject::OpenAsk { line, .. } => first_line_cut(line),
             crate::model::AskSubject::PlanReview { .. }
             | crate::model::AskSubject::InputUnconfirmed { .. } => None,
         };

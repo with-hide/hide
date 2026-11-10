@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentReference, mentionCandidates, referenceLands, referenceText } from "./agentReference";
 import type { SnapshotRest } from "./snapshot";
 
-const reviewer = { pane_id: "w9J:p52", device_pane_id: "w9J:p52", herdr_name: "reviewer", agent_kind: "codex", identity_label: "가입 페이지 문구 수정" };
+const reviewer = { pane_id: "w9J:p52", herdr_name: "reviewer", agent_kind: "codex", identity_label: "가입 페이지 문구 수정" };
 
 describe("an agent reference", () => {
   it("names the agent, its pane id and its task on one line", () => {
@@ -13,8 +13,8 @@ describe("an agent reference", () => {
     expect(agentReference({ ...reviewer, herdr_name: undefined })).toBe("@codex (pane w9J:p52 · 가입 페이지 문구 수정)");
   });
 
-  it("writes a device pane's id as the core says that device knows it", () => {
-    expect(agentReference({ ...reviewer, pane_id: "remote:mini:pane:w2:p7", device_pane_id: "w2:p7" })).toBe("@reviewer (pane w2:p7 · 가입 페이지 문구 수정)");
+  it("writes a device pane's full address, so a reader on another machine finds that pane", () => {
+    expect(agentReference({ ...reviewer, pane_id: "remote:mini:pane:w2:p7" })).toBe("@reviewer (pane remote:mini:pane:w2:p7 · 가입 페이지 문구 수정)");
   });
 
   it("never carries a line break, which would submit the prompt it is typed into", () => {
@@ -42,13 +42,18 @@ describe("where a reference can be typed", () => {
     expect(referenceLands(rest, "remote:mini:pane:w2:p7", "remote:mini:pane:w2:p1")).toBe(true);
   });
 
-  it("refuses the pane it names and a pane on another device, where its id names nothing", () => {
-    expect(referenceLands(rest, "w9J:p52", "w9J:p52")).toBe(false);
-    expect(referenceLands(rest, "remote:mini:pane:w2:p7", "w9J:p1")).toBe(false);
+  it("lands a device pane's full address in a pane of this machine, which takes it as given", () => {
+    expect(referenceLands(rest, "remote:mini:pane:w2:p7", "w9J:p1")).toBe(true);
   });
 
-  it("offers a pane's @ every other agent on its device and none elsewhere", () => {
-    const agents = [{ pane_id: "w9J:p1" }, { pane_id: "w9J:p52" }, { pane_id: "remote:mini:pane:w2:p7" }];
-    expect(mentionCandidates(rest, agents, "w9J:p1").map((agent) => agent.pane_id)).toEqual(["w9J:p52"]);
+  it("refuses the pane it names and a bare id typed into a device's pane, where it would name another pane", () => {
+    expect(referenceLands(rest, "w9J:p52", "w9J:p52")).toBe(false);
+    expect(referenceLands(rest, "w9J:p52", "remote:mini:pane:w2:p1")).toBe(false);
+  });
+
+  it("offers a pane of this machine its own agents and the devices' agents, and a device's pane only its device's", () => {
+    const agents = [{ pane_id: "w9J:p1" }, { pane_id: "w9J:p52" }, { pane_id: "remote:mini:pane:w2:p7" }, { pane_id: "remote:mini:pane:w2:p1" }];
+    expect(mentionCandidates(rest, agents, "w9J:p1").map((agent) => agent.pane_id)).toEqual(["w9J:p52", "remote:mini:pane:w2:p7", "remote:mini:pane:w2:p1"]);
+    expect(mentionCandidates(rest, agents, "remote:mini:pane:w2:p1").map((agent) => agent.pane_id)).toEqual(["remote:mini:pane:w2:p7"]);
   });
 });

@@ -853,6 +853,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         laid_since_unix_ms: None,
         laid_more: 0,
         laid_asks: BTreeSet::new(),
+        open_asks: None,
         human_turn: None,
         status_word_visible: true,
         changed_at_unix_ms: agent.changed_at_unix_ms,

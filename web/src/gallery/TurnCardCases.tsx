@@ -26,7 +26,7 @@ const WHOLE = `네, 실제로 생길 수 있습니다. 다만 흔한 경우는 �
 - 기본 계정이 준비 안 됨: 프로필은 준비됐는데도 시작이 거절됩니다.
 - 기본 계정만 준비됨: 프로필 쪽 훅이 빠져 있어도 그냥 시작됩니다.`;
 
-type Case = { id: string; label: string; header: PaneHeader; request: NonNullable<AgentRow["request"]>; wait?: AgentRow["wait"]; opened?: boolean; lettersOpened?: boolean };
+type Case = { id: string; label: string; header: PaneHeader; request: NonNullable<AgentRow["request"]>; wait?: AgentRow["wait"]; open_asks?: AgentRow["open_asks"]; opened?: boolean; lettersOpened?: boolean };
 
 const CONDUCTOR: Case = {
   id: "conductor",
@@ -55,7 +55,13 @@ const CONDUCTOR: Case = {
       ],
       more_peers: 0,
     },
-    asked: [{ line: "닫은 탭 결함 어떻게 할지 정해 주세요", at_unix_ms: min(6), current: false }],
+  },
+  open_asks: {
+    session: { device_id: "local", agent: "claude", session_id: "gallery-conductor" },
+    items: [
+      { id: "m1", text: "닫은 탭 결함 어떻게 할지 정해 주세요", at_unix_ms: min(6) },
+      { id: "m2", text: "Windows CI 재실행을 기다릴지, 지금 머지할지", at_unix_ms: min(6) + 30_000 },
+    ],
   },
 };
 
@@ -135,7 +141,7 @@ export function TurnCardCases({ seed }: { seed: AgentRow }) {
           <div key={example.id} className="flex flex-col gap-xs" data-turn-card-case={example.id}>
             <div className="text-micro text-muted-foreground">{example.label}</div>
             <div className="w-(--size-turn-card) max-w-full rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-lg">
-              <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request, wait: example.wait }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} answerOpened={example.opened} lettersOpened={example.lettersOpened} />
+              <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request, wait: example.wait, open_asks: example.open_asks }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} onAsk={() => undefined} answerOpened={example.opened} lettersOpened={example.lettersOpened} />
             </div>
           </div>
         ))}

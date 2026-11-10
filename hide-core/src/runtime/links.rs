@@ -388,7 +388,7 @@ impl Runtime {
         let Some(client) = self.links_work.client.as_ref() else {
             return false;
         };
-        // An unanswered ask put away from the record (넘기기): a sign the
+        // An unanswered ask put away from the record (무시하기): a sign the
         // question verdict may have been wrong, with ids only
         // (needs-you-cleanup D-06, D-15).
         let put_away = (payload.status == MissedStatus::Dismissed)
@@ -1259,6 +1259,9 @@ impl Runtime {
         let recorded =
             crate::agent_state::work::family::Recorded::from_summaries(projects.values());
         summaries.projects = projects;
+        // The sessions' open questions are read from the summaries.
+        self.plans.asks_edit += 1;
+        self.refresh_plan_reviews();
         self.refresh_inactive_groups();
         if recorded != self.recorded_pulls {
             self.recorded_pulls = recorded;

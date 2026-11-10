@@ -5,9 +5,11 @@ import { localDeviceId, type AgentRow, type SnapshotRest } from "./snapshot";
 // An agent reference is the one line that names another pane for the agent
 // in this one: `@<name> (pane <id> · <task>)`. The menu copies it, a
 // sidebar row dropped on a terminal types it, and a pane header's @ types the
-// one chosen from its list into that pane; the agent that reads it sends
-// its letter to the pane id, which `hide request send` takes on the machine
-// that owns the pane.
+// one chosen from its list into that pane; the agent that reads it gives the
+// pane id to `hide pane read`, `hide pane send` and `hide request send`.
+// A pane of this machine is named bare (`w9J:p52`); a pane of a connected
+// device carries its full address (`remote:<device>:pane:w2:p7`), because a
+// bare id names a pane only on the machine of whoever reads it.
 
 /** A task label longer than this is cut, so a reference stays one short line. */
 const TASK_LIMIT = 80;
@@ -19,7 +21,7 @@ function oneLine(text: string, limit: number): string {
   return flat.length > limit ? `${flat.slice(0, limit - 1).join("")}…` : flat.join("");
 }
 
-/** The reference text for a pane: its name, the id its own machine gives the pane, and the task it does when one is known. */
+/** The reference text for a pane: its name, the id a reader on this machine addresses it by, and the task it does when one is known. */
 export function referenceText(name: string, id: string, task?: string | null): string {
   const named = oneLine(name, TASK_LIMIT);
   const doing = task ? oneLine(task, TASK_LIMIT) : "";
@@ -28,8 +30,8 @@ export function referenceText(name: string, id: string, task?: string | null): s
 }
 
 /** An agent's reference: the name the engine knows it by, else its kind, then its task label. */
-export function agentReference(agent: Pick<AgentRow, "pane_id" | "device_pane_id" | "herdr_name" | "agent_kind" | "identity_label">): string {
-  return referenceText(agent.herdr_name || agent.agent_kind, agent.device_pane_id, agent.identity_label);
+export function agentReference(agent: Pick<AgentRow, "pane_id" | "herdr_name" | "agent_kind" | "identity_label">): string {
+  return referenceText(agent.herdr_name || agent.agent_kind, agent.pane_id, agent.identity_label);
 }
 
 /** The device a pane belongs to: its remote target, else this machine. */
@@ -39,10 +41,15 @@ export function paneDevice(rest: SnapshotRest | null, paneId: string): string {
 
 /**
  * Whether `reference` can be typed into `target`: another pane on the same
- * device, because a pane id names a pane only on the machine that owns it.
+ * device, or a device's pane typed into a pane of this machine, which takes
+ * its full address. A bare id of this machine typed into a device's pane
+ * would name that device's pane, and a device's address typed into another
+ * device's is not one that device can reach.
  */
 export function referenceLands(rest: SnapshotRest | null, reference: string, target: string): boolean {
-  return reference !== target && paneDevice(rest, reference) === paneDevice(rest, target);
+  if (reference === target) return false;
+  const to = paneDevice(rest, target);
+  return paneDevice(rest, reference) === to || to === localDeviceId(rest);
 }
 
 /** One sidebar row's drag: which pane it names and the text a drop types. */
@@ -83,7 +90,7 @@ export function beginAgentDrag(agent: Parameters<typeof agentReference>[0], even
 
 /**
  * The agents a pane's @ can name, in the order given: every agent whose
- * reference lands in `paneId` (another pane on the same device).
+ * reference lands in `paneId` (`referenceLands`).
  */
 export function mentionCandidates<A extends Pick<AgentRow, "pane_id">>(rest: SnapshotRest | null, agents: readonly A[], paneId: string): A[] {
   return agents.filter((agent) => referenceLands(rest, agent.pane_id, paneId));

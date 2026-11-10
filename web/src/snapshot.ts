@@ -150,6 +150,8 @@ export type AgentRow = {
   user_turn?: UserTurnFact;
   /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
   ask_subject?: AskSubject;
+  /** The questions the session put to the operator that still wait and that the operator sent nothing since, oldest first (`OpenAsksSnapshot`, status-model.md: A question still waiting): the row's `?N`, the pane's mark and the turn card's list; absent while none does. */
+  open_asks?: OpenAsks;
   /** The person's turn this row leads with, its own or a descendant's (PRD ask-human); absent when none stands. */
   human_turn?: HumanTurnLead;
   /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
@@ -206,9 +208,13 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn"] as const;
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"] as const;
 /** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string } | { cause: "open_ask"; id: string; line: string };
+/** The questions a row's session put to the operator that still wait (`OpenAsksSnapshot`). */
+export type OpenAsks = { session: WorkSession; items: OpenAsk[] };
+/** One question that still waits on the operator; `id` is the record's, which 무시하기 names. */
+export type OpenAsk = { id: string; text: string; at_unix_ms: number };
 
 export const HUMAN_KINDS = ["auth", "permission"] as const;
 /** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
@@ -256,8 +262,6 @@ export type AgentRequest = {
   answer?: TurnAnswer;
   /** The letters and started agents since the shown request (`LettersSinceSnapshot`). */
   letters?: LettersSince;
-  /** The questions later turns put to the operator since the shown request, oldest first (`AskedSnapshot`). */
-  asked?: AskedTurn[];
 };
 
 /** The agent's answer to the shown request: the label's line and the head of its last message. */
@@ -296,7 +300,6 @@ export type PeerLine = { peer: RequestSender; mark?: LetterMark; line?: string; 
 export type LettersSince = { total: number; progress: number; letters: number; recent: LetterLine[]; peers: PeerLine[]; more_peers: number };
 
 /** A question a later turn put to the operator (`AskedSnapshot`); `current` when it ended the newest turn. */
-export type AskedTurn = { line: string; at_unix_ms: number; current: boolean };
 
 /** The whole answer the operator opened on a turn card (`turn_answer`), one at a time. */
 export type TurnAnswerRead = { pane_id: string | null; offset: number | null; phase: "reading" | "ready" | "failed" | null; text: string | null };
