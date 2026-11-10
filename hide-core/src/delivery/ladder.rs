@@ -141,9 +141,9 @@ fn answered(target: &InputTarget, rung: &str, answer: Result<(), EngineError>) -
         }
         None => {
             let reason = if matches!(error, EngineError::Answer(_)) {
-                "herdr_format"
+                "engine_format"
             } else {
-                "herdr_call_failed"
+                "engine_call_failed"
             };
             lost(target, rung, reason, &error);
             Delivered::Lost(reason)
@@ -162,7 +162,7 @@ fn answered(target: &InputTarget, rung: &str, answer: Result<(), EngineError>) -
 /// or one that could not be read, may follow a submission that arrived.
 fn not_typed(error: &EngineError) -> Option<&'static str> {
     match error {
-        EngineError::Request(_) => Some("herdr_parameters"),
+        EngineError::Request(_) => Some("engine_parameters"),
         EngineError::Refused { .. } => Some("engine_refused"),
         EngineError::NotRunning(_) | EngineError::Transport(_) => Some("engine_unreachable"),
         EngineError::Unanswered(_) | EngineError::Malformed(_) | EngineError::Answer(_) => None,
@@ -293,7 +293,7 @@ mod tests {
         let uncertain = FakeEngine::start(|_, _| unanswered("the answer never came"));
         assert_eq!(
             deliver(uncertain.engine().as_ref(), &target, "letter"),
-            Delivered::Lost("herdr_call_failed"),
+            Delivered::Lost("engine_call_failed"),
         );
     }
 

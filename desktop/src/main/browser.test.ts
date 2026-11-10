@@ -761,6 +761,33 @@ describe("a page's navigation and the keyboard", () => {
     expect(pageFocusReports(forwarded)).toEqual(["typing", "typing", "pressed"]);
   });
 
+  it("gives the keyboard back to the shell when the operator took it there while the page that held it was loading", async () => {
+    const { page, forwarded, shellFocus, shellTakesFocus } = candidate();
+    const dashboard = page("dashboard");
+    // The page holds the keyboard when its own document starts to load, so
+    // the start shows nothing taken from anyone.
+    dashboard.takeFocus();
+    dashboard.navigate();
+    // The operator moves the keyboard to the terminal before the document
+    // commits; Chromium then focuses the view for the commit.
+    dashboard.focus(false);
+    shellTakesFocus();
+    dashboard.focus(true);
+    dashboard.takeFocus();
+    await turn();
+    expect(shellFocus).toHaveBeenCalledOnce();
+    expect(pageFocusReports(forwarded)).toEqual(["dashboard"]);
+    // The next load of the same page finds the keyboard in the shell, not in the page.
+    dashboard.stopLoading();
+    dashboard.focus(false);
+    dashboard.navigate();
+    dashboard.focus(true);
+    dashboard.takeFocus();
+    await turn();
+    expect(shellFocus).toHaveBeenCalledTimes(2);
+    expect(pageFocusReports(forwarded)).toEqual(["dashboard"]);
+  });
+
   it("leaves a background window alone and treats focus after the load as the operator's", async () => {
     const { page, forwarded, shellFocus, shellTakesFocus, windowFocus } = candidate();
     const dashboard = page("dashboard");

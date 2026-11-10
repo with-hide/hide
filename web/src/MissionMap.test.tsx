@@ -166,6 +166,30 @@ it("shows the decision with why, the node it stopped, its wait and the choices a
   } finally { await map.unmount(); }
 });
 
+it("says what a waiting answer waits for and offers Send now only where pressing can lift it, once (B26, B28)", async () => {
+  const answer = (hold?: "working" | "typing" | "recent" | "approval" | "other" | "forced") => asked({ answer: { key: 3, text: "Stack it", option: 1, state: "waiting", ...(hold ? { hold } : {}) } });
+  const map = await mount({ items: [answer("working")] });
+  try {
+    const now = () => map.q("[data-mission-now]") as HTMLButtonElement | null;
+    expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Sent · Conductor is working");
+    await act(async () => now()!.click());
+    expect(map.events.filter((event) => event.kind === "mission_answer").map((event) => event.payload)).toEqual([{ mission: "mission-1", key: 3, now: true }]);
+    await map.rerender(answer("typing"));
+    expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Sent · something is typed in its input");
+    expect(now()).not.toBeNull();
+    // The quiet period is not typing: its input is empty, and it still takes the press.
+    await map.rerender(answer("recent"));
+    expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Sent · there was activity a moment ago");
+    expect(now()).not.toBeNull();
+    // A menu of its own, a wait that ends on its own, an older core's answer and the press itself offer nothing to press.
+    for (const [hold, words] of [["approval", "Sent · Conductor waits at a menu"], ["other", "Sent · waiting for its turn"], [undefined, "Sent · waiting for its turn"], ["forced", "Sending now"]] as const) {
+      await map.rerender(answer(hold));
+      expect(map.q("[data-mission-banner-sent]")?.textContent).toContain(words);
+      expect(now()).toBeNull();
+    }
+  } finally { await map.unmount(); }
+});
+
 it("writes an answer in the banner: Enter sends it, Escape closes it and gives focus back, and the field stops at its cap (B27)", async () => {
   const map = await mount({ items: [asked()] });
   try {

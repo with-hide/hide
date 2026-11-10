@@ -52,7 +52,7 @@ describe("All projects while this machine's Herdr does not answer", () => {
   it("shows why instead of counting no agents", () => {
     const rest = {
       navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("a", "local")] },
-      status: { herdr: { state: "unreachable", message: "Herdr did not answer" } },
+      status: { engine: { state: "unreachable", message: "Herdr did not answer" } },
     } as unknown as SnapshotRest;
     const [local] = mainSections(rest);
     expect(local?.availability.state).toBe("unavailable");
@@ -63,7 +63,7 @@ describe("a Project's Overview", () => {
   it("keeps the rows its device last reported and says it cannot answer now", () => {
     const down = {
       navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("a", "local")] },
-      status: { herdr: { state: "unreachable", message: "Herdr did not answer" } },
+      status: { engine: { state: "unreachable", message: "Herdr did not answer" } },
     } as unknown as SnapshotRest;
     const local = overviewProject(down, [{ pane_id: "a-pane", group: "working" }] as never, "a");
     expect(local?.deviceAgents.map((row) => row.pane_id)).toEqual(["a-pane"]);
@@ -87,7 +87,7 @@ describe("a Project's Overview", () => {
   it("hands the board every agent of the device, since a descendant may work in another project", () => {
     const up = {
       navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("a", "local")] },
-      status: { herdr: { state: "connected" } },
+      status: { engine: { state: "connected" } },
     } as unknown as SnapshotRest;
     expect(overviewProject(up, [{ pane_id: "a-pane", group: "working" }, { pane_id: "x", group: "seen" }] as never, "a")?.deviceAgents).toHaveLength(2);
   });
@@ -97,7 +97,7 @@ describe("Main's order", () => {
   it("lists Projects in the core's order, pinned ones as the sidebar lists them", () => {
     const rest = {
       navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("Beta", "local", true), project("alpha", "local", true), project("c", "local")] },
-      status: { herdr: { state: "connected" } },
+      status: { engine: { state: "connected" } },
     } as unknown as SnapshotRest;
     expect(boardProjects(rest, []).map((row) => row.workspace.id)).toEqual(["Beta", "alpha", "c"]);
   });
@@ -218,24 +218,24 @@ describe("the first screen", () => {
   const device = { navigator: { focused_device_id: "mini", devices: [{ id: "mini", kind: "remote", label: "Mac mini" }] } };
 
   it("waits for this machine's Herdr, then opens Main when no Workspace is in front", () => {
-    expect(startupScreen({ ...local, status: { herdr: { state: "not_connected" } } } as unknown as SnapshotRest, false)).toBeNull();
-    expect(startupScreen({ ...local, status: { herdr: { state: "connected" } } } as unknown as SnapshotRest, false)).toBe("main");
+    expect(startupScreen({ ...local, status: { engine: { state: "not_connected" } } } as unknown as SnapshotRest, false)).toBeNull();
+    expect(startupScreen({ ...local, status: { engine: { state: "connected" } } } as unknown as SnapshotRest, false)).toBe("main");
     const resumed = { device_id: "local", path: "/a", resumed: true };
-    expect(startupScreen({ ...local, workspace_view: resumed, status: { herdr: { state: "connecting" } } } as unknown as SnapshotRest, true)).toBe("workspace");
+    expect(startupScreen({ ...local, workspace_view: resumed, status: { engine: { state: "connecting" } } } as unknown as SnapshotRest, true)).toBe("workspace");
   });
 
   it("opens Main on a first run or when the Workspace in front is not the one used last", () => {
     const fresh = { device_id: "local", path: "/a", resumed: false };
-    expect(startupScreen({ ...local, workspace_view: fresh, status: { herdr: { state: "connected" } } } as unknown as SnapshotRest, true)).toBe("main");
-    expect(startupScreen({ ...local, status: { herdr: { state: "connected" } } } as unknown as SnapshotRest, true)).toBe("main");
+    expect(startupScreen({ ...local, workspace_view: fresh, status: { engine: { state: "connected" } } } as unknown as SnapshotRest, true)).toBe("main");
+    expect(startupScreen({ ...local, status: { engine: { state: "connected" } } } as unknown as SnapshotRest, true)).toBe("main");
   });
 
   it("keeps the saved Workspace pending while its catalog and view are being restored", () => {
-    const pending = { ...local, ui_state: { focused_checkout_id: "saved" }, status: { herdr: { state: "connected" } } };
+    const pending = { ...local, ui_state: { focused_checkout_id: "saved" }, status: { engine: { state: "connected" } } };
     expect(startupScreen(pending as unknown as SnapshotRest, false)).toBeNull();
     expect(startupScreen(pending as unknown as SnapshotRest, true)).toBeNull();
     for (const state of ["connecting", "not_connected"]) {
-      const reaching = { ...pending, status: { herdr: { state } } };
+      const reaching = { ...pending, status: { engine: { state } } };
       expect(startupScreen(reaching as unknown as SnapshotRest, false)).toBeNull();
       expect(startupScreen(reaching as unknown as SnapshotRest, true)).toBeNull();
     }
@@ -244,18 +244,18 @@ describe("the first screen", () => {
     const restored = { ...pending, workspace_view: { resumed: true } };
     expect(startupScreen(restored as unknown as SnapshotRest, true)).toBe("workspace");
     for (const state of ["socket_missing", "unconfigured", "unreachable", "incompatible", "stale"]) {
-      const failed = { ...pending, status: { herdr: { state } } };
+      const failed = { ...pending, status: { engine: { state } } };
       expect(startupScreen(failed as unknown as SnapshotRest, false)).toBe("main");
       expect(startupScreen(failed as unknown as SnapshotRest, true)).toBe("main");
     }
   });
 
   it("waits for the device in front, not for this machine's Herdr", () => {
-    const connecting = { ...device, status: { herdr: { state: "connected" }, remote: [{ target_id: "mini", state: "not_connected" }] } };
+    const connecting = { ...device, status: { engine: { state: "connected" }, remote: [{ target_id: "mini", state: "not_connected" }] } };
     expect(startupScreen(connecting as unknown as SnapshotRest, false)).toBeNull();
-    const noSession = { ...device, status: { herdr: { state: "connected" }, remote: [{ target_id: "mini", state: "connected", session: null }] } };
+    const noSession = { ...device, status: { engine: { state: "connected" }, remote: [{ target_id: "mini", state: "connected", session: null }] } };
     expect(startupScreen(noSession as unknown as SnapshotRest, false)).toBeNull();
-    const gone = { ...device, status: { herdr: { state: "connected" }, remote: [{ target_id: "mini", state: "unreachable" }] } };
+    const gone = { ...device, status: { engine: { state: "connected" }, remote: [{ target_id: "mini", state: "unreachable" }] } };
     expect(startupScreen(gone as unknown as SnapshotRest, false)).toBe("main");
   });
 });

@@ -30,7 +30,7 @@ const IN_FLIGHT = new Set(["transmitting", "awaiting_topology", "unknown"]);
 export function AgentDraftTab({ id, interaction, actions, number = null }: { id: string; interaction: AreaTabInteraction; actions: Actions; number?: number | null }) {
   const { t } = useInterfaceTranslation();
   const label = t("groups.newTab");
-  return <TabButton entry={{ id, source_id: id, kind: "herdr", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
+  return <TabButton entry={{ id, source_id: id, kind: "engine", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
 }
 
 /** "closing…" while the core is still confirming a close with the engine. */

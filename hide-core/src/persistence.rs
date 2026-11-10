@@ -117,7 +117,8 @@ struct StoredUiState {
     /// Written only by a core move's rekey and left out once taken, so an
     /// ordinary store never carries it and an older build ignores it.
     #[serde(
-        rename = "focus_from_herdr",
+        rename = "focus_from_engine",
+        alias = "focus_from_herdr",
         default,
         skip_serializing_if = "std::ops::Not::not"
     )]
@@ -1488,7 +1489,7 @@ mod tests {
         assert!(
             !String::from_utf8(fs::read(&path).unwrap())
                 .unwrap()
-                .contains("focus_from_herdr")
+                .contains("focus_from_engine")
         );
         assert!(!load(&path).0.focus_from_engine);
     }
@@ -2240,9 +2241,10 @@ mod tests {
 
     /// The store the 1.2.1 daemon wrote (an isolated run of that release),
     /// with the hint a 1.2.1 core move's rekey adds, loads with the hint and
-    /// is saved back under the key 1.2.1 reads, `focus_from_herdr`.
+    /// is read under its 1.2.1 key and saved back under the engine name, which
+    /// is the only key this build writes.
     #[test]
-    fn a_moved_store_release_1_2_1_wrote_keeps_its_focus_hint_key() {
+    fn a_moved_store_release_1_2_1_wrote_is_saved_under_the_engine_key() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("core-state.json");
         fs::write(
@@ -2254,7 +2256,7 @@ mod tests {
         assert!(state.focus_from_engine);
         save(&path, &state, &sizes).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved["focus_from_herdr"], serde_json::json!(true));
-        assert!(saved.get("focus_from_engine").is_none());
+        assert_eq!(saved["focus_from_engine"], serde_json::json!(true));
+        assert!(saved.get("focus_from_herdr").is_none());
     }
 }

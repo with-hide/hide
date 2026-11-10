@@ -1064,13 +1064,10 @@ A session that was already running keeps the old process, which Hide's piece nev
 
 ### Herdr's integration an earlier Hide installed
 
-Earlier builds put Herdr's own integration into each agent's configuration with the bundled Herdr (`herdr integration install <target>`), as a third piece of the agent's row, `herdr:<agent>` in the record, because Herdr learned an agent's session from it.
-Hide runs no Herdr now, and each agent's own Hide piece reports its session ([Which session is the pane's](#which-session-is-the-panes)), so the kit installs nothing of Herdr's and takes out only what the record says it put there, without a Herdr binary (`hide_kit::herdr_integration`, PRD engine-bundle-4-herdr-removal D-12).
-It runs where the retired agents' pieces come out, once per machine: a `herdr:<agent>` piece in the record has the hook entries the kit recorded Herdr writing (`herdr_hooks`, Codex's in `~/.codex/hooks.json`) taken out, each only while it is still byte for byte what was recorded, through `hide-agent-hooks`, the one writer of an agent's configuration.
-An entry the operator edited stays and is logged (`herdr_integration.entries_kept`), a piece recorded with no entries (every agent's but Codex's) leaves the agent's files as they are (`herdr_integration.unrecorded_left`), and an integration the operator installed before Hide has no piece and stays.
-Codex's record that it trusted a removed entry stays in `~/.codex/config.toml`, where it trusts nothing that is not there.
-A write that fails keeps the piece, so the next pass tries again; the piece leaves the record once it is out.
-This retirement stays for operators who skip the releases that ran Herdr.
+Earlier builds put Herdr's own integration into each agent's configuration as a third piece of the agent's row, `herdr:<agent>` in the record.
+This build runs no Herdr and installs nothing of Herdr's.
+It takes nothing of Herdr's out of an agent's files either: the record still reads its `herdr_hooks` field and a `herdr:<agent>` piece, so an earlier Hide's record loads and the piece is forgotten without any write to the agent's configuration (`hide_kit::record`, `forget_piece`).
+Codex's record that it trusted an entry stays in `~/.codex/config.toml`, where it trusts nothing that is not there.
 
 ### Which agents ask for a review
 

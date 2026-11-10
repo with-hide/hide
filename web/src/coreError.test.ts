@@ -18,6 +18,17 @@ describe("a failure the core names by its kind", () => {
   });
 });
 
+describe("a launch refusal the core names by its code", () => {
+  it("words the engine name and the herdr name a launch record stored before the rename alike", () => {
+    const sentence = english("coreError.agent.refusedByHerdr");
+    expect(sentence).not.toBe("coreError.agent.refusedByHerdr");
+    expect(coreErrorText({ kind: "agent_start.refused_by_engine" }, english)).toBe(sentence);
+    expect(coreErrorText({ kind: "agent_start.refused_by_herdr" }, english)).toBe(sentence);
+    const korean_sentence = korean("coreError.agent.refusedByHerdr");
+    expect(coreErrorText({ kind: "agent_start.refused_by_herdr" }, korean)).toBe(korean_sentence);
+  });
+});
+
 describe("a connection state the core names by its code", () => {
   it("words this machine's terminal engine and a device without the core's socket paths", () => {
     expect(engineStateText("socket_missing", korean)).toBe("터미널 엔진이 실행 중이 아니에요.");

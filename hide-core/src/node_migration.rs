@@ -2329,7 +2329,7 @@ mod tests {
         "task_view",
         "practice",
         "practice_invite_closed",
-        "focus_from_herdr",
+        "focus_from_engine",
         "shortcut_bindings",
         "shortcut_bindings_imported",
         "browser_shortcut_bindings",
@@ -2396,7 +2396,7 @@ mod tests {
             // default save; every other listed field is.
             assert!(
                 saved.get(field).is_some()
-                    || matches!(*field, "focus_from_herdr" | "machine_label"),
+                    || matches!(*field, "focus_from_engine" | "machine_label"),
                 "{field} is listed as machine-free but the core no longer saves it"
             );
         }

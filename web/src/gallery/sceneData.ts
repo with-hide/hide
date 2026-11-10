@@ -202,7 +202,7 @@ function pane(id: string) {
     id,
     device_id: "local",
     device_pane_id: id,
-    herdr_label: null,
+    engine_label: null,
     terminal_title: null,
     cwd: ROOT,
     status_code: "idle" as const,

@@ -76,7 +76,7 @@ export function FirstRunWizard({ actions }: { actions: Actions }) {
 
 function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: WizardStep; reopened: boolean; desktop: boolean }) {
   const { t } = useInterfaceTranslation();
-  const profiles = useShellStore((s) => s.rest?.status?.herdr_profiles);
+  const profiles = useShellStore((s) => s.rest?.status?.machine_profiles);
   const saved = useShellStore((s) => s.rest?.ui_state?.first_run_choices);
   const [chosen, setChosen] = useState<readonly string[] | null>(() => reopened ? null : saved?.agents ?? null);
   const [answered, setAnswered] = useState(false);
@@ -488,7 +488,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
   const [adding, setAdding] = useState(() => !!useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form?.view);
   // The Devices step was skipped because no machine is listed to add: one line says where they go later.
   const noDevices = useShellStore((s) => {
-    const listed = s.rest?.status?.herdr_profiles;
+    const listed = s.rest?.status?.machine_profiles;
     return listed?.state === "ready" && listed.profiles.length === 0 && !listed.truncated;
   });
   const finish = () => {

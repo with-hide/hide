@@ -1,7 +1,6 @@
-//! The fifteen agents Hide stopped supporting (PRD settings-cleanup D-06,
-//! and Gemini CLI once Hide's support list became the agents the pinned
-//! Herdr shipped an integration for): the one-time pass that takes out what an
-//! earlier build put on a machine for them.
+//! The fifteen agents Hide stopped supporting (PRD settings-cleanup D-06):
+//! the one-time pass that takes out what an earlier build put on a machine
+//! for them.
 //!
 //! An earlier kit wrote a skill stub and, for seven of them, a SessionStart
 //! guidance hook, and recorded each in `~/.hide/kit/installed.json`. This pass
@@ -41,7 +40,6 @@ struct Retired {
     label: &'static str,
     skills: Skills,
     hook: Option<GuidanceAgent>,
-    herdr: Option<&'static str>,
 }
 
 const fn retired(
@@ -55,7 +53,6 @@ const fn retired(
         label,
         skills,
         hook,
-        herdr: None,
     }
 }
 
@@ -65,7 +62,6 @@ const RETIRED: [Retired; 15] = [
         label: "Cursor",
         skills: Skills::Shared,
         hook: Some(GuidanceAgent::Cursor),
-        herdr: Some("cursor"),
     },
     retired(
         "copilot-cli",
@@ -139,41 +135,23 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
     let mut outcome = Outcome::default();
     for agent in &RETIRED {
         let hook_code = format!("hook:{}", agent.id);
-        let herdr_code = format!("herdr:{}", agent.id);
         let own_skill = match agent.skills {
             Skills::Own(folder) => Some(own_skill_code(folder)),
             Skills::Shared => None,
         };
+        // An earlier build's Herdr integration piece is only a name now: it
+        // leaves the record with the agent, and its files stay.
+        if record.forget_piece(&format!("herdr:{}", agent.id)) {
+            outcome.changed = true;
+        }
         // Nothing in the record names this agent: nothing of it is Hide's.
         let owned = record.agent_choice(agent.id).is_some()
-            || (agent.herdr.is_some() && record.contains_piece(&herdr_code))
             || (agent.hook.is_some() && record.contains_piece(&hook_code))
             || own_skill
                 .as_deref()
                 .is_some_and(|code| record.contains_piece(code));
         if !owned {
             continue;
-        }
-        if agent.herdr.is_some() {
-            match crate::herdr_integration::retire(target, record, agent.id) {
-                Some(RemoveOutcome::Failed { reason }) => {
-                    outcome
-                        .report
-                        .failures
-                        .push(format!("{} Herdr integration: {reason}", agent.label));
-                    // Ownership must survive failure even though the active adapter is gone.
-                    continue;
-                }
-                Some(RemoveOutcome::Removed) => {
-                    outcome
-                        .report
-                        .removed
-                        .push(format!("{} Herdr integration", agent.label));
-                    outcome.changed = true;
-                }
-                Some(_) => outcome.changed = true,
-                None => {}
-            }
         }
         if let Some(hook) = agent.hook
             && record.contains_piece(&hook_code)
@@ -242,21 +220,6 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
         }
     }
     outcome
-}
-
-/// Full kit removal also reaches integrations no active adapter iterates.
-pub(crate) fn remove_herdr(
-    target: &KitTarget,
-    record: &mut Record,
-) -> Vec<(String, RemoveOutcome)> {
-    RETIRED
-        .iter()
-        .filter(|agent| agent.herdr.is_some())
-        .filter_map(|agent| {
-            crate::herdr_integration::retire(target, record, agent.id)
-                .map(|outcome| (crate::herdr_integration::code(agent.id), outcome))
-        })
-        .collect()
 }
 
 /// What taking Hide off a machine removes for the retired agents: their

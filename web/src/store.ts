@@ -140,8 +140,6 @@ export type DaemonInfo = {
   started_at_unix: string;
   state_dir: string;
   core_state_path: string;
-  herdr_bin_path: string | null;
-  herdr_socket_path: string | null;
   keep_alive: boolean;
   idle_secs: number;
 };
@@ -755,7 +753,7 @@ export const useShellStore = create<Store>((set, get) => ({
         ...cursors,
         focusedPaneId: focusedPaneOf(rest),
         operatorFocusApplied: appliedAfter(rest, get()),
-        engineState: rest.status?.herdr?.state ?? get().engineState,
+        engineState: rest.status?.engine?.state ?? get().engineState,
       });
     } else {
       set(cursors);
