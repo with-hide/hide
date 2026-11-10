@@ -1,24 +1,122 @@
 ---
 title: Tasks and status
-description: One row per agent's work, with a dot that says whether it needs you.
+description: One row per agent's work, with a mark that says whether it needs you.
 ---
 
 ## What it is
 
-A task row is one agent's work. The dot is its state, the line under the name says what it is doing, and the badge on the right counts helpers or questions.
+You start three agents. Two are writing code. The third stops and asks "Delete the old branch?". Its row moves to **Needs You** and shows a `!`. The other two rows stay quiet until they need you or finish.
+
+A task row is one agent's work. The mark on the left is its state, the line under the name says what it is doing, and the badge on the right counts helpers or questions.
 
 <iframe src="/embed/docs-embed.html?part=task-row&theme=dark" title="The task row, live component" height="140" loading="lazy"></iframe>
 
-## How the answer is shown
+hide keeps five things apart for every agent: what it needs from you, whether it is running, whether it reported a result, whether you have looked at it, and whose work it is. Every screen reads the same answer, so a row means the same thing in the sidebar, in the pane header, in the Agents tab and on your phone.
+
+## How to read it
+
+### Four groups
+
+Rows are grouped by whose move is next.
+
+| Group | What is in it |
+| --- | --- |
+| Needs You | An agent waits for you: a question, an approval or a block that you have not read, or a View it opened for you to look at. |
+| Unread | The agent stopped, reported a result, and you have not looked yet. |
+| Working | The agent runs, or it waits on its helpers, a background task, its pull request's checks, or a reply. |
+| Seen | Everything else: idle agents, questions and results you already read. |
+
+Unread is separate from Needs You on purpose. A result to read means "look when you have a moment". A question means "act now".
+
+A screen that is really waiting for input stays in Needs You until you answer, whether or not you have looked at it: a blocked prompt the agent's program shows, a question or plan the agent's program itself is waiting on, or a question Hide put on the row (a plan review, a mission decision). The prompt is still waiting, so the row leaves when it is answered, not when it is read.
+
+A plain question written at the end of a turn is different: once you read it without answering, it moves to Seen, and the Tasks list still lists it under Needs You, drawn dimmed, so you can answer it. A Blocked that Hide AI judged from the agent's text is the same: once you read it, it is Seen. A finished result leaves Unread once its pane has had your keyboard focus, or a phone has opened it.
+
+A helper that an agent started (a delegated row) shows only in Working or Seen. Its questions go to its parent first. Some causes, such as a blocked prompt, rise to the agent at the top of the team, and that row then stands in Needs You.
+
+### The marks
+
+<iframe src="/embed/docs-embed.html?part=status-colors&theme=dark" title="The status marks and what they mean" height="220" loading="lazy"></iframe>
+
+| Mark | Name | When |
+| --- | --- | --- |
+| `!` in a warning badge | Needs you | It is your turn: a question, an approval or a block. |
+| Eye in a warning badge | To look at | An agent opened a View for you and asks nothing else. |
+| Solid ring | In progress | The agent is working. |
+| Dashed ring | In progress, waiting | The agent waits on helpers, a background task, CI or a reply. The hover names the wait, for example `Waiting on CI`. |
+| Green dot | Unread | Stopped, you have not looked, and the result reads as finished. |
+| Plain dot | Unread | Stopped with work left, or nobody judged how it ended. |
+| Faint hollow ring | Quiet | At rest, and you have read everything. |
+| Grey moon | Asleep | hide put the agent to sleep, and the row says it wakes when opened. |
+| No mark, dimmed row | Status unknown | hide cannot read the agent now. |
+
+The rings do not turn. The dashes, not motion, tell waiting from work. Colour never carries the meaning alone: the mark's name and the first word of the line are in the hover text and in the row's accessible name.
+
+### The line
+
+The line under a title starts with a word that says how the turn ended: `Blocked`, `Done` or `Unfinished`. A question or an approval names no verb and says only what is asked, because the `!` and the colour already say it is your turn. `Stopped` means no result was judged; it has no line, and the word shows on hover, in the row's accessible name and in notices.
+
+A row that has questions still waiting for you ends its line with `?N`. This list is kept by Hide AI's summaries; with them off, nothing keeps it.
+
+### The turn card
+
+The second row of an agent's pane shows its last turn, request then answer. Press it to open the turn card under the row. The card reads the session as one conversation: earlier turns, your request, the agent's answer, the questions still waiting, and the agents it worked with and their letters. Press **Open record** to see the whole record in the right lane. Press the turn again, press Esc, or press outside to close the card.
 
 <iframe src="/embed/docs-embed.html?part=turn-card&theme=dark" title="The turn card, live component" height="560" loading="lazy"></iframe>
 
+### Task steps
+
+An agent can put up the steps of its own task with `hide task`. hide draws them as a map beside its pane and the row gets a plan chip. A plan the agent wants you to review is a question: the row moves to Needs You with `Task steps review · N steps`. For work split across several agents and pull requests, see [Missions](/docs/features/missions/). A mission adds no status of its own: the Conductor and its workers are ordinary rows.
+
+## Settings
+
+| Where | Setting | What it does |
+| --- | --- | --- |
+| Settings > Notifications | **Notify me when an agent needs me** | A desktop notice when a row enters Needs You. Desktop app only. |
+| Settings > Notifications | **Notify me when an agent finishes** | A desktop notice when a result is ready to read. Desktop app only. |
+| Settings > Notifications | **Push to phone** | `Off`, `Only when the app is closed` or `Always`. |
+| View menu (eye button) | **Request and progress line** | `One line` (default), `Two lines` or `Off`. Shapes the second row of every agent pane. An ask is never hidden by this setting. |
+| View menu (eye button) | **Agent logo** | `Show beside each row` or `Hide`. In the desktop app, hold `⌥` (`Alt` on Windows and Linux) to peek while it is hidden. |
+
+Notices arrive only while no hide window is in front. The count on the app icon sums the groups whose switch is on.
+
 ## Commands and keys
+
+Commands (the same on every system):
 
 | Do | Run |
 | --- | --- |
-| Show what each agent is doing | `hide agent show <id>` |
-| List agents | `hide agent list` |
+| List agents | `hide agent list` (add `--live` for agents that have not ended) |
+| See what one agent is doing and waiting on | `hide agent show <id\|name\|pane\|here>` |
+| List running panes | `hide ps` |
+| Put up your own task steps (an agent runs this) | `hide task set`, then `hide task node` as steps move; `hide task help` explains it |
+| Say a step needs a person (an agent runs this) | `hide agent ask-human auth\|permission <where>` |
+
+Keys in the desktop app:
+
+| Do | macOS | Windows and Linux |
+| --- | --- | --- |
+| Open the Overview | `⇧⌘O` | `Alt+Shift+O` |
+| Switch the sidebar list (Projects, Tasks, PRs) | `⇧⌘B` | `Alt+Shift+B` |
+| Focus the sidebar | `⇧⌘P` | `Alt+Shift+P` |
+| Select agent 1 to 9 | `⌥1` to `⌥9` | `Alt+1` to `Alt+9` |
+| Search | `⌘K` | `Ctrl+Shift+K` |
+| Show task steps | `⇧⌘U` | `Alt+Shift+U` |
+| Next recent tab | `⌃⇥` | `Ctrl+Tab` |
+
+On Windows and Linux every `⌘` chord is `Ctrl+Shift` and a `⌘` chord with `⇧` or `⌥` is `Alt+Shift`, so a plain `Ctrl` key still reaches your shell and your agent. In a browser tab some chords move; the full table is in the shortcuts reference.
+
+Where a row stands in each list (Tasks, Overview, Projects) is owned by `docs/tasks-and-pr-list.md` in with-hide/hide-private; this page does not restate it.
+
+## Known gaps by system
+
+Quoted from the rows named below in `docs/INSTALL.md`, "What each system supports".
+
+- **Agent notifications.** macOS: "supported: the wizard's notifications step asks macOS and reads its answer back; delivery on a signed build is unverified". Windows: "supported: the app registers itself for toasts at launch ... delivery and a click from the Action Center after Hide quit are unverified". Linux: "supported where a notification service runs; without one the wizard and Settings say so and keep the switch off; delivery is unverified".
+- **Needs You count on the app icon.** macOS: "supported: a count on the Dock once macOS lets Hide notify". Windows: "supported: a dot on the taskbar button, with the count in its description". Linux: "unverified: drawn only by a desktop that shows launcher counts for the app's `.desktop` entry ... no desktop has been tried".
+- **A person's turn an agent declares with `hide agent ask-human`.** Windows: "unverified natively: nothing in it is system-specific ... but no Windows desktop or device run has pressed Done". On a connected device, macOS and Linux: "unverified natively".
+- **A session's own plan (`hide task`).** Windows: "unverified: the same core, hook and kit code with their tests in the Windows lane ... no agent has put up a plan on Windows". Linux: "supported in CI ... a real agent's plan is unmeasured there and closes with one run".
+- **Keyboard shortcuts.** Windows and Linux: "supported by registry tests".
 
 import UsedIn from "@docs/UsedIn.astro";
 

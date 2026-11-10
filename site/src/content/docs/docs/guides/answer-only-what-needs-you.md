@@ -1,7 +1,7 @@
 ---
 title: Answer only what needs you
 description: Many agents can run at once. hide brings up only the ones waiting on a person, and tells you the difference between your turn and done.
-features: [tasks-status, project-memory]
+features: [tasks-status, project-memory, letters-watches]
 ---
 
 **Use when** several agents are working and you do not want to keep checking each terminal.
@@ -57,4 +57,5 @@ conversation.
 
 - [Tasks and status](/docs/features/tasks-status/) explains the rows, marks and groups.
 - [Project Memory](/docs/features/project-memory/) explains the cards.
+- [Letters and watches](/docs/features/letters-watches/) explains the letter an agent gets when you press `Done`.
 - Next guide: [Run a mission](/docs/guides/run-a-mission/).
