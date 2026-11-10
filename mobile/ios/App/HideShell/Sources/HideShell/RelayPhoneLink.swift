@@ -109,11 +109,9 @@ public final class RelayPhoneLink: PhoneLink {
                 if type == resultType, answer["request_id"] as? String == requestId { return answer }
                 if type == "refused_request", answer["request"] as? String == kind { throw LinkFailure.outdated }
             }
-        } catch let failure as LinkFailure {
-            throw failure
         } catch {
-            // The message left; whatever ended the wait, it may have arrived.
-            throw LinkFailure.unconfirmed
+            // The message left; the one rule says what any end of the wait means now.
+            throw ReplyRule.afterHandover(error)
         }
     }
 

@@ -197,6 +197,38 @@ final class ReplySenderTests: XCTestCase {
         XCTAssertEqual(ledger.states[target().requestId], .uncertain)
     }
 
+    func testAfterTheHandoverOnlyTheComputersRefusalIsCertain() {
+        // A peer that left after the send, an answer that could not be read and a closed socket all surface from the
+        // link as `.notSent` or as a plain error; once the message was handed over, none of them says "not sent".
+        XCTAssertEqual(ReplyRule.afterHandover(LinkFailure.notSent), .unconfirmed)
+        XCTAssertEqual(ReplyRule.afterHandover(LinkFailure.unconfirmed), .unconfirmed)
+        XCTAssertEqual(ReplyRule.afterHandover(URLError(.networkConnectionLost)), .unconfirmed)
+        XCTAssertEqual(ReplyRule.afterHandover(LinkFailure.answer("stale")), .unconfirmed)
+        XCTAssertEqual(ReplyRule.afterHandover(LinkFailure.outdated), .outdated)
+    }
+
+    func testOnlyAnEndThatCertainlyWroteNothingReturnsTheText() {
+        for failure: LinkFailure in [.notSent, .outdated, .answer("stale"), .answer("gone"), .answer("failed")] {
+            XCTAssertTrue(ReplyRule.returnsText(failure), "\(failure)")
+        }
+        for failure: LinkFailure in [.unconfirmed, .answer("uncertain"), .answer("in_flight")] {
+            XCTAssertFalse(ReplyRule.returnsText(failure), "\(failure)")
+        }
+    }
+
+    func testAReplyThatMostLikelyArrivedIsNeverPutBackInTheBox() async {
+        await sender([.requestFails(.unconfirmed)]).reply(text: "yes", target: target())
+        XCTAssertNil(held.take(room: room, deviceId: "dev", paneId: "pane"))
+        let again = sender([.answer(["ok": false, "reason": "in_flight"])])
+        await again.reply(text: "yes", target: target("n2"))
+        XCTAssertNil(held.take(room: room, deviceId: "dev", paneId: "pane"))
+    }
+
+    func testAReplyThatCertainlyWroteNothingIsPutBack() async {
+        await sender([.answer(["ok": false, "reason": "stale"])]).reply(text: "yes", target: target())
+        XCTAssertEqual(held.take(room: room, deviceId: "dev", paneId: "pane"), "yes")
+    }
+
     func testAnOlderComputerIsToldToUpdate() async {
         await sender([.requestFails(.outdated)]).reply(text: "yes", target: target())
         XCTAssertEqual(notifier.posted.values.first, "outdated")

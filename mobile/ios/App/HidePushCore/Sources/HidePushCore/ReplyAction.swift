@@ -49,15 +49,40 @@ public enum LinkFailure: Error, Equatable {
     case answer(String)
 }
 
+/// The one rule for what became of a reply, so no path decides it on its own. A reply has three ends only:
+/// not sent (the failure is certain to have come before anything was handed to the connection), sent (the computer
+/// answered `input_result` with `ok: true`), and not confirmed (everything else: a peer that left after the send, an
+/// answer that could not be read, the deadline, a closed socket). Only the first, and the computer's own refusals that
+/// say nothing was written, give the text back to the person; a reply that most likely arrived is never offered again.
+public enum ReplyRule {
+    /// What any end of the wait means once the message was handed to the connection: only the computer's refusal of
+    /// the message as unknown (`outdated`) is certain; every other way the wait ended is `unconfirmed`.
+    public static func afterHandover(_ error: Error) -> LinkFailure {
+        if let failure = error as? LinkFailure, failure == .outdated { return .outdated }
+        return .unconfirmed
+    }
+
+    /// The computer could not say whether it wrote the reply.
+    public static func isUncertain(_ failure: LinkFailure) -> Bool {
+        switch failure {
+        case .unconfirmed, .answer("uncertain"), .answer("in_flight"): return true
+        default: return false
+        }
+    }
+
+    /// The text goes back into the person's reply box only for an end that certainly wrote nothing.
+    public static func returnsText(_ failure: LinkFailure) -> Bool { !isUncertain(failure) }
+}
+
 /// One encrypted session to one computer, for as long as one action takes. The real one is `RelayPhoneLink` (over
 /// the relay protocol library), a test's is a stand-in; both end every wait when `close` is called.
 public protocol PhoneLink: AnyObject {
     /// Joins the room, finishes the handshake, signs in with the credential and waits for the computer's hello.
     /// Throws `LinkFailure.notSent` for anything that goes wrong on the way: nothing has been sent yet.
     func connect(room: String, noiseKey: Data, credential: String) async throws
-    /// Sends one message and waits for the message of `type` that names `requestId`. Throws `.notSent` when the message
-    /// could not be handed to the connection, `.unconfirmed` when it was and no answer came, `.outdated` when the
-    /// computer refused the message as unknown.
+    /// Sends one message and waits for the message of `type` that names `requestId`. Throws `.notSent` only when the
+    /// message could not be handed to the connection, and after that only `.outdated` (the computer refused the message
+    /// as unknown) or `.unconfirmed` (`ReplyRule.afterHandover`): whatever ended the wait, the message may have arrived.
     func request(_ message: [String: Any], resultType: String, requestId: String) async throws -> [String: Any]
     func close()
 }
@@ -159,18 +184,22 @@ public final class ReplySender {
             held.drop(room: target.room, deviceId: target.deviceId, paneId: target.paneId)
             return
         }
-        held.keep(text: text, room: target.room, deviceId: target.deviceId, paneId: target.paneId)
-        switch failure {
-        case .unconfirmed, .answer("uncertain"), .answer("in_flight"):
+        if ReplyRule.returnsText(failure) {
+            held.keep(text: text, room: target.room, deviceId: target.deviceId, paneId: target.paneId)
+        }
+        if ReplyRule.isUncertain(failure) {
             ledger.set(.uncertain, for: id)
             notifier.post(id: Self.failedId(id), body: words.unconfirmed, userInfo: target.userInfo)
+            return
+        }
+        switch failure {
         case .answer("stale"), .answer("gone"):
             ledger.set(.failed, for: id)
             notifier.post(id: Self.failedId(id), body: words.stale, userInfo: target.userInfo)
         case .outdated:
             ledger.set(.failed, for: id)
             notifier.post(id: Self.failedId(id), body: words.outdated, userInfo: target.userInfo)
-        case .notSent, .answer:
+        case .notSent, .answer, .unconfirmed:
             ledger.set(.failed, for: id)
             notifier.post(id: Self.failedId(id), body: words.notSent, userInfo: target.userInfo)
         }
