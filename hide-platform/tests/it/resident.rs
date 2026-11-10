@@ -918,3 +918,5 @@ fn a_start_waits_out_a_program_another_process_holds_open_for_writing() {
     assert!(holder.0.try_wait().unwrap().is_some(), "{report}");
     assert!(resident.is_running(), "{report}");
 }
+
+// Throwaway change: shows the repeat lane running this module.
