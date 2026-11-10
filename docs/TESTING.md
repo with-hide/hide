@@ -953,7 +953,7 @@ Nothing is handed to the nightly.
   `tests/it/support`, `tests/it/main.rs`, a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
   `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
 - **The budget is 200 test runs for the whole pull request.**
-  N is the number of tests inside the chosen files, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs), and the Rust tests are counted from their `#[test]` and `#[tokio::test]` attributes in the source, since the count has to exist before anything builds.
+  N is the number of tests inside the chosen files, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs), and the Rust tests are counted from their `#[test]`, `#[tokio::test]` and `#[cfg_attr(..., test)]` attributes in the source, since the count has to exist before anything builds; a selected module that declares none (a helper file) counts as one, so the repeat is never zero.
   Each test runs `clamp(floor(200 / N), 3, 10)` times: 5 tests run 10 times (50 runs), 20 run 10 (200), 50 run 4 (200), 100 run 3 (300, the floor of 3 wins), and one spec of 12 tests runs 12 x 10 = 120 times.
   Fewer than three repeats shows too little, so a pull request that changes more than 66 tests runs over 200.
   The job summary says how many tests were counted and the repeat chosen.

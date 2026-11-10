@@ -46,7 +46,8 @@ WEB_SPEC = re.compile(r"^web/e2e/[^/]+\.spec\.ts$")
 RUST_MODULE = re.compile(r"^(?P<crate>.+)/tests/it/(?P<module>.+)\.rs$")
 # Helpers every module of the binary shares, and the file that declares the modules.
 RUST_SHARED = ("support", "main")
-RUST_TEST = re.compile(r"^\s*#\[(?:tokio::)?test\b", re.MULTILINE)
+# `#[test]`, `#[tokio::test]` and `#[cfg_attr(<condition>, test)]`, the form a test takes when it also runs as a wasm test.
+RUST_TEST = re.compile(r"^\s*#\[(?:(?:tokio::)?test\b|cfg_attr\([^\]]*,\s*test\)\])", re.MULTILINE)
 
 PACKAGE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MODULE = re.compile(r"^[a-z0-9_]+(?:::[a-z0-9_]+)*$")
@@ -109,14 +110,19 @@ def rust_files(module, root=ROOT):
 
 
 def rust_test_count(modules, root=ROOT):
-    """Tests the selected Rust modules declare, counted from their `#[test]` and `#[tokio::test]` attributes.
+    """Tests the selected Rust modules declare, counted from their test attributes.
 
     Counted from the source because the count has to exist before anything
-    builds. A module that declares tests with a macro is counted short, and
-    an `#[ignore]` test is counted although nextest skips it; the lane prints
-    what it ran.
+    builds. A module that declares tests with a macro is counted short, an
+    `#[ignore]` test is counted although nextest skips it, and a module that
+    declares none (a helper file in the `tests/it` folder) counts as one, so a
+    selected module never makes the pull request's count, and so its repeat,
+    zero; the lane prints what it ran.
     """
-    return sum(len(RUST_TEST.findall(file.read_text(encoding="utf-8"))) for module in modules for file in rust_files(module, root))
+    return sum(
+        max(1, sum(len(RUST_TEST.findall(file.read_text(encoding="utf-8"))) for file in rust_files(module, root)))
+        for module in modules
+    )
 
 
 def listed_tests(text):

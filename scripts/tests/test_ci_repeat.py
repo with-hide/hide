@@ -143,6 +143,30 @@ class RustCount(unittest.TestCase):
             self.assertEqual(count("tests/it/alpha.rs"), 3)
             self.assertEqual(count("tests/it/folder/mod.rs"), 2)
 
+    def test_a_cfg_attr_test_counts_and_a_module_with_none_counts_as_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tests = root / "tests/it"
+            tests.mkdir(parents=True)
+            (tests / "wasm.rs").write_text(
+                '#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]\n'
+                '#[cfg_attr(not(target_arch = "wasm32"), test)]\nfn a() {}\n'
+                '#[cfg_attr(not(target_arch = "wasm32"), test)]\nfn b() {}\n#[cfg(test)]\nmod inline {}\n')
+            (tests / "helper.rs").write_text("//! A stand-in program, no test.\npub fn run() {}\n")
+
+            def count(*names):
+                return repeat.rust_test_count([{"package": "p", "module": name, "path": f"tests/it/{name}.rs"} for name in names], root)
+
+            self.assertEqual(count("wasm"), 2)
+            self.assertEqual(count("helper"), 1)
+            self.assertEqual(count("wasm", "helper"), 3)
+
+    def test_the_real_modules_the_review_found_count_above_zero(self):
+        for path, minimum in (("hide-platform/tests/it/stand_ins.rs", 1), ("hide-relay-protocol/tests/it/admission.rs", 5)):
+            with self.subTest(path=path):
+                found = repeat.select(entries(path), CRATE_DIRS)["rust"]
+                self.assertGreaterEqual(repeat.rust_test_count(found, ROOT), minimum)
+
     def test_a_changed_file_that_is_missing_is_refused_not_counted_as_zero(self):
         with self.assertRaises(OSError):
             repeat.rust_test_count([{"package": "p", "module": "m", "path": "tests/it/missing.rs"}], Path("/nonexistent-root"))
