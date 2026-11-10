@@ -2364,13 +2364,13 @@ export type EngineStatus = {
 };
 
 /**
- * What this machine's Herdr save offers to move into Hide's own engine, and what the last move came to (PRD
- * engine-bundle-4-herdr-removal D-6 to D-8). `move` while Hide's own Herdr runs, which moving stops (the question);
- * `import` for any other save, read only; `result` when only the last move's left-out workspaces wait to be read.
- * `herdr_running` says a Herdr runs on with the save's conversations open, so an import opens them as shells.
+ * What this machine's Herdr save offers to import into Hide's own engine, and what the last import came to (PRD
+ * engine-bundle-4-herdr-removal D-7, D-8). `import` for a save, read only; `result` when only the last import's
+ * left-out workspaces wait to be read. `herdr_running` says a Herdr runs on with the save's conversations open, so an
+ * import opens them as shells.
  */
 export type HerdrImport = {
-  kind: "move" | "import" | "result";
+  kind: "import" | "result";
   stage: "offered" | "moving" | "failed" | "moved";
   workspaces: number;
   tabs: number;
@@ -2378,7 +2378,7 @@ export type HerdrImport = {
   /** Conversations an earlier import left open in their Herdr, which an import resumes now that it is closed (B15). */
   waiting: number;
   herdr_running: boolean;
-  failure: "not_stopped" | "unreadable" | null;
+  failure: "unreadable" | null;
   reason: string | null;
   refused: { label: string; reason: string }[];
   /** The device whose save this is; absent for this machine's (B18). */
