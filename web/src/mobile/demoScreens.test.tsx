@@ -7,9 +7,11 @@ import { stop, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { SettingsSheet, PRIVACY_POLICY_URL } from "./SettingsSheet";
 import { setTab, openMission, usePhone } from "./store";
+import { blockNetwork, type NetworkGuard } from "./demoNetworkGuard";
 
 // What a person sees of the sample host: the marks that say it is a sample, on the screens a real host draws, with the sample data in them.
 
+let network: NetworkGuard;
 let root: Root;
 let host: HTMLElement;
 const text = () => document.body.textContent ?? "";
@@ -18,7 +20,7 @@ const settle = (ms = 400) => act(async () => { await vi.advanceTimersByTimeAsync
 beforeAll(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
-  vi.stubGlobal("fetch", () => Promise.reject(new Error("no request in a demo")));
+  network = blockNetwork((name, value) => vi.stubGlobal(name, value), () => vi.unstubAllGlobals());
   window.history.replaceState(null, "", "/p/5/?demo=1");
   start();
   host = document.body.appendChild(document.createElement("div"));
@@ -32,7 +34,7 @@ afterAll(async () => {
   stop();
   host.remove();
   vi.useRealTimers();
-  vi.unstubAllGlobals();
+  network.release();
   localStorage.clear();
 });
 
@@ -45,6 +47,10 @@ describe("the sample host's screens", () => {
     // The host's name carries the pill that marks it as a sample.
     const name = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Demo Mac"));
     expect(name?.querySelector("[data-phone-demo-sample]")?.textContent).toBe("Sample");
+  });
+
+  it("open no connection of any kind while they are drawn", () => {
+    expect(network.calls).toEqual([]);
   });
 
   it("list the agents by group, with a parent's children under it", () => {

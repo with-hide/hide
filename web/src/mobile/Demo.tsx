@@ -2,6 +2,7 @@
 // host's name wherever a real host's name would show, and the host sheet's own panel, which leads to the real connect flow.
 
 import { LaptopIcon } from "lucide-react";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { leaveDemo } from "./connection";
@@ -10,9 +11,9 @@ import { leaveDemo } from "./connection";
 export function SamplePill() {
   const { t } = useInterfaceTranslation();
   return (
-    <span className="shrink-0 rounded-full border border-border bg-secondary px-sm text-micro text-subtle-foreground" data-phone-demo-sample="true">
+    <Badge variant="outline" className="rounded-full px-sm" data-phone-demo-sample="true">
       {t("mobile.demo.sample")}
-    </span>
+    </Badge>
   );
 }
 

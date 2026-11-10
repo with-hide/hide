@@ -2,18 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PhoneAgent } from "./protocol";
 import { listedAgents } from "./protocol";
+import { blockNetwork, type NetworkGuard } from "./demoNetworkGuard";
+import { HOSTS_KEY } from "./hosts";
 
 // The sample host as a person meets it: the hosted phone opened with `?demo`, read through the same store every screen reads. Only
 // the browser's WebSocket, fetch and clock are substituted, and the first two are substituted to fail, because the demo may use neither.
-const sockets: string[] = [];
-const requests: string[] = [];
+let network: NetworkGuard;
 
 beforeEach(() => {
-  sockets.length = 0;
-  requests.length = 0;
   vi.useFakeTimers();
-  vi.stubGlobal("WebSocket", Object.assign(function Refused(url: string) { sockets.push(url); throw new Error("no socket in a demo"); }, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 }));
-  vi.stubGlobal("fetch", (url: string) => { requests.push(String(url)); return Promise.reject(new Error("no request in a demo")); });
+  network = blockNetwork((name, value) => vi.stubGlobal(name, value), () => vi.unstubAllGlobals());
   window.history.replaceState(null, "", "/p/5/?demo=1");
   localStorage.clear();
   sessionStorage.clear();
@@ -24,7 +22,7 @@ afterEach(async () => {
   const { stop } = await import("./connection");
   stop();
   vi.useRealTimers();
-  vi.unstubAllGlobals();
+  network.release();
   localStorage.clear();
   window.history.replaceState(null, "", "/");
   delete document.documentElement.dataset.phoneDemo;
@@ -55,8 +53,7 @@ describe("the sample host", () => {
     expect(s.missions!.some((mission) => mission.question !== null)).toBe(true);
     expect(s.prs!.items.length).toBeGreaterThan(2);
     expect(document.documentElement.dataset.phoneDemo).toBe("true");
-    expect(sockets).toEqual([]);
-    expect(requests).toEqual([]);
+    expect(network.calls).toEqual([]);
     expect(localStorage.length).toBe(0);
   });
 
@@ -176,8 +173,26 @@ describe("the sample host", () => {
     await settle();
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(sockets).toEqual([]);
-    expect(requests).toEqual([]);
+    expect(network.calls).toEqual([]);
+  });
+
+  it("leaves a real paired host's list as it was after a visit and leaving", async () => {
+    const hosts = JSON.stringify([{ room: "a".repeat(43), name: "My Mac", noiseKey: "b".repeat(43), credential: "kept", protocol: 5, lastSeen: 1000 }]);
+    localStorage.setItem(HOSTS_KEY, hosts);
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, pathname: "/p/5/", search: "?demo=1", hash: "", assign });
+    const { connection, settle, state } = await demoPhone();
+    connection.openStartSheet();
+    await settle();
+    connection.editStartSheet({ text: "A task during the visit" });
+    connection.submitStart();
+    await settle();
+    expect(state().macName).toBe("Demo Mac");
+    connection.leaveDemo();
+    expect(assign).toHaveBeenCalledWith("/");
+    expect(localStorage.getItem(HOSTS_KEY)).toBe(hosts);
+    expect(localStorage.length).toBe(1);
+    expect(network.calls).toEqual([]);
   });
 
   it("is not entered from a page that is not the hosted phone", async () => {

@@ -3132,7 +3132,7 @@ The list shows 내 차례, 작업 중, 끝남 and 확인함 with a parent's chil
 The start sheet and the pull request's `맡기기` sheet add a sample row to 작업 중, which opens as a started agent's detail does; an answer to the mission's decision clears it, and `머지` takes the pull request off the list.
 볼 것 holds one HTML page, drawn in the sandboxed frame, and one image.
 The sample text is the app's own and is worded in all four languages (`web/src/i18n/resources/mobileDemo.ts`), and it is worded again when the phone's language changes; pull request titles, branches and file names are code text and stay as written.
-The demo opens no WebSocket and makes no request, so it works offline.
+The demo opens no WebSocket and makes no request, so it works offline once the page is loaded; a first visit on the web with no network cannot load the page, while the iOS app carries it.
 It writes no host entry, credential or notification subscription, offers no notification row, and a visit leaves only the phone's own language and theme choice, which the demo shares with the real app.
 A visit adds at most 10 sample agents and 40 sentences to one conversation; past that the start sheet or the reply bar shows its ordinary failure line.
 A slim bar, `체험 중 · 샘플 데이터` with `체험 끝내기`, sits over every screen of a demo.

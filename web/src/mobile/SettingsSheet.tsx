@@ -85,15 +85,9 @@ export function SettingsSheet({ defaultOpen = false }: { defaultOpen?: boolean }
               ))}
             </RadioGroup>
           </section>
-          <a
-            href={PRIVACY_POLICY_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-phone-privacy-link="true"
-            className="flex min-h-(--size-touch-target) items-center text-title text-foreground underline-offset-4 hover:underline"
-          >
-            {t("mobile.settings.privacy")}
-          </a>
+          <Button asChild variant="text-link" className="min-h-(--size-touch-target) justify-start px-none text-title text-foreground">
+            <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer" data-phone-privacy-link="true">{t("mobile.settings.privacy")}</a>
+          </Button>
           <p className="text-body text-muted-foreground" data-phone-settings-note={kept ? "kept" : "not-kept"} role={kept ? undefined : "status"}>
             {t(kept ? "mobile.settings.note" : "mobile.settings.notKept")}
           </p>
