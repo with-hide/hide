@@ -6,6 +6,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { closePane, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace } from "./wire";
+import { testBrowserArgs } from "./browser-launch.cjs";
 
 declare global {
   interface Window {
@@ -98,7 +99,7 @@ test("unavailable WebGL keeps the terminal usable and closes cleanly", async ({ 
 // A separate fixture pool replaces the suite's --disable-webgl for these cases.
 // SwiftShader supplies a repeatable real context without requiring host GPU hardware.
 const webglTest = test.extend({
-  launchOptions: { args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] },
+  launchOptions: { args: testBrowserArgs(["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]) },
 });
 
 webglTest.describe("WebGL recovery", () => {

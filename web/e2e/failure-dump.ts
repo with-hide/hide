@@ -75,6 +75,8 @@ export async function pageSide(page: Page): Promise<unknown> {
       main: document.querySelector("[data-main-screen]") !== null,
       connection: document.querySelector("[data-connection]")?.getAttribute("data-connection") ?? null,
       projects: [...document.querySelectorAll("nav[data-sidebar] [data-project] [data-row-name]")].map((row) => row.textContent?.trim() ?? ""),
+      renderFailures: [...document.querySelectorAll("[data-render-failed]")].map((node) => node.getAttribute("data-render-failed")),
+      renderDiagnostics: (window as Window & { __hideProbe?: { diagnostics: () => string[] } }).__hideProbe?.diagnostics().filter((line) => line.startsWith("render_failed ")).slice(-8) ?? [],
       requests,
     };
   });
