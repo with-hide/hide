@@ -10,7 +10,6 @@
 // and Dark captures land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test } from "@playwright/test";
-import "./checkout-hover-probe";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -23,6 +22,7 @@ import { fixtureProgram } from "./platform-fixture";
 import { chooseTheme, countSent, enterWorkspace, openOtherCheckouts, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { quietFor } from "./wait";
+import { withCheckoutHoverDump } from "./checkout-hover";
 import { initGithubRepository } from "./github-remote";
 
 test.describe.configure({ timeout: 180_000 });
@@ -269,10 +269,12 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await rest(page);
     await expect(plain).toHaveCount(0);
 
-    await chooseTheme(page, "light");
-    await feature.locator("[data-checkout]").hover();
-    await expect(card).toBeVisible();
-    await screenshot(page, "checkout-pr-card-light");
+    await withCheckoutHoverDump(feature.locator("[data-checkout]"), async () => {
+      await chooseTheme(page, "light");
+      await feature.locator("[data-checkout]").hover();
+      await expect(card).toBeVisible();
+      await screenshot(page, "checkout-pr-card-light");
+    });
   } finally {
     daemon?.stop();
     engine.stop();
