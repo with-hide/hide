@@ -93,7 +93,7 @@ A failed or expired write records `write_timeout` and attempts a `timeout` refus
 An exhausted shutdown deadline records `shutdown_timeout` without a cap field.
 Every refusal half-closes TCP and discards at most `MAX_FRAME + 14` unread bytes within that same deadline.
 If pipelined input fills that discard budget, the socket stays half-closed until the deadline so the peer can read the refusal before unread input causes a reset; no further input is retained or consumed.
-Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within sixteen seconds.
+Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within sixteen seconds; a push request still waiting on Apple ends unanswered with its socket.
 An HTTP upgrade already in progress may instead see a failed upgrade or `timeout`; it must reconnect too.
 
 | Close code | Meaning | Client action |
@@ -142,7 +142,8 @@ There is no new HTTP entrance: a request arrives only on an admitted device sock
 A device sends `push_request` only after a `registered` whose `push` is true.
 A `push_request` from a phone socket, or before admission, is an `invalid_message` refusal like any other message in the wrong place.
 Every other answer is a `push_result` under the request's id and leaves the socket open, because closing a device socket would disconnect every phone in its room.
-A request whose fields are wrong is answered `failed`; one whose id cannot be read is an `invalid_message` refusal, since no answer could name it.
+A request whose fields are wrong, an extra field or an environment other than the two included, is answered `failed` and reaches Apple with nothing; one whose id cannot be read is an `invalid_message` refusal, since no answer could name it.
+`admission::decode_push` is the relay's one reader of the message: it parses the same `ClientMessage` every other side decodes and reads only the id on its own, to answer a request it refuses.
 
 The relay fixes everything Apple reads besides the token, the collapse value and the ciphertext: the topic (the app's bundle id, from its configuration), `apns-push-type: alert`, `apns-priority: 10` and `apns-expiration` one hour after it sends.
 A request has no field for them, and an extra field makes it malformed.
@@ -151,7 +152,8 @@ The environment chooses the host: `api.sandbox.push.apple.com` for a development
 ### Budgets
 
 `hide-relay/src/limits.rs` holds these constants beside the socket budgets.
-Every request that reaches the room check is counted, a malformed one included, so a room cannot spend the relay's CPU with bad requests.
+Every request from an admitted device socket is counted, a malformed or refused one included: its bytes are charged to the room's daily byte budget like any forwarded frame, which closes the socket with `daily_limit` once spent, and it counts against the request caps below, so neither bad requests nor requests past a cap spend the relay without a ceiling.
+A cap logs `cap_exceeded` once per window, not once per refused request: once per room for each of the minute and the day window, once per second for the relay-wide cap, and at most once a second for the concurrency cap.
 
 | Budget | Production cap | Past it | Log `cap` |
 | --- | --- | --- | --- |
@@ -159,10 +161,15 @@ Every request that reaches the room check is counted, a malformed one included, 
 | Requests per room in a 24-hour window | 1,000 | `rate_limited` | `pushes_per_room_per_day` |
 | Requests across the relay per second | 50 | `rate_limited` | `pushes_per_second` |
 | Requests in flight to Apple, as streams of one HTTP/2 connection | 32 | `rate_limited` | `concurrent_pushes` |
-| One request to Apple, its answer and body included | 10 seconds | `unavailable` | none |
+| One request to Apple, its answer, its body and the one retry included | 10 seconds | `unavailable` | none |
+| Apple's answer body read | 4,096 bytes | `unavailable` | none |
 
-A room's push counters live as long as its byte record and are bounded by the same `room_records`.
+A room's push counters live in its byte record, start their day with it and are bounded by the same `room_records`, so a room's record expiring cannot open a second day's allowance inside one.
 The relay keeps no queue and makes no retry except the one below; a refused request is the sender's to drop.
+
+Known limitation: the caps are per room and relay-wide, with no share per address.
+Admission is self-signed, so one address that opens many rooms can hold the relay-wide 50 a second, and other computers' requests are answered `rate_limited` meanwhile.
+Volume to Apple stays bounded by the relay-wide cap and each room's daily cap, and one address can already hold every socket the relay admits; a share per address would need a record the relay does not keep, since it stores no address past the 60-second admission rate.
 
 ### Apple's answers
 
@@ -170,7 +177,7 @@ The relay keeps no queue and makes no retry except the one below; a refused requ
 | --- | --- |
 | 2xx | `delivered` |
 | 410, or 400 `BadDeviceToken` or `DeviceTokenNotForTopic` | `token_gone`: the token names no install of this app, and the sender deletes it |
-| 403 `ExpiredProviderToken` | the provider token is signed again and the request sent once more, the only retry; if the token is younger than 20 minutes, or the retry fails, `unavailable` |
+| 403 `ExpiredProviderToken` | the provider token is signed again and the request sent once more, the only retry, inside the same 10 seconds; if the token is younger than 20 minutes, the retry finds the token expired again or it gets no answer, `unavailable`; any other answer to the retry is mapped by this table |
 | 429, 5xx, no answer within the deadline | `unavailable` |
 | anything else | `failed` |
 
@@ -189,6 +196,8 @@ The relay sends Apple exactly:
 {"aps":{"alert":{"loc-key":"hide-notification"},"mutable-content":1},"hide":"<payload>"}
 ```
 
+Every base64url value in this section, `payload` and `collapse` included, is unpadded (RFC 4648 section 5 without `=`).
+
 `hide-notification` is a localization key the app must carry; it is the only text Apple and a phone without the key can show, so it names nothing.
 No title, state, project, badge count or tag is in plain text.
 The extension tries each computer's key in turn and shows the decrypted notice; a body no key opens keeps the fixed text.
@@ -197,7 +206,7 @@ The largest body is 4,079 bytes, inside Apple's 4,096.
 `collapse` is Apple's plaintext `apns-collapse-id`, so it never carries an agent key, tag or title: hided sends the first 24 bytes of HMAC-SHA-256 keyed with the phone's 16-byte authentication secret over `hide-collapse\0` and the agent's tag, base64url (32 characters).
 It is stable for one agent on one phone, so a later notice replaces the earlier one, and different across phones.
 
-Test vector: RFC 8291 Appendix A, whose receiver private key opens it.
+Test vector: RFC 8291 Appendix A; its receiver private key, `q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94`, opens it.
 Its inputs (receiver public key `BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4`, sender public key `BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8`, ECDH secret `kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs`, authentication secret `BTBZMqHH6r4Tts7J_aSIgg`, salt `DGv6ra1nlYgDCS1FRnbzlw`, plaintext `When I grow up, I want to be a watermelon`) give the `payload`:
 
 ```text
@@ -208,7 +217,7 @@ DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vC
 
 ### Registration on the phone protocol
 
-Inside its encrypted session the app sends `apns_registration {token, environment, key: {p256dh, auth}}`: the device token as hex (`admission::token_valid`), its environment, and a per-computer P-256 public key (65 bytes uncompressed) and 16-byte secret, base64url, the same shape as a Web Push subscription's keys.
+Inside its encrypted session the app sends `apns_registration {token, environment, key: {p256dh, auth}}`: the device token as hex, either case (`admission::token_valid`), its environment, and a per-computer P-256 public key (65 bytes uncompressed) and 16-byte secret, base64url, the same shape as a Web Push subscription's keys.
 hided answers `push_state {notifications: "on" | "refused"}` and keeps it in the phone's record in `phones.json` (0600), where it replaces a Web Push subscription and the reverse.
 `push_permission {state: "denied"}` removes it, unpairing removes it with the phone, and a `token_gone` answer removes it.
 An older hided answers the message `refused_request` and keeps the session, so the addition keeps `PHONE_PROTOCOL` at 5.
@@ -225,8 +234,10 @@ Deploy the relay first: a hided released before it simply has no push to send.
 
 Apple's `.p8` is the relay's only secret.
 It sits at `/etc/hide-relay/apns.p8`, root-owned, mode 0400, in a 0700 directory, and reaches the service only through systemd `LoadCredential=`, never the repository, CI, an environment variable or a log; `deploy/relay-apns.conf.example` is the drop-in.
-`--apns-key`, `--apns-key-id`, `--apns-team-id` and `--apns-topic` come together or not at all; without them the relay answers every request `unavailable`, and with them it refuses to start on a key it cannot read, a key readable by group or others, or one that is not a P-256 key.
-`--apns-endpoint` names a loopback stand-in for tests and is refused for any other host.
+`--apns-key`, `--apns-key-id`, `--apns-team-id` and `--apns-topic` come together or not at all; without them the relay answers every request `unavailable`, and with them it refuses to start on a key it cannot read, one that is not a P-256 key, or one whose mode has any bit for others or a group write bit (`apns_key_permissions`).
+A group read bit is allowed: systemd writes a credential root-owned 0400 and grants the service user read through a POSIX ACL, and with an ACL entry the group bits of the mode show the ACL mask, so the credential the relay is given reads as 0440.
+Checking the drop-in on the production host is part of its deploy check.
+`--apns-endpoint` names a loopback stand-in for tests and is refused for any other host, by the configuration and by `apns::Apns::new` alike.
 A push log line names a fixed event (`delivered`, `unregistered`, `push_token_invalid`, `cap_exceeded` and the rest in `hide-relay/src/apns.rs` and `server.rs`) and a cap, never a token, ciphertext, provider token, Apple's answer body or the room.
 
 ## Encrypted frames and messages
