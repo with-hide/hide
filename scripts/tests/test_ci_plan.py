@@ -103,7 +103,7 @@ class Selection(unittest.TestCase):
         self.assertTrue({"web-e2e", "windows-e2e"} <= set(plan("desktop/src/main/wirePath.ts")["lanes"]))
         self.assertTrue({"checks", "web-e2e"} <= set(plan("design/tokens.json")["lanes"]))
         # The README e2e spec reads the README, its logo and its hero picture.
-        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/assets/video/kick-conductor.gif"):
+        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/public/assets/video/kick-conductor.gif"):
             with self.subTest(path=path):
                 self.assertIn("web-e2e", plan(path)["lanes"])
         # A guide a test reads is more than documentation.

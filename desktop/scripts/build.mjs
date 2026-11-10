@@ -46,5 +46,5 @@ copyTree(path.join(root, "static"), path.join(dist, "static"));
 await build({ entryPoints: [path.join(root, "static/status.js")], outfile: path.join(dist, "static/status.js"), bundle: true, platform: "browser", format: "iife", target: "chrome144", minify: true, legalComments: "eof" });
 fs.rmSync(path.join(dist, "static/owl-motion.js"));
 // The startup owl is the site's canonical pose, copied rather than kept twice.
-for (const file of ["owl-blink.svg", "owl-blink-still.svg"]) fs.copyFileSync(path.join(root, "../site/assets/owls", file), path.join(dist, "static", file));
+for (const file of ["owl-blink.svg", "owl-blink-still.svg"]) fs.copyFileSync(path.join(root, "../site/public/assets/owls", file), path.join(dist, "static", file));
 fs.writeFileSync(path.join(dist, "static", "tokens.css"), tokenCss.replace(themeBlocks, ":root {"));

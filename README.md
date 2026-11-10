@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="site/assets/video/kick-conductor.gif" width="960" alt="A Conductor plans a six-step mission, then each step flies out to a worker on This Mac, linux-box or mac-mini: Claude Code, Codex, Antigravity and Grok. One agent asks a question, you answer it, and every step ends in a pull request.">
+  <img src="site/public/assets/video/kick-conductor.gif" width="960" alt="A Conductor plans a six-step mission, then each step flies out to a worker on This Mac, linux-box or mac-mini: Claude Code, Codex, Antigravity and Grok. One agent asks a question, you answer it, and every step ends in a pull request.">
 </p>
 
 You run several coding agents at once, and someone has to keep track of them.
@@ -55,8 +55,8 @@ Hide AI runs on the agent CLI you already signed in to, and every status still w
 </td>
 <td width="54%">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/rows-on-dark.webp">
-  <img src="site/assets/shots/rows-on-light.webp" width="100%" alt="The Tasks list with Hide AI on: Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, a fixed test under Unread, the release notes and a starred task under Revisit, and the agents still working.">
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/assets/shots/rows-on-dark.webp">
+  <img src="site/public/assets/shots/rows-on-light.webp" width="100%" alt="The Tasks list with Hide AI on: Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, a fixed test under Unread, the release notes and a starred task under Revisit, and the agents still working.">
 </picture>
 </td>
 </tr>
@@ -71,7 +71,7 @@ The Overview draws the whole night as one map: which agent started which, the le
 
 </td>
 <td width="54%">
-<img src="site/assets/video/kick-focus.gif" width="100%" alt="The Overview map of 36 agents across four projects narrows to My turn: two agents wait on you, Approve #431 and #436? and Retry failed payments.">
+<img src="site/public/assets/video/kick-focus.gif" width="100%" alt="The Overview map of 36 agents across four projects narrows to My turn: two agents wait on you, Approve #431 and #436? and Retry failed payments.">
 </td>
 </tr>
 <tr>
@@ -88,8 +88,8 @@ For a set of pull requests, a Conductor agent runs a **mission**: it plans the w
 </td>
 <td width="54%">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/record-lane-dark.webp">
-  <img src="site/assets/shots/record-lane-light.webp" width="100%" alt="A session's record: working, one question waiting on you, its requests grouped as Plan the export and Check each pull request, and the pull requests its workers opened.">
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/assets/shots/record-lane-dark.webp">
+  <img src="site/public/assets/shots/record-lane-light.webp" width="100%" alt="A session's record: working, one question waiting on you, its requests grouped as Plan the export and Check each pull request, and the pull requests its workers opened.">
 </picture>
 </td>
 </tr>
@@ -105,7 +105,7 @@ A rule worth keeping comes back as one pull request to your docs.
 
 </td>
 <td width="54%">
-<img src="site/assets/video/kick-memory.gif" width="100%" alt="Two fresh agents on Thursday: one starts from zero and has to be told again; Antigravity in hide starts with the card Use pnpm, never npm, said to Codex on Monday.">
+<img src="site/public/assets/video/kick-memory.gif" width="100%" alt="Two fresh agents on Thursday: one starts from zero and has to be told again; Antigravity in hide starts with the card Use pnpm, never npm, said to Codex on Monday.">
 </td>
 </tr>
 <tr>
@@ -125,8 +125,8 @@ hide file open src/export/csv.ts
 </td>
 <td width="54%">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/agent-click-dark.webp">
-  <img src="site/assets/shots/agent-click-light.webp" width="100%" alt="A Codex pane ran hide browser click browser-1 --text Export CSV beside the invoices page it opened, downloaded 128 invoices, and reports that the export matches the spec.">
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/assets/shots/agent-click-dark.webp">
+  <img src="site/public/assets/shots/agent-click-light.webp" width="100%" alt="A Codex pane ran hide browser click browser-1 --text Export CSV beside the invoices page it opened, downloaded 128 invoices, and reports that the export matches the spec.">
 </picture>
 </td>
 </tr>
@@ -141,8 +141,8 @@ One click hands a pull request to an agent.
 </td>
 <td width="54%">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/prs-list-dark.webp">
-  <img src="site/assets/shots/prs-list-light.webp" width="100%" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks.">
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/assets/shots/prs-list-dark.webp">
+  <img src="site/public/assets/shots/prs-list-light.webp" width="100%" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks.">
 </picture>
 </td>
 </tr>
@@ -158,7 +158,7 @@ Add any machine by its SSH alias and its agents join the same lists, and pair yo
 
 </td>
 <td width="54%" align="center">
-<img src="site/assets/owls/owl-devices.svg" width="70%" alt="The hide owl with a laptop, the core and a phone">
+<img src="site/public/assets/owls/owl-devices.svg" width="70%" alt="The hide owl with a laptop, the core and a phone">
 </td>
 </tr>
 </table>

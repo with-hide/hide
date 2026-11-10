@@ -1,12 +1,12 @@
 // The shell's brand poses; a failed drawing goes to the shell's diagnostic log.
-import agents from "../../../site/assets/owls/owl-agents.svg";
-import agentsStill from "../../../site/assets/owls/owl-agents-still.svg";
-import devices from "../../../site/assets/owls/owl-devices.svg";
-import devicesStill from "../../../site/assets/owls/owl-devices-still.svg";
-import ai from "../../../site/assets/owls/owl-ai.svg";
-import aiStill from "../../../site/assets/owls/owl-ai-still.svg";
-import factory from "../../../site/assets/owls/owl-factory.svg";
-import factoryStill from "../../../site/assets/owls/owl-factory-still.svg";
+import agents from "../../../site/public/assets/owls/owl-agents.svg";
+import agentsStill from "../../../site/public/assets/owls/owl-agents-still.svg";
+import devices from "../../../site/public/assets/owls/owl-devices.svg";
+import devicesStill from "../../../site/public/assets/owls/owl-devices-still.svg";
+import ai from "../../../site/public/assets/owls/owl-ai.svg";
+import aiStill from "../../../site/public/assets/owls/owl-ai-still.svg";
+import factory from "../../../site/public/assets/owls/owl-factory.svg";
+import factoryStill from "../../../site/public/assets/owls/owl-factory-still.svg";
 import { useShellStore } from "../store";
 import { MovingOwl } from "./moving-owl";
 
