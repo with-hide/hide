@@ -35,7 +35,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
@@ -294,6 +294,18 @@ function history(mission: Mission, now: number): MissionEvent[] {
   return events.sort((a, b) => a.at_unix_ms - b.at_unix_ms);
 }
 
+/**
+ * A node's gate as the core draws it (PRD mission-human-gate): its `human`
+ * finish line, tagged `볼 것`, and the derived view the map reads.
+ */
+function gated(one: MissionNode, state: MissionGateState, look: string, extra: Partial<MissionGate> = {}): void {
+  const gate: MissionGate = { state, look, ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: null, said: null, ...extra };
+  const line: MissionCriterion = { key: "human", kind: "human", text: look, state: state === "passed" ? "pass" : "open", ...(gate.via ? { via: gate.via, evidence: gate.said ?? undefined } : {}), ...(gate.ask != null ? { asked: gate.ask } : {}) };
+  one.criteria = [...one.criteria.filter((criterion) => criterion.kind !== "human"), line];
+  one.criteria_met = one.criteria.filter((criterion) => criterion.state === "pass" || criterion.state === "skipped").length;
+  one.gate = gate;
+}
+
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
@@ -304,12 +316,41 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed" || held !== undefined;
   // A decision about screens to look at, with the Views linked to it.
   const looking = shown === "decision-views";
+  // `gate-plan`: the plan before approval names where the operator looks; `gate-tobe`: a reached gate is the decision the Conductor asks;
+  // `gate-all`: planned gates passed and ahead beside an unplanned decision; `gate-nocond`: a reached gate no Conductor holds, waiting 30 hours.
+  const gating = shown === "gate-tobe";
+  const adhoc = shown === "gate-all";
   // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
   const remote = shown === "remote" || shown === "remote-long" || shown === "stalled";
-  const state = answered || looking ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
+  const state = answered || looking ? "decision" : shown === "gate-plan" ? "plan" : shown === "gate-nocond" ? "no-conductor" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || gating || adhoc || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
   nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : one)));
+  const at = (key: string) => nodes.find((one) => one.key === key)!;
+  if (shown === "gate-plan") {
+    gated(at("cause"), "ahead", "원인 결론");
+    gated(at("screen"), "ahead", "화면 시안 2장");
+    gated(at("together"), "ahead", "머지 전 합친 화면");
+  }
+  if (gating || adhoc) {
+    const screen = at("screen");
+    Object.assign(screen, { status: "working" as const, pane_id: null, pr_state: "mergeable" as const, line: "시안 2장 완성", landing: null });
+    gated(at("cause"), "passed", "원인 결론", { via: "pane", said: "ㄱㄱ 좋아" });
+    if (gating) gated(screen, "open", "화면 시안 2장", { ask: 4, since_unix_ms: now - 3 * MINUTE, long_wait_at_unix_ms: now - 3 * MINUTE + 24 * 60 * MINUTE });
+    gated(at("together"), "ahead", "머지 전 합친 화면");
+    if (adhoc) gated(at("fix-1487"), "ahead", "실제 앱에서 reopen 화면");
+  }
+  if (shown === "gate-nocond") {
+    // No Conductor holds the mission and the node's worker has no row: the reached gate is the mission's own Needs You item.
+    const since = now - 30 * 60 * MINUTE;
+    const screen = at("screen");
+    Object.assign(screen, { status: "working" as const, line: "시안 2장 완성", pr_state: "mergeable" as const, attention: { reason: "human_gate" as const, pr: null, to: "operator" as const, since_unix_ms: since, on_row: false, item: true, choices: [] } });
+    screen.criteria = screen.criteria.map((criterion) => ({ ...criterion, state: "pass" as const }));
+    gated(screen, "open", "화면 시안 2장", { since_unix_ms: since, long_wait_at_unix_ms: since + 24 * 60 * MINUTE });
+    gated(at("cause"), "passed", "원인 결론", { via: "card", said: "계속 진행" });
+    gated(at("together"), "ahead", "합친 화면");
+    for (const one of nodes) if (one.attention?.reason !== "human_gate") one.attention = null;
+  }
   if (remote) {
     for (const one of nodes) {
       one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;
@@ -329,15 +370,22 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     // The screen's pull request stacks on the API's until that one merges.
     stack_waiting: ["plan", "wide", "no-pr", "done"].includes(state) ? 0 : 1,
     check: "cargo test && pnpm test", github: "octocat",
-    decision: looking ? "화면 PR: 고치기 전·후 화면 12장을 보고 머지해도 될까요?" : state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
-    question: looking
+    decision: gating ? "화면 시안 2장 확인하고 알려 주세요" : adhoc ? "화면 PR을 어디에 올릴까요?" : shown === "gate-nocond" ? null : looking ? "화면 PR: 고치기 전·후 화면 12장을 보고 머지해도 될까요?" : state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
+    question: gating
+      ? { key: 4, why: null, options: ["계속 진행", "고칠 점 있음"], recommend: null, node: "screen", asked_at_unix_ms: now - 3 * MINUTE }
+      : adhoc
+      ? { key: 5, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`], recommend: 1, node: "screen", asked_at_unix_ms: now - 2 * MINUTE }
+      : looking
       ? { key: 3, why: "화면이 바뀌는 PR이라 머지 전에 직접 봐야 해요", options: ["머지해도 됨", "고칠 점 있음"], recommend: null, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기: 목록 화면은 지금 올리고, 검색 화면은 API가 머지된 뒤 따로 올려요"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : null,
     answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting", ...(held ? { hold: held } : {}) } : null,
     answer_failed: shown === "decision-unreadable" ? "session_unreadable" : null,
-    decision_views: looking ? [
+    decision_views: gating ? [
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", view: "v7", kind: "file" as const, label: "시안 A · 목록 화면.png", unseen: true, by: "worker" as const },
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d8", view: "v8", kind: "file" as const, label: "시안 B · 검색 화면.png", unseen: true, by: "worker" as const },
+    ] : looking ? [
       { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", view: "v7", kind: "browser" as const, label: "전후 비교 · screens.html", by: "conductor" as const },
       { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d8", view: "v8", kind: "file" as const, label: "리뷰 요약.md", unseen: true, by: "worker" as const },
       { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d9", view: "v9", kind: "file" as const, label: "이전 시안.png", closed: true, by: "worker" as const },

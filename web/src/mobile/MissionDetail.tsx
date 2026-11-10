@@ -10,7 +10,8 @@
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIcon, GitPullRequestIcon, Loader2Icon, ThumbsUpIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
-import { Elapsed } from "../components/elapsed";
+import { Elapsed, useMinuteClock } from "../components/elapsed";
+import { GatePlanList, GateStrip } from "../components/mission-gate";
 import { ProgressCells } from "../components/mission-tone";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
@@ -22,7 +23,7 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { DECISION_VIEWS_SHOWN, attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
@@ -44,6 +45,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
   const open = missionOpen(mission);
   const { done, total } = progress(mission);
   const steps = missionSteps(mission);
+  const ahead = mission.status === "running" ? gatesAhead(mission).filter((node) => node.status === "planned") : [];
   const foldKey = `done:${mission.id}`;
   const doneOpen = usePhone((s) => s.missionFolds[foldKey] === true);
   const stateWord = open ? (mission.conductor.present ? t("mobile.mission.conductor") : t("mission.noConductor")) : t(STATE_PILL[mission.status]);
@@ -84,6 +86,8 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
       ) : null}
       <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain px-lg pb-lg", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {asking ? <DecisionCard mission={mission} connected={connected} /> : null}
+        {/* Where the operator will look, over a plan that waits for approval, as the desktop's map lists it (PRD mission-human-gate B1, B13). */}
+        <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} className="pt-lg" />
         {stepsOmitted > 0 ? (
           <p className="pt-lg text-body text-muted-foreground" data-phone-mission-steps-omitted={stepsOmitted}>{t("mobile.mission.stepsOmitted", { count: stepsOmitted })}</p>
         ) : null}
@@ -98,6 +102,14 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
             <ul className="divide-y divide-border border-b border-border">
               {steps.hold.map((node) => <Step key={node.key} mission={mission} node={node} kind="hold" />)}
               {steps.working.map((node) => <Step key={node.key} mission={mission} node={node} kind="working" />)}
+            </ul>
+          </section>
+        ) : null}
+        {ahead.length > 0 ? (
+          <section className="pt-lg" data-phone-mission-ahead="true">
+            <h2 className="pb-xs text-body text-muted-foreground">{t("mission.gate.planTitle", { count: ahead.length })}</h2>
+            <ul className="divide-y divide-border border-b border-border">
+              {ahead.map((node) => <Step key={node.key} mission={mission} node={node} kind="ahead" />)}
             </ul>
           </section>
         ) : null}
@@ -307,10 +319,13 @@ function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connecte
  * waits on or follows and its worker; pressing it opens the worker's detail
  * when the phone's list holds that agent.
  */
-function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissionNode; kind: "hold" | "working" | "done" }) {
+function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissionNode; kind: "hold" | "working" | "done" | "ahead" }) {
   const { t } = useInterfaceTranslation();
   const mark = kind === "hold" ? "turn" : nodeMark(node, null);
   const detail = stepLine(mission, node, kind, t);
+  // The step's review gate, as the desktop's card draws it; reached past 24 hours it says so in grey (PRD mission-human-gate B13, B22).
+  const minute = useMinuteClock();
+  const long = gateWaitedLong(node.gate, minute);
   const worker = node.worker_agent ? agentProductName(node.worker_agent) : null;
   // A row hided left out of a long list is not one the phone can open.
   const agent = usePhone((s) => (node.agent && agentOf(s.groups, node.agent) ? node.agent : null));
@@ -325,6 +340,18 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
             {detail ? <span className="min-w-0 break-keep wrap-anywhere" data-phone-step-line={kind}>{detail}</span> : null}
             {worker ? <span className="shrink-0">· {worker}</span> : null}
           </span>
+          {node.gate ? (
+            <span className="flex min-w-0 flex-col gap-xxs">
+              <GateStrip gate={node.gate} className="text-body" />
+              {long ? <span className="text-caption text-muted-foreground" data-phone-step-gate-long="true">{t("agents.mark.turn")} · {t("mission.gate.long")}</span> : null}
+              {node.gate.state === "passed" && node.gate.via ? (
+                <span className="min-w-0 break-keep text-caption text-muted-foreground wrap-anywhere" data-phone-step-gate-via={node.gate.via}>
+                  {t(`mission.gate.via.${node.gate.via}`)}
+                  {node.gate.said ? <> · “{node.gate.said}”</> : null}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
         </span>
         {agent ? <ChevronRightIcon aria-hidden="true" className="mt-md size-(--size-icon) shrink-0 text-muted-foreground" /> : null}
       </span>
@@ -356,7 +383,8 @@ function StepPr({ number, state }: { number: number; state: PrState | null | und
 }
 
 /** What a step's second line says besides its pull request (B36): why it waits, what it follows, where its work stands, or how it ended. */
-function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | "working" | "done", t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | "working" | "done" | "ahead", t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+  if (kind === "ahead") return t("mission.gate.when");
   if (kind === "hold") {
     const reason = holdReason(mission, node, workerOf);
     switch (reason?.kind) {

@@ -1,0 +1,4 @@
+module HideRelayC {
+    header "hide_relay.h"
+    export *
+}

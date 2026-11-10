@@ -437,6 +437,21 @@ pub fn payload(notice: &Notice, clear: &BTreeSet<AgentKey>) -> Value {
     })
 }
 
+/// What a notice asks of the person, for the app's notification to offer the action that fits (a Reply to a
+/// question, an Approve to an approval) and for that action to be checked later against the same ask: `turn` is
+/// the agent's last change of state, which `input` compares with the agent's now. Only a notice that sends the
+/// person to an agent waiting on a question or an approval carries one.
+pub fn with_ask(payload: &mut Value, agent: &super::projection::PhoneAgent) {
+    if payload.get("state").and_then(Value::as_str) != Some("needs_you") {
+        return;
+    }
+    let (Some(at), "question" | "approval") = (agent.changed_at_unix_ms, agent.demand.as_str())
+    else {
+        return;
+    };
+    payload["ask"] = json!({"kind": agent.demand, "turn": at.to_string()});
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,6 +881,52 @@ mod tests {
         assert_eq!(payload["state"], "needs_you");
         assert_eq!(payload["place"], "");
         assert!(payload.get("body").is_none());
+    }
+
+    /// A notice asks an action of the person only while its agent waits on a question or an approval, and carries the
+    /// state change the action is later checked against.
+    #[test]
+    fn a_notice_carries_the_ask_its_action_is_checked_against_only_for_a_question_or_an_approval() {
+        let agent = |demand: &str, changed_at: Option<u64>| {
+            let row = json!({
+                "pane_id": "w1:p1", "group": "needs_you", "mark": "turn", "identity_label": "t",
+                "agent_kind": "claude", "status_code": demand, "demand": demand,
+                "changed_at_unix_ms": changed_at,
+            });
+            project(&json!({"navigator": {"agents": [row]}}), "local")
+                .agents()
+                .next()
+                .cloned()
+                .unwrap()
+        };
+        let ask = |state: &str, demand: &str, at: Option<u64>| {
+            let mut payload = json!({"state": state});
+            with_ask(&mut payload, &agent(demand, at));
+            payload.get("ask").cloned()
+        };
+        assert_eq!(
+            ask("needs_you", "question", Some(5)),
+            Some(json!({"kind": "question", "turn": "5"}))
+        );
+        assert_eq!(
+            ask("needs_you", "approval", Some(6)),
+            Some(json!({"kind": "approval", "turn": "6"}))
+        );
+        assert_eq!(
+            ask("needs_you", "error", Some(5)),
+            None,
+            "no action for any other demand"
+        );
+        assert_eq!(
+            ask("needs_you", "question", None),
+            None,
+            "no turn to check against, no action"
+        );
+        assert_eq!(
+            ask("done", "question", Some(5)),
+            None,
+            "a finished task offers none"
+        );
     }
 
     /// The same public transition boundary used by phone and desktop carries

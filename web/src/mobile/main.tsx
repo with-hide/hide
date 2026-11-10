@@ -8,11 +8,12 @@ import { createRoot } from "react-dom/client";
 import "../index.css";
 import "./mobile.css";
 import { App } from "./App";
-import { openNoticed, start } from "./connection";
+import { currentHost, openNoticed, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { openKey } from "./protocol";
 import { markAppHost, serviceWorkerAllowed } from "./appHost";
 import { followNativeLinks } from "./nativeLink";
+import { followPushOpens, pushOpenAddress } from "./pushOpen";
 import { hostedPhone } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
 import { patch, usePhone } from "./store";
@@ -22,6 +23,13 @@ markAppHost();
 followPhoneTheme();
 // A pairing link that opens the app while a computer is connected goes to the start page, which asks before connecting.
 followNativeLinks((_pair, link) => window.location.assign(`/${new URL(link).hash}`), () => patch({ relayError: "qrError" }));
+
+// A tapped notification of the app names a computer and an agent: this computer opens it here, another through the start page.
+followPushOpens((target) => {
+  const key = openKey(target.tag);
+  if (key && currentHost()?.room === target.room) openNoticed(key);
+  else window.location.assign(pushOpenAddress(target));
+});
 
 const followColorTheme = (value: string | null) =>
   document.documentElement.classList.toggle(PALETTE_HIDE_CLASS, readColorTheme(value).choice === "hide");

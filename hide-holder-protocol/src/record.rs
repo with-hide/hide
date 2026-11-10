@@ -81,6 +81,21 @@ impl Identity {
     }
 }
 
+impl Identity {
+    /// Whether the process it names is confirmed gone: nothing runs under
+    /// its pid, or something that started at another time does. A process
+    /// table that cannot be read says nothing, so it is not gone.
+    pub fn gone(&self) -> bool {
+        if !hide_platform::process::is_alive(self.pid) {
+            return true;
+        }
+        match hide_platform::process::start_time(self.pid) {
+            Ok(started) => started != self.started,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+}
+
 /// Why a pane ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

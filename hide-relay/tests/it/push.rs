@@ -121,12 +121,12 @@ async fn apple_s_answers_land_on_the_documented_outcome() {
         (
             StatusCode::BAD_REQUEST,
             "BadDeviceToken",
-            PushOutcome::TokenGone,
+            PushOutcome::TokenRejected,
         ),
         (
             StatusCode::BAD_REQUEST,
             "DeviceTokenNotForTopic",
-            PushOutcome::TokenGone,
+            PushOutcome::TokenRejected,
         ),
         (StatusCode::TOO_MANY_REQUESTS, "", PushOutcome::Unavailable),
         (

@@ -80,7 +80,8 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
     const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown", sidebar_lens: lens === "projects" ? "projects" as const : "tasks" as const, task_view: lens === "tasks-project" ? "project" as const : "status" as const, agent_logo_mode: logos } };
     // `mission-ask`: a mission waits on the operator with no session row to carry it, so Needs You lists the mission itself.
     // `mission-close-refused`: the same, for a mission whose nodes are all done and whose close was refused.
-    const rest = state === "mission-ask" || state === "mission-close-refused" ? withMissionAsk(shown, "local", Date.now(), state === "mission-ask" ? "no-conductor" : "close-refused") : shown;
+    // `mission-gate`: the same, for a reached review gate (PRD mission-human-gate D-23).
+    const rest = state === "mission-ask" || state === "mission-close-refused" || state === "mission-gate" ? withMissionAsk(shown, "local", Date.now(), state === "mission-ask" ? "no-conductor" : state === "mission-gate" ? "gate-nocond" : "close-refused") : shown;
     useShellStore.setState({ rest, agents: scene.agents, connection: "live", ...(axis ? { focusedPaneId: "a1" } : {}) });
   }, [scene, width, rail, axis, state, lens, logos]);
 
