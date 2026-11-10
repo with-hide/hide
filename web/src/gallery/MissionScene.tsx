@@ -299,6 +299,8 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
+  // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, and reached the operator.
+  if (shown === "delay" || shown === "stall") return stalledOrHeld(missionFixture("running", now), now, shown);
   // An answer sent from the banner draws the decision with that answer on it.
   const held = shown.startsWith("decision-hold-") ? (shown.slice("decision-hold-".length) as MissionAnswerHold) : undefined;
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed" || held !== undefined;
@@ -384,6 +386,19 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
 }
 
 /** The no-Conductor mission with every node done and its close refused for three empty check lines, raised on the first node and waiting on the operator. */
+function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "delay" | "stall"): { mission: Mission; rest: SnapshotRest } {
+  mission.decision = null;
+  mission.question = null;
+  if (shown === "delay") {
+    mission.delay = "디스크 여유 4 GiB, 빌드 하나 끝나면 재개";
+    mission.delay_until_unix_ms = now + 40 * MINUTE;
+    return { mission, rest };
+  }
+  const node = mission.nodes.find((one) => one.status === "planned") ?? mission.nodes[mission.nodes.length - 1]!;
+  node.attention = { reason: "not_started", pr: null, to: "operator", since_unix_ms: now - 31 * MINUTE, on_row: false, item: true, choices: ["leave", "drop"] };
+  return { mission, rest };
+}
+
 function closeRefused({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number): { mission: Mission; rest: SnapshotRest } {
   mission.nodes.forEach((one, index) => {
     Object.assign(one, { status: "done", finished_at_unix_ms: now - (30 - index) * MINUTE, attention: null, hide: null, landing: null, warnings: [], agent_runtime: null });
