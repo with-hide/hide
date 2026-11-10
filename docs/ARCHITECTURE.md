@@ -780,6 +780,7 @@ The last look is stamped when a visit commits and once a minute while a pane is 
 The hours count from the later of the agent's last conversation line and its last look (`PaneStamps::idle_since`).
 The last conversation line is the newest request or reply the session read proves (`last_conversation_at_unix_ms`), because a relaunch or an engine restart reports a state for a moment and moves the change stamp without adding a line to the conversation; on 2026-10-22 one app update restarted every idle agent's 24 hours that way.
 Until a session read proves a line, the change stamp stands in, so a restart only ever delays a sleep.
+A pane's stamp, and the last look in it, is dropped only when the engine's topology no longer holds the pane, never because the agent list holds no agent for it: a restarted engine lists an agent only once its program shows again, and a stamp lost in that gap sleeps an agent the operator just read the moment the session read proves its old conversation (`AgentSleepStore::stamp`; the read records follow the same rule, `prune_read_records`).
 A wake stamps a last look, as a visit does, because the conversation it resumes is as old as the sleep and would make the agent due again at the next minute.
 A relaunch forgets an end that was in flight, because it cannot know whether it landed, and reads a wake that was in flight as still asleep until an agent appears in the pane.
 An in-pane sleep keeps the read axis's engine mark beside the ended agent's state sequence: the sequence identifies the ended agent only on that engine, because an engine restart starts its counter again.
@@ -2533,6 +2534,7 @@ Schema 2 clients that request `snapshot_format: "semantic-rest-v1"` receive `res
 Omission retains a value, `null` clears an optional value and an empty array or map clears a collection; `workspace_view` is explicitly null when absent in this format.
 Without the capability, schema 2 keeps the supported complete-rest delta, including the omitted absent `workspace_view`; an unknown format is refused with `schema_mismatch` before snapshot delivery.
 A mismatched token, Origin, or schema version, or a ninth concurrent client, is closed with a reason code (`invalid_token`, `origin_not_allowed`, `schema_mismatch`, `client_limit`) and a diagnostic log line.
+The web shell follows a new token in its address by retiring the previous socket's pending file reads with `socket_closed` and clearing its browser-comment state before opening the successor; the previous socket's late close cannot reject the successor's reads.
 After a valid handshake the daemon reads from the revision the client sent (`have_revision`, the cursor `Core::snapshot_delta_payload` takes), and then one delta frame per core notification burst.
 A client with cursor 0 gets a self-contained `snapshot`; a reconnecting client resumes with a `delta` that carries only what changed while it was away.
 When the core cannot serve the cursor, because the client's revision is ahead of the core's after a daemon restart, the daemon re-reads from zero and sends a `snapshot` (`server::classify_frame` owns that rule).
