@@ -83,6 +83,10 @@ pub struct MissionView {
     /// mission-plan-visibility B25); a decision from before it has key 0
     /// and nothing beside its line.
     pub question: Option<Question>,
+    /// The Views linked to that decision that are still open, for the
+    /// operator to look at before answering (`mission_views`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decision_views: Vec<super::mission_views::DecisionView>,
     /// The operator's answer from the banner to that decision (B26, B28).
     pub answer: Option<AnswerView>,
     /// Why the last answer did not reach the Conductor (B28).
@@ -438,6 +442,21 @@ pub struct AttentionView {
     pub unmet_nodes: u32,
 }
 
+/// The spawn an admission judges: the machine its child starts on (none
+/// for the caller's own), its agent, the profile it names by name, the
+/// project it starts in, the model and effort it starts with, and whether
+/// it retries a spawn that finished, which answers with the child it
+/// started and is judged by what it did (engineering 11).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SpawnWorker<'a> {
+    pub(crate) machine: Option<&'a str>,
+    pub(crate) kind: &'a str,
+    pub(crate) profile: Option<&'a str>,
+    pub(crate) repo: &'a str,
+    pub(crate) launch: &'a hide_agent_adapter::LaunchChoice,
+    pub(crate) finished: bool,
+}
+
 /// A spawn admitted as one of a mission's workers: its cap is checked in
 /// the ledger, with the workers it already has.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -568,6 +587,10 @@ struct ViewsMadeFrom {
     /// a node's `work` reads, and of the doorbell's holds, which its
     /// Conductor's held letters read; zero with none running.
     rows_and_holds: u64,
+    /// While a decision links Views: the View layouts' change count, since
+    /// its card lists the ones still open and whether each was seen; zero
+    /// with none linked.
+    views_generation: u64,
     made: bool,
 }
 
@@ -753,6 +776,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
         WakeEvent::EndAsked => format!(
             "The operator asked from the map to end mission {} \"{}\".\nTreat it as the operator saying \"cancel\" and follow that item of `hide mission help`: ask about the open pull requests with `hide mission decide`, end the workers, then `hide mission close --as cancelled`.",
             mission.id, mission.title
+        ),
+        WakeEvent::MaterialAsked => format!(
+            "The operator asks for something to look at before answering your decision on mission {} \"{}\": {}\nMake one page that starts with three lines (what changed, the 2-3 things to check, what good looks like), then ask again with `hide mission decide ... --show <page>`: Hide opens the page as a View and lists it on the decision.",
+            mission.id,
+            mission.title,
+            mission.decision.as_deref().unwrap_or("-")
         ),
         WakeEvent::Attention => {
             let (what, act) = attention_words(wake.reason, &pr);
@@ -1487,6 +1516,7 @@ impl Runtime {
                     decision: None,
                     question: None,
                     question_seq: 0,
+                    conductor_views: Vec::new(),
                     answer: None,
                     answer_failed: None,
                     delay: None,
@@ -1733,10 +1763,16 @@ impl Runtime {
                 options,
                 recommend,
                 node,
+                show,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
-                let changed =
-                    self.decide_mission(&id, line, (why, options, recommend, node), now)?;
+                let changed = self.decide_mission(
+                    &id,
+                    line,
+                    (why, options, recommend, node),
+                    Some((&actor, &show)),
+                    now,
+                )?;
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Delay { mission, line } => {
@@ -1927,10 +1963,11 @@ impl Runtime {
                     .collect();
                 Ok((json!({"items": items}), false))
             }
-            MissionCommand::Settings => Ok((
-                json!({"settings": self.snapshot.ui_state.conductor_settings}),
-                false,
-            )),
+            MissionCommand::Settings => {
+                let mut settings = json!(self.snapshot.ui_state.conductor_settings);
+                settings["candidates"] = self.candidate_items().into();
+                Ok((json!({ "settings": settings }), false))
+            }
         }
     }
 
@@ -2337,12 +2374,12 @@ impl Runtime {
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
-        machine: Option<&str>,
-        kind: &str,
-        launch: &hide_agent_adapter::LaunchChoice,
+        worker: &SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
         intent: &str,
         briefed: bool,
     ) -> Result<Option<MissionAdmission>, String> {
+        let machine = worker.machine;
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return Ok(None);
         };
@@ -2365,18 +2402,111 @@ impl Runtime {
         }
         // The candidates the mission was created with: a Settings edit
         // applies from the next mission (B48).
-        let candidates = &mission.candidates;
-        if !candidates.is_empty()
-            && !candidates
-                .iter()
-                .any(|candidate| candidate.admits(kind, launch))
-        {
-            return Err("mission_candidate_refused".into());
+        if let Some(started) = self.outside_candidates(actor, worker, pick, &mission.candidates)? {
+            return Err(crate::coordination::refusal(
+                "mission_candidate_refused",
+                &started,
+            ));
         }
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
             closed: self.closed_registration_ids().into_iter().collect(),
+        }))
+    }
+
+    /// Settings › Mission's candidates as `hide mission settings` names
+    /// them (PRD agent-profiles-phase2 B11, B15): each row's agent item as
+    /// the operator reads it (`item`, `Claude · work`) and the `--profile`
+    /// value that starts it (`profile`, `default` for the built-in), from
+    /// this machine's profiles, which the rows name; a row whose profile this
+    /// machine no longer lists has neither and says `profile_gone`, since no
+    /// worker can start as it.
+    fn candidate_items(&self) -> Vec<Value> {
+        let profiles = self.machine_profiles(self.node.as_str());
+        self.snapshot
+            .ui_state
+            .conductor_settings
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let mut row = json!({
+                    "agent": candidate.agent,
+                    "model": candidate.model,
+                    "effort": candidate.effort,
+                    "purpose": candidate.purpose,
+                });
+                let named = match &candidate.profile {
+                    None => Some(None),
+                    Some(id) => profiles
+                        .and_then(|profiles| {
+                            profiles.profiles.iter().find(|profile| {
+                                profile.id == id.0
+                                    && hide_agent_adapter::adapter(&candidate.agent)
+                                        .is_some_and(|adapter| adapter.id == profile.kind)
+                            })
+                        })
+                        .map(|profile| Some(profile.name.clone())),
+                };
+                match named {
+                    Some(name) => {
+                        let request = crate::launch::Request::new(
+                            &candidate.agent,
+                            candidate.profile.clone().zip(name.clone()),
+                        );
+                        row["item"] = request.shown().into();
+                        row["profile"] = name.unwrap_or_else(|| "default".to_owned()).into();
+                    }
+                    None => row["profile_gone"] = true.into(),
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// What the spawn `worker` would start, in the operator's words
+    /// (`Claude · work (opus, high)`), when it is none of `candidates`;
+    /// `None` when it is one, when there are none to hold it to, or when it
+    /// retries a spawn that finished. The item judged is the one the spawn
+    /// starts with: the one it names, else its caller's, the project's or
+    /// the agent's default, never the name alone (PRD agent-profiles-phase2
+    /// D-08, B13), picked once into `pick` (`spawn_request`), which the
+    /// start then takes, so every admission and the start see one item.
+    pub(crate) fn outside_candidates(
+        &self,
+        actor: &Actor,
+        worker: &SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
+        candidates: &[crate::missions::Candidate],
+    ) -> Result<Option<String>, String> {
+        if candidates.is_empty() || worker.finished {
+            return Ok(None);
+        }
+        let request = match pick {
+            Some(request) => request,
+            None => pick.insert(self.spawn_request(
+                actor,
+                worker.machine,
+                worker.kind,
+                worker.profile,
+                worker.repo,
+            )?),
+        };
+        if candidates
+            .iter()
+            .any(|candidate| candidate.admits(&request.target, worker.launch))
+        {
+            return Ok(None);
+        }
+        let choice = [&worker.launch.model, &worker.launch.effort]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        Ok(Some(if choice.is_empty() {
+            request.shown()
+        } else {
+            format!("{} ({})", request.shown(), choice.join(", "))
         }))
     }
 
@@ -2959,10 +3089,13 @@ impl Runtime {
     /// a mission already planned keeps its own. The cleanup switch applies
     /// to every mission: turned on, the merged worktrees are looked at now.
     pub(super) fn set_conductor_settings(&mut self, settings: ConductorSettings) -> bool {
-        if let Err(code) = settings.validate() {
-            self.set_error(&code, "Mission settings were not saved", false);
-            return true;
-        }
+        let settings = match settings.edited() {
+            Ok(settings) => settings,
+            Err(code) => {
+                self.set_error(&code, "Mission settings were not saved", false);
+                return true;
+            }
+        };
         if self.snapshot.ui_state.conductor_settings == settings {
             return false;
         }
@@ -3269,7 +3402,14 @@ impl Runtime {
             decision: mission.decision.clone(),
             // A decision from before questions has nothing beside its line
             // and no time it was asked (answered under key 0).
-            question: mission.decision.as_ref().and(mission.question.clone()),
+            question: mission.decision.as_ref().and(mission.question.clone()).map(
+                |mut question| {
+                    // The links are the book's; the map draws `decision_views`.
+                    question.views.clear();
+                    question
+                },
+            ),
+            decision_views: self.decision_views(mission),
             answer: mission.answer.as_ref().map(|answer| AnswerView {
                 key: answer.key,
                 text: answer.text.clone(),
@@ -3384,6 +3524,7 @@ impl Runtime {
         }));
         let laid = self.laid_panes();
         let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
+        let views_generation = self.decision_views_generation();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -3402,6 +3543,7 @@ impl Runtime {
             && before.present == present
             && before.unreadable == unreadable
             && before.rows_and_holds == rows_and_holds
+            && before.views_generation == views_generation
             && now < before.until
             && self.snapshot.missions.failed == failed
         {
@@ -3470,6 +3612,7 @@ impl Runtime {
             sleeping,
             laid,
             rows_and_holds,
+            views_generation,
             made: true,
         };
     }
@@ -3622,6 +3765,13 @@ fn proven_launch(
     Some(crate::missions::NodeLaunch {
         agent_id: record.id.clone(),
         agent: launch.kind.clone(),
+        profile: launch
+            .profile
+            .as_ref()
+            .map(|profile| crate::missions::NodeProfile {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+            }),
         model: launch.choice.model.clone(),
         effort: launch.choice.effort.clone(),
     })

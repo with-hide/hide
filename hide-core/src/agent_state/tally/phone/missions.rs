@@ -61,6 +61,9 @@ pub struct PhoneMission {
     pub answer: Option<PhoneAnswer>,
     pub answer_failed: Option<String>,
     pub conductor: PhoneConductor,
+    /// The Views linked to the open decision (`MissionView::decision_views`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decision_views: Vec<PhoneDecisionView>,
     /// The Conductor's letters only the operator can let through
     /// (`MissionView::conductor_letters`), which the shared 내 차례 rule reads.
     pub conductor_letters: Option<PhoneHeldLetters>,
@@ -180,6 +183,21 @@ pub struct PhoneEscalation {
     pub human: Option<PhoneHuman>,
 }
 
+/// A View linked to a mission's open decision, as the phone's decision card
+/// lists it: its row opens the 볼 것 of the agent that opened it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneDecisionView {
+    pub device_id: String,
+    pub display_id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+}
+
 /// What a person's turn asks and where, as a step's waiting reason says it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PhoneHuman {
@@ -201,6 +219,8 @@ struct MissionIn {
     answer: Option<PhoneAnswer>,
     #[serde(default)]
     answer_failed: Option<String>,
+    #[serde(default)]
+    decision_views: Vec<PhoneDecisionView>,
     conductor: ConductorIn,
     #[serde(default)]
     conductor_letters: Option<PhoneHeldLetters>,
@@ -450,6 +470,14 @@ fn phone_mission(
         question: mission.question,
         answer: mission.answer,
         answer_failed: mission.answer_failed,
+        decision_views: mission
+            .decision_views
+            .into_iter()
+            .map(|view| PhoneDecisionView {
+                label: cut(&view.label),
+                ..view
+            })
+            .collect(),
         conductor,
         conductor_letters: mission.conductor_letters,
         nodes,

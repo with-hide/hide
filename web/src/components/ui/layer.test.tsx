@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { useReturnFocus } from "./layer";
+import { useOutsidePressSurface, useReturnFocus } from "./layer";
+import { Popover, PopoverAnchor, PopoverContent } from "./popover";
 
 afterEach(() => { document.body.replaceChildren(); });
 
@@ -165,4 +166,41 @@ it("keeps the keyboard where the operator put it outside the named layer, and ta
   expect(document.activeElement).toBe(elsewhere);
   named.remove();
   elsewhere.remove();
+});
+
+// A popover waits for the click to close and reads a press whose mousedown
+// something stopped as taken elsewhere; the terminal stops its mousedown to
+// keep xterm from selecting, so only a surface marked outside closes it.
+it("closes an open popover on a press of a surface that stops its mousedown, once marked outside", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  const changes: boolean[] = [];
+  function Surface({ marked }: { marked: boolean }) {
+    const outside = useOutsidePressSurface();
+    // The terminal's own gesture handler, as `terminals.ts` adds it on the way down.
+    const stop = (node: HTMLDivElement | null) => node?.addEventListener("mousedown", (event) => event.stopPropagation(), { capture: true });
+    return <div ref={(node) => { stop(node); if (marked) outside(node); }} data-surface={marked ? "marked" : "plain"} />;
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (open: boolean) => root.render(<>
+    <Surface marked={false} />
+    <Surface marked />
+    <Popover open={open} onOpenChange={(next) => changes.push(next)}><PopoverAnchor><span /></PopoverAnchor><PopoverContent>card</PopoverContent></Popover>
+  </>);
+  const press = async (target: Element) => act(async () => {
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  try {
+    await act(async () => { render(true); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await press(document.querySelector("[data-surface=plain]")!);
+    expect(changes, "a plain stopping surface reads as taken elsewhere").toEqual([]);
+    await press(document.querySelector("[data-surface=marked]")!);
+    expect(changes).toEqual([false]);
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
 });

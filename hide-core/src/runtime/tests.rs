@@ -105,6 +105,8 @@ mod links;
 mod memory;
 #[path = "tests/mission_letters.rs"]
 mod mission_letters;
+#[path = "tests/mission_worker_item.rs"]
+mod mission_worker_item;
 #[path = "tests/mission_worker_sleep.rs"]
 mod mission_worker_sleep;
 #[path = "tests/missions.rs"]

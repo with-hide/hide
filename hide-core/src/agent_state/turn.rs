@@ -944,7 +944,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         // A mission decision's line is also its sentence, which a surface
         // that does not know the subject draws instead (D-12).
         let line = match subject {
-            crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
+            crate::model::AskSubject::MissionDecision { line, .. } => first_line_cut(line),
             crate::model::AskSubject::MissionAttention { node, .. } => first_line_cut(node),
             crate::model::AskSubject::HumanTurn { place, .. } => first_line_cut(place),
             crate::model::AskSubject::PlanReview { .. }
@@ -1444,6 +1444,7 @@ mod row_tests {
         use super::super::escalation::Verb;
         let decision = crate::model::AskSubject::MissionDecision {
             line: "Skip the check line?".into(),
+            views: 0,
         };
         let mut agent = row();
         agent.group = "needs_you".into();

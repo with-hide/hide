@@ -227,6 +227,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                         mission: None,
                         plan_node,
                         plan: None,
+                        pick: None,
                         brief,
                         parent: flags.remove("--parent"),
                         machine: flags.remove("--machine"),

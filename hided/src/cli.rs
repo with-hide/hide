@@ -1319,6 +1319,38 @@ fn workspace_action(env: &Env, action: Action, request_id: Option<&str>) -> Resu
     Ok(())
 }
 
+/// `hide mission decide --show <path>`: opens the path as the caller's View,
+/// an HTML file as a page and anything else as a file, and answers its id.
+/// A refusal is printed as the open's own line.
+pub(crate) fn open_view_for_decision(env: &Env, path: &str) -> Result<String, String> {
+    let page = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        });
+    let action = if page {
+        let cwd = std::env::current_dir().map_err(|_| "cwd_unavailable".to_owned())?;
+        match crate::browser_cli::address(path, &cwd) {
+            Ok(url) => Action::OpenBrowser {
+                url,
+                area_id: None,
+                new_target: false,
+            },
+            Err(_) => return workspace_refusal("invalid_address", "Use a readable HTML file"),
+        }
+    } else {
+        Action::OpenFile {
+            path: path.to_owned(),
+        }
+    };
+    let answer = workspace_action_value(env, action, None)?;
+    answer["result"]["view_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "invalid_response".to_owned())
+}
+
 fn workspace_action_value(
     env: &Env,
     action: Action,

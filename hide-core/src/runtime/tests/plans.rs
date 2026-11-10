@@ -522,6 +522,7 @@ fn handing(spec: &str, ask: bool) -> Value {
 fn spawn_step(step: &str, parent: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
+            pick: None,
             parent: parent.map(str::to_owned),
             machine: None,
             name: "web".into(),
@@ -565,8 +566,6 @@ fn admit(runtime: &Runtime, actor: &Actor, step: &str) -> crate::coordination::P
             crate::node::TEST_NODE,
             Some("here"),
             Some(step),
-            "codex",
-            &Default::default(),
             false,
         )
         .unwrap()
@@ -677,7 +676,7 @@ fn a_step_is_handed_to_a_child_only_after_its_earlier_steps_and_the_review() {
         vec![serde_json::from_value(json!({"agent": "claude"})).unwrap()];
     assert_eq!(
         prepare(&mut runtime, &sender, "web", Some("here")),
-        "plan_candidate_refused"
+        crate::coordination::refusal("plan_candidate_refused", "Codex")
     );
     runtime
         .snapshot
@@ -720,8 +719,6 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
             crate::node::TEST_NODE,
             Some("here"),
             None,
-            "codex",
-            &Default::default(),
             false,
         ),
         Ok(None)
@@ -734,8 +731,6 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
                 crate::node::TEST_NODE,
                 Some("here"),
                 step,
-                "codex",
-                &Default::default(),
                 false,
             ),
             Err("plan_delegate_not_permitted".into())
@@ -748,8 +743,6 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
             crate::node::TEST_NODE,
             Some("here"),
             Some("web"),
-            "codex",
-            &Default::default(),
             true,
         ),
         Err("plan_delegate_not_permitted".into())

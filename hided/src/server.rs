@@ -1442,7 +1442,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Hide knows no project of the mission's GitHub repository on that machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own (its pull requests show once it is), then run the same command again with --repo naming it; or leave out --machine"
         }
         "mission_candidate_refused" => {
-            "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"
+            "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them: its agent with --profile set to the candidate's profile (a spawn without --profile takes your own profile), its fixed model or the CLI's default, its fixed effort. The words after this say what the spawn would have started"
         }
         // A spawn whose agent would start without Hide's hook on its
         // machine (`runtime::start_hook`): nothing was made or typed, and the
@@ -5467,6 +5467,10 @@ mod tests {
             ("plan_node_finished\u{1f}web", "already done or dropped"),
             ("plan_node_unknown\u{1f}nope", "hide task show"),
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
+            (
+                "plan_candidate_refused\u{1f}Codex · team",
+                "worker candidates",
+            ),
         ] {
             let (code, detail) = hide_core::coordination::split_refusal(reason);
             let detail = detail.unwrap();
@@ -5486,7 +5490,6 @@ mod tests {
             "plan_missing",
             "plan_review_pending",
             "plan_delegate_needs_parent",
-            "plan_candidate_refused",
             "plan_delegate_not_permitted",
             "plan_unavailable",
             "plan_session_unknown",

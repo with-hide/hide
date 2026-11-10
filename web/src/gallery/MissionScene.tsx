@@ -5,7 +5,7 @@
 // rejected (running, with the search fix's check failed and one reviewer's
 // rejection, its short reason first), decision (a decision, a failed node whose worker ended, raised to the
 // operator with its PR's CI failure beside the choices, a stuck worker and an outside PR closed unmerged in the
-// operator's turn), decision-sent (its answer waiting
+// operator's turn), decision-views (a decision about screens with the Views linked to it to look at), decision-sent (its answer waiting
 // for the Conductor's turn), decision-unreadable (its answer waiting on a
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // the engine confirming it), stack (the merge order), no-conductor, stale, failed
@@ -300,9 +300,11 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
   // An answer sent from the banner draws the decision with that answer on it.
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
+  // A decision about screens to look at, with the Views linked to it.
+  const looking = shown === "decision-views";
   // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
   const remote = shown === "remote" || shown === "remote-long" || shown === "stalled";
-  const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
+  const state = answered || looking ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
   nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : one)));
@@ -325,12 +327,18 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     // The screen's pull request stacks on the API's until that one merges.
     stack_waiting: ["plan", "wide", "no-pr", "done"].includes(state) ? 0 : 1,
     check: "cargo test && pnpm test", github: "octocat",
-    decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
-    question: state === "decision"
+    decision: looking ? "화면 PR: 고치기 전·후 화면 12장을 보고 머지해도 될까요?" : state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
+    question: looking
+      ? { key: 3, why: "화면이 바뀌는 PR이라 머지 전에 직접 봐야 해요", options: ["머지해도 됨", "고칠 점 있음"], recommend: null, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
+      : state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : null,
     answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting" } : null,
     answer_failed: shown === "decision-unreadable" ? "session_unreadable" : null,
+    decision_views: looking ? [
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", kind: "browser" as const, label: "전후 비교 · screens.html", by: "conductor" as const },
+      { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d8", kind: "file" as const, label: "리뷰 요약.md", unseen: true, by: "worker" as const },
+    ] : undefined,
     delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
     created_at_unix_ms: now - 320 * MINUTE,
     started_at_unix_ms: state === "plan" ? null : now - (STARTED_AGO[state] ?? 44) * MINUTE,

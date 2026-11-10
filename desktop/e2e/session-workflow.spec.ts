@@ -61,7 +61,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(raisedWho).toContainText("자식의 긴 한국어 검증 요청");
     await expect(raisedWho).toContainText("(child)");
     // The raised ask leads with the parent's request, its own first line while the label gave no summary (PRD pane-last-request B1, B3).
-    await expect(raisedRow.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
+    await expect(raisedRow.locator("[data-pane-turn-request-text]")).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     const terminal = await host.boundingBox();
     const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
@@ -91,10 +91,17 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     continueFixtureTranscript(fixture, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중", request: "자식 검토 결과 정리와 세션 복귀 확인" });
     await setAgentState(daemon, parent, "working");
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중", { timeout: 25_000 });
-    // The working turn leads with the label's summary of the new request, and a press opens its card under it (B1, B2, B6).
+    // The working turn leads with the label's summary of the new request, and the whole `<request> → <answer>` is its card's
+    // trigger: the real pointer pressing the answer's words, after the arrow, opens the card under the row (B1, B2, B6).
     const request = pane.locator(`[data-pane-turn-request="${parent}"]`);
-    await expect(request).toContainText("자식 검토 결과 정리와 세션 복귀 확인");
-    await request.click();
+    await expect(pane.locator(`[data-pane-turn="${parent}"] [data-pane-turn-request-text]`)).toContainText("자식 검토 결과 정리와 세션 복귀 확인");
+    const answer = await pane.locator(`[data-pane-own-progress="${parent}"]`).boundingBox();
+    if (!answer) throw new Error("the turn's answer has no box to press");
+    await page.mouse.move(answer.x + answer.width / 4, answer.y + answer.height / 2);
+    await expect(page.locator(`[data-pane-turn-card="${parent}"]`), "the pointer on the turn opens nothing").toHaveCount(0);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(request).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator(`[data-pane-turn-card="${parent}"] [data-turn-card-original]`)).toContainText("이어서 진행해줘");
     await captureNativeWindow(app, "session-turn-card", { ...facts, terminal });
     await request.click();

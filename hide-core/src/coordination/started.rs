@@ -166,6 +166,7 @@ pub(crate) mod tests {
         child: Child,
     ) -> Result<String, String> {
         let command = crate::coordination::Command::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,
@@ -438,6 +439,7 @@ pub(crate) mod tests {
         let again = |task| Mutation::Reserve {
             parent: origin.clone(),
             command: crate::coordination::Command::Spawn {
+                pick: None,
                 mission: None,
                 plan_node: None,
                 plan: None,

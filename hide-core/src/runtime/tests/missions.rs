@@ -85,6 +85,7 @@ fn without_gate(runtime: &mut Runtime) {
 fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
+            pick: None,
             parent: Some("here".into()),
             machine: machine.map(str::to_owned),
             name: "worker".into(),
@@ -103,6 +104,23 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
             beside: false,
             profile: None,
         },
+    }
+}
+
+/// A spawn of `kind` in the project with `launch`, on `machine`, naming no
+/// profile.
+fn worker<'a>(
+    machine: Option<&'a str>,
+    kind: &'a str,
+    launch: &'a hide_agent_adapter::LaunchChoice,
+) -> crate::runtime::missions::SpawnWorker<'a> {
+    crate::runtime::missions::SpawnWorker {
+        machine,
+        kind,
+        profile: None,
+        repo: PROJECT,
+        launch,
+        finished: false,
     }
 }
 
@@ -229,11 +247,10 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         runtime
             .mission_spawn_admission(
                 &conductor,
-                None,
-                "codex",
-                &Default::default(),
+                &worker(None, "codex", &Default::default()),
+                &mut None,
                 "plain",
-                false
+                false,
             )
             .unwrap()
             .is_none()
@@ -262,9 +279,8 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     let admission = runtime
         .mission_spawn_admission(
             &conductor,
-            None,
-            "codex",
-            &Default::default(),
+            &worker(None, "codex", &Default::default()),
+            &mut None,
             "plain",
             false,
         )
@@ -288,11 +304,10 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         runtime
             .mission_spawn_admission(
                 &conductor,
-                None,
-                "codex",
-                &Default::default(),
+                &worker(None, "codex", &Default::default()),
+                &mut None,
                 "plain",
-                false
+                false,
             )
             .unwrap()
             .is_none()
@@ -2102,8 +2117,15 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     };
     let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
         runtime
-            .mission_spawn_admission(&conductor, None, kind, &choice, "plain", false)
+            .mission_spawn_admission(
+                &conductor,
+                &worker(None, kind, &choice),
+                &mut None,
+                "plain",
+                false,
+            )
             .map(|admission| admission.is_some())
+            .map_err(|refusal| crate::coordination::split_refusal(&refusal).0.to_owned())
     };
     // No candidates: any agent the machine has.
     assert_eq!(admit(&runtime, "codex", launch(None, None)), Ok(true));
@@ -2111,12 +2133,14 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     let candidates = vec![
         crate::missions::Candidate {
             agent: "claude".into(),
+            profile: None,
             model: None,
             effort: None,
             purpose: "changes".into(),
         },
         crate::missions::Candidate {
             agent: "codex".into(),
+            profile: None,
             model: Some("gpt-x".into()),
             effort: Some("high".into()),
             purpose: "review".into(),
@@ -2165,7 +2189,167 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     runtime.missions.book.missions[0].candidates.truncate(1);
     assert_eq!(
         prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
-        "mission_candidate_refused"
+        crate::coordination::refusal("mission_candidate_refused", "Codex")
+    );
+}
+
+/// The fixture's own machine lists Codex's profile `team` (`p-team`), and
+/// the Conductor's pane (`sender`, a Codex session) records that it runs
+/// with it.
+fn conductor_runs_team(runtime: &mut Runtime) {
+    let node = runtime.node.to_string();
+    let mut kit = runtime.kit_state(&node);
+    kit.profiles = Some(crate::model::ProfilesSnapshot {
+        state: crate::model::ProfilesState::Listed,
+        version: 1,
+        profiles: vec![crate::model::ProfileSnapshot {
+            id: "p-team".into(),
+            kind: "codex".into(),
+            name: "team".into(),
+            account: Some("/accounts/team".into()),
+            program: None,
+            env_keys: Vec::new(),
+            version: 1,
+            install: None,
+            folder: None,
+            hook: None,
+            skill: None,
+            login: None,
+            wrapper_folder: false,
+            startable: true,
+            account_key: Some(hide_agent_adapter::AccountKey::Folder(
+                "/accounts/team".into(),
+            )),
+            account_variables: Vec::new(),
+        }],
+        defaults: Default::default(),
+    });
+    runtime.kit_states.insert(node, kit);
+    runtime.snapshot.ui_state.pane_launches.insert(
+        "sender".into(),
+        crate::model::PaneLaunch {
+            pending: false,
+            start: 0,
+            kind: "codex".into(),
+            name: "sender".into(),
+            choice: Default::default(),
+            session: Some("sender-session".into()),
+            profile: Some(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p-team".into()),
+                name: "team".into(),
+                account: hide_agent_adapter::AccountKey::Folder("/accounts/team".into()),
+            }),
+        },
+    );
+}
+
+/// A candidate holds the profile a worker actually starts with (PRD
+/// agent-profiles-phase2 D-08, B12, B13, B15): a Conductor running
+/// `Codex · team` that spawns a Codex worker without `--profile` hands it
+/// its own profile, which a candidate of Codex's built-in default does not
+/// admit, and the refusal names what would have started; the same spawn
+/// naming the built-in default is the candidate. A candidate of
+/// `Codex · team` admits a worker that inherits it or names it, and not one
+/// on the built-in default. A candidate of a profile the machine no longer
+/// lists admits no worker at all, since no start can take that profile.
+#[test]
+fn a_candidate_admits_the_profile_a_worker_starts_with() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    conductor_runs_team(&mut runtime);
+    let candidate = |profile: Option<&str>| crate::missions::Candidate {
+        agent: "codex".into(),
+        profile: profile.map(|id| hide_agent_adapter::ProfileId(id.into())),
+        model: None,
+        effort: None,
+        purpose: String::new(),
+    };
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate(None)];
+    running(&mut runtime);
+    let defaults = hide_agent_adapter::LaunchChoice::default();
+    let admit = |runtime: &Runtime, profile: Option<&str>| {
+        runtime
+            .mission_spawn_admission(
+                &conductor,
+                &crate::runtime::missions::SpawnWorker {
+                    profile,
+                    ..worker(None, "codex", &defaults)
+                },
+                &mut None,
+                "plain",
+                false,
+            )
+            .map(|admission| admission.is_some())
+    };
+    let refused = |item: &str| {
+        Err(crate::coordination::refusal(
+            "mission_candidate_refused",
+            item,
+        ))
+    };
+
+    assert_eq!(admit(&runtime, None), refused("Codex · team"));
+    assert_eq!(admit(&runtime, Some("default")), Ok(true));
+    // The spawn command itself is refused, before the ledger reserves it.
+    assert_eq!(
+        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
+        crate::coordination::refusal("mission_candidate_refused", "Codex · team")
+    );
+
+    runtime.missions.book.missions[0].candidates = vec![candidate(Some("p-team"))];
+    assert_eq!(admit(&runtime, None), Ok(true));
+    assert_eq!(admit(&runtime, Some("team")), Ok(true));
+    assert_eq!(admit(&runtime, Some("default")), refused("Codex"));
+
+    runtime.missions.book.missions[0].candidates = vec![candidate(Some("p-gone"))];
+    assert_eq!(admit(&runtime, None), refused("Codex · team"));
+    assert_eq!(admit(&runtime, Some("default")), refused("Codex"));
+    assert!(
+        admit(&runtime, Some("gone"))
+            .unwrap_err()
+            .starts_with(crate::launch::PROFILE_GONE)
+    );
+}
+
+/// `hide mission settings` names each candidate as the agent item it
+/// starts and the `--profile` value that starts it (PRD
+/// agent-profiles-phase2 B11, B14, B15): a row kept with its agent alone is
+/// the built-in default, a row of a listed profile is named by that
+/// profile's name now, and a row whose profile this machine no longer lists
+/// says so and names none.
+#[test]
+fn mission_settings_name_each_candidates_item() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    conductor_runs_team(&mut runtime);
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![
+        serde_json::from_value(json!({"agent": "codex", "purpose": "changes"})).unwrap(),
+        serde_json::from_value(json!({"agent": "codex", "profile": "p-team", "model": "gpt-x"}))
+            .unwrap(),
+        serde_json::from_value(json!({"agent": "codex", "profile": "p-gone"})).unwrap(),
+    ];
+    let (answer, _) = command(&mut runtime, "sender", json!({"op": "settings"})).unwrap();
+    let rows = answer["settings"]["candidates"].as_array().unwrap().clone();
+    let named = |row: &Value| {
+        (
+            row["item"].clone(),
+            row["profile"].clone(),
+            row.get("profile_gone").cloned(),
+        )
+    };
+    assert_eq!(named(&rows[0]), (json!("Codex"), json!("default"), None));
+    assert_eq!(
+        named(&rows[1]),
+        (json!("Codex · team"), json!("team"), None)
+    );
+    assert_eq!(
+        named(&rows[2]),
+        (Value::Null, Value::Null, Some(json!(true)))
+    );
+    assert_eq!(
+        (rows[0]["purpose"].clone(), rows[1]["model"].clone()),
+        (json!("changes"), json!("gpt-x"))
     );
 }
 
@@ -5222,6 +5406,7 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     let asking = conductor_shown(&mut runtime);
     let decision = crate::model::AskSubject::MissionDecision {
         line: "Skip the check line?".into(),
+        views: 0,
     };
     assert_eq!(
         (
@@ -5251,7 +5436,8 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     assert_eq!(
         conductor_shown(&mut runtime).ask_subject,
         Some(crate::model::AskSubject::MissionDecision {
-            line: "Which base?".into()
+            line: "Which base?".into(),
+            views: 0
         })
     );
 
@@ -7092,9 +7278,8 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
         runtime
             .mission_spawn_admission(
                 &conductor,
-                machine,
-                "codex",
-                &Default::default(),
+                &worker(machine, "codex", &Default::default()),
+                &mut None,
                 intent,
                 true,
             )
@@ -8919,4 +9104,426 @@ fn a_mission_workers_watch_is_quiet_while_its_node_waits_on_the_operator() {
         github(vec![pull(7, "c3", PullRequestBadge::Merged, None)], false),
     );
     assert!(runtime.mission_worker_waits(&worker), "merged");
+}
+
+/// A File View opened in the project's checkout, by its id.
+fn project_view(runtime: &mut Runtime, path: &str) -> String {
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    view_in(runtime, &key, path)
+}
+
+/// A File View opened in the checkout `key` names, by its id.
+fn view_in(
+    runtime: &mut Runtime,
+    key: &crate::runtime::workspace_view::WorkspaceKey,
+    path: &str,
+) -> String {
+    runtime
+        .change_view_layout(key, |layout, stamp| {
+            let display =
+                layout.new_display(path, crate::view_layout::DisplayKind::File, None, false);
+            let id = display.id.clone();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, stamp)?;
+            Ok((id, true))
+        })
+        .unwrap()
+}
+
+/// What the mission's decision card lists: each View's id and who linked it.
+fn decision_views(runtime: &mut Runtime) -> Vec<(String, &'static str)> {
+    runtime.refresh_missions();
+    runtime.snapshot.missions.items[0]
+        .decision_views
+        .iter()
+        .map(|view| {
+            let by = match view.by {
+                super::mission_views::DecisionViewBy::Conductor => "conductor",
+                super::mission_views::DecisionViewBy::Worker => "worker",
+            };
+            (view.display_id.clone(), by)
+        })
+        .collect()
+}
+
+/// A View is linked to a decision only by what was recorded when it was
+/// named or opened (operator decision 2026-11-09, after mission-42's card
+/// asked the operator to look at captures it did not link): the Views
+/// `--show` names, the ones the Conductor opened since its question before
+/// that are still open when it asks, and the ones the stopped node's worker
+/// or an agent under it opened in the node's current attempt. What the
+/// Conductor opens after asking waits for its next question; a seen View
+/// stays listed, a closed one leaves.
+#[test]
+fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Screens"}),
+    )
+    .unwrap();
+    without_gate(&mut runtime);
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    // The node's worker started a helper in the `recipient` pane.
+    let helper = crate::runtime::delivery::tests::observed(&runtime, "recipient").actor;
+    let record = |id: &str, actor: Actor, parent: Option<&str>| crate::coordination::AgentRecord {
+        id: id.into(),
+        name: Some(id.into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: crate::node::TEST_NODE.into(),
+        native_machine: crate::node::TEST_NODE.into(),
+        session: format!("{id}-session"),
+        instance: actor.pane_id.clone(),
+        pane: actor.pane_id.clone(),
+        parent: parent.map(str::to_owned),
+        origin: None,
+        project: None,
+        actor,
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    };
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: None,
+    };
+    register(&mut runtime, record("agent-2", worker, Some("agent-1")));
+    register(&mut runtime, record("agent-9", helper, Some("agent-2")));
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let close = |runtime: &mut Runtime, view: &str| {
+        runtime
+            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .unwrap();
+    };
+
+    // Before it asks, the Conductor opens the page it will ask about, and
+    // one it closes again; linking marks nothing seen or unseen.
+    let page = project_view(&mut runtime, "/checkouts/fixture/screens.html");
+    runtime.link_mission_view(&key, &page, "sender", 10);
+    let unseen = |runtime: &Runtime, view: &str| {
+        runtime
+            .view_layout_of(&key)
+            .and_then(|layout| layout.display(view))
+            .map(|display| display.unseen.is_some())
+    };
+    assert_eq!(unseen(&runtime, &page), Some(false));
+    let gone = project_view(&mut runtime, "/checkouts/fixture/gone.md");
+    runtime.link_mission_view(&key, &gone, "sender", 20);
+    close(&mut runtime, &gone);
+    // The worker's helper opens its notes in this attempt.
+    let notes = project_view(&mut runtime, "/checkouts/fixture/notes.md");
+    runtime.link_mission_view(&key, &notes, "recipient", 30);
+    let named = project_view(&mut runtime, "/checkouts/fixture/report.md");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?", "node": "fix", "show": [named]}),
+    )
+    .unwrap();
+    // The named one leads, then the opened ones newest first.
+    assert_eq!(
+        decision_views(&mut runtime),
+        [
+            (named.clone(), "conductor"),
+            (notes.clone(), "worker"),
+            (page.clone(), "conductor")
+        ]
+    );
+
+    // The list was made when it asked: what the Conductor or the worker
+    // opens after that waits for the next question.
+    let after = project_view(&mut runtime, "/checkouts/fixture/after.md");
+    runtime.link_mission_view(&key, &after, "sender", 40);
+    let late = project_view(&mut runtime, "/checkouts/fixture/late.md");
+    runtime.link_mission_view(&key, &late, "recipient", 50);
+    let listed = decision_views(&mut runtime);
+    assert!(!listed.iter().any(|(id, _)| *id == after || *id == late));
+
+    // A seen View stays; a closed one leaves.
+    runtime.mark_view_unseen(&key, &page);
+    assert!(runtime.mark_view_seen(&key, &page));
+    assert!(decision_views(&mut runtime).contains(&(page.clone(), "conductor")));
+    close(&mut runtime, &page);
+    assert!(
+        !decision_views(&mut runtime)
+            .iter()
+            .any(|(id, _)| *id == page)
+    );
+
+    // The next question takes what the Conductor opened since this one and
+    // what the worker opened in the node's attempt now, not the one before.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"attempts": 2}}),
+    )
+    .unwrap();
+    let retried = project_view(&mut runtime, "/checkouts/fixture/retried.md");
+    runtime.link_mission_view(&key, &retried, "recipient", 60);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge them now?", "node": "fix"}),
+    )
+    .unwrap();
+    assert_eq!(
+        decision_views(&mut runtime),
+        [(retried.clone(), "worker"), (after.clone(), "conductor")]
+    );
+
+    // A View id no View of the checkout has is refused.
+    assert_eq!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "decide", "line": "Merge them later?", "show": ["d999"]}),
+        )
+        .unwrap_err(),
+        "mission_show_unknown"
+    );
+    // A clear shows nothing, as it asks nothing.
+    assert_eq!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "decide", "line": null, "show": [retried]}),
+        )
+        .unwrap_err(),
+        "mission_question_without_line"
+    );
+}
+
+/// A decision with nothing linked asks the Conductor for something to look
+/// at once per question (`자료 요청`): a second press, or a press on a
+/// question the Conductor has since changed, sends nothing.
+#[test]
+fn asking_for_material_wakes_the_conductor_once_per_question() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Screens"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?"}),
+    )
+    .unwrap();
+    let key = runtime.missions.book.missions[0]
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    let asked = |runtime: &Runtime| {
+        runtime.missions.book.missions[0]
+            .wakes
+            .iter()
+            .filter(|wake| wake.event == crate::missions::WakeEvent::MaterialAsked)
+            .count()
+    };
+    runtime.refresh_missions();
+    assert!(runtime.snapshot.missions.items[0].decision_views.is_empty());
+
+    assert!(runtime.mission_material_event("mission-1", key));
+    assert_eq!(asked(&runtime), 1);
+    runtime.refresh_missions();
+    assert!(
+        runtime.snapshot.missions.items[0]
+            .question
+            .as_ref()
+            .unwrap()
+            .material_asked
+    );
+    assert!(!runtime.mission_material_event("mission-1", key));
+    assert!(!runtime.mission_material_event("mission-1", key + 1));
+    assert_eq!(asked(&runtime), 1);
+}
+
+/// A store of Views in a temporary folder, as the app keeps one.
+fn with_views(runtime: &mut Runtime) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0);
+    dir
+}
+
+/// A mission's first question takes what its Conductor opened since the
+/// mission began, newest first and at most `VIEW_LINK_LIMIT`, so the Views
+/// it opened long before, the likeliest to have nothing to do with the
+/// question, fall to the end and then out.
+#[test]
+fn a_first_decision_lists_the_newest_views_since_the_mission_began_up_to_the_cap() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    without_gate(&mut runtime);
+    running(&mut runtime);
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let mut opened = Vec::new();
+    for n in 1..=20u64 {
+        let id = project_view(&mut runtime, &format!("/checkouts/fixture/{n}.md"));
+        runtime.link_mission_view(&key, &id, "sender", n * 10);
+        opened.push(id);
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    let listed: Vec<String> = decision_views(&mut runtime)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let newest: Vec<String> = opened
+        .iter()
+        .rev()
+        .take(crate::missions::VIEW_LINK_LIMIT)
+        .cloned()
+        .collect();
+    assert_eq!(listed, newest);
+}
+
+/// A decision's Views moving tells the operator nothing new: a View the
+/// Conductor opens after asking, or a linked one closing, leaves its row's
+/// group, demand, read state and signals as they were, so no notice goes
+/// and the Needs You count stays; only the eye's count follows.
+#[test]
+fn a_decisions_views_moving_tell_the_operator_nothing_new() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let page = project_view(&mut runtime, "/checkouts/fixture/page.md");
+    runtime.link_mission_view(&key, &page, "sender", 10);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    let told = |row: &crate::model::SidebarAgentSnapshot| {
+        (
+            row.group.clone(),
+            row.demand.clone(),
+            row.unread,
+            row.state_change_seq,
+            row.laid_since_unix_ms,
+            row.descendant_signals.clone(),
+        )
+    };
+    let views = |row: &crate::model::SidebarAgentSnapshot| match &row.ask_subject {
+        Some(crate::model::AskSubject::MissionDecision { views, .. }) => *views,
+        other => panic!("the row asks the decision: {other:?}"),
+    };
+    let asked = conductor_shown(&mut runtime);
+    assert_eq!((asked.group.as_str(), views(&asked)), ("needs_you", 1));
+
+    let later = project_view(&mut runtime, "/checkouts/fixture/later.md");
+    runtime.link_mission_view(&key, &later, "sender", 20);
+    runtime
+        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
+        .unwrap();
+    let moved = conductor_shown(&mut runtime);
+    assert_eq!(told(&moved), told(&asked));
+    assert_eq!(views(&moved), 0);
+}
+
+/// What the Conductor opened belongs to the mission, not to one agent: a
+/// Conductor that takes the mission over asks with the Views its
+/// predecessor opened since the question before.
+#[test]
+fn a_taken_missions_next_decision_keeps_what_its_last_conductor_opened() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    without_gate(&mut runtime);
+    running(&mut runtime);
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let page = project_view(&mut runtime, "/checkouts/fixture/page.md");
+    runtime.link_mission_view(&key, &page, "sender", 10);
+
+    runtime.delivery_observations.remove("sender");
+    runtime.refresh_missions();
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "take", "mission": "mission-1"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    assert_eq!(decision_views(&mut runtime), [(page, "conductor")]);
+}
+
+/// A device's worker opening a View in that device's checkout is found as a
+/// mission command from that device finds its agent, and the View is
+/// linked by the device and its own View id, which the card opens there.
+#[test]
+fn a_device_workers_view_is_linked_by_that_devices_own_view_id() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    running_criteria_mission(&mut runtime);
+    let (far, record) = far_agent("agent-9", "w2:p0");
+    register(&mut runtime, record);
+    connect_with_repository(&mut runtime, Vec::new());
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-9"}}),
+    )
+    .unwrap();
+    let mut seen = crate::runtime::delivery::tests::observed(&runtime, "recipient");
+    seen.actor = far.clone();
+    runtime
+        .delivery_observations
+        .insert(far.pane_id.clone(), seen);
+
+    let key = (DEVICE.to_owned(), DEVICE_ROOT.to_owned());
+    let page = view_in(&mut runtime, &key, "/Users/example/fixture/screens.html");
+    runtime.link_mission_view(&key, &page, "w2:p0", 10);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?", "node": "fix"}),
+    )
+    .unwrap();
+    runtime.refresh_missions();
+    let listed: Vec<_> = runtime.snapshot.missions.items[0]
+        .decision_views
+        .iter()
+        .map(|view| {
+            (
+                view.device_id.clone(),
+                view.checkout_path.clone(),
+                view.display_id.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(listed, [(DEVICE.to_owned(), DEVICE_ROOT.to_owned(), page)]);
 }

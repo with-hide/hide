@@ -208,7 +208,7 @@ export type UserTurnFact = {
 
 export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn"] as const;
 /** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
 
 export const HUMAN_KINDS = ["auth", "permission"] as const;
 /** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
@@ -1483,6 +1483,23 @@ export type MissionQuestion = {
   /** The node the decision stopped. */
   node: string | null;
   asked_at_unix_ms: number;
+  /** The operator asked the Conductor for something to look at (`자료 요청`); absent until then. */
+  material_asked?: boolean;
+};
+
+/** A View linked to a mission's open decision that is still open (`DecisionView`): the Conductor's, named with `--show` or opened since the question before, or the stopped node's worker's in its current attempt. */
+export type DecisionView = {
+  device_id: string;
+  checkout_path: string;
+  display_id: string;
+  kind: ViewDisplaySnapshot["kind"];
+  label: string;
+  /** The operator has not looked at it since it was opened; absent once they have. */
+  unseen?: boolean;
+  /** Who linked it (`contracts/snapshot-wire-enums.json`: `mission_decision_view_by`). */
+  by: "conductor" | "worker";
+  /** The pane of the agent that opened it, while that agent is open. */
+  pane_id?: string;
 };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
@@ -1528,8 +1545,8 @@ export type MissionBriefSnapshot = { mission: string | null; node: string | null
 /** The agent a node or a candidate names, with its model and effort. */
 export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
 
-/** The agent, model and effort Hide started a node's worker with (`missions::NodeLaunch`). */
-export type MissionNodeLaunch = { agent_id: string; agent: string; model?: string | null; effort?: string | null };
+/** The agent item, model and effort Hide started a node's worker with (`missions::NodeLaunch`): `profile` is the profile it started with, by its id on the worker's machine and its name then; none for the built-in default. */
+export type MissionNodeLaunch = { agent_id: string; agent: string; profile?: { id: string; name: string } | null; model?: string | null; effort?: string | null };
 
 /** One node of a mission's map, with what the map draws and nothing the shell works out (`NodeView`). */
 export type MissionNode = {
@@ -1652,6 +1669,8 @@ export type Mission = {
   decision: string | null;
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
+  /** The Views linked to that decision that are still open; absent when none. */
+  decision_views?: DecisionView[];
   answer: MissionAnswer | null;
   /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
   end_asked?: boolean;
@@ -1746,7 +1765,8 @@ export type PlanView = {
 export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
-export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
+/** A candidate's `profile` is a profile's id on this machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08, B14). */
+export type ConductorCandidate = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */
 export type MissionMapFlow = "down" | "across";
 export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };

@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
-import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchedProfileName, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import type { AgentRow, Device, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -108,6 +108,20 @@ describe("the numbers and words", () => {
     expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false });
     // A session with neither value carries no proven launch: the plan's words stay marked planned.
     expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
+  });
+
+  it("names the profile a worker started with before its model, by its name now, and the built-in default as before (agent-profiles-phase2 B1, B12, B23)", () => {
+    const words = { auto: "auto", defaultModel: "default model" };
+    const launch = (profile: string | null, launch_model: string | null) => ({ launch_model, launch_effort: null, profile });
+    expect(runWords(launch("work", "opus"), null, words)).toEqual({ words: "work · opus", planned: false });
+    expect(runWords(launch("work", null), { agent: "claude", model: "opus" }, words)).toEqual({ words: "work · default model", planned: false });
+    expect(runWords(launch(null, "opus"), null, words)).toEqual({ words: "opus", planned: false });
+    const devices = [{ id: "mac", kind: "local", kit: { profiles: { state: "listed", version: 2, profiles: [{ id: "p-work", kind: "claude-code", name: "company" }], defaults: {} } } }] as unknown as Device[];
+    const started = { agent_id: "agent-2", agent: "claude", profile: { id: "p-work", name: "work" } };
+    expect(launchedProfileName(devices, "mac", started)).toBe("company");
+    expect(launchedProfileName(devices, "mac", { ...started, profile: { id: "p-gone", name: "old" } })).toBe("old");
+    expect(launchedProfileName(devices, "mini", started)).toBe("work");
+    expect(launchedProfileName(devices, "mac", { agent_id: "agent-2", agent: "claude" })).toBeNull();
   });
 
   it("finds a pane's launch on its machine, else on the mission's", () => {

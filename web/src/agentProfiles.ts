@@ -249,6 +249,18 @@ export function missingItemName(t: TFunction<"translation">, agentLabel: string)
   return itemName(t, agentLabel, t("agentProfiles.itemGone"));
 }
 
+/** One item of an agent's list on a machine (D-01): `profile` is its id, `default` for the built-in one, and `name` the profile's name, null for the built-in one. */
+export type AgentItem = { kind: ProviderKind; profile: string; name: string | null };
+
+/** The items of `kind` on `device`: the built-in one first, then the profiles its list holds, in order; the built-in one alone where the machine lists none. */
+export function agentItems(device: Device | undefined, kind: ProviderKind): AgentItem[] {
+  const adapter = agentAdapter(kind);
+  const listed = listedProfiles(device);
+  const view = adapter && listed ? agentProfilesView(listed, adapter.id, adapter.label) : null;
+  if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null }];
+  return view.profiles.map((row) => ({ kind, profile: row.id, name: row.builtIn ? null : row.name }));
+}
+
 /** The project's chosen profile for `agent` (`project_settings.agent_profiles`), by the catalog project a start target names. */
 export function projectProfile(rest: SnapshotRest | null, deviceId: string, workspaceId: string, agent: string): string | null {
   const workspace = catalogWorkspaces(rest).find((row) => row.id === workspaceId && row.device_id === deviceId);

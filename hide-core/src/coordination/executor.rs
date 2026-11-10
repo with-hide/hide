@@ -1,4 +1,4 @@
-use super::{AgentRecord, Command, Mutation, SpawnRecord, resolve_actor, view};
+use super::{AgentRecord, Command, Mutation, Picked, SpawnRecord, resolve_actor, view};
 use crate::agent_start::ShellStart;
 use crate::delivery::ladder::{Delivered, InputTarget};
 use crate::delivery::typed::SendRoute;
@@ -1129,6 +1129,7 @@ fn spawn(
         plan_node,
         plan,
         beside,
+        pick,
     } = &command
     else {
         return Err("invalid_spawn".into());
@@ -1181,22 +1182,7 @@ fn spawn(
     // An earlier attempt of this intent by the same parent: every check
     // below judges a retry by what that attempt already did (engineering
     // #11).
-    let earlier = {
-        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
-            super::live_self(&ledger, actor)
-                .next()
-                .map(|p| p.id.clone())
-        } else {
-            parent.clone()
-        };
-        known_parent.and_then(|id| {
-            ledger
-                .spawns
-                .iter()
-                .find(|record| record.parent == id && record.intent == *intent)
-                .cloned()
-        })
-    };
+    let earlier = super::earlier_spawn(&ledger, actor, parent.as_deref(), intent).cloned();
     // A spawn beside its caller opens in the caller's own tab, so it is
     // judged before anything is registered, reserved or created; a retry of
     // an intent whose pane exists already is judged by what it did, and a
@@ -1249,32 +1235,18 @@ fn spawn(
             )?;
         }
     }
-    // Pick once before judging hooks, then keep that same request through
-    // admission and node resolution. Completed retries need no new choice.
+    // The item an admission judged is the one that starts; a spawn none
+    // judged picks here, once, before its hook is judged, and keeps that
+    // same request through node resolution. Completed retries need no
+    // new choice.
     let agent = if earlier.as_ref().is_some_and(|record| record.completed) {
         None
+    } else if let Some(Picked(request)) = pick {
+        Some((**request).clone())
     } else {
-        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
         let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
         let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
-        let profiles = locked.machine_profiles(child_machine);
-        let parent = if machine.is_none() {
-            locked.caller_launch_profile(actor, kind)
-        } else {
-            crate::launch::Parent::None
-        };
-        Some(crate::launch::pick(
-            kind,
-            profile
-                .as_deref()
-                .map(|name| crate::launch::chosen(kind, name, profiles))
-                .transpose()?,
-            &parent,
-            locked
-                .project_agent_profile(child_machine, repo, kind)
-                .as_ref(),
-            profiles,
-        ))
+        Some(locked.spawn_request(actor, machine.as_deref(), kind, profile.as_deref(), repo)?)
     };
     let mut hook_proof = None;
     // The child's hook is judged before anything is made for it, on every
@@ -2988,6 +2960,7 @@ mod tests {
                 &Mutation::Reserve {
                     parent: self.parent.clone(),
                     command: Command::Spawn {
+                        pick: None,
                         mission: None,
                         plan_node: None,
                         plan: None,
@@ -3238,6 +3211,7 @@ mod tests {
                 .unwrap()
                 .to_owned();
             let command = Command::Spawn {
+                pick: None,
                 mission: None,
                 plan_node: None,
                 plan: None,

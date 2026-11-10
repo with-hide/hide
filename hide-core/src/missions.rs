@@ -625,6 +625,9 @@ pub enum WakeEvent {
     /// A node shows signs its worker is stuck; `warning` says which
     /// (with-hide/hide-private#552).
     Warning,
+    /// The operator asked for something to look at before answering the
+    /// open question (`자료 요청`).
+    MaterialAsked,
 }
 
 impl WakeEvent {
@@ -644,6 +647,7 @@ impl WakeEvent {
             Self::Fix => "fix",
             Self::Reopened => "reopened",
             Self::Warning => "warning",
+            Self::MaterialAsked => "material_asked",
         }
     }
 }
@@ -681,6 +685,70 @@ pub struct Question {
     #[serde(default)]
     pub node: Option<String>,
     pub asked_at_unix_ms: u64,
+    /// The Views the Conductor linked to this question: the ones `--show`
+    /// named and the ones it opened since the question before was asked
+    /// that were still open, oldest first, at most [`VIEW_LINK_LIMIT`]. The map lists them with the node's
+    /// own (`MissionNode::views`) under the question.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
+    /// The operator asked the Conductor for something to look at before
+    /// answering (`볼 자료 요청`): asked once per question.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub material_asked: bool,
+}
+
+/// The most Views one question or one node links; past it the oldest goes.
+pub const VIEW_LINK_LIMIT: usize = 16;
+/// The longest `decide --show` value: a View id, or a path the CLI opens as
+/// a View before the core sees it.
+const SHOW_LIMIT: usize = 4096;
+
+/// A View a decision shows the operator to look at, by the checkout that
+/// holds it: a link is a fact recorded when the View was opened or named,
+/// never a guess from its name or its time.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ViewLink {
+    pub device_id: String,
+    pub checkout_path: String,
+    pub display_id: String,
+    /// The node's attempt the View was opened in (`MissionNode::attempts`);
+    /// a question's own link keeps 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attempt: u8,
+    /// When it was opened or named, which orders a question's opened Views
+    /// newest first.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub at_unix_ms: u64,
+    /// On a question: the stopped node's worker, or an agent under it,
+    /// opened it, where every other link is the Conductor's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worker: bool,
+}
+
+impl ViewLink {
+    pub fn same_view(&self, other: &Self) -> bool {
+        self.device_id == other.device_id
+            && self.checkout_path == other.checkout_path
+            && self.display_id == other.display_id
+    }
+}
+
+/// Adds `link` to `links` as the newest, once: the same View again moves
+/// to the end, and the oldest goes past [`VIEW_LINK_LIMIT`]. Whether the
+/// list changed.
+pub fn push_view_link(links: &mut Vec<ViewLink>, link: ViewLink) -> bool {
+    if links
+        .last()
+        .is_some_and(|last| last.same_view(&link) && last.attempt == link.attempt)
+    {
+        return false;
+    }
+    links.retain(|known| !known.same_view(&link));
+    links.push(link);
+    if links.len() > VIEW_LINK_LIMIT {
+        links.remove(0);
+    }
+    true
 }
 
 /// The operator's answer to the question with `key`, from the banner (B26):
@@ -755,6 +823,11 @@ pub struct MissionNode {
     pub branch: Option<String>,
     #[serde(default)]
     pub attempts: u8,
+    /// The Views the node's worker and the agents under it opened, each with
+    /// the attempt it was opened in; a decision that stops the node lists
+    /// the current attempt's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
     /// What the node does now, its conclusion or its verification result.
     #[serde(default)]
     pub line: Option<String>,
@@ -881,20 +954,34 @@ pub struct MissionNode {
     pub warnings: Vec<NodeWarning>,
 }
 
-/// The agent, model and effort Hide started a node's worker with, proven for
-/// one registration: its pane's launch record named the registration's own
-/// conversation. A start on the CLI's defaults records no launch, so it
-/// proves none.
+/// The agent item, model and effort Hide started a node's worker with,
+/// proven for one registration: its pane's launch record named the
+/// registration's own conversation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NodeLaunch {
     /// The worker's registration the launch was proven for.
     pub agent_id: String,
     /// The agent kind, in the engine's spelling.
     pub agent: String,
+    /// The profile it started with (PRD agent-profiles-phase2 B12); none
+    /// for the built-in default, as in every launch recorded before it. A
+    /// build before it reads a launch without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<NodeProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+}
+
+/// A profile a node's worker started with: its id on the worker's machine,
+/// by which the map names it as it is called now, and its name then, which
+/// the map shows once the profile is gone (B23) and `hide mission show`
+/// prints. Never its account.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeProfile {
+    pub id: hide_agent_adapter::ProfileId,
+    pub name: String,
 }
 
 /// Causes a node remembers as raised; past this a new cause is refused
@@ -1167,6 +1254,11 @@ pub struct Mission {
     /// How many questions this mission has asked; the next one's key.
     #[serde(default)]
     pub question_seq: u64,
+    /// The Views its Conductor opened since its last question was asked,
+    /// or since it was created, oldest first, at most [`VIEW_LINK_LIMIT`]:
+    /// the next question takes the ones still open (`mission_views`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conductor_views: Vec<ViewLink>,
     /// The operator's answer from the banner to the current question.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<Answer>,
@@ -1399,13 +1491,22 @@ fn default_cap() -> u8 {
     DEFAULT_CAP
 }
 
-/// One worker candidate (D-31, D-34): an agent, its model or the CLI's
-/// default, a fixed effort or none for the Conductor to choose, and what it
-/// is for.
+/// One worker candidate (D-31, D-34): an agent item (the agent and one of
+/// its profiles on the mission's machine, PRD agent-profiles-phase2 D-08),
+/// its model or the CLI's default, a fixed effort or none for the Conductor
+/// to choose, and what it is for.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Candidate {
     pub agent: String,
+    /// The profile, by its id on the mission's machine; `None` for the
+    /// agent's built-in default, which is left out of what is kept, so a
+    /// value of built-in defaults only is the bytes a build before profiles
+    /// wrote and reads (B14). A build before it refuses a value that names
+    /// one (`deny_unknown_fields`): `docs/INSTALL.md`, What each system
+    /// supports, says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<hide_agent_adapter::ProfileId>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -1415,17 +1516,40 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// Whether a worker started as `kind` with `launch` is this candidate
-    /// (D-34): the same agent, its model where the candidate fixes one or
-    /// the CLI's default where it names none, and its effort only where the
-    /// candidate fixes one; an automatic effort is the Conductor's choice.
-    pub(crate) fn admits(&self, kind: &str, launch: &hide_agent_adapter::LaunchChoice) -> bool {
-        hide_agent_adapter::canonical_kind(&self.agent) == hide_agent_adapter::canonical_kind(kind)
+    /// Whether a worker started as `target` with `launch` is this candidate
+    /// (D-34, PRD agent-profiles-phase2 D-08, B13): the same agent and
+    /// profile, the one the start actually runs with (`launch::pick`'s
+    /// answer, never the profile the spawn named alone), its model where the
+    /// candidate fixes one or the CLI's default where it names none, and its
+    /// effort only where the candidate fixes one; an automatic effort is the
+    /// Conductor's choice.
+    pub(crate) fn admits(
+        &self,
+        target: &hide_agent_adapter::LaunchTarget,
+        launch: &hide_agent_adapter::LaunchChoice,
+    ) -> bool {
+        hide_agent_adapter::canonical_kind(&self.agent)
+            == hide_agent_adapter::canonical_kind(&target.kind)
+            && self.profile_id() == target.profile
             && self.model == launch.model
             && self
                 .effort
                 .as_ref()
                 .is_none_or(|effort| launch.effort.as_ref() == Some(effort))
+    }
+
+    /// The profile the candidate names, the built-in default for none.
+    pub(crate) fn profile_id(&self) -> hide_agent_adapter::ProfileId {
+        self.profile
+            .clone()
+            .unwrap_or_else(hide_agent_adapter::ProfileId::default_profile)
+    }
+
+    /// The row as it is kept: the built-in default named by its id is the
+    /// one left out, so both spellings are one row.
+    fn kept(mut self) -> Self {
+        self.profile = self.profile.filter(|id| !id.is_default());
+        self
     }
 }
 
@@ -1446,6 +1570,13 @@ impl ConductorSettings {
                 candidate.effort.as_deref(),
             )
             .map_err(|code| format!("conductor_settings.{code}"))?;
+            if candidate
+                .profile
+                .as_ref()
+                .is_some_and(|id| !crate::project_settings::valid_profile_id(&id.0))
+            {
+                return Err("conductor_settings.profile_invalid".into());
+            }
             if candidate.purpose.len() > LINE_LIMIT
                 || candidate.purpose.chars().any(char::is_control)
             {
@@ -1453,6 +1584,14 @@ impl ConductorSettings {
             }
         }
         Ok(())
+    }
+
+    /// The value an edit keeps: each row as it is kept, then checked
+    /// (`validate`).
+    pub(crate) fn edited(mut self) -> Result<Self, String> {
+        self.candidates = self.candidates.into_iter().map(Candidate::kept).collect();
+        self.validate()?;
+        Ok(self)
     }
 
     /// Reads the value `core-state.json` keeps. Fields a value kept by an
@@ -1622,6 +1761,10 @@ pub enum MissionCommand {
         recommend: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node: Option<String>,
+        /// Views of the Conductor's checkout to show with the question, by
+        /// id; the CLI opens a path as a View first and sends its id.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        show: Vec<String>,
     },
     /// Sets or clears why new nodes wait on usage (B13).
     Delay {
@@ -1765,6 +1908,7 @@ impl MissionCommand {
                 why,
                 options,
                 node,
+                show,
                 ..
             } => {
                 // The choices' count and length are refused with their own
@@ -1777,6 +1921,10 @@ impl MissionCommand {
                     && valid_line(why, LINE_LIMIT)
                     && options.len() <= NODE_LIMIT
                     && node.as_deref().is_none_or(valid_key)
+                    && show.len() <= VIEW_LINK_LIMIT
+                    && show
+                        .iter()
+                        .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
             }
             Self::Delay { mission, line } => {
                 id_ok(mission)
@@ -2173,6 +2321,7 @@ pub(crate) fn apply_plan(
                 base_pr: None,
                 branch: None,
                 attempts: 0,
+                views: Vec::new(),
                 line: None,
                 change: None,
                 review: None,
@@ -2589,6 +2738,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_no_nodes" => "Set a plan with hide mission plan before starting",
         "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
+        "mission_show_unknown" => {
+            "Name a View of your own checkout from hide view list, or give --show a path to open"
+        }
         "mission_too_many_nodes" => "Plan at most 64 nodes; merge or split the work differently",
         "mission_node_unknown" => "Run hide mission show to see the plan's node keys",
         "mission_ambiguous" => {
@@ -2611,7 +2763,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
         }
         "mission_question_without_line" => {
-            "Give --why, --option, --recommend and --node with --line; --clear takes none of them"
+            "Give --why, --option, --recommend, --node and --show with --line; --clear takes none of them"
         }
         "mission_options_too_many" => "Offer at most 5 options; leave the rest to the conversation",
         "mission_option_invalid" => "Write each option as one line of at most 120 characters",
@@ -2693,7 +2845,7 @@ pub fn next_action(code: &str) -> &'static str {
             "The node holds 16 defects; ask the operator how to go on with it"
         }
         "mission_candidate_refused" => {
-            "Start the worker as one of the operator's candidates: run hide mission settings for the agents, models and efforts it allows"
+            "Start the worker as one of the operator's candidates: run hide mission settings for the agent items (each with its --profile value), models and efforts it allows"
         }
         "mission_cap_reached" => {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"
@@ -3122,6 +3274,7 @@ pub(crate) mod tests {
             decision: None,
             question: None,
             question_seq: 0,
+            conductor_views: Vec::new(),
             answer: None,
             answer_failed: None,
             delay: None,
@@ -3831,6 +3984,7 @@ pub(crate) mod tests {
         settings.concurrency = 4;
         settings.candidates.push(Candidate {
             agent: "opencode".into(),
+            profile: None,
             model: None,
             effort: Some("high".into()),
             purpose: String::new(),
@@ -3841,11 +3995,48 @@ pub(crate) mod tests {
         );
         settings.candidates[0] = Candidate {
             agent: "claude".into(),
+            profile: None,
             model: Some("opus".into()),
             effort: Some("high".into()),
             purpose: "screens".into(),
         };
         assert!(settings.validate().is_ok());
+    }
+
+    /// A candidate kept before profiles names its agent alone and reads as
+    /// the agent's built-in default item, written back byte for byte, in
+    /// Settings › Mission and in the copy a mission keeps (PRD
+    /// agent-profiles-phase2 B14, D-12); one that names a profile keeps it,
+    /// and the built-in default named by its id is kept as no profile.
+    #[test]
+    fn a_candidate_kept_before_profiles_reads_as_its_agents_built_in_default() {
+        let kept = r#"{"agent":"claude","model":"opus","effort":null,"purpose":"changes"}"#;
+        let candidate: Candidate = serde_json::from_str(kept).unwrap();
+        assert_eq!(
+            candidate.profile_id(),
+            hide_agent_adapter::ProfileId::default_profile()
+        );
+        assert_eq!(serde_json::to_string(&candidate).unwrap(), kept);
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["candidates"] =
+            serde_json::json!([serde_json::from_str::<serde_json::Value>(kept).unwrap()]);
+        let copied: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(copied.candidates, vec![candidate.clone()]);
+        assert_eq!(serde_json::to_value(&copied).unwrap(), stored);
+
+        let work =
+            r#"{"agent":"claude","profile":"p-work","model":null,"effort":null,"purpose":""}"#;
+        let named: Candidate = serde_json::from_str(work).unwrap();
+        assert_eq!(named.profile_id().0, "p-work");
+        assert_eq!(serde_json::to_string(&named).unwrap(), work);
+
+        let mut settings = ConductorSettings::default();
+        settings.candidates.push(Candidate {
+            profile: Some(hide_agent_adapter::ProfileId::default_profile()),
+            ..candidate.clone()
+        });
+        let edited = settings.edited().unwrap();
+        assert_eq!(edited.candidates, vec![candidate]);
     }
 
     /// A Conductor recorded before profiles names none and reads as the
