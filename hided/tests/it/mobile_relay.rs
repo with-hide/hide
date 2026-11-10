@@ -107,6 +107,15 @@ async fn control(device: &mut Device, message: ServerMessage) {
         .unwrap();
 }
 async fn accept(listener: &TcpListener) -> Device {
+    accept_answering(
+        listener,
+        ServerMessage::Registered { push: false }.encode().unwrap(),
+    )
+    .await
+}
+/// Admits hided's device socket and confirms it with `registered`, spelled as
+/// the relay under test spells it: an older relay sends `{"type":"registered"}`.
+async fn accept_answering(listener: &TcpListener, registered: String) -> Device {
     let (stream, _) = tokio::time::timeout(GUARD, listener.accept())
         .await
         .unwrap()
@@ -133,7 +142,7 @@ async fn accept(listener: &TcpListener) -> Device {
         panic!("device proof");
     };
     pending.verify(&signature, 1).unwrap();
-    control(&mut device, ServerMessage::Registered).await;
+    device.send(Message::Text(registered.into())).await.unwrap();
     device
 }
 async fn phone(device: &mut Device, qr: &PairingQr, connection: u32, auth: Value) -> Session {
@@ -557,5 +566,268 @@ async fn relay_reports_version_and_capacity_refusals_in_the_connection_line() {
         state(&mut shell, |s| s["relay"]["reason"] == "daily_limit").await["relay"]["state"],
         "refused"
     );
+    running.stop();
+}
+
+/// A phone's push key pair, as the iOS app makes one per computer: the
+/// private half stays here to decrypt what Apple would carry.
+struct AppKey {
+    private: ring::agreement::EphemeralPrivateKey,
+    public: Vec<u8>,
+    auth: [u8; 16],
+}
+impl AppKey {
+    fn new() -> Self {
+        let rng = ring::rand::SystemRandom::new();
+        let private =
+            ring::agreement::EphemeralPrivateKey::generate(&ring::agreement::ECDH_P256, &rng)
+                .unwrap();
+        let public = private.compute_public_key().unwrap().as_ref().to_vec();
+        Self {
+            private,
+            public,
+            auth: [7; 16],
+        }
+    }
+    fn registration(&self, token: &str) -> Value {
+        json!({
+            "type": "apns_registration",
+            "token": token,
+            "environment": "sandbox",
+            "key": {
+                "p256dh": URL_SAFE_NO_PAD.encode(&self.public),
+                "auth": URL_SAFE_NO_PAD.encode(self.auth),
+            },
+        })
+    }
+    /// RFC 8291 decryption of one aes128gcm body, as the phone's
+    /// notification extension does it (`docs/RELAY_PROTOCOL.md`, The
+    /// notification body).
+    fn decrypt(self, body: &[u8]) -> Vec<u8> {
+        let hmac = |key: &[u8], parts: &[&[u8]]| {
+            let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+            let mut context = ring::hmac::Context::with_key(&key);
+            for part in parts {
+                context.update(part);
+            }
+            context.sign().as_ref().to_vec()
+        };
+        let (salt, rest) = body.split_at(16);
+        assert_eq!(&rest[..4], 4096_u32.to_be_bytes(), "record size");
+        assert_eq!(rest[4], 65, "the sender key is an uncompressed P-256 point");
+        let sender = &rest[5..70];
+        let ciphertext = &rest[70..];
+        let peer = ring::agreement::UnparsedPublicKey::new(&ring::agreement::ECDH_P256, sender);
+        let shared =
+            ring::agreement::agree_ephemeral(self.private, &peer, |secret| secret.to_vec())
+                .unwrap();
+        let prk_key = hmac(&self.auth, &[&shared]);
+        let ikm = hmac(&prk_key, &[b"WebPush: info\0", &self.public, sender, &[1]]);
+        let prk = hmac(salt, &[&ikm]);
+        let cek = hmac(&prk, &[b"Content-Encoding: aes128gcm\0", &[1]]);
+        let nonce = hmac(&prk, &[b"Content-Encoding: nonce\0", &[1]]);
+        let key = ring::aead::LessSafeKey::new(
+            ring::aead::UnboundKey::new(&ring::aead::AES_128_GCM, &cek[..16]).unwrap(),
+        );
+        let mut buffer = ciphertext.to_vec();
+        let plain = key
+            .open_in_place(
+                ring::aead::Nonce::try_assume_unique_for_key(&nonce[..12]).unwrap(),
+                ring::aead::Aad::empty(),
+                &mut buffer,
+            )
+            .unwrap();
+        // One record: the plaintext, then the last-record delimiter.
+        assert_eq!(plain.last(), Some(&2));
+        plain[..plain.len() - 1].to_vec()
+    }
+}
+
+/// The push request hided sends over its device socket, read by the relay.
+async fn push_request(device: &mut Device) -> hide_relay_protocol::admission::PushRequest {
+    loop {
+        match next(device).await {
+            Some(Message::Text(text)) => {
+                let ClientMessage::Push(request) = ClientMessage::decode(&text).unwrap() else {
+                    panic!("expected push_request, got {text}");
+                };
+                return request;
+            }
+            Some(Message::Binary(_)) => {}
+            other => panic!("expected push_request, got {other:?}"),
+        }
+    }
+}
+
+fn phones_file(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("state/phones.json")).unwrap()
+}
+
+const APP_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+#[tokio::test]
+async fn an_app_phone_is_notified_through_the_relay_and_a_gone_token_is_dropped() {
+    use hide_relay_protocol::admission::{PushEnvironment, PushOutcome, PushResult};
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir.path(), listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    let mut shell = shell(&running).await;
+    event(&mut shell, "mobile_enable", json!({"enabled":true})).await;
+    let mut device = accept_answering(
+        &listener,
+        ServerMessage::Registered { push: true }.encode().unwrap(),
+    )
+    .await;
+    state(&mut shell, |s| s["relay"]["state"] == "connected").await;
+    event(&mut shell, "mobile_show_code", json!({})).await;
+    let code = state(&mut shell, |s| s["qr"].is_string()).await;
+    let qr = PairingQr::decode(code["qr"].as_str().unwrap()).unwrap();
+    let mut session = phone(
+        &mut device,
+        &qr,
+        1,
+        json!({"client_kind":"phone","pair":qr.code,"name":"iPhone"}),
+    )
+    .await;
+    let paired = receive(&mut device, &mut session, "paired").await;
+    receive(&mut device, &mut session, "agents").await;
+    let phone_id = paired["phone_id"].as_str().unwrap().to_owned();
+
+    // A malformed registration is refused and stores nothing.
+    let key = AppKey::new();
+    let mut wrong = key.registration("../not-hex");
+    send(&mut device, &mut session, wrong.take()).await;
+    let refused = receive(&mut device, &mut session, "push_state").await;
+    assert_eq!(refused["notifications"], "refused");
+    send(&mut device, &mut session, key.registration(APP_TOKEN)).await;
+    let stored = receive(&mut device, &mut session, "push_state").await;
+    assert_eq!(stored["notifications"], "on");
+    assert!(phones_file(dir.path()).contains(APP_TOKEN));
+    let listed = state(&mut shell, |s| s["phones"][0]["notifications"] == "on").await;
+    assert_eq!(listed["phones"][0]["id"], phone_id);
+
+    // A notice goes out as one push request: the token, the environment, an
+    // opaque collapse value and the ciphertext, and nothing readable.
+    let notice = json!({
+        "title": "a secret task title",
+        "state": "needs_you",
+        "tag": "device-1:w1:p1",
+        "device_id": "device-1",
+        "pane_id": "w1:p1",
+        "clear": [],
+    });
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    let (id, payload) = (phone_id.clone(), notice.clone());
+    let sent = tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload));
+    let request = push_request(&mut device).await;
+    assert_eq!(request.token, APP_TOKEN);
+    assert_eq!(request.environment, PushEnvironment::Sandbox);
+    assert!(!request.collapse.contains("w1") && !request.collapse.contains("device"));
+    let body = URL_SAFE_NO_PAD.decode(&request.payload).unwrap();
+    assert!(!String::from_utf8_lossy(&body).contains("secret"));
+    let text = ClientMessage::Push(request.clone()).encode().unwrap();
+    assert!(!text.contains("a secret task title") && !text.contains("w1:p1"));
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: request.id,
+            result: PushOutcome::Delivered,
+        }),
+    )
+    .await;
+    assert_eq!(sent.await.unwrap(), Ok(()));
+    // The phone's key opens it to the notice JSON hided sends Web Push.
+    let plain: Value = serde_json::from_slice(&key.decrypt(&body)).unwrap();
+    assert_eq!(plain, notice);
+
+    // The same agent collapses to the same value on this phone.
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    let (id, payload) = (phone_id.clone(), notice.clone());
+    let sent = tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload));
+    let again = push_request(&mut device).await;
+    assert_eq!(again.collapse, request.collapse);
+    assert_ne!(again.id, request.id);
+    // Apple called the token gone: hided drops it and does not retry.
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: again.id,
+            result: PushOutcome::TokenGone,
+        }),
+    )
+    .await;
+    assert_eq!(sent.await.unwrap(), Err("token_gone"));
+    assert!(!phones_file(dir.path()).contains(APP_TOKEN));
+    state(&mut shell, |s| s["phones"][0]["notifications"] == "unasked").await;
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    let (id, payload) = (phone_id.clone(), notice.clone());
+    assert_eq!(
+        tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload))
+            .await
+            .unwrap(),
+        Err("no_registration")
+    );
+
+    // Unpairing removes a registration with the phone.
+    send(
+        &mut device,
+        &mut session,
+        AppKey::new().registration(APP_TOKEN),
+    )
+    .await;
+    receive(&mut device, &mut session, "push_state").await;
+    assert!(phones_file(dir.path()).contains(APP_TOKEN));
+    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    closed(&mut device, 1).await;
+    assert!(!phones_file(dir.path()).contains(APP_TOKEN));
+    running.stop();
+}
+
+#[tokio::test]
+async fn an_older_relay_keeps_the_link_and_is_never_sent_a_push_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir.path(), listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    let mut shell = shell(&running).await;
+    event(&mut shell, "mobile_enable", json!({"enabled":true})).await;
+    // Exactly what a relay from before push answers.
+    let mut device = accept_answering(&listener, r#"{"type":"registered"}"#.to_owned()).await;
+    state(&mut shell, |s| s["relay"]["state"] == "connected").await;
+    event(&mut shell, "mobile_show_code", json!({})).await;
+    let code = state(&mut shell, |s| s["qr"].is_string()).await;
+    let qr = PairingQr::decode(code["qr"].as_str().unwrap()).unwrap();
+    let mut session = phone(
+        &mut device,
+        &qr,
+        1,
+        json!({"client_kind":"phone","pair":qr.code,"name":"iPhone"}),
+    )
+    .await;
+    let paired = receive(&mut device, &mut session, "paired").await;
+    receive(&mut device, &mut session, "agents").await;
+    send(
+        &mut device,
+        &mut session,
+        AppKey::new().registration(APP_TOKEN),
+    )
+    .await;
+    assert_eq!(
+        receive(&mut device, &mut session, "push_state").await["notifications"],
+        "on"
+    );
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    let id = paired["phone_id"].as_str().unwrap().to_owned();
+    let sent = tokio::task::spawn_blocking(move || {
+        mobile.push_to_app(&id, &json!({"title":"t","tag":"d:p","clear":[]}))
+    });
+    assert_eq!(sent.await.unwrap(), Err("relay_without_push"));
+    // The link stays up and carries the phone; `receive` fails on any text
+    // message, so no push request reached this relay.
+    send(&mut device, &mut session, json!({"type":"ping","id":1})).await;
+    receive(&mut device, &mut session, "pong").await;
     running.stop();
 }

@@ -24,8 +24,10 @@ use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use serde_json::{Value, json};
 
+use hide_relay_protocol::admission::{self, PushRequest};
+
 use super::projection::AgentKey;
-use super::store::{PushMode, PushSubscription};
+use super::store::{ApnsRegistration, PushMode, PushSubscription};
 #[cfg(test)]
 use hide_core::agent_state::push::VANISHED_TTL;
 pub use hide_core::agent_state::push::{Notice, NoticeState, Transitions};
@@ -34,6 +36,10 @@ const RECORD_SIZE: u32 = 4096;
 // aes128gcm adds a 16-byte salt, 4-byte record size, 1-byte key length,
 // 65-byte P-256 public key, 1-byte delimiter and 16-byte authentication tag.
 const MAX_PLAINTEXT_SIZE: usize = 4096 - 86 - 1 - 16;
+/// The same body carried by the relay to Apple's push service: the ciphertext
+/// is at most 3,000 bytes there (`admission::MAX_CIPHERTEXT`), which holds a
+/// plaintext of this size (`docs/RELAY_PROTOCOL.md`, The notification body).
+pub const MAX_APNS_PLAINTEXT: usize = admission::MAX_CIPHERTEXT - 86 - 1 - 16;
 const TTL_SECS: u64 = 60 * 60;
 const JWT_LIFETIME_SECS: u64 = 12 * 60 * 60;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -198,14 +204,22 @@ pub fn encrypt_with_secret(
     Ok(body)
 }
 
-/// Encrypts one message for a subscription with a fresh sender key and salt.
-pub fn encrypt(push: &PushSubscription, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+/// Encrypts one message for a phone's P-256 key and authentication secret
+/// with a fresh sender key and salt: RFC 8291, whether the phone carries the
+/// body over Web Push or through the relay to Apple.
+pub fn encrypt_for(p256dh: &str, auth: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let ua_public = URL_SAFE_NO_PAD
-        .decode(push.p256dh.trim_end_matches('='))
+        .decode(p256dh.trim_end_matches('='))
         .map_err(|_| "the subscription key is not base64url".to_owned())?;
+    if ua_public.len() != 65 || ua_public[0] != 4 {
+        return Err("the subscription key is not a P-256 point".to_owned());
+    }
     let auth = URL_SAFE_NO_PAD
-        .decode(push.auth.trim_end_matches('='))
+        .decode(auth.trim_end_matches('='))
         .map_err(|_| "the subscription secret is not base64url".to_owned())?;
+    if auth.len() != 16 {
+        return Err("the subscription secret is not 16 bytes".to_owned());
+    }
     let rng = SystemRandom::new();
     let private = ring::agreement::EphemeralPrivateKey::generate(&ring::agreement::ECDH_P256, &rng)
         .map_err(|_| "sender key generation failed".to_owned())?;
@@ -226,6 +240,66 @@ pub fn encrypt(push: &PushSubscription, plaintext: &[u8]) -> Result<Vec<u8>, Str
         &salt,
         plaintext,
     )
+}
+
+/// Encrypts one message for a Web Push subscription with a fresh sender key
+/// and salt.
+pub fn encrypt(push: &PushSubscription, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    encrypt_for(&push.p256dh, &push.auth, plaintext)
+}
+
+/// Apple's collapse header, which its network reads in plain text. It is an
+/// HMAC prefix under the phone's own authentication secret over the agent
+/// tag, so it is stable for one agent on one phone and says nothing: never an
+/// agent key, a pane id or a title (`docs/RELAY_PROTOCOL.md`, The collapse
+/// value). A later notice for the same agent replaces the earlier one.
+pub fn collapse(auth: &[u8], tag: &str) -> String {
+    URL_SAFE_NO_PAD.encode(&hmac(auth, &[b"hide-collapse\0", tag.as_bytes()])[..24])
+}
+
+/// The push request for an iOS app phone: the notice JSON encrypted for the
+/// phone's key exactly as Web Push carries it, and the collapse value. The
+/// request id is the link's to assign (`docs/RELAY_PROTOCOL.md`, The
+/// notification body).
+pub fn app_request(
+    registration: &ApnsRegistration,
+    payload: &Value,
+) -> Result<PushRequest, &'static str> {
+    let plaintext = app_plaintext(payload)?;
+    let body = encrypt_for(&registration.p256dh, &registration.auth, &plaintext)
+        .map_err(|_| "encrypt_failed")?;
+    let auth = URL_SAFE_NO_PAD
+        .decode(registration.auth.trim_end_matches('='))
+        .map_err(|_| "encrypt_failed")?;
+    let tag = payload.get("tag").and_then(Value::as_str).unwrap_or("");
+    Ok(PushRequest {
+        id: 0,
+        environment: registration.environment,
+        token: registration.token.clone(),
+        collapse: collapse(&auth, tag),
+        payload: URL_SAFE_NO_PAD.encode(body),
+    })
+}
+
+/// The notice JSON inside the relay's ciphertext bound. Tags to close are the
+/// one part that can shrink, from the end: a notification the phone does not
+/// close is better than none. Past that the notice does not fit.
+fn app_plaintext(payload: &Value) -> Result<Vec<u8>, &'static str> {
+    let mut payload = payload.clone();
+    loop {
+        let text = payload.to_string();
+        if text.len() <= MAX_APNS_PLAINTEXT {
+            return Ok(text.into_bytes());
+        }
+        let Some(clear) = payload
+            .get_mut("clear")
+            .and_then(Value::as_array_mut)
+            .filter(|clear| !clear.is_empty())
+        else {
+            return Err("payload_too_large");
+        };
+        clear.pop();
+    }
 }
 
 /// `https://host[:port]` of an endpoint: the JWT audience.
@@ -311,19 +385,18 @@ pub fn mode_allows(mode: PushMode, renderers: usize) -> bool {
 }
 
 /// Whether an operator notice can reach a phone at all, judged before any
-/// send is tried. `Ok` carries the signing key; `Err` is the first reason it
-/// cannot, as the code the log records: `no_vapid`, `mode_off`, `app_open`
-/// (app-closed mode with a desktop or web shell connected), `mobile_off` or
-/// `no_subscription`. The mode is checked before the Mobile switch because it
-/// is the setting an operator changes to receive these notices.
+/// send is tried. `Err` is the first reason it cannot, as the code the log
+/// records: `mode_off`, `app_open` (app-closed mode with a desktop or web
+/// shell connected), `mobile_off` or `no_subscription` (no phone has a Web
+/// Push subscription or an app registration). The mode is checked before the
+/// Mobile switch because it is the setting an operator changes to receive
+/// these notices.
 pub fn notice_route(
-    vapid: Option<&Vapid>,
     mode: PushMode,
     mobile_on: bool,
     renderers: usize,
     subscriptions: usize,
-) -> Result<&Vapid, &'static str> {
-    let vapid = vapid.ok_or("no_vapid")?;
+) -> Result<(), &'static str> {
     if !mode_allows(mode, renderers) {
         return Err(if mode == PushMode::Off {
             "mode_off"
@@ -337,7 +410,21 @@ pub fn notice_route(
     if subscriptions == 0 {
         return Err("no_subscription");
     }
-    Ok(vapid)
+    Ok(())
+}
+
+/// Whether an iOS app phone's registration can be stored: a lowercase hex
+/// device token inside the relay's bounds, and the key and secret in the same
+/// shape a Web Push subscription carries.
+pub fn registration_valid(registration: &ApnsRegistration) -> bool {
+    let token = &registration.token;
+    token.len() >= admission::MIN_TOKEN
+        && token.len() <= admission::MAX_TOKEN
+        && token.len().is_multiple_of(2)
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        && encrypt_for(&registration.p256dh, &registration.auth, &[]).is_ok()
 }
 
 /// The JSON a phone's service worker receives.
@@ -402,6 +489,56 @@ mod tests {
             URL_SAFE_NO_PAD.encode(ikm),
             "S4lYMb_L0FxCeq0WhDx813KgSYqU26kOyzWUdsXYyrg"
         );
+    }
+
+    /// The iOS app's body is the same RFC 8291 bytes, base64url: Appendix A's
+    /// inputs give the `hide` value `docs/RELAY_PROTOCOL.md` lists, which the
+    /// relay's own test wraps in Apple's body.
+    #[test]
+    fn the_app_body_vector_is_appendix_a_in_base64url() {
+        let body = encrypt_with_secret(
+            &b64("kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs"),
+            &b64("BTBZMqHH6r4Tts7J_aSIgg"),
+            &b64("BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"),
+            &b64("BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"),
+            &b64("DGv6ra1nlYgDCS1FRnbzlw").try_into().unwrap(),
+            b"When I grow up, I want to be a watermelon",
+        )
+        .unwrap();
+        assert_eq!(URL_SAFE_NO_PAD.encode(body), APP_BODY_VECTOR);
+    }
+
+    /// The `hide` value of the documented vector (`docs/RELAY_PROTOCOL.md`).
+    const APP_BODY_VECTOR: &str = "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN";
+
+    /// Apple reads the collapse value in plain text: stable for one agent on
+    /// one phone, different across agents and phones, and never the tag.
+    #[test]
+    fn the_collapse_value_is_opaque_and_stable_per_phone_and_agent() {
+        let tag = "device-1:w1:p1";
+        let one = collapse(&[1; 16], tag);
+        assert_eq!(one, collapse(&[1; 16], tag));
+        assert_ne!(one, collapse(&[2; 16], tag));
+        assert_ne!(one, collapse(&[1; 16], "device-1:w1:p2"));
+        assert_eq!(one.len(), 32);
+        assert!(one.len() <= admission::MAX_COLLAPSE);
+        assert!(!one.contains("w1") && !one.contains("device"));
+    }
+
+    /// Past the bound only the tags to close shrink, from the end; a notice
+    /// that still does not fit is refused rather than cut.
+    #[test]
+    fn an_app_plaintext_sheds_tags_to_close_and_never_its_notice() {
+        let tags: Vec<String> = (0..400).map(|n| format!("device-1:w1:p{n}")).collect();
+        let payload = json!({"title": "task", "tag": "device-1:w1:p1", "clear": tags});
+        let plain: Value = serde_json::from_slice(&app_plaintext(&payload).unwrap()).unwrap();
+        assert!(plain.to_string().len() <= MAX_APNS_PLAINTEXT);
+        assert_eq!(plain["title"], "task");
+        let kept = plain["clear"].as_array().unwrap();
+        assert!(!kept.is_empty() && kept.len() < 400);
+        assert_eq!(kept[0], "device-1:w1:p0");
+        let huge = json!({"title": "x".repeat(MAX_APNS_PLAINTEXT), "clear": []});
+        assert_eq!(app_plaintext(&huge), Err("payload_too_large"));
     }
 
     /// A message encrypted for a subscription decrypts with the phone's key.
@@ -1063,37 +1200,15 @@ mod tests {
 
     #[test]
     fn a_notice_goes_to_a_phone_only_when_every_condition_holds() {
-        let (vapid, _) = Vapid::generate().unwrap();
-        let route = |vapid, mode, mobile_on, renderers, subscriptions| {
-            notice_route(vapid, mode, mobile_on, renderers, subscriptions).map(|_| ())
-        };
-        assert_eq!(route(Some(&vapid), PushMode::Always, true, 3, 1), Ok(()));
-        assert_eq!(route(Some(&vapid), PushMode::AppClosed, true, 0, 1), Ok(()));
-        assert_eq!(route(None, PushMode::Always, true, 0, 1), Err("no_vapid"));
-        assert_eq!(
-            route(Some(&vapid), PushMode::Off, true, 0, 1),
-            Err("mode_off")
-        );
-        assert_eq!(
-            route(Some(&vapid), PushMode::AppClosed, true, 1, 1),
-            Err("app_open")
-        );
-        assert_eq!(
-            route(Some(&vapid), PushMode::Always, false, 0, 1),
-            Err("mobile_off")
-        );
-        assert_eq!(
-            route(Some(&vapid), PushMode::Always, true, 0, 0),
-            Err("no_subscription")
-        );
+        let route = notice_route;
+        assert_eq!(route(PushMode::Always, true, 3, 1), Ok(()));
+        assert_eq!(route(PushMode::AppClosed, true, 0, 1), Ok(()));
+        assert_eq!(route(PushMode::Off, true, 0, 1), Err("mode_off"));
+        assert_eq!(route(PushMode::AppClosed, true, 1, 1), Err("app_open"));
+        assert_eq!(route(PushMode::Always, false, 0, 1), Err("mobile_off"));
+        assert_eq!(route(PushMode::Always, true, 0, 0), Err("no_subscription"));
         // Several causes at once report the first in the documented order.
-        assert_eq!(
-            route(Some(&vapid), PushMode::Off, false, 0, 0),
-            Err("mode_off")
-        );
-        assert_eq!(
-            route(Some(&vapid), PushMode::Always, false, 0, 0),
-            Err("mobile_off")
-        );
+        assert_eq!(route(PushMode::Off, false, 0, 0), Err("mode_off"));
+        assert_eq!(route(PushMode::Always, false, 0, 0), Err("mobile_off"));
     }
 }

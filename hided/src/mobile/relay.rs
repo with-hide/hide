@@ -1,19 +1,21 @@
 //! One outbound relay socket, owned by Mobile. The relay routes opaque frames;
 //! phone admission and every encrypted application frame stay in phone.rs.
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::{
     Error,
-    admission::{ClientMessage, DeviceHello, DeviceKey, Refusal, ServerMessage},
+    admission::{
+        ClientMessage, DeviceHello, DeviceKey, PushOutcome, PushRequest, Refusal, ServerMessage,
+    },
     frame::{Frame, MAX_FRAME},
     noise::{NoiseKeypair, Session},
     qr::PairingQr,
 };
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::{
@@ -241,6 +243,98 @@ pub(super) enum Output {
     Closed { connection: u32 },
 }
 
+/// Push requests waiting for the socket loop to send them. A blocking
+/// caller that finds it full is answered at once rather than queued.
+const PUSH_QUEUE: usize = 8;
+/// Requests sent and not yet answered. The relay answers each within its own
+/// deadline and one retry, so a full table means it stopped answering.
+const MAX_PENDING_PUSH: usize = 32;
+/// How long a caller waits for the relay's answer: two of the relay's
+/// ten-second Apple deadlines (the one retry) and a margin.
+pub const PUSH_ANSWER_WAIT: Duration = Duration::from_secs(30);
+
+/// One request the link carries to the relay, and where its answer goes.
+struct PushJob {
+    request: PushRequest,
+    answer: std::sync::mpsc::SyncSender<Result<PushOutcome, &'static str>>,
+}
+
+/// What a running link offers the rest of Mobile: a push request to the
+/// relay, when the relay said it forwards them. A relay that does not know
+/// the `push` field of `registered` sends `{"type":"registered"}`, which reads
+/// as false, so hided never sends a message an older relay would close the
+/// link on (`docs/RELAY_PROTOCOL.md`, Push relay).
+#[derive(Clone)]
+pub struct Link {
+    jobs: mpsc::Sender<PushJob>,
+    next_id: Arc<AtomicU32>,
+    push: bool,
+}
+
+impl Link {
+    /// Sends one push request and waits for the relay's result. Blocking:
+    /// every caller is a blocking thread, where Web Push sends already run.
+    /// `Err` is why no result came, as the diagnostic names it.
+    pub fn push(&self, mut request: PushRequest) -> Result<PushOutcome, &'static str> {
+        if !self.push {
+            return Err("relay_without_push");
+        }
+        request.id = self.next_id();
+        let (answer, result) = std::sync::mpsc::sync_channel(1);
+        self.jobs
+            .try_send(PushJob { request, answer })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => "push_queue_full",
+                mpsc::error::TrySendError::Closed(_) => "relay_link_ended",
+            })?;
+        result
+            .recv_timeout(PUSH_ANSWER_WAIT)
+            .map_err(|error| match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => "relay_no_answer",
+                std::sync::mpsc::RecvTimeoutError::Disconnected => "relay_link_ended",
+            })?
+    }
+
+    /// A request id this link has not used lately; 0 is not a request id
+    /// (`admission::PushRequest`).
+    fn next_id(&self) -> u32 {
+        loop {
+            let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+            if id != 0 {
+                return id;
+            }
+        }
+    }
+}
+
+/// Holds the link Mobile hands out while its socket loop runs, and takes it
+/// back on every way out of the loop: an end, an error or a cancellation.
+struct Published<'a> {
+    mobile: &'a Mobile,
+    link: Link,
+}
+
+impl<'a> Published<'a> {
+    fn new(mobile: &'a Mobile, link: Link) -> Self {
+        mobile.lock().relay_link = Some(link.clone());
+        Self { mobile, link }
+    }
+}
+
+impl Drop for Published<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.mobile.lock();
+        // A newer link may already stand in its place; only this one goes.
+        if inner
+            .relay_link
+            .as_ref()
+            .is_some_and(|held| held.jobs.same_channel(&self.link.jobs))
+        {
+            inner.relay_link = None;
+        }
+    }
+}
+
 struct Peer {
     inbound: mpsc::Sender<Vec<u8>>,
     task: AbortHandle,
@@ -269,7 +363,7 @@ async fn connect(
     .await
     .map_err(|_| LinkError::Closed)??;
     let hello = DeviceHello::new(&keys.device.public_key(), PHONE_PROTOCOL)?;
-    tokio::time::timeout(DEADLINE, async {
+    let push = tokio::time::timeout(DEADLINE, async {
         socket
             .send(Message::Text(
                 ClientMessage::Device {
@@ -297,7 +391,10 @@ async fn connect(
             return Err(LinkError::Closed);
         };
         match ServerMessage::decode(&text)? {
-            ServerMessage::Registered => Ok(()),
+            // `push` reads as false from a relay that does not know the
+            // field, so an older relay is served every phone frame and no
+            // push request (`docs/RELAY_PROTOCOL.md`, Push relay, deploying).
+            ServerMessage::Registered { push } => Ok(push),
             ServerMessage::Refused { reason } => Err(LinkError::Refused(reason)),
             _ => Err(LinkError::Closed),
         }
@@ -306,6 +403,16 @@ async fn connect(
     .map_err(|_| LinkError::Closed)??;
     mobile.relay_state(State::Connected);
     let (outgoing, mut output) = mpsc::channel::<Output>(OUTBOUND_QUEUE);
+    let (jobs, mut pushed) = mpsc::channel::<PushJob>(PUSH_QUEUE);
+    let link = Link {
+        jobs,
+        next_id: Arc::new(AtomicU32::new(1)),
+        push,
+    };
+    // The link is handed out only while this loop runs.
+    let _published = Published::new(mobile, link);
+    let mut pending: HashMap<u32, (tokio::time::Instant, std::sync::mpsc::SyncSender<_>)> =
+        HashMap::new();
     let mut peers: HashMap<u32, Peer> = HashMap::new();
     let mut ping = tokio::time::interval(Duration::from_secs(20));
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -332,6 +439,14 @@ async fn connect(
                             if let Some(peer) = peers.remove(&connection) { peer.task.abort(); }
                             None
                         }
+                        // Answers an id this link sent; one it never sent, or
+                        // an id already answered, is not this relay's answer.
+                        ServerMessage::PushResult(result) => {
+                            if let Some((_, answer)) = pending.remove(&result.id) {
+                                let _ = answer.send(Ok(result.result));
+                            }
+                            None
+                        }
                         ServerMessage::Refused { reason } => return Err(LinkError::Refused(reason)),
                         _ => return Err(LinkError::Closed),
                     },
@@ -353,6 +468,22 @@ async fn connect(
                 Output::Frame { connection, bytes } if peers.contains_key(&connection) => Some(Message::Binary(bytes.into())),
                 Output::Closed { connection } if peers.remove(&connection).is_some() => Some(Message::Text(ClientMessage::Close { connection }.encode()?.into())),
                 _ => None,
+            },
+            Some(job) = pushed.recv() => {
+                // A caller stops waiting after PUSH_ANSWER_WAIT; its entry
+                // goes then, so the table holds only answers still awaited.
+                pending.retain(|_, (sent, _)| sent.elapsed() < PUSH_ANSWER_WAIT);
+                if pending.len() >= MAX_PENDING_PUSH {
+                    // The relay stopped answering: this request is refused
+                    // rather than sent with no answer to wait for.
+                    let _ = job.answer.send(Err("relay_not_answering"));
+                    None
+                } else {
+                    let id = job.request.id;
+                    let message = ClientMessage::Push(job.request).encode()?;
+                    pending.insert(id, (tokio::time::Instant::now(), job.answer));
+                    Some(Message::Text(message.into()))
+                }
             },
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
                 let _ = result;

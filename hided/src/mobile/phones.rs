@@ -18,7 +18,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use subtle::ConstantTimeEq;
 
-use super::store::{self, Notifications, PhoneOrigin, PhoneRecord, PhonesFile, PushSubscription};
+use super::store::{
+    self, ApnsRegistration, Notifications, PhoneOrigin, PhoneRecord, PhonesFile, PushSubscription,
+};
 
 pub const MAX_PHONES: usize = 4;
 pub const CODE_TTL_MS: u64 = 5 * 60 * 1000;
@@ -216,6 +218,7 @@ impl Phones {
             last_seen_ms: now_ms,
             notifications: Notifications::Unasked,
             push: None,
+            apns: None,
             origin,
         };
         self.file.phones.push(record.clone());
@@ -272,6 +275,8 @@ impl Phones {
         stale
     }
 
+    /// Stores a Web Push subscription, which replaces any APNs registration:
+    /// a phone has one way to be reached at a time.
     pub fn set_subscription(&mut self, id: &str, push: Option<PushSubscription>) -> bool {
         let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
             return false;
@@ -281,9 +286,42 @@ impl Phones {
         } else {
             phone.notifications
         };
-        if phone.push == push && phone.notifications == notifications {
+        let apns = if push.is_some() {
+            None
+        } else {
+            phone.apns.clone()
+        };
+        if phone.push == push && phone.notifications == notifications && phone.apns == apns {
             return false;
         }
+        phone.push = push;
+        phone.notifications = notifications;
+        phone.apns = apns;
+        self.save();
+        true
+    }
+
+    /// Stores an iOS app phone's registration, which replaces a Web Push
+    /// subscription for the same reason.
+    pub fn set_apns(&mut self, id: &str, registration: Option<ApnsRegistration>) -> bool {
+        let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
+            return false;
+        };
+        let notifications = if registration.is_some() {
+            Notifications::On
+        } else {
+            phone.notifications
+        };
+        let push = if registration.is_some() {
+            None
+        } else {
+            phone.push.clone()
+        };
+        if phone.apns == registration && phone.notifications == notifications && phone.push == push
+        {
+            return false;
+        }
+        phone.apns = registration;
         phone.push = push;
         phone.notifications = notifications;
         self.save();
@@ -294,16 +332,17 @@ impl Phones {
         let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
             return false;
         };
-        let push = if notifications == Notifications::Off {
-            None
+        let (push, apns) = if notifications == Notifications::Off {
+            (None, None)
         } else {
-            phone.push.clone()
+            (phone.push.clone(), phone.apns.clone())
         };
-        if phone.notifications == notifications && phone.push == push {
+        if phone.notifications == notifications && phone.push == push && phone.apns == apns {
             return false;
         }
         phone.notifications = notifications;
         phone.push = push;
+        phone.apns = apns;
         self.save();
         true
     }
@@ -321,6 +360,19 @@ impl Phones {
             return false;
         };
         phone.push = None;
+        self.save();
+        true
+    }
+
+    /// Drops an APNs registration Apple called gone; the app registers a new
+    /// one on its next connection.
+    pub fn drop_apns(&mut self, id: &str, token: &str) -> bool {
+        let Some(phone) = self.file.phones.iter_mut().find(|phone| {
+            phone.id == id && phone.apns.as_ref().is_some_and(|apns| apns.token == token)
+        }) else {
+            return false;
+        };
+        phone.apns = None;
         self.save();
         true
     }
