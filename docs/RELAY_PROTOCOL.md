@@ -283,6 +283,9 @@ The decoder caps the URL at 1024 bytes, validates lengths/version/room derivatio
 Pairing-code generation, expiry and single consumption remain hided's phone-admission responsibility.
 The phone loader must clear the fragment after parsing and must never log or persist the full URL or decoded code.
 The relay never receives the QR, code or encrypted phone credential in a routing control message.
+The iOS app takes the same URL in two ways and both go through the same decoder: its own camera scan (`HideScanner`), and a universal link, since `app.withhide.dev` is an associated domain of the app (the `apple-app-site-association` file the hosted phone site serves matches `/` with the fragment `pair=*`).
+The app registers no custom URL scheme, so no other app can hand it a pairing link; a link it is given is held in memory for one minute, handed to the page once, and shown to the person, who presses Connect, so it never pairs a phone without a tap.
+Whether iOS passes the fragment of a universal link to the app is a platform behavior to confirm on a device with the deployed association file; the simulator run in this repository cannot show it.
 
 ## Build and evidence
 

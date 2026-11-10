@@ -690,7 +690,7 @@ Xcode does not run on every Mac this repository is built on, so the app builds o
 It runs, on this machine:
 
 1. `bash scripts/verify-web.sh web build:phone`, the same phone build the hosted site uses (`HIDE_IOS_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`, for a run after only Swift changed);
-2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`;
+2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`, and a plugin list (`BridgeGate.appPlugins`) that differs from the plugins the package defines;
 3. `mobile/scripts/assemble.mjs`, which fills `mobile/www/` (ignored): the loader and the current protocol's bundle from step 1, and every older `p/<n>/` bundle that `mobile/retained-bundles.json` pins, then `protocols.json` as their union and no `sw.js`.
    The build trusts the pin and nothing the server says about itself: each pinned file is read from `https://app.withhide.dev` and must match its pinned size and SHA-256, so a file that differs, a pinned file or protocol the site no longer serves, a protocol the site serves that the pin lacks, or a page whose content policy is not the phone site's stops the build with the file named; the app never ships fewer bundles than the pin lists without someone changing the pin.
    The protocol this source speaks is never pinned: it comes from step 1;
@@ -699,19 +699,23 @@ It runs, on this machine:
    A failing test fails the command.
 
 `bash mobile/scripts/build-ios.sh run` installs the built app in a simulator of its own on the mini (`hide-ios-<branch>`, created if missing), launches it, waits `HIDE_IOS_SETTLE` seconds (default 15) and captures the screen.
-With `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build); the link goes to the mini in a private file, never in an argument, and the file is removed on every way out.
+With `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build); the link travels on the standard input of the script, in front of it, so it is in no argument and in no file on the mini, and there is nothing to remove.
+A pairing code lives five minutes and only while a Mobile page of that Hide stays open, so the page that showed it (or a client that sent `mobile_observe`) must still be connected when the simulator launches.
+`HIDE_IOS_TAPS='<css selector>;;<css selector>'` presses those on the page, in order, once each is there (`[data-phone-host]` the saved computer, `[data-phone-tab="settings"]`, `[data-phone-setting="language"]`, `[data-phone-add]`, `[data-phone-scan]`), `HIDE_IOS_APPEARANCE=light|dark` sets the simulator's appearance, `HIDE_IOS_HOME=1` captures the home screen with the icon, and `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on its launch screen (it starts and waits for a debugger that never comes) and captures that.
+The taps, like the link, are read by the debug build only.
 `HIDE_IOS_CAPTURE=<file.png>` copies the capture back; otherwise it is `~/hide-ios-build/<branch>/shots/run.png` on the mini.
 `bash mobile/scripts/build-ios.sh clean` deletes that simulator and the branch's whole folder there.
 
-Everything a command starts it ends: the simulator it created is shut down and deleted, one it found off is shut down again, and the pairing link file is removed, on every exit including a failure (a trap in `mini-ios.sh`).
-`HIDE_IOS_KEEP_SIMULATOR=1` leaves the simulator booted for a check by hand, and `clean` removes it afterwards.
+Everything a command starts it ends: the simulator it created is shut down and deleted, and one it found off is shut down again, on every exit including a failure (a trap in `mini-ios.sh`).
+`HIDE_IOS_KEEP_SIMULATOR=1` leaves the simulator booted for a check by hand and marks it; the next command of the branch that does not ask to keep it ends that simulator too, so `clean` is not the only way it goes.
+The Swift tests of a `build` run on the branch's simulator and clear the pairing Keychain items they test, so a pairing kept for a check does not survive a later `build`: pair again after it.
 The mini runs other work, and nothing prunes a branch it does not own, so each branch's state is one folder of about 0.5 GB (`~/hide-ios-build/<branch>/`) plus one simulator; once 4 other branches hold a folder there, the build refuses before it copies anything and prints the folders.
 Run `bash mobile/scripts/build-ios.sh clean` from those branches, or `rm -rf` a folder it names after `xcrun simctl delete` of its `hide-ios-<branch>` simulator, then retry.
 The build prints the machine's free disk when it ends.
 
 `bash scripts/verify-web.sh mobile test` runs the node tests of `mobile/` (the assembler against a pin that differs or a protocol that is missing, the pin generator, the Capacitor version check, which also refuses a plugin package or product the app links without the fixed plugin list changing, and the release gate below), which `pr.yml`'s checks lane runs.
 The Swift tests need Xcode, so only the build command above runs them; [Swift tests are not in CI](#swift-tests-are-not-in-ci) says why.
-`build` and `run` build the app unsigned for the simulator; [The release build](#the-release-build) signs and uploads one.
+The simulator build is signed ad hoc (`CODE_SIGN_IDENTITY=-`, no account or certificate), not left unsigned, because the simulator gives the Keychain only to an app that carries its entitlements and answers -34018 to an unsigned one; [The release build](#the-release-build) signs and uploads one with the team's own certificate.
 
 ### The release build
 
@@ -766,7 +770,7 @@ It lists every failed check and the upload never starts after one.
 | Identity | bundle id `me.grab.hide.ios`, the version and build number the command passed, iPhone only, minimum iOS 15.0, built with an iOS 26 SDK (Apple's upload rule since 2026-04-28) |
 | Export compliance | neither `ITSAppUsesNonExemptEncryption` nor `ITSEncryptionExportComplianceCode` is in the app: the app carries its own end-to-end encryption ([RELAY_PROTOCOL.md](RELAY_PROTOCOL.md)), so App Store Connect asks its export questionnaire for each build and the build waits at Missing Compliance until the operator answers it; the key's value is set from what the operator's answers and documents turn out to be (a `true` without the code Apple issues after reviewing documents is refused at validation, error 90592) |
 | Debug left out | Capacitor `loggingBehavior` none, `CAPACITOR_DEBUG` not on, no App Transport Security exception, no `server.url` or cleartext, no allowed navigation, web view inspection off, the debug pairing hook's name (`HIDE_DEBUG_PAIR_LINK`) absent from the binary and `BridgeGate` present in it |
-| Privacy manifest | `PrivacyInfo.xcprivacy` in the app: no tracking, no tracking domains, nothing collected, and a reason for every required-reason API it declares; Capacitor 8.6.0's own two frameworks declare none and no binary in the app calls one (read from the archive's symbols on 2026-11-10), so the app's list is empty until a node adds code that does |
+| Privacy manifest | `PrivacyInfo.xcprivacy` in the app: no tracking, no tracking domains, nothing collected, and a reason for every required-reason API it declares; Capacitor 8.6.0's own two frameworks declare none and call none (read from the archive's symbols on 2026-11-10); the app's own code reads `UserDefaults` for the first-run marker that clears a Keychain item left by an earlier install, so its manifest declares `NSPrivacyAccessedAPICategoryUserDefaults` with reason `CA92.1`, and a node that adds code calling another required-reason API adds its declaration in the same change |
 | Signature | signed by an Apple Distribution certificate, valid with `--strict --deep`; the profile is an App Store profile of team `GH6F6ZA497` for iOS, with no device list |
 | Entitlements | exactly the list in `mobile/release-expect.json`; a node that adds a capability (`aps-environment` production with push, Associated Domains with universal links) adds its entitlement to that list in the same change, and a build with an entitlement nobody listed fails |
 | Web bundle | every file of `public/` is in the manifest `mobile/scripts/bundle-manifest.mjs` made after `cap sync` (the assembled folder, every retained file as pinned, and the two Cordova files Capacitor adds), with its SHA-256, and none is missing |

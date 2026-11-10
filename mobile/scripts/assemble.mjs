@@ -18,8 +18,10 @@ import { ORIGIN, contentPolicy, filePath, framePolicy, get, sha256 } from '../..
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const PINS = resolve(ROOT, 'mobile/retained-bundles.json');
 const MAX_FILE = 16 * 1024 * 1024;
-// Files of the browser build that do nothing inside the app: the app registers no service worker.
+// Files of the browser build that do nothing inside the app: the app registers no service worker, and the file iOS reads
+// from the hosted site to hand it a link is the site's, not the app's.
 const NOT_IN_APP = new Set(['sw.js']);
+const notInApp = (path) => NOT_IN_APP.has(path) || path === '.well-known' || path.startsWith('.well-known/');
 
 // A read of a published file is the same read every time, so a network stumble is tried again, a few times.
 const ATTEMPTS = 3;
@@ -75,16 +77,26 @@ export function parsePins(value) {
   return pins;
 }
 
+/** The one place the protocol this source speaks is read: `PHONE_PROTOCOL`, which the phone build and the pin generator both follow. */
+export async function sourceProtocol(root = ROOT) {
+  const source = await readFile(resolve(root, 'web/src/mobile/phoneVersion.ts'), 'utf8');
+  const current = Number(source.match(/PHONE_PROTOCOL = (\d+)/)?.[1]);
+  if (!Number.isSafeInteger(current) || current < 1) throw new Error('phone protocol missing');
+  return current;
+}
+
 /**
  * @param {{dist: string, out: string, pins: ReturnType<typeof parsePins>, origin?: string, fetcher?: typeof fetch}} options
  * @returns {Promise<number[]>} the protocols the folder carries
  */
-export async function assemble({ dist, out, pins, origin = ORIGIN, fetcher = fetch }) {
+export async function assemble({ dist, out, pins, expected, origin = ORIGIN, fetcher = fetch }) {
   const built = JSON.parse(await readFile(resolve(dist, 'protocols.json'), 'utf8'));
   if (!Array.isArray(built) || built.length !== 1 || !Number.isSafeInteger(built[0]) || built[0] < 1) {
     throw new Error('The phone build must contain exactly its own protocol');
   }
   const [current] = built;
+  // The build's own protocol is the source's: a phone-dist built from another revision is refused, not shipped.
+  if (expected !== undefined && current !== expected) throw new Error(`web/phone-dist speaks protocol ${current} but this source speaks ${expected}; rebuild it`);
   // The current protocol is built from this source; a pin for it would let the site's copy stand in for the source.
   if (pins.has(current)) throw new Error(`Protocol ${current} is this source's own; remove it from retained-bundles.json`);
 
@@ -98,7 +110,7 @@ export async function assemble({ dist, out, pins, origin = ORIGIN, fetcher = fet
   // A fresh folder: a file left by an earlier build must never ride along.
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
-  await cp(dist, out, { recursive: true, filter: (source) => !NOT_IN_APP.has(source.slice(dist.length + 1)) });
+  await cp(dist, out, { recursive: true, filter: (source) => !notInApp(source.slice(dist.length + 1)) });
 
   for (const [number, files] of pins) {
     for (const [path, entry] of Object.entries(files)) {
@@ -127,7 +139,7 @@ export async function assemble({ dist, out, pins, origin = ORIGIN, fetcher = fet
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const pins = parsePins(JSON.parse(await readFile(PINS, 'utf8')));
-    const protocols = await assemble({ dist: resolve(ROOT, 'web/phone-dist'), out: resolve(ROOT, 'mobile/www'), pins });
+    const protocols = await assemble({ dist: resolve(ROOT, 'web/phone-dist'), out: resolve(ROOT, 'mobile/www'), pins, expected: await sourceProtocol() });
     console.log(`phone bundles in the app: ${protocols.join(', ')}`);
   } catch (error) {
     console.error(`App bundle assembly stopped: ${error.message}`);

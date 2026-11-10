@@ -28,9 +28,11 @@ export function requireMain(env) {
   }
 }
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+// The one file iOS reads to hand a link to the app: it must sit under `.well-known`, the only name here that starts with a dot.
+export const ASSOCIATION = '.well-known/apple-app-site-association';
 export function filePath(path) {
   if (typeof path !== 'string' || path.length > 240 ||
-      !path.split('/').every(part => /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(part))) {
+      !path.split('/').every((part, index) => (index === 0 && part === '.well-known') || /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(part))) {
     throw new Error('Invalid phone site file path');
   }
   return path;
@@ -54,6 +56,18 @@ export function inventory(value) {
     if (!/^p\/[1-9]\d*\//.test(path) || !numbers.includes(Number(path.split('/')[1]))) throw new Error('Phone protocol is missing its index');
   }
   return numbers;
+}
+// What the file says, to the letter: this app (team and bundle id) opens for the page `/` that carries a `#pair=` fragment,
+// which is the QR link of docs/RELAY_PROTOCOL.md, and for nothing else on the site. A looser file would open the app for
+// ordinary browsing; a missing or other one leaves a scanned QR in Safari.
+export const ASSOCIATION_BODY = { applinks: { details: [{ appIDs: ['GH6F6ZA497.me.grab.hide.ios'],
+  components: [{ '/': '/', '#': 'pair=*', comment: 'A Hide pairing link: the QR a computer shows, opened by the camera' }] }] } };
+export function association(text) {
+  assert(JSON.stringify(JSON.parse(text)) === JSON.stringify(ASSOCIATION_BODY), 'The apple-app-site-association file is not the one this app is built for.');
+  return text;
+}
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
 }
 export async function get(url, fetcher, headers = {}) {
   const response = await fetcher(url, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -148,6 +162,7 @@ export async function preparePhone({ source, dist, stage, secrets, fetcher = fet
   const protocol = protocols[0];
   const policy = contentPolicy(await readFile(resolve(dist, 'index.html'), 'utf8'));
   if (contentPolicy(await readFile(resolve(dist, `p/${protocol}/index.html`), 'utf8')) !== policy) throw new Error('Phone pages disagree on CSP');
+  association(await readFile(resolve(dist, ASSOCIATION), 'utf8'));
   let size = Object.values(files).reduce((sum, entry) => sum + entry.size, 0);
   for (const path of await localFiles(dist)) {
     if (path === 'protocols.json') continue;
@@ -182,7 +197,9 @@ export async function preparePhone({ source, dist, stage, secrets, fetcher = fet
     frames.push({ src: `^/${path.replaceAll('.', '\\.')}$`, headers: headers(`${frame}; frame-ancestors 'self'`), continue: true });
   }
   await writeFile(resolve(stage, '.vercel/output/config.json'), JSON.stringify({ version: 3, routes: [
-    { src: '^/(?!p/[1-9][0-9]*/).*$', headers: headers(`${policy}; frame-ancestors 'none'`), continue: true },
+    { src: '^/(?!p/[1-9][0-9]*/|\\.well-known/apple-app-site-association$).*$', headers: headers(`${policy}; frame-ancestors 'none'`), continue: true },
+    // The association file is read by iOS, not a browser: JSON, no redirect, and no page policy around it.
+    { src: '^/\\.well-known/apple-app-site-association$', headers: { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }, continue: true },
     ...bundles,
     ...frames,
     { src: '/', dest: '/index.html' },
@@ -202,7 +219,10 @@ export async function confirmPhone(stage, fetcher = fetch) {
   for (const [path, entry] of Object.entries(expected.files)) {
     const { bytes, headers } = await get(`${ORIGIN}/${path}`, fetcher);
     if (sha256(bytes) !== entry.sha256 || bytes.length !== entry.size) throw new Error(`Production phone file differs: ${path}`);
-    if (FRAME.test(path)) {
+    if (path === ASSOCIATION) {
+      association(bytes.toString());
+      if (headers.get('content-type') !== 'application/json') throw new Error('Production apple-app-site-association is not served as application/json');
+    } else if (FRAME.test(path)) {
       if (headers.get('content-security-policy') !== `${framePolicy(bytes.toString())}; frame-ancestors 'self'`) throw new Error('Production look frame CSP header is missing or changed');
     } else if (path.endsWith('.html')) {
       const policy = contentPolicy(bytes.toString());

@@ -4,6 +4,17 @@ import { decodeQr, type PairingQr } from "../../../hide-relay-protocol/web";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { relayReady } from "./relayRuntime";
+import { appHost } from "./appHost";
+import { nativeCode, scanQr } from "./appBridge";
+
+/** The app's own camera view: it asks for the camera when the person taps, reads one code and gives its text to the same decoder. */
+async function scanInApp(t: TFunction, onPair: (pair: PairingQr) => void, fail: (error: "cameraError" | "qrError") => void): Promise<void> {
+  let text: string;
+  try { text = await scanQr(t("mobile.relay.scanHint")); }
+  catch (error) { if (nativeCode(error) !== "cancelled") fail("cameraError"); return; }
+  try { await relayReady(); onPair(decodeQr(text)); }
+  catch { fail("qrError"); }
+}
 
 /** One camera, frames capped at 640 pixels at four scans/second, stopped on hide or unmount. */
 export function ScanQr({ t, onPair }: { t: TFunction; onPair: (pair: PairingQr) => void }) {
@@ -62,7 +73,11 @@ export function ScanQr({ t, onPair }: { t: TFunction; onPair: (pair: PairingQr) 
   return <div className="flex flex-col gap-md">
     <p className="text-subhead text-muted-foreground">{t("mobile.relay.scanHint")}</p>
     {camera ? <video ref={video} muted playsInline className="aspect-square w-full rounded-lg object-cover" /> : null}
-    <Button variant="secondary" className="min-h-(--size-touch-target)" onClick={() => { setError(null); setCamera(!camera); }}>{t(camera ? "common.close" : "mobile.relay.scan")}</Button>
+    <Button variant="secondary" className="min-h-(--size-touch-target)" data-phone-scan="true" onClick={() => {
+      setError(null);
+      if (appHost()) void scanInApp(t, onPair, setError);
+      else setCamera(!camera);
+    }}>{t(camera ? "common.close" : "mobile.relay.scan")}</Button>
     <Input aria-label={t("mobile.relay.paste")} placeholder={t("mobile.relay.paste")} value={link} autoComplete="off" maxLength={1024} onChange={(event) => setLink(event.target.value)} />
     <Button variant="secondary" disabled={!link} onClick={() => {
       void relayReady().then(() => { const pair = decodeQr(link); setLink(""); onPair(pair); }).catch(() => setError("qrError"));

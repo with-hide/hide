@@ -41,7 +41,7 @@ import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { readHosts, saveHost, revokeHost, type PairedHost } from "./hosts";
+import { hostStore, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
@@ -69,13 +69,18 @@ function storedCredential(): string | null {
   }
 }
 
+/** Writes to the host store one after another, so a pairing and a refusal that follows it never overtake each other. */
+let storing: Promise<unknown> = Promise.resolve();
+function persist(write: () => Promise<void>): void {
+  storing = storing.then(write).catch(storageFailed);
+}
+
 function storeCredential(credential: string | null): void {
   if (hostedPhone()) {
-    try {
-      if (relayHost && credential) { relayHost = { ...relayHost, credential }; saveHost(localStorage, relayHost); }
-      // A revoked device stays listed as disconnected, without the credential it refused.
-      else if (relayHost) { relayHost = { ...relayHost, credential: null }; revokeHost(localStorage, relayHost.room); }
-    } catch { storageFailed(); }
+    const host = relayHost;
+    if (host && credential) { relayHost = { ...host, credential }; const saved = relayHost; persist(() => hostStore().save(saved)); }
+    // A revoked device stays listed as disconnected, without the credential it refused.
+    else if (host) { relayHost = { ...host, credential: null }; persist(() => hostStore().revoke(host.room)); }
     return;
   }
   try {
@@ -1015,7 +1020,7 @@ async function startRelay(): Promise<void> {
       patch({ screen: "pair", macName: relayPair.name });
       if (query.get("connect") === "1") pairNow();
     } else {
-      relayHost = readHosts(localStorage).find((host) => host.room === query.get("host")) ?? null;
+      relayHost = (await hostStore().list()).find((host) => host.room === query.get("host")) ?? null;
       if (!relayHost) { window.location.replace("/"); return; }
       credential = relayHost.credential;
       // A revoked device opened from a link or a notification says so without dialing it.

@@ -11,11 +11,15 @@
 #          and run the HideShell tests there; a failing test fails the command
 #   run    install the built app in a simulator of its own on the mini, launch it, wait, capture the screen
 #          (HIDE_IOS_PAIR_LINK=<link> makes the debug build follow that pairing link at launch;
+#           HIDE_IOS_TAPS='<css selector>;;<css selector>' presses those on the page, in order, once each is there;
+#           HIDE_IOS_APPEARANCE=light|dark sets the simulator's appearance; HIDE_IOS_HOME=1 captures the home screen with the
+#           icon; HIDE_IOS_LAUNCH_SCREEN=1 holds the app on its launch screen and captures that;
 #           HIDE_IOS_CAPTURE=<file.png> copies the capture back here; HIDE_IOS_SETTLE=<seconds>, default 15)
 #   clean  delete that simulator and this branch's whole folder on the mini
 #
-# Every command ends what it started on the mini: its simulator is shut down and deleted and the pairing link file is
-# removed, on any way out. HIDE_IOS_KEEP_SIMULATOR=1 keeps the simulator for a check by hand.
+# Every command ends what it started on the mini: its simulator is shut down and deleted, on any way out (the pairing
+# link is never a file there). HIDE_IOS_KEEP_SIMULATOR=1 keeps the simulator for a check by hand; the next command
+# of the branch that does not ask for it ends that simulator too, so `clean` is not the only way it goes.
 # A branch's state is one folder, about 0.5 GB, ~/hide-ios-build/<branch>/; past 4 other branches' folders the build
 # refuses and says which to remove.
 #
@@ -55,12 +59,7 @@ case "$command" in
             --exclude 'App/build' --exclude 'DerivedData' --exclude 'xcuserdata' --exclude '.build' \
             mobile/ios/ "$host:$remote/ios/"
         ;;
-    run)
-        # Debug builds only: a pairing link the simulator follows at launch (see ShellViewController).
-        if [[ -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then
-            printf '%s' "$HIDE_IOS_PAIR_LINK" | ssh "$host" "umask 077; mkdir -p '$remote' && cat > '$remote/pair-link'"
-        fi
-        ;;
+    run) ;;
     clean) ;;
     status)
         [[ -n "${2:-}" ]] || { printf 'usage: %s status <delivery id>\n' "$0" >&2; exit 2; }
@@ -69,9 +68,16 @@ case "$command" in
     *) printf 'usage: %s [build | release | status <delivery id> | run | clean]\n' "$0" >&2; exit 2 ;;
 esac
 
-# `release` runs the same build and Swift tests first: a build whose tests fail is never signed.
-ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
-    bash -s -- "${command/release/build}" "$slug" < mobile/scripts/mini-ios.sh
+# Debug builds only: a pairing link the simulator follows at launch (see ShellViewController). It travels in front of
+# the script on the same standard input, so it is in no argument and in no file, and there is nothing to leave behind.
+{
+    if [[ "$command" == run && -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then printf 'HIDE_PAIR_LINK=%q\n' "$HIDE_IOS_PAIR_LINK"; fi
+    if [[ "$command" == run && -n "${HIDE_IOS_TAPS:-}" ]]; then printf 'HIDE_TAPS=%q\n' "$HIDE_IOS_TAPS"; fi
+    cat mobile/scripts/mini-ios.sh
+} | ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
+    HIDE_IOS_APPEARANCE="${HIDE_IOS_APPEARANCE:-}" HIDE_IOS_HOME="${HIDE_IOS_HOME:-}" HIDE_IOS_LAUNCH_SCREEN="${HIDE_IOS_LAUNCH_SCREEN:-}" \
+    bash -s -- "${command/release/build}" "$slug"
+# `release` ran the same build and Swift tests just above: a build whose tests fail is never signed.
 if [[ "$command" == release ]]; then
     inputs=$(mktemp -d)
     trap 'rm -rf "$inputs"' EXIT

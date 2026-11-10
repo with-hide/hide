@@ -13,6 +13,7 @@ beforeEach(async () => {
   for (const file of ['App/CapApp-SPM/Package.swift', 'App/HideShell/Package.swift']) {
     await cp(join(real, 'ios', file), join(copy, 'ios', file), { recursive: true });
   }
+  await cp(join(real, 'ios/App/HideShell/Sources'), join(copy, 'ios/App/HideShell/Sources'), { recursive: true });
 });
 afterEach(async () => { await rm(copy, { recursive: true, force: true }); });
 
@@ -38,5 +39,13 @@ describe('what the app links', () => {
     expect(await check(copy)).toEqual([expect.stringContaining('@capacitor/keyboard')]);
     await edit('ios/App/CapApp-SPM/Package.swift', '.product(name: "Cordova", package: "capacitor-swift-pm")', '.product(name: "Cordova", package: "capacitor-swift-pm"),\n                .product(name: "CapacitorKeyboard", package: "capacitor-swift-pm")');
     expect((await check(copy)).join('\n')).toContain('CapApp-SPM links Capacitor, CapacitorKeyboard, Cordova');
+  });
+
+  it('refuses a plugin class the gate does not list, and a name the gate lists that no class has', async () => {
+    await edit('ios/App/HideShell/Sources/HideShell/HideScannerPlugin.swift', 'public let jsName = "HideScanner"', 'public let jsName = "HideScanner2"');
+    expect((await check(copy)).join('\n')).toContain('BridgeGate.appPlugins is Console, HideApp, HideKeychain, HideScanner;');
+    await edit('ios/App/HideShell/Sources/HideShell/HideScannerPlugin.swift', 'public let jsName = "HideScanner2"', 'public let jsName = "HideScanner"');
+    await edit('ios/App/HideShell/Sources/HideShell/BridgeGate.swift', '"HideApp"]', '"HideApp", "HideAnything"]');
+    expect((await check(copy)).join('\n')).toContain('HideAnything');
   });
 });

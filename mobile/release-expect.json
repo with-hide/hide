@@ -7,6 +7,7 @@
     "application-identifier": "GH6F6ZA497.me.grab.hide.ios",
     "com.apple.developer.team-identifier": "GH6F6ZA497",
     "get-task-allow": false,
-    "beta-reports-active": true
+    "beta-reports-active": true,
+    "com.apple.developer.associated-domains": ["applinks:app.withhide.dev"]
   }
 }

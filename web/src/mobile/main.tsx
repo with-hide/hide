@@ -11,13 +11,17 @@ import { App } from "./App";
 import { openNoticed, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { openKey } from "./protocol";
-import { serviceWorkerAllowed } from "./appHost";
+import { markAppHost, serviceWorkerAllowed } from "./appHost";
+import { followNativeLinks } from "./nativeLink";
 import { hostedPhone } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
 import { patch, usePhone } from "./store";
 import { PALETTE_HIDE_CLASS, readColorTheme } from "../theme";
 
+markAppHost();
 followPhoneTheme();
+// A pairing link that opens the app while a computer is connected goes to the start page, which asks before connecting.
+followNativeLinks((_pair, link) => window.location.assign(`/${new URL(link).hash}`), () => patch({ relayError: "qrError" }));
 
 const followColorTheme = (value: string | null) =>
   document.documentElement.classList.toggle(PALETTE_HIDE_CLASS, readColorTheme(value).choice === "hide");

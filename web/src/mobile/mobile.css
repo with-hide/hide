@@ -62,3 +62,20 @@ html[data-phone-demo] .phone-safe-top {
 .phone-ansi .ansi-bright-magenta-bg { background-color: var(--terminal-bright-magenta); }
 .phone-ansi .ansi-bright-cyan-bg { background-color: var(--terminal-bright-cyan); }
 .phone-ansi .ansi-bright-white-bg { background-color: var(--terminal-bright-white); }
+
+/*
+ * Inside the iOS app (appHost.ts sets the attribute): a control is pressed, never selected, and a long press on it shows
+ * no callout. Text a person may want to copy, a conversation or a terminal line, stays selectable.
+ */
+html[data-app-host] button,
+html[data-app-host] a,
+html[data-app-host] nav,
+html[data-app-host] label,
+html[data-app-host] summary,
+html[data-app-host] [role="button"],
+html[data-app-host] [role="tab"],
+html[data-app-host] [role="radio"] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

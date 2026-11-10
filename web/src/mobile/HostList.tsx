@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
 import { LaptopIcon, PlusIcon, ServerIcon, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
-import { readHosts, hostLink, removeHost, revokeHost, dropHostPush, type PairedHost } from "./hosts";
+import { hostStore, hostLink, removeHost, dropHostPush, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
@@ -13,10 +13,11 @@ import type { PhoneDevice } from "./protocol";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */
 export function HostList({ t, active, machines = [], activeRoom: named, choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; /** The Mac being viewed when the page address does not name it (the gallery). */ activeRoom?: string; /** The devices the Mac being viewed reaches, drawn under its row (PRD mobile-companion-ui B9). */ machines?: readonly PhoneDevice[]; choose?: (host: PairedHost) => void }) {
-  const [hosts, setHosts] = useState(() => {
-    try { return readHosts(localStorage); } catch { return null; }
-  });
+  // Undefined while the list is read (the app reads each computer's secret from the Keychain), null when it cannot be read.
+  const [hosts, setHosts] = useState<PairedHost[] | null | undefined>(undefined);
   const [error, setError] = useState(false);
+  const reload = () => hostStore().list().then(setHosts, () => setHosts(null));
+  useEffect(() => { void reload(); }, []);
   const [removing, setRemoving] = useState<PairedHost | null>(null);
   const activeRoom = named ?? (location.pathname.startsWith("/p/") ? new URLSearchParams(location.search).get("host") : null);
   const [presence, setPresence] = useState<Record<string, Presence>>({});
@@ -25,7 +26,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
     const stop = () => { for (const close of stops) close(); stops = []; };
     // The device refused this phone: its row stays, without the credential, and is watched no more.
     const revoked = (room: string) => {
-      try { revokeHost(localStorage, room); setHosts(readHosts(localStorage)); } catch { setError(true); }
+      void hostStore().revoke(room).then(reload).catch(() => setError(true));
       void dropHostPush(room);
     };
     const followVisibility = () => {
@@ -37,7 +38,8 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
     document.addEventListener("visibilitychange", followVisibility);
     return () => { stop(); document.removeEventListener("visibilitychange", followVisibility); };
   }, [hosts, activeRoom]);
-  if (!hosts) return <p role="alert">{t("mobile.relay.storage")}</p>;
+  if (hosts === undefined) return null;
+  if (hosts === null) return <p role="alert">{t("mobile.relay.storage")}</p>;
   return <div className="flex min-w-0 flex-col gap-xs">
     {hosts.map((host) => {
       const state = host.room === activeRoom ? active : presence[host.room];
@@ -65,7 +67,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
       const viewing = host.room === activeRoom && state?.online === true;
       return <div key={host.room} className="flex min-w-0 flex-col">
         <div className="flex min-w-0 items-start">
-        <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-sm py-md text-left" onClick={() => choose(host)}>
+        <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-sm py-md text-left" data-phone-host="true" onClick={() => choose(host)}>
           <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground" />
           <span className="flex min-w-0 flex-1 flex-col gap-xs">
             <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
@@ -90,12 +92,12 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
         <Button variant="destructive" className="min-h-(--size-touch-target)" onClick={() => {
           void removeHost(removing.room).then(() => {
             if (removing.room === activeRoom) location.assign("/");
-            else { setHosts(readHosts(localStorage)); setRemoving(null); }
+            else { void reload(); setRemoving(null); }
           }).catch(() => setError(true));
         }}>{t("mobile.relay.remove")}</Button>
       </div>
     </div> : null}
-    <Button variant="ghost" className="mt-sm min-h-(--size-touch-target) justify-start gap-sm border-t border-border px-sm text-body" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
+    <Button variant="ghost" className="mt-sm min-h-(--size-touch-target) justify-start gap-sm border-t border-border px-sm text-body" data-phone-add="true" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
     {error ? <p role="alert">{t("mobile.relay.storage")}</p> : null}
   </div>;
 }

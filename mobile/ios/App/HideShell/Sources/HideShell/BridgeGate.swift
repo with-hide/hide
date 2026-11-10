@@ -21,8 +21,10 @@ public final class BridgeGate: NSObject, WKScriptMessageHandler {
         public static let app = Origin(scheme: "capacitor", host: "localhost")
     }
 
-    /// The plugins the web side may call. A plugin is added here in the same change that links it.
-    public static let appPlugins: Set<String> = ["Console"]
+    /// The plugins the web side may call: Capacitor's own console, and the three of the app's own (their `jsName`).
+    /// A plugin is added here in the same change that links it; `mobile/scripts/check-versions.mjs` compares this
+    /// list with the plugin classes in this package and fails when they differ.
+    public static let appPlugins: Set<String> = ["Console", "HideKeychain", "HideScanner", "HideApp"]
 
     public enum Verdict: Equatable {
         case pass
