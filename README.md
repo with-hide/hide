@@ -87,27 +87,127 @@ To look at hide in a browser without installing the app, `bash scripts/web-dev.s
 
 ## Features
 
-### Every agent at a glance
-
-The sidebar shows the same work three ways: **Projects** as a tree of checkouts and the agents in them, **Tasks** grouped by who acts next, and **Pull requests** sorted by what waits on you.
-The Project tool beside your agents counts the project's sessions, pull requests, worktrees and the last seven days' cost, and lists what is yours to do.
-The Overview draws the whole night as one map: which agent started which, the letters between them, and who is waiting on you.
-
-### Agents start, watch and write to each other
-
-A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
-Mix vendors freely: one agent writes, another checks.
-A child runs in its own tab and reports to its parent, not to you.
-The agent that started a child watches it: it hears within a minute when the child stops on a question, and after 20 quiet minutes when it stalls.
-Claude Code and Codex can end a turn and wait; the letter they wait for wakes them.
-For a set of pull requests, a Conductor agent runs a **mission**: it plans the work, starts the workers and reports back.
+<table>
+<tr>
+<td width="46%" valign="middle">
 
 ### Hide AI does the reading
 
 Hide AI reads what each agent did and writes what a person needs: a title, why it stopped, what you asked and what you missed.
 Agents sort themselves into **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
-**Project Memory** turns what you decide in a session into a card, checks it against the repository and hands it to the next agent, whichever vendor runs it; a rule worth keeping comes back as one pull request to your docs.
+
 Hide AI runs on the agent CLI you already signed in to, and every status still works with it switched off.
+
+</td>
+<td width="54%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/rows-on-dark.webp">
+  <img src="site/assets/shots/rows-on-light.webp" width="100%" alt="The Tasks list with Hide AI on: Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, a fixed test under Unread, the release notes and a starred task under Revisit, and the agents still working.">
+</picture>
+</td>
+</tr>
+<tr>
+<td width="46%" valign="middle">
+
+### Every agent at a glance
+
+The sidebar shows the same work three ways: **Projects** as a tree of checkouts and the agents in them, **Tasks** grouped by who acts next, and **Pull requests** sorted by what waits on you.
+
+The Overview draws the whole night as one map: which agent started which, the letters between them, and who is waiting on you.
+
+</td>
+<td width="54%">
+<img src="site/assets/video/kick-focus.gif" width="100%" alt="The Overview map of 36 agents across four projects narrows to My turn: two agents wait on you, Approve #431 and #436? and Retry failed payments.">
+</td>
+</tr>
+<tr>
+<td width="46%" valign="middle">
+
+### Agents start, watch and write to each other
+
+A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
+Mix vendors freely: one agent writes, another checks.
+
+The agent that started a child watches it: it hears within a minute when the child stops on a question, and after 20 quiet minutes when it stalls.
+For a set of pull requests, a Conductor agent runs a **mission**: it plans the work, starts the workers and reports back.
+
+</td>
+<td width="54%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/record-lane-dark.webp">
+  <img src="site/assets/shots/record-lane-light.webp" width="100%" alt="A session's record: working, one question waiting on you, its requests grouped as Plan the export and Check each pull request, and the pull requests its workers opened.">
+</picture>
+</td>
+</tr>
+<tr>
+<td width="46%" valign="middle">
+
+### Memory every agent shares
+
+**Project Memory** turns what you decide in a session into a card, checks it against the repository and hands it to the next agent, whichever vendor runs it.
+Tell Codex once on Monday; Antigravity already knows on Thursday.
+
+A rule worth keeping comes back as one pull request to your docs.
+
+</td>
+<td width="54%">
+<img src="site/assets/video/kick-memory.gif" width="100%" alt="Two fresh agents on Thursday: one starts from zero and has to be told again; Antigravity in hide starts with the card Use pnpm, never npm, said to Codex on Monday.">
+</td>
+</tr>
+<tr>
+<td width="46%" valign="middle">
+
+### Your agent drives the browser
+
+An agent opens the page it changed beside its pane, clicks through it and reads what it shows, so it checks its own work before it asks you.
+A file or diff it names opens next to it too.
+
+```sh
+hide browser open localhost:5173/invoices
+hide browser click browser-1 --text "Export CSV"
+hide file open src/export/csv.ts
+```
+
+</td>
+<td width="54%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/agent-click-dark.webp">
+  <img src="site/assets/shots/agent-click-light.webp" width="100%" alt="A Codex pane ran hide browser click browser-1 --text Export CSV beside the invoices page it opened, downloaded 128 invoices, and reports that the export matches the spec.">
+</picture>
+</td>
+</tr>
+<tr>
+<td width="46%" valign="middle">
+
+### Pull requests, waiting on you first
+
+The ones waiting on you come first, with their checks; the ones an agent is still working on sit below.
+One click hands a pull request to an agent.
+
+</td>
+<td width="54%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/assets/shots/prs-list-dark.webp">
+  <img src="site/assets/shots/prs-list-light.webp" width="100%" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks.">
+</picture>
+</td>
+</tr>
+<tr>
+<td width="46%" valign="middle">
+
+### One core, any screen
+
+Put hide's core on a machine that never sleeps.
+Projects, letters and titles live there; your laptop becomes a screen, so closing it stops nothing.
+
+Add any machine by its SSH alias and its agents join the same lists, and pair your phone by QR to answer the one that needs you, over your own Tailscale.
+
+</td>
+<td width="54%" align="center">
+<img src="site/assets/owls/owl-devices.svg" width="70%" alt="The hide owl with a laptop, the core and a phone">
+</td>
+</tr>
+</table>
 
 ### One agent, several accounts
 
@@ -118,30 +218,11 @@ Each profile is its own account folder with hide's hooks installed there; pick o
 > You don't have to fill in the form. Ask any agent in hide, "add a Claude Code profile for ~/.claude-work", and it sets the profile up for you.
 > If you also start a wrapper by hand in a terminal, have it set the profile's folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so hide shows that start as the profile too.
 
-### Your agent drives the browser
-
-An agent opens the page it changed beside its pane, clicks through it and reads what it shows, so it checks its own work before it asks you.
-A file or diff it names opens next to it too.
-
-```sh
-hide browser open localhost:5173/invoices             # a page beside the agent's pane
-hide browser snapshot browser-1 --interactive          # the page as numbered elements
-hide browser click browser-1 --text "Export CSV"       # click, fill, type, press, drag, screenshot
-hide file open src/export/csv.ts                       # the file it changed, in the editor beside it
-```
-
-### One core, any screen
-
-Put hide's core on a machine that never sleeps.
-Projects, letters and titles live there; your laptop becomes a screen, so closing it stops nothing.
-Add any machine by its SSH alias and its agents join the same lists, and pair your phone by QR to answer the one that needs you, over your own Tailscale.
-
 ### Still an IDE
 
 - **Real terminals.** Agents run in real terminal panes with their layout, scrollback and focus, drawn in place.
 - **Files and diffs.** An editor with a VS Code style Explorer, and each checkout's changes one click from its tab.
 - **A worktree per task.** GitHub issues and local notes sit in one backlog; starting one opens a worktree, an agent and its first prompt.
-- **Pull requests.** The ones waiting on you come first, and one click hands a pull request to an agent.
 - **Keyboard first.** `⌘K` goes to any agent, task, issue or pull request, and `⌘P` opens any file.
 - **Guardrails.** Guard the base branch, working folders, files and risky Git commands, per project.
 - **Limits and cost in view.** How much of each agent's week is left, and each project's last seven days at API prices.
@@ -149,6 +230,26 @@ Add any machine by its SSH alias and its agents join the same lists, and pair yo
 > [!NOTE]
 > **Software Factory is coming.** Queue issues with clear requirements; workers take them in order, verify and merge them, and bring back only what needs a person.
 > Email [hello@withhide.dev](mailto:hello@withhide.dev) to join the list, or watch this repository's releases.
+
+## hide, Orca and Herdr
+
+All three run the agent CLIs you already use, side by side, across more than one machine.
+hide is built for the part after that: knowing which of them needs you, and why.
+
+| | hide | [Orca](https://github.com/stablyai/orca) | [Herdr](https://github.com/herdrdev/herdr) |
+| --- | :---: | :---: | :---: |
+| Form | Desktop app | Desktop app | Terminal app, one Rust binary |
+| Runs the agent CLIs you signed in to | ✓ | ✓ | ✓ |
+| Agents start and prompt each other | ✓ | ✓ | ✓ |
+| Agents on several machines in one window | ✓ | ✓ | ✓ |
+| Marks the agent that waits on you | ✓ | ✓ | ✓ |
+| Writes why it stopped and what it asks, read from its session | ✓ | | |
+| A parent agent is told when its child goes quiet | ✓ | | |
+| Decisions carried to the next agent, whichever vendor | ✓ | | |
+| Answer from your phone | ✓ | ✓ | |
+| License | FSL-1.1-ALv2, Apache 2.0 after two years | MIT | Apache 2.0 |
+
+<sub>The Orca and Herdr columns come from each project's README on 2026-11-10; an empty cell means its README does not describe the feature, not that it cannot be done. Something wrong? [Tell us](https://github.com/with-hide/hide/discussions). Parts of hide's terminal layer come from Herdr, and [NOTICE](NOTICE) names each file.</sub>
 
 ## Your agents drive hide too
 
