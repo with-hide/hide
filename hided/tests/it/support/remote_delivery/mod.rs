@@ -142,6 +142,14 @@ impl Environment {
             .collect()
     }
 
+    /// One variable of the account's environment, as a session in a pane of it reads it.
+    pub fn var(&self, name: &str) -> Option<String> {
+        self.values
+            .iter()
+            .find(|(key, _)| key.to_string_lossy() == name)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    }
+
     pub fn set(&mut self, name: &str, value: impl Into<OsString>) {
         self.values.insert(name.into(), value.into());
     }
@@ -198,11 +206,15 @@ pub fn wait_within<T>(
 }
 
 /// What the hook helper recorded about why it gave no letter, read from the
-/// account's own `delivery-diagnostics.json`: the cause and the stage times
-/// of the request it stopped at (`asked_ms`, `connected_ms`, `answered_ms`,
+/// `delivery-diagnostics.json` of the records folder `environment`'s hooks
+/// keep it in (`hide_agent_hooks::route::records_root`; docs/agent-hooks.md,
+/// Where the hooks keep their records): the cause and the stage times of the
+/// request it stopped at (`asked_ms`, `connected_ms`, `answered_ms`,
 /// `ended_ms`), so a hook that ran out of its budget says which stage the
-/// time went to. Read-only; a missing file says so.
-pub fn hook_diagnostics(home: &Path) -> String {
+/// time went to. An account folder is searched too, for a record a build
+/// before the records followed the state folder left there. Read-only; a
+/// missing file says so.
+pub fn hook_diagnostics(environment: &Environment) -> String {
     fn find(folder: &Path, depth: usize) -> Option<PathBuf> {
         for entry in fs::read_dir(folder).ok()?.flatten() {
             let path = entry.path();
@@ -222,14 +234,22 @@ pub fn hook_diagnostics(home: &Path) -> String {
         }
         None
     }
-    find(&home.join(".hide"), 4).map_or_else(
-        || "no delivery-diagnostics.json under the account's .hide".to_owned(),
-        |path| {
-            fs::read_to_string(&path)
-                .map(|text| text.chars().take(4096).collect())
-                .unwrap_or_else(|error| format!("{}: {error}", path.display()))
-        },
-    )
+    let state = hide_agent_hooks::state_folder::state_dir(
+        &environment.home,
+        environment.var("HIDE_STATE_DIR").as_deref(),
+        environment.var("XDG_STATE_HOME").as_deref(),
+    );
+    let records = hide_agent_hooks::route::records_root(&environment.home, Some(&state));
+    find(&records, 2)
+        .or_else(|| find(&environment.home.join(".hide"), 4))
+        .map_or_else(
+            || format!("no delivery-diagnostics.json in {}", records.display()),
+            |path| {
+                fs::read_to_string(&path)
+                    .map(|text| text.chars().take(4096).collect())
+                    .unwrap_or_else(|error| format!("{}: {error}", path.display()))
+            },
+        )
 }
 
 /// What the account's machine is running when the helper never became ready,

@@ -169,7 +169,7 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
             "remote hook did not receive the real letter: after {:?}, stderr {:?}, recorded {}",
             delivered.elapsed,
             delivered.stderr,
-            hook_diagnostics(&fixture.remote.environment.home)
+            hook_diagnostics(&fixture.remote.environment)
         );
         wait_for("durable remote delivery confirmation", || {
             Ok(fixture
