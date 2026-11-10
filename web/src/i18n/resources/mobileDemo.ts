@@ -4,6 +4,7 @@ import type { Catalogs } from "../schema";
 // and the sample content itself. The content is the app's own, so it is worded here in every language, unlike a real host's text.
 export const mobileDemoEnglish = {
   "mobile.demo.try": "Try the demo",
+  "mobile.demo.kind": "Agent",
   "mobile.demo.tryHint": "Look around with sample data. No computer needed.",
   "mobile.demo.host": "Demo Mac",
   "mobile.demo.sample": "Sample",
@@ -55,6 +56,7 @@ export const mobileDemoCatalogs = {
   en: mobileDemoEnglish,
   ko: {
     "mobile.demo.try": "체험해 보기",
+    "mobile.demo.kind": "에이전트",
     "mobile.demo.tryHint": "샘플 데이터로 둘러보세요. 컴퓨터가 없어도 돼요.",
     "mobile.demo.host": "체험용 Mac",
     "mobile.demo.sample": "샘플",
@@ -103,6 +105,7 @@ export const mobileDemoCatalogs = {
   },
   "zh-CN": {
     "mobile.demo.try": "体验一下",
+    "mobile.demo.kind": "智能体",
     "mobile.demo.tryHint": "用示例数据随便看看，无需电脑。",
     "mobile.demo.host": "演示 Mac",
     "mobile.demo.sample": "示例",
@@ -151,6 +154,7 @@ export const mobileDemoCatalogs = {
   },
   ja: {
     "mobile.demo.try": "デモを試す",
+    "mobile.demo.kind": "エージェント",
     "mobile.demo.tryHint": "サンプルデータで見て回れます。パソコンは不要です。",
     "mobile.demo.host": "デモ用 Mac",
     "mobile.demo.sample": "サンプル",

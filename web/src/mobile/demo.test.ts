@@ -66,6 +66,9 @@ describe("the sample host", () => {
     for (const mission of state().missions!) kinds.push(mission.conductor.agent_kind, ...mission.nodes.map((node) => node.worker_agent));
     expect(kinds.length).toBeGreaterThan(10);
     expect(kinds.filter((kind) => kind !== null && agentAdapter(kind) !== undefined)).toEqual([]);
+    // VoiceOver reads the kind: it is a word of the phone's language, not a code.
+    const { translate } = await import("../i18n/translator");
+    expect(new Set(kinds.filter((kind) => kind !== null))).toEqual(new Set([translate("mobile.demo.kind")]));
   });
 
   it("answers a reply with a sample answer, in the conversation it was sent from", async () => {

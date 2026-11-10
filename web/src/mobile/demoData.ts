@@ -40,19 +40,20 @@ export type DemoState = {
 export const START_STATE: DemoState = { t0: 0, started: [], answered: false, merged: [], feedback: null, seenLooks: [], said: {} };
 
 /**
- * The kind of every sample agent and conductor: one Hide has no adapter for, so a row and a detail draw the neutral terminal
- * mark and no vendor's name or logo (a store screenshot of the demo shows no other company's mark). A step names no worker.
+ * The kind of every sample agent and conductor is the word "agent" in the phone's language: a kind Hide has no adapter for,
+ * so a row and a detail draw the neutral terminal mark and no vendor's name or logo (a store screenshot of the demo shows no
+ * other company's mark), and VoiceOver reads a word of the language it speaks. A step names no worker.
  */
-const SAMPLE_KIND = "agent";
+const sampleKind = (t: T): string => t("mobile.demo.kind");
 
 const LOOK_PANE = "a2";
 export const LOOK_HTML = "v1";
 export const LOOK_IMAGE = "v2";
 
-function agent(pane: string, title: string, ago: number, state: DemoState, over: Partial<PhoneAgent> = {}): PhoneAgent {
+function agent(t: T, pane: string, title: string, ago: number, state: DemoState, over: Partial<PhoneAgent> = {}): PhoneAgent {
   return {
     device_id: DEMO_DEVICE, pane_id: pane, root_pane_id: pane, group: "working", mark: "going", wait: null, descendants_working: 0,
-    agent_kind: SAMPLE_KIND, title, place: null, device_label: null, changed_at_unix_ms: state.t0 - ago * MINUTE,
+    agent_kind: sampleKind(t), title, place: null, device_label: null, changed_at_unix_ms: state.t0 - ago * MINUTE,
     line: null, status_code: "working", demand: "none", emphasized: false, holds_notification: false, ...over,
   };
 }
@@ -63,25 +64,25 @@ const asking = (text: string): PhoneAgent["line"] => ({ text, mode: "request", t
 /** Every agent of the sample list by pane, so a conversation can name the one it belongs to. */
 function agents(t: T, state: DemoState): Record<string, PhoneAgent> {
   const allSeen = state.seenLooks.includes(LOOK_HTML) && state.seenLooks.includes(LOOK_IMAGE);
-  const child1 = agent("a1c1", t("mobile.demo.a1c1.title"), 2, state, { line: { text: t("mobile.demo.a1c1.line"), mode: "kept", tone: "subtle" } });
-  const child2 = agent("a1c2", t("mobile.demo.a1c2.title"), 9, state, { group: "done", mark: "done", status_code: "idle", line: { text: t("mobile.demo.a1c2.line"), mode: "news", tone: "news" } });
-  const parent = agent("a1", t("mobile.demo.a1.title"), 3, state, {
+  const child1 = agent(t, "a1c1", t("mobile.demo.a1c1.title"), 2, state, { line: { text: t("mobile.demo.a1c1.line"), mode: "kept", tone: "subtle" } });
+  const child2 = agent(t, "a1c2", t("mobile.demo.a1c2.title"), 9, state, { group: "done", mark: "done", status_code: "idle", line: { text: t("mobile.demo.a1c2.line"), mode: "news", tone: "news" } });
+  const parent = agent(t, "a1", t("mobile.demo.a1.title"), 3, state, {
     group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "demo · fix/review",
     line: asking(t("mobile.demo.a1.ask")), descendants: { asking: 0, working: 1, done: 1 }, children_open: true, children: [child1, child2],
   });
   const listed: PhoneAgent[] = [
     parent,
-    agent(LOOK_PANE, t("mobile.demo.a2.title"), 11, state, {
+    agent(t, LOOK_PANE, t("mobile.demo.a2.title"), 11, state, {
       group: "needs_you", mark: allSeen ? "turn" : "look", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "demo · main",
       line: asking(t("mobile.demo.a2.ask")),
     }),
-    agent("a3", t("mobile.demo.a3.title"), 4, state, { place: "demo · perf" }),
-    agent("a4", t("mobile.demo.a4.title"), 22, state, { place: "demo · main" }),
-    agent("a5", t("mobile.demo.a5.title"), 60, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · site" }),
-    agent("a6", t("mobile.demo.a6.title"), 35, state, { group: "done", mark: "done", status_code: "idle", line: { text: t("mobile.demo.a1c2.line"), mode: "news", tone: "news" }, place: "demo · main" }),
-    agent("a7", t("mobile.demo.a7.title"), 180, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · notes" }),
-    agent("a8", t("mobile.demo.a8.title"), 240, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · notes" }),
-    ...state.started.map((started, at) => agent(started.pane, started.title, at, state, { place: "demo · main" })),
+    agent(t, "a3", t("mobile.demo.a3.title"), 4, state, { place: "demo · perf" }),
+    agent(t, "a4", t("mobile.demo.a4.title"), 22, state, { place: "demo · main" }),
+    agent(t, "a5", t("mobile.demo.a5.title"), 60, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · site" }),
+    agent(t, "a6", t("mobile.demo.a6.title"), 35, state, { group: "done", mark: "done", status_code: "idle", line: { text: t("mobile.demo.a1c2.line"), mode: "news", tone: "news" }, place: "demo · main" }),
+    agent(t, "a7", t("mobile.demo.a7.title"), 180, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · notes" }),
+    agent(t, "a8", t("mobile.demo.a8.title"), 240, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · notes" }),
+    ...state.started.map((started, at) => agent(t, started.pane, started.title, at, state, { place: "demo · main" })),
   ];
   const all: Record<string, PhoneAgent> = {};
   for (const one of listed) all[one.pane_id] = one;
@@ -169,17 +170,17 @@ function step(key: string, title: string, status: PhoneMissionNode["status"], ov
 const merged = (key: string, title: string, number: number): PhoneMissionNode =>
   step(key, title, "done", { pr: number, pr_state: "merged", agent_runtime: "ended" });
 
-function mission(id: string, title: string, state: DemoState, over: Partial<PhoneMission> = {}): PhoneMission {
+function mission(t: T, id: string, title: string, state: DemoState, over: Partial<PhoneMission> = {}): PhoneMission {
   return {
     id, title, device_id: DEMO_DEVICE, device_label: null, status: "running", decision: null, question: null, answer: null, answer_failed: null,
     landing_order: [], created_at_unix_ms: state.t0 - 3 * HOUR, started_at_unix_ms: state.t0 - 3 * HOUR, closed_at_unix_ms: null, stale: false,
-    conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: SAMPLE_KIND, agent: null }, nodes: [], ...over,
+    conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: sampleKind(t), agent: null }, nodes: [], ...over,
   };
 }
 
 export function missionsFrame(t: T, state: DemoState): ServerFrame {
   const asked = state.t0 - 6 * MINUTE;
-  const release = mission("mission-release", t("mobile.demo.m1.title"), state, {
+  const release = mission(t, "mission-release", t("mobile.demo.m1.title"), state, {
     created_at_unix_ms: state.t0 - 134 * MINUTE,
     started_at_unix_ms: state.t0 - 134 * MINUTE,
     decision: state.answered ? null : t("mobile.demo.m1.decision"),
@@ -191,7 +192,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
       step("sign", t("mobile.demo.m1.sign"), "working", { stage: 0 }),
     ],
   });
-  const ui = mission("mission-ui", t("mobile.demo.m2.title"), state, {
+  const ui = mission(t, "mission-ui", t("mobile.demo.m2.title"), state, {
     created_at_unix_ms: state.t0 - 50 * MINUTE,
     started_at_unix_ms: state.t0 - 50 * MINUTE,
     nodes: [
@@ -199,7 +200,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
       step("b", t("mobile.demo.m2.missions"), "working", { pr: 2102, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a4" } }),
     ],
   });
-  const finished = mission("mission-guide", t("mobile.demo.a2.title"), state, {
+  const finished = mission(t, "mission-guide", t("mobile.demo.a2.title"), state, {
     status: "done",
     created_at_unix_ms: state.t0 - 26 * HOUR,
     started_at_unix_ms: state.t0 - 26 * HOUR,
