@@ -31,8 +31,21 @@ import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
+import { DemoBar } from "./Demo";
 
 export function App() {
+  const demo = usePhone((s) => s.demo);
+  if (!demo) return <Screens />;
+  // The bar sits over the screen the sample host draws, which scrolls beneath it as it does alone.
+  return (
+    <div className="flex h-full flex-col">
+      <DemoBar />
+      <div className="min-h-0 flex-1 overflow-y-auto"><Screens /></div>
+    </div>
+  );
+}
+
+function Screens() {
   const { t } = useInterfaceTranslation();
   const screen = usePhone((s) => s.screen);
   const detail = usePhone((s) => s.detail);

@@ -13,6 +13,8 @@ import { INTERFACE_LANGUAGES, LANGUAGE_NAMES, isInterfaceLanguage } from "../i18
 import type { ThemeChoice } from "../theme";
 import { choosePhoneSettings, usePhoneSettings } from "./settings";
 
+/** The page the store listing and this link both name (5.1.1(i)); its content is the site's. */
+export const PRIVACY_POLICY_URL = "https://withhide.dev/privacy";
 const FOLLOW = "follow";
 const THEMES = ["system", "light", "dark"] as const satisfies readonly ThemeChoice[];
 
@@ -83,6 +85,15 @@ export function SettingsSheet({ defaultOpen = false }: { defaultOpen?: boolean }
               ))}
             </RadioGroup>
           </section>
+          <a
+            href={PRIVACY_POLICY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-phone-privacy-link="true"
+            className="flex min-h-(--size-touch-target) items-center text-title text-foreground underline-offset-4 hover:underline"
+          >
+            {t("mobile.settings.privacy")}
+          </a>
           <p className="text-body text-muted-foreground" data-phone-settings-note={kept ? "kept" : "not-kept"} role={kept ? undefined : "status"}>
             {t(kept ? "mobile.settings.note" : "mobile.settings.notKept")}
           </p>

@@ -38,11 +38,15 @@ import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
+import { DemoSocket, demoRequested } from "./demoSocket";
+import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
 import { readHosts, saveHost, revokeHost, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
+/** The sample host is the socket: no pairing, credential or address is involved (demoSocket.ts). */
+let demo = false;
 let relayPair: PairingQr | null = null;
 export const currentHost = () => relayHost;
 function storageFailed(): void { patch({ relayError: "storage" }); }
@@ -234,10 +238,10 @@ function connect(): void {
   if (stopped) return;
   if (socket && socket.readyState <= WebSocket.OPEN) return;
   // Nothing to present: the unpaired screen stays, no socket is opened.
-  if (!pairCode && !credential) return;
+  if (!demo && !pairCode && !credential) return;
   const first = pairCode ? { client_kind: "phone", pair: pairCode } : { client_kind: "phone", token: credential };
   let refused = false;
-  const ws: PhoneSocket = relayHost ? new RelaySocket(relayHost, () => {
+  const ws: PhoneSocket = demo ? new DemoSocket() : relayHost ? new RelaySocket(relayHost, () => {
     stopped = true;
     window.location.replace(`/?host=${encodeURIComponent(relayHost!.room)}`);
   }, (reason) => {
@@ -945,6 +949,7 @@ export function pairNow(): void {
 
 /** Reads the page address and starts: pair, reconnect, or show how to pair (B11-B13). */
 export function start(): void {
+  if (demoRequested()) { startDemo(); return; }
   if (hostedPhone()) { void startRelay(); return; }
   const fragment = parseFragment(window.location.hash);
   window.addEventListener("online", wake);
@@ -975,6 +980,24 @@ export function start(): void {
   connect();
 }
 
+
+/**
+ * The sample host: the app opens on its list as for a paired host, over a socket that sends sample data. Nothing is paired, so
+ * nothing is stored; leaving goes back to the first screen, which has no memory of the visit.
+ */
+function startDemo(): void {
+  demo = true;
+  stopped = false;
+  document.documentElement.dataset.phoneDemo = "true";
+  patch({ demo: true, screen: "app", macName: translate("mobile.demo.host"), unreachable: false });
+  connect();
+}
+
+/** The sample host's way out: the first screen, or its real QR scan and paste flow. */
+export function leaveDemo(connectReal = false): void {
+  stop();
+  window.location.assign(connectReal ? "/?add=1" : "/");
+}
 
 async function startRelay(): Promise<void> {
   try {
