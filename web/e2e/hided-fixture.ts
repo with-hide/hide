@@ -280,11 +280,11 @@ async function launch(engine: DaemonEngine, label: string, dir: string, home: st
                   // This fixture is also compiled by the desktop host's
                   // non-JSX project; read just the wire fields needed here.
                   const snapshot = rest as {
-                    status?: { herdr?: { state: string } };
+                    status?: { engine?: { state: string } };
                     ui_state?: { focused_checkout_id?: string | null };
                     workspace_view?: unknown;
                   };
-                  return snapshot.status?.herdr?.state === "connected"
+                  return snapshot.status?.engine?.state === "connected"
                     && (!snapshot.ui_state?.focused_checkout_id || Boolean(snapshot.workspace_view));
                 }, "the restarted core's engine and saved Workspace");
               } finally {
