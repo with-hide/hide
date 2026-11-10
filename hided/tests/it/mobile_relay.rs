@@ -967,6 +967,7 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
 }
 
 /// An app phone's record as `phones.json` keeps it, with the key `key` registered for `APP_TOKEN`.
+#[cfg(unix)]
 fn write_app_phone(dir: &Path, key: &AppKey) {
     use std::os::unix::fs::PermissionsExt;
     let state_dir = dir.join("state");
@@ -999,6 +1000,7 @@ fn write_app_phone(dir: &Path, key: &AppKey) {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn notices_that_found_no_relay_link_are_sent_once_when_it_comes_up() {
     use hide_relay_protocol::admission::{PushOutcome, PushResult};
