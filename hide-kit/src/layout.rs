@@ -128,6 +128,12 @@ pub fn holder_restart(state_dir: &Path) -> PathBuf {
     state_dir.join("holder-restart")
 }
 
+/// Held while a restart request is checked and recorded, so concurrent
+/// losses ask once (`hided::holder_restart`).
+pub fn holder_restart_lock(state_dir: &Path) -> PathBuf {
+    state_dir.join("holder-restart.lock")
+}
+
 /// Durable local requests and watches; its owner is the core delivery worker.
 pub fn delivery_ledger(state_dir: &Path) -> PathBuf {
     state_dir.join("delivery-ledger.json")

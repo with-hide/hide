@@ -1760,8 +1760,9 @@ mod tests {
         assert!(refused.retried, "{}", refused.message);
     }
 
-    /// A holder nobody listens at is reported once the record says it is gone,
-    /// and the open fails as it did; a holder the record still runs is not.
+    /// An open that cannot reach a holder tells whoever asked, and fails as it
+    /// did. Whether the record names a holder that is gone is `holder_gone`'s,
+    /// tested with real holders in `hide-holder`.
     #[test]
     fn an_attach_that_cannot_reach_a_holder_tells_who_asked() {
         let known = Arc::new(Known::default());

@@ -74,11 +74,13 @@ pub enum CommandKind {
         json: bool,
     },
     Stop,
-    /// `hide restart`: `stop`, then `connect`. The daemon runs it for itself
-    /// when its pane holders died without saying why
-    /// (`holder_restart`), so the start finds and settles them; it is not
-    /// listed, as `connect` is not.
-    Restart,
+    /// `hide restart --daemon <pid>`: `stop`, then `connect`, for the daemon
+    /// with that pid only. A daemon runs it for itself when its pane holders
+    /// died without saying why (`holder_restart`), so the start finds and
+    /// settles them; it is not listed, as `connect` is not.
+    Restart {
+        daemon: u32,
+    },
     /// `hide runtime prepare`: the folder this package's runtime runs from,
     /// made first on Windows (`hide_kit::runtime`), as one JSON line for the
     /// desktop host.
@@ -344,7 +346,14 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
-        Some("restart") => Ok(CommandKind::Restart),
+        Some("restart") => match (
+            iter.next().map(String::as_str),
+            iter.next().and_then(|pid| pid.parse().ok()),
+            iter.next(),
+        ) {
+            (Some("--daemon"), Some(daemon), None) => Ok(CommandKind::Restart { daemon }),
+            _ => Err("usage: hide restart --daemon <pid>".to_owned()),
+        },
         Some("import") => match (
             iter.next().map(String::as_str),
             iter.next().map(String::as_str),
@@ -940,10 +949,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
-        CommandKind::Restart => {
-            stop(&env.state_dir)?;
-            connect_json(&env)
-        }
+        CommandKind::Restart { daemon } => restart(&env, daemon),
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
         CommandKind::Serve { keep_alive } => serve(env, keep_alive),
@@ -2714,6 +2720,25 @@ fn runtime_prepare(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Ends the daemon `daemon` and starts the next, when `daemon` is still the
+/// one this state folder names. A daemon that was stopped or replaced since
+/// the request was made is never touched, and nothing is started for it.
+fn restart(env: &Env, daemon: u32) -> Result<(), String> {
+    if let Some(state) = daemon_to_restart(&env.state_dir, daemon)? {
+        stop_daemon(&env.state_dir, &state)?;
+        connect_json(env)?;
+    }
+    Ok(())
+}
+
+/// The state of the daemon `hide restart` may end: the one this folder names
+/// now, when it is `daemon` and still that process.
+fn daemon_to_restart(state_dir: &Path, daemon: u32) -> Result<Option<DaemonState>, String> {
+    Ok(state_file::read_state(state_dir)
+        .map_err(|e| e.to_string())?
+        .filter(|state| state.pid == daemon && still_the_daemon(state)))
+}
+
 fn stop(state_dir: &Path) -> Result<(), String> {
     match state_file::read_state(state_dir).map_err(|e| e.to_string())? {
         Some(state) if still_the_daemon(&state) => {
@@ -3399,6 +3424,39 @@ mod tests {
         ended.wait().unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_restart_ends_only_the_daemon_that_asked() {
+        let mut daemon = Command::new("sleep").arg("30").spawn().unwrap();
+        let started = process::start_time(daemon.id()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), daemon.id())
+                .unwrap()
+                .is_none()
+        );
+        state_file::write_state(dir.path(), &recorded(daemon.id(), Some(started))).unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), daemon.id())
+                .unwrap()
+                .is_some()
+        );
+        // Another daemon took the folder, or the pid is another process now.
+        assert!(
+            daemon_to_restart(dir.path(), daemon.id() + 1)
+                .unwrap()
+                .is_none()
+        );
+        state_file::write_state(dir.path(), &recorded(daemon.id(), Some(started + 1))).unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), daemon.id())
+                .unwrap()
+                .is_none()
+        );
+        daemon.kill().unwrap();
+        daemon.wait().unwrap();
+    }
+
     #[test]
     fn a_state_with_no_recorded_start_is_judged_by_liveness() {
         assert!(still_the_daemon(&recorded(std::process::id(), None)));
@@ -3695,7 +3753,11 @@ mod tests {
             parse_args(&args).unwrap()
         };
         assert_eq!(parse(&["hide", "connect"]), CommandKind::Connect);
-        assert_eq!(parse(&["hide", "restart"]), CommandKind::Restart);
+        assert_eq!(
+            parse(&["hide", "restart", "--daemon", "4242"]),
+            CommandKind::Restart { daemon: 4242 }
+        );
+        assert!(parse_args(&["hide", "restart"].map(String::from)).is_err());
         assert_eq!(
             parse(&["hide", "status", "--json"]),
             CommandKind::Status { json: true }

@@ -1282,7 +1282,8 @@ impl Panes {
     }
 
     /// Whether `pane`'s record still says its holder runs while the holder's
-    /// pid and start time name no process: the holder was killed or crashed
+    /// pid and start time are confirmed gone (`Identity::gone`; a process table
+    /// that cannot be read is not proof): the holder was killed or crashed
     /// without saying why. It reads and changes nothing, and a record that is
     /// not `running`, is another folder's, or names a holder that runs (one
     /// that is only slow or busy) answers `false`; the next start of a node
@@ -1292,7 +1293,7 @@ impl Panes {
             current.phase == Phase::Running
                 && current.end.is_none()
                 && current.owner == self.owner
-                && current.holder.is_some_and(|holder| !holder.runs())
+                && current.holder.is_some_and(|holder| holder.gone())
         })
     }
 
