@@ -27,6 +27,7 @@ pub mod env;
 pub mod file_url;
 pub mod guide;
 mod herdr_transition;
+pub mod holder_restart;
 pub mod index;
 pub mod issue_cli;
 pub mod link_mux;

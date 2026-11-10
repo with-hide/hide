@@ -121,6 +121,13 @@ pub fn daemon_lock(state_dir: &Path) -> PathBuf {
     state_dir.join("hided.lock")
 }
 
+/// When the daemon last asked for its own restart because a pane's holder
+/// died without saying why (`hided::holder_restart`): its modified time is
+/// the only thing read, so a daemon never asks twice in a short while.
+pub fn holder_restart(state_dir: &Path) -> PathBuf {
+    state_dir.join("holder-restart")
+}
+
 /// Durable local requests and watches; its owner is the core delivery worker.
 pub fn delivery_ledger(state_dir: &Path) -> PathBuf {
     state_dir.join("delivery-ledger.json")

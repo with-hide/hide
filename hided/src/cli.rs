@@ -74,6 +74,11 @@ pub enum CommandKind {
         json: bool,
     },
     Stop,
+    /// `hide restart`: `stop`, then `connect`. The daemon runs it for itself
+    /// when its pane holders died without saying why
+    /// (`holder_restart`), so the start finds and settles them; it is not
+    /// listed, as `connect` is not.
+    Restart,
     /// `hide runtime prepare`: the folder this package's runtime runs from,
     /// made first on Windows (`hide_kit::runtime`), as one JSON line for the
     /// desktop host.
@@ -339,6 +344,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
+        Some("restart") => Ok(CommandKind::Restart),
         Some("import") => match (
             iter.next().map(String::as_str),
             iter.next().map(String::as_str),
@@ -934,6 +940,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
+        CommandKind::Restart => {
+            stop(&env.state_dir)?;
+            connect_json(&env)
+        }
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
         CommandKind::Serve { keep_alive } => serve(env, keep_alive),
@@ -3685,6 +3695,7 @@ mod tests {
             parse_args(&args).unwrap()
         };
         assert_eq!(parse(&["hide", "connect"]), CommandKind::Connect);
+        assert_eq!(parse(&["hide", "restart"]), CommandKind::Restart);
         assert_eq!(
             parse(&["hide", "status", "--json"]),
             CommandKind::Status { json: true }
