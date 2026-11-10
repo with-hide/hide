@@ -1044,8 +1044,7 @@ pub(crate) fn owned_label_fixture<T: serde::de::DeserializeOwned>(
                 .iter()
                 .any(|key| tokens.remove(*key).is_some_and(|value| !value.is_null()));
             let activity = text(tokens, "activity").and_then(|value| value.parse::<u64>().ok());
-            // The Herdr plugin mirrored its lifecycle into a status token; a
-            // fixture that gave only the token meant that lifecycle.
+            // A fixture that gave only the status token meant that lifecycle.
             let present = |name: &str| {
                 [name.to_owned(), format!("{name}_new")]
                     .iter()

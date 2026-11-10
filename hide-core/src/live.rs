@@ -810,9 +810,8 @@ pub(crate) enum FocusReadback {
     Unread(String),
 }
 
-/// Read current focus without producing another focus effect. Herdr's event
-/// stream had no ordering cursor, so an external move needs this same
-/// confirmation before an older queued layout can replace Hide's selection.
+/// Read current focus without producing another focus effect. An external move
+/// needs this same confirmation before an older queued layout can replace Hide's selection.
 pub(crate) fn confirm_pane_focus(engine: &dyn Engine, pane_id: &str) -> FocusReadback {
     match read_pane_focus(engine, pane_id, Duration::from_secs(5)) {
         Ok((layout, active_tab_id))

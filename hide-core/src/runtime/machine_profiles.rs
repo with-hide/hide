@@ -80,7 +80,7 @@ impl Runtime {
             });
         if let Err(error) = spawned {
             crate::diagnostic!(
-                serde_json::json!({"component":"herdr_profiles","kind":"herdr_profiles.not_started","request":id,"reason":error.to_string()})
+                serde_json::json!({"component":"machine_profiles","kind":"machine_profiles.not_started","request":id,"reason":error.to_string()})
             );
             self.settle_machine_profiles(
                 id,
@@ -113,7 +113,7 @@ impl Runtime {
         let answer = hosts.and_then(|hosts| {
             if hosts.unreadable {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "herdr_profiles",
+                    "component": "machine_profiles",
                     "kind": "ssh_hosts.unreadable",
                     "request": id,
                 }));
@@ -125,7 +125,7 @@ impl Runtime {
             Ok(distributions) => Ok((hosts, distributions)),
             Err(reason) => {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "herdr_profiles",
+                    "component": "machine_profiles",
                     "kind": "wsl.listing_failed",
                     "request": id,
                     "message": reason,

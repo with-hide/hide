@@ -121,7 +121,7 @@ fn slot(rules: &SharedRules) -> MutexGuard<'_, RuleSlot> {
 /// Gives the pane `manifest` to read its screen by, for the watch `owner`;
 /// answers whether the set changed, and when it did, whether it changed
 /// from one agent's rules to another's or to none, which drops the title
-/// and progress the rules read (Herdr's change of agent).
+/// and progress the rules read.
 fn set_rules(rules: &SharedRules, owner: u64, manifest: Option<String>) -> Option<bool> {
     let compiled = manifest.as_deref().map(|json| {
         serde_json::from_str::<Manifest>(json)

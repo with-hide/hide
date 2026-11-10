@@ -130,7 +130,7 @@ Regression owners: `hide-core/src/runtime/tests/human_turn.rs`, the escalation t
 
 ## agent_status provenance and background waits
 
-The raw `agent_status` is the core's own engine's, with Herdr's names and meaning: each pane's holder reads its screen with its agent's definition-file rules, and the engine turns a stop after work into `done` and its `completion_seq` ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)); the core derives its axes in `agent_state/axes.rs`.
+The raw `agent_status` is the core's own engine's: each pane's holder reads its screen with its agent's definition-file rules, and the engine turns a stop after work into `done` and its `completion_seq` ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)); the core derives its axes in `agent_state/axes.rs`.
 The screen rules follow Herdr's: for Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
 A native session reference or display-only hook token does not prove that a tool is running or that its command completed.
 Other integrations can have full lifecycle reporting, so this screen-inference statement is specific to those two agents, not every agent.

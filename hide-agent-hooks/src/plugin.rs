@@ -288,7 +288,7 @@ fn remove_if_empty(folder: &Path) -> Result<(), String> {
 }
 
 impl PluginFile {
-    /// The agent's own folder, the one Herdr's integration for it used too.
+    /// The agent's own folder.
     pub fn config_directory<'h>(&self, at: impl Into<AccountAt<'h>>) -> PathBuf {
         at.into().place(
             self.config.adapter(),

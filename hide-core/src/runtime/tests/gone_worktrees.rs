@@ -242,7 +242,7 @@ fn the_core_closes_the_pane_the_engine_left_in_a_gone_worktree() {
         .find(|record| record["kind"] == "gone_worktree.close_requested")
         .expect("the close is recorded");
     assert_eq!(requested["checkout"], gone());
-    assert_eq!(requested["herdr_workspace_ids"], serde_json::json!(["w1"]));
+    assert_eq!(requested["engine_workspace_ids"], serde_json::json!(["w1"]));
     wait_for("the engine to be asked to close the pane", || {
         fake.methods().contains(&"close_pane")
     });

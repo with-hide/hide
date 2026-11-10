@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use hide_node_link::device::{Cancel, Refusal, SshFailure, SshProblem};
-use hide_platform::process::{RunFailure, run_to_end};
+use hide_platform::process::{FOREIGN_PANE_IDENTITY, RunFailure, run_to_end};
 
 /// What Hide sets when the configuration leaves it at OpenSSH's default
 /// (B28): a dial that gets no answer gives up, and a link whose network went
@@ -31,6 +31,14 @@ const ALIVE_COUNT: u32 = 3;
 /// The most of `ssh -G`'s answer read; a configuration's answer is a few
 /// kilobytes.
 const QUERY_OUTPUT_LIMIT: usize = 256 * 1024;
+
+/// Whether a variable of the parent process is kept from `ssh`: the operator's
+/// Herdr pane identity and Hide's own. The match is case-sensitive, as it was
+/// before the shared rule, so a lowercase `herdr_*` variable a proxy command
+/// reads still reaches it.
+fn withheld_from_ssh(name: &str) -> bool {
+    name.starts_with(FOREIGN_PANE_IDENTITY) || name.starts_with("HIDE_")
+}
 
 /// The `ssh` this computer has, and the configuration it reads.
 #[derive(Clone, Debug)]
@@ -253,13 +261,13 @@ impl SshProgram {
     }
 
     /// `ssh` with the account's configuration: `-F` and `HOME` for a private
-    /// home, and an environment without the Herdr pane identity this
+    /// home, and an environment without the foreign pane identity this
     /// process may carry, so the alias's proxy command sees the account's own.
     pub fn command(&self) -> Command {
         let mut command = Command::new(&self.path);
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
-            if name.starts_with("HERDR_") || name.starts_with("HIDE_") {
+            if withheld_from_ssh(&name) {
                 command.env_remove(&key);
             }
         }
@@ -612,6 +620,16 @@ pub fn classify(ending: &Ending<'_>) -> SshFailure {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn ssh_keeps_a_lowercase_herdr_variable_and_withholds_the_pane_identity() {
+        assert!(withheld_from_ssh("HERDR_PANE_ID"));
+        assert!(withheld_from_ssh("HERDR_SOCKET_PATH"));
+        assert!(withheld_from_ssh("HIDE_PANE_ID"));
+        assert!(!withheld_from_ssh("herdr_proxy_endpoint"));
+        assert!(!withheld_from_ssh("Herdr_Proxy"));
+        assert!(!withheld_from_ssh("PATH"));
+    }
 
     fn resolved(extra: &str) -> Resolved {
         Resolved::read(&format!(

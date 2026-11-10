@@ -299,7 +299,7 @@ fn snapshot(created: bool) -> Value {
 }
 
 /// A snapshot can name a new pane's folder from its process, which is not the
-/// checkout's until the shell has started (it was the Herdr server's own): the snapshot the close
+/// checkout's until the shell has started (it was the engine server's own): the snapshot the close
 /// ingests must still place the replacement at the checkout it was created for.
 #[test]
 fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect() {

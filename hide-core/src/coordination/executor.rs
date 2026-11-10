@@ -2205,9 +2205,9 @@ fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
 }
 
 /// What the pane a spawn or a registration recorded is now, against the
-/// terminal recorded with it: a pane id can outlive its terminal (Herdr
-/// handed ids out again after a new server, and a live handoff moves a
-/// pane), so the pane is the record's only while it runs that terminal.
+/// terminal recorded with it: a pane id can outlive its terminal (ids were
+/// handed out again after a server was replaced, and a live handoff moves
+/// a pane), so the pane is the record's only while it runs that terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RecordedPane {
     /// It runs the recorded terminal.
@@ -2242,8 +2242,8 @@ pub(super) fn recorded_pane(
 /// never showed its agent). Each new attempt is its own intent with a pane of
 /// its own, so the earlier pane would stay behind as an extra tab, holding the
 /// agent's name in the engine when its start was typed. A pane id can outlive its
-/// terminal (Herdr handed ids out again after a new server, and a live handoff
-/// moves a pane), so a pane is the attempt's own only
+/// terminal (ids were handed out again after a server was replaced, and a
+/// live handoff moves a pane), so a pane is the attempt's own only
 /// while it runs the terminal the attempt recorded; any other pane under that
 /// id, and a record from before terminals were recorded, is logged and left
 /// open. A pane where an agent shows or the shell does not hold the terminal

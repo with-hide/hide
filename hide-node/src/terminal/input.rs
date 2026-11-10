@@ -109,7 +109,7 @@ pub(super) enum Typed {
     Bytes(Vec<u8>),
     Paste(Vec<u8>),
     Keys(Vec<hide_holder_protocol::Key>),
-    /// One submission, as Herdr's `agent.prompt` makes it: its text, then
+    /// One submission: its text, then
     /// its submit once its gap has passed since the text was written, with
     /// the pane's later input behind it ([`hide_holder_protocol::Submit`]).
     Submit(Box<hide_holder_protocol::Submit>),
@@ -730,7 +730,7 @@ impl PaneHold {
 }
 
 /// How long a submit replayed from a fork's hold waits after the keys
-/// before it were written, as Herdr's `agent.prompt` waits from its text's
+/// before it were written, as an agent prompt waits from its text's
 /// flush before its Enter. Held keys reach the program together, and a
 /// program that reads keys arriving together as a paste (Codex) takes an
 /// Enter inside one for a newline, where the operator had pressed it after

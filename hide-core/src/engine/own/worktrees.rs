@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_becomes_a_folder_name_as_herdr_spells_it() {
+    fn a_branch_becomes_a_folder_name_under_the_slug_rule() {
         assert_eq!(
             path_slug("feat/Engine Own__layout"),
             "feat-engine-own-layout"

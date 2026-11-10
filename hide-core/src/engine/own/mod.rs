@@ -293,7 +293,7 @@ impl OwnEngine<'static> {
         })?;
         let _ = engine.shared.saving.set(saver.signal());
         engine.saver = Some(saver);
-        // A pane whose program exits on its own closes, as Herdr closes it.
+        // A pane whose program exits on its own closes.
         // The node holds no engine: it is told the engine's shared state
         // weakly, so an engine dropped is not kept by its holders.
         let shared = Arc::downgrade(&engine.shared);
@@ -832,8 +832,8 @@ impl OwnEngine<'_> {
 
     /// Starts the holder of `pane`, which this call has placed and drawn
     /// `starting`: the screen shows a new tab or split at once and its
-    /// terminal attaches once the holder runs, as a Herdr pane is answered
-    /// once it forked rather than once its shell is up (perf-gate rows 22
+    /// terminal attaches once the holder runs, and the call answers once the
+    /// pane forked rather than once its shell is up (perf-gate rows 22
     /// and 23 measured the holder's start, about 50 ms, in front of every
     /// new pane). A holder that does not start takes the pane out again,
     /// its tab with it when it was the tab's only pane, and withdraws every
@@ -873,9 +873,8 @@ impl OwnEngine<'_> {
     }
 
     /// Starts the holder of `pane`, drawn `starting`, after this call has
-    /// answered, as Herdr answers a new tab or split once its pane forked
-    /// and its shell starts after: the core shows a created tab when the
-    /// answer names it, so the holder's start (three flushed writes of its
+    /// answered, once its pane forked and its shell starts after: the core
+    /// shows a created tab when the answer names it, so the holder's start (three flushed writes of its
     /// record and two programs started) stood between the chord and the
     /// screen. A holder that does not start then leaves its pane where it
     /// was drawn, marked with why ([`OnFailure::Mark`]: the screen shows
@@ -1108,9 +1107,8 @@ impl OwnEngine<'_> {
     /// Lays `root` out in a new tab of `workspace`, over `replace` when
     /// given: the panes `replace` runs that `root` names stay running in
     /// their places, the leaves it does not run start, and the panes of
-    /// `replace` it leaves out end. Herdr makes every pane again; this
-    /// engine keeps the ones it can, since ending a shell to draw it again
-    /// would lose what runs there.
+    /// `replace` it leaves out end. The engine keeps the panes it can, since
+    /// ending a shell to draw it again would lose what runs there.
     fn apply_planned(
         &self,
         workspace: &str,
@@ -1539,8 +1537,7 @@ fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
     }
 }
 
-/// How long a prompt waits before its Enter, as Herdr's `agent.prompt`
-/// waits.
+/// How long a prompt waits before its Enter.
 const PROMPT_SUBMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// What the engine types as a prompt's text for an agent of `kind` on a
@@ -1568,11 +1565,11 @@ fn prompt_text(kind: &str, windows: bool, body: PaneInput) -> Vec<PaneInput> {
     text
 }
 
-/// A terminal's focus report that focus came back (`CSI I`), as Herdr's
-/// Ghostty encoder writes it.
+/// A terminal's focus report that focus came back (`CSI I`), as Ghostty's
+/// encoder writes it.
 const FOCUS_GAINED: &[u8] = b"\x1b[I";
 
-/// The agent kind a pane runs, in the name Herdr would give it.
+/// The agent kind a pane runs, in the name the engine reports it by.
 fn shown_kind(catalog: &hide_agent_adapter::definition::Catalog, kind: &str) -> String {
     agents::definition(catalog, kind).map_or_else(|| kind.to_owned(), agents::kind_name)
 }
@@ -1598,7 +1595,7 @@ fn delivery_of(
 }
 
 /// Hide's key as the holder names it; the holder encodes it for the
-/// program's keyboard modes, as Herdr encodes a named key for its pane.
+/// program's keyboard modes.
 fn holder_key(key: PaneKey) -> HolderKey {
     match key {
         PaneKey::Esc => HolderKey::Escape,
@@ -1616,8 +1613,8 @@ fn holder_key(key: PaneKey) -> HolderKey {
 
 /// What `send_keys` types for `keys`, in their order: a named key for the
 /// holder to encode, and as bytes a single character (`/`) or a Ctrl chord
-/// of a letter (`ctrl+o`, its control byte), which Herdr's `send_keys` takes
-/// too and an agent's own search is opened with (`crate::agent_find`).
+/// of a letter (`ctrl+o`, its control byte), which an agent's own search is
+/// opened with (`crate::agent_find`).
 /// Adjacent bytes go as one input; the holder writes its inputs in order.
 fn typed_keys(keys: &[&str]) -> Answer<Vec<PaneInput>> {
     let mut typed: Vec<PaneInput> = Vec::new();
@@ -1658,7 +1655,8 @@ fn typed_bytes(key: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// A key a caller names, by Hide's name or Herdr's (`ctrl+c`, `escape`).
+/// A key a caller names, by Hide's name or the spelling `send_keys` takes
+/// (`ctrl+c`, `escape`).
 fn named_key(name: &str) -> Answer<PaneKey> {
     let spelled = name.trim().to_ascii_lowercase().replace('+', "-");
     let spelled = match spelled.as_str() {
@@ -2231,8 +2229,8 @@ impl<'g> Engine for OwnEngine<'g> {
     }
 
     /// Where the holder's screen is in its scrollback. A holder built
-    /// before scroll asks reports none, as a Herdr pane with no scroll
-    /// metrics does, so a find on it opens the agent's own search.
+    /// before scroll asks reports none, so a find on it opens the agent's
+    /// own search.
     fn pane_scroll(
         &self,
         _wait: Wait,
@@ -2348,7 +2346,7 @@ impl<'g> Engine for OwnEngine<'g> {
     }
 
     /// The text as it is, then Enter encoded for the program's keyboard
-    /// modes, as Herdr submits text.
+    /// modes.
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.check()?;
         self.type_bytes(pane, text.as_bytes().to_vec())?;
@@ -2508,7 +2506,7 @@ impl<'g> Engine for OwnEngine<'g> {
             args,
         )
         .map_err(|message| refused("agent_start_refused", message))?;
-        // Herdr's condition for a start: the shell holds the terminal alone.
+        // A start needs the shell to hold the terminal alone.
         let processes = self.processes(pane)?;
         if !processes.shell_holds_terminal() {
             return Err(refused(
@@ -2643,7 +2641,7 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(delivery_of(&catalog, pane, agent))
     }
 
-    #[allow(clippy::disallowed_methods)] // Herdr's submit delay, a production wait
+    #[allow(clippy::disallowed_methods)] // the prompt's submit delay, a production wait
     fn prompt_agent(&self, _wait: Wait, target: &str, text: &str) -> Answer<()> {
         self.check()?;
         if text.is_empty() {
@@ -2669,8 +2667,8 @@ impl<'g> Engine for OwnEngine<'g> {
             }
             (pane, held.live.facts.bracketed_paste, agent.kind.clone())
         };
-        // Herdr's `agent.prompt`: the text as one paste when the program
-        // takes bracketed paste, then Enter a moment later, so a program that
+        // The text goes as one paste when the program takes bracketed paste,
+        // then Enter a moment later, so a program that
         // reads a fast Enter as part of the paste still submits. Typed as a
         // letter, so the operator's keys typed meanwhile wait until the
         // Enter was handed over instead of landing inside it (D-13).
@@ -2730,8 +2728,8 @@ impl<'g> Engine for OwnEngine<'g> {
 #[cfg(test)]
 mod tests {
     // An agent's own search opens with `ctrl+o` and `/` (`crate::agent_find`):
-    // the own engine types them as the bytes Herdr would, in order with the
-    // named keys around them.
+    // the own engine types them as bytes, in order with the named keys
+    // around them.
     #[test]
     fn send_keys_types_a_character_and_a_ctrl_letter_in_order_with_named_keys() {
         use super::{HolderKey, PaneInput, typed_keys};
@@ -3536,8 +3534,7 @@ mod tests {
         };
         let ended = |pane: &str| holders.ended.lock().unwrap().iter().any(|id| id == pane);
 
-        // A split is answered and in the session while its holder starts,
-        // as a Herdr pane is once it forked.
+        // A split is answered and in the session while its holder starts.
         let (starting, go) = held();
         let split = engine
             .split_beside(WAIT, &first, None, Env::new())
@@ -4030,7 +4027,7 @@ mod tests {
     /// letter-19988: the core settles a tab move it asked for when a
     /// session reports the move (`runtime::tab_focus`), and a session of the
     /// core's own engine reports every move it made, a creation's included,
-    /// so nothing waits out the deadline for a confirmation Herdr would send.
+    /// so nothing waits out the deadline for a confirmation.
     #[test]
     fn every_move_of_the_shown_tab_is_reported_with_the_session_and_none_for_a_tab_already_shown() {
         let engine = OwnEngine::new(Arc::new(Holders::default()));
@@ -4437,7 +4434,7 @@ mod tests {
     /// folder opens where it is, once; removing a worktree removes its
     /// checkout and its workspace.
     #[test]
-    fn a_new_worktree_goes_under_hides_folder_and_a_herdr_one_opens_where_it_is() {
+    fn a_new_worktree_goes_under_hides_folder_and_an_imported_one_opens_where_it_is() {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
         let repo = home(&place).join("repo");
@@ -4457,7 +4454,7 @@ mod tests {
                 "init",
             ],
         );
-        let herdr_place = home(&place).join(".herdr/worktrees/repo/old");
+        let earlier_place = home(&place).join(".herdr/worktrees/repo/old");
         run_git(
             &repo,
             &[
@@ -4466,7 +4463,7 @@ mod tests {
                 "-q",
                 "-b",
                 "old",
-                &herdr_place.to_string_lossy(),
+                &earlier_place.to_string_lossy(),
             ],
         );
         let engine =
@@ -4497,7 +4494,7 @@ mod tests {
         assert!(same_folder(&bound.repo_root, &repo));
 
         let opened = engine
-            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .open_worktree(WAIT, &wire(&earlier_place), &wire(&repo), false)
             .expect("Herdr's worktree opens");
         assert!(!opened.already_open);
         let session = engine.session(WAIT).unwrap();
@@ -4508,11 +4505,11 @@ mod tests {
             .and_then(|workspace| workspace.worktree.clone())
             .expect("the workspace is bound to Herdr's checkout");
         assert!(
-            same_folder(&in_place.checkout_path, &herdr_place),
+            same_folder(&in_place.checkout_path, &earlier_place),
             "opened where it is"
         );
         let again = engine
-            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), true)
+            .open_worktree(WAIT, &wire(&earlier_place), &wire(&repo), true)
             .unwrap();
         assert!(again.already_open);
         assert_eq!(again.workspace_id, opened.workspace_id);
@@ -4533,7 +4530,7 @@ mod tests {
                 .iter()
                 .all(|workspace| workspace.workspace_id != made.workspace_id)
         );
-        assert!(herdr_place.exists(), "Herdr's checkout stays where it is");
+        assert!(earlier_place.exists(), "Herdr's checkout stays where it is");
     }
 
     fn launch(pane: &str, name: &str, kind: &str, args: &[&str]) -> AgentLaunch {
@@ -6372,7 +6369,7 @@ mod tests {
         assert_eq!(holders.rules_given(2)[1], (pane, None));
     }
 
-    /// Herdr's `agent.start` and `agent.prompt` refusals: a busy pane takes
+    /// The `agent.start` and `agent.prompt` refusals: a busy pane takes
     /// no start, and a prompt waits for the agent to show and not to ask.
     #[test]
     fn a_busy_pane_takes_no_start_and_a_prompt_is_pasted_only_into_a_ready_agent() {
@@ -7551,8 +7548,7 @@ mod tests {
     }
 
     /// A program a pane's shell runs in another folder keeps that folder in
-    /// use: the pane reports it beside its own, as Herdr's foreground cwd
-    /// does. A folder its machine could not read is unknown, never none: the
+    /// use: the pane reports it beside its own. A folder its machine could not read is unknown, never none: the
     /// cleanup's read lists the pane with no folder, which it refuses, and a
     /// close is not confirmed. The shell alone adds no folder.
     #[test]

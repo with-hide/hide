@@ -16,8 +16,7 @@
 
 //! The line the core's own engine types into a pane's shell to start an
 //! agent (PRD engine-bundle-3-core-owns D-4, D-16): the agent's program and
-//! its arguments, each quoted for the shell that reads it, as Herdr's
-//! `agent.start` types it.
+//! its arguments, each quoted for the shell that reads it.
 
 use hide_shell::Syntax;
 
@@ -121,7 +120,7 @@ fn powershell_quote(value: &str) -> String {
     Syntax::PowerShell.single_quoted(value)
 }
 
-/// Herdr's PowerShell start: a script the program names runs in the shell,
+/// The PowerShell start: a script the program names runs in the shell,
 /// anything else as one process on the pane's console, its arguments handed
 /// over as one Windows command line, which PowerShell 5.1's own passing of
 /// native arguments would mangle.
@@ -171,7 +170,7 @@ fn powershell_args(args: &[String]) -> String {
 
 /// Whether `argv`, a definition's resume, may be typed as a resume: a plain
 /// command name first, no control character and no apostrophe, within
-/// Herdr's bounds; the rules a definition's words are read with
+/// the bounds a definition's words are read with
 /// (`hide_agent_adapter::definition`). The file the pane's node starts that
 /// command from takes its place only after this check (`restore.rs`,
 /// `resume_agent`): it is the node's answer, typed quoted as a start types
@@ -205,8 +204,8 @@ pub(super) fn check_resume(argv: &[String]) -> Result<(), String> {
 /// The glyphs Claude Code puts before its title while it works.
 const CLAUDE_ACTIVITY_GLYPHS: &str = "·✢✳✶✻✽◐◓◑◒";
 
-/// A terminal title without the one activity glyph an agent puts before it,
-/// as Herdr strips it; `None` for an empty title.
+/// A terminal title without the one activity glyph an agent puts before it;
+/// `None` for an empty title.
 pub(super) fn stripped_title(title: &str) -> Option<String> {
     let title = title
         .strip_prefix("Administrator: ")
