@@ -297,7 +297,7 @@ class Selection(unittest.TestCase):
         # platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-ios", "hide-relay-protocol", "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
