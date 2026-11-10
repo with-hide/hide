@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -25,6 +26,15 @@ def load(root):
 
 
 class TimedWaits(unittest.TestCase):
+    def setUp(self):
+        for name, value in {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}.items():
+            previous = os.environ.get(name)
+            if previous is None:
+                self.addCleanup(os.environ.pop, name, None)
+            else:
+                self.addCleanup(os.environ.__setitem__, name, previous)
+            os.environ[name] = value
+
     def tree(self, files, baseline=None):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -100,6 +110,89 @@ class TimedWaits(unittest.TestCase):
     def test_a_function_named_sleep_that_is_not_imported_is_not_a_sleep(self):
         body = "fn sleep(runtime: &mut Runtime) {}\nfn t() { sleep(&mut r); }\n"
         _, check = self.tree(self.rust(body))
+        self.assertEqual(check.measure()["rust_sleeps"], {})
+
+    def test_a_timer_import_in_another_scope_does_not_count_local_sleep_calls(self):
+        for scope in ("mod timers", "fn timers()"):
+            with self.subTest(scope=scope):
+                body = (
+                    "fn sleep(runtime: &mut Runtime) {}\n"
+                    "fn local() { sleep(&mut r); }\n"
+                    f"{scope} {{\n"
+                    "    use std::thread::sleep;\n"
+                    "    fn timer() { sleep(d); } // wait-ok: the pid file's next poll\n"
+                    "}\n"
+                    "fn after() { sleep(&mut r); }\n"
+                )
+                _, check = self.tree(self.rust(body))
+                self.assertEqual(self.run_check(check)[0], 0)
+
+    def test_local_functions_shadow_a_timer_import_in_their_scope(self):
+        body = (
+            "use std::thread::sleep;\n"
+            "fn timer() { sleep(d); }\n"
+            "fn local() {\n"
+            "    sleep(&mut r);\n"
+            "    fn sleep(runtime: &mut Runtime) {}\n"
+            "}\n"
+            "mod local_module {\n"
+            "    fn sleep(runtime: &mut Runtime) {}\n"
+            "    use std::thread::*;\n"
+            "    fn run() { sleep(&mut r); }\n"
+            "}\n"
+            "fn after() { sleep(d); }\n"
+        )
+        _, check = self.tree(self.rust(body))
+        self.assertEqual(check.measure()["rust_sleeps"], {"hide-x/tests/it/wait.rs": [2, 12]})
+
+    def test_modules_require_an_import_and_blocks_inherit_until_a_local_import_shadows(self):
+        body = (
+            "use std::thread::sleep;\n"
+            "fn timer() { { sleep(d); } }\n"
+            "mod no_timer { fn run() { sleep(d); } }\n"
+            "mod timer { use super::*; fn run() { sleep(d); } }\n"
+            "fn local() {\n"
+            "    fn sleep(runtime: &mut Runtime) {}\n"
+            "    { use std::thread::{sleep}; sleep(d); }\n"
+            "    sleep(&mut r);\n"
+            "}\n"
+        )
+        _, check = self.tree(self.rust(body))
+        self.assertEqual(check.measure()["rust_sleeps"], {"hide-x/tests/it/wait.rs": [2, 4, 7]})
+
+    def test_a_precise_capture_use_is_not_an_import_or_a_brace_scope(self):
+        body = (
+            "use std::thread::sleep;\n"
+            "fn values() -> impl Iterator<Item = ()> + use<> {\n"
+            "    sleep(d);\n"
+            "    [()].into_iter()\n"
+            "}\n"
+        )
+        _, check = self.tree(self.rust(body))
+        self.assertEqual(check.measure()["rust_sleeps"], {"hide-x/tests/it/wait.rs": [3]})
+
+    def test_new_calls_after_an_existing_scoped_import_exceed_the_baseline(self):
+        for imported, call in (("sleep", "sleep"), ("sleep as nap", "nap")):
+            with self.subTest(imported=imported):
+                before = f"mod timers {{\n    use tokio::time::{{{imported}}};\n    async fn a() {{ {call}(d).await; }}\n"
+                baseline = {"rust_sleeps": {"hide-x/tests/it/wait.rs": 1}}
+                root, check = self.tree(self.rust(before + "}\n"), baseline)
+                self.assertEqual(self.run_check(check)[0], 0)
+                (root / "hide-x/tests/it/wait.rs").write_text(
+                    before + f"    async fn b() {{ {call}(d).await; }}\n}}\n"
+                )
+                code, err = self.run_check(check)
+                self.assertEqual(code, 1)
+                self.assertIn("2 unannotated", err)
+
+    def test_the_review_reproduction_keeps_the_existing_agent_operations_out(self):
+        source = (ROOT / "hide-core/src/runtime/tests/launch_choice.rs").read_text()
+        _, check = self.tree(self.rust(source + (
+            "\nmod timer_test {\n"
+            "    use std::thread::sleep; // wait-ok: the pid file's next poll\n"
+            "    fn timer() { sleep(d); } // wait-ok: the pid file's next poll\n"
+            "}\n"
+        )))
         self.assertEqual(check.measure()["rust_sleeps"], {})
 
     def test_an_imported_sleep_called_in_a_cfg_test_module_counts_and_in_production_does_not(self):
@@ -219,8 +312,9 @@ class TimedWaits(unittest.TestCase):
 
     def git(self, root, *args):
         subprocess.run(
-            ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
-            check=True, capture_output=True,
+            ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com",
+             "-c", "commit.gpgsign=false", *args],
+            check=True, capture_output=True, timeout=10,
         )
 
     def edit_baseline(self, root, check, baseline):

@@ -39,6 +39,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from bisect import bisect_right
 from collections import Counter
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -53,11 +54,18 @@ SKIPPED_DIRS = {"target", "node_modules", "vendor", ".git", "agents", "dist", "o
 
 E2E_WAIT = re.compile(r"\btimeout\s*:")
 RUST_WAIT = re.compile(r"\bthread::sleep\b|\btime::sleep\b")
-RUST_USE = re.compile(r"\buse\b[^;]*;")
+RUST_USE = re.compile(r"\buse\b\s*(?=[\w:{])[^;]*;")
 RUST_USE_GLOB = re.compile(r"\b(?:thread|time)::(?:\*|\{[^}]*\*[^}]*\})")
 RUST_USE_NAME = re.compile(r"\b(?:thread|time)::sleep\b(?:\s+as\s+(\w+))?")
 RUST_USE_GROUP = re.compile(r"\b(?:thread|time)::\{([^}]*)\}")
 RUST_USE_MEMBER = re.compile(r"\s*sleep(?:\s+as\s+(\w+))?\s*")
+RUST_SCOPE_TOKEN = re.compile(
+    r"(?P<use>" + RUST_USE.pattern + r")"
+    r"|(?P<module>\bmod\s+\w+\s*\{)"
+    r"|\bfn\s+(?P<function>\w+)"
+    r"|(?P<brace>[{}])"
+    r"|(?P<call>(?<![\w:.])\w+)\s*\("
+)
 ANNOTATION = re.compile(r"//\s*wait-ok:[ \t]*(\S[^\n]*)")
 
 KINDS = {
@@ -112,7 +120,7 @@ def unannotated(raw: str, matches: list) -> list:
 
 
 def sleep_names(code: str) -> set:
-    """The names a Rust file's `use` items bring a sleep in as: `sleep`, an `as` alias, or `sleep` for a glob of `thread` or `time`."""
+    """Names brought in by the supplied `use` items, including aliases and timer globs."""
     names = set()
     for statement in RUST_USE.findall(code):
         if RUST_USE_GLOB.search(statement):
@@ -127,19 +135,54 @@ def sleep_names(code: str) -> set:
     return names
 
 
+class SleepScope:
+    """Item bindings belong to a brace scope, even before their declaration.
+
+    Blocks inherit their enclosing scope. Modules require `use super::*` to
+    inherit it, and a local function shadows an inherited timer binding.
+    """
+    def __init__(self, parent=None, module=False):
+        self.parent = parent
+        self.inherits = not module
+        self.bindings = {}
+
+    def is_timer(self, name: str) -> bool:
+        if name in self.bindings:
+            return self.bindings[name]
+        return bool(self.inherits and self.parent and self.parent.is_timer(name))
+
+
 def rust_waits(whole: str, tested: str) -> list:
-    """The sleeps in `tested`, the file's test code: qualified (`thread::sleep`) and, where the file's `use` items
-    bring one in by name, the calls of that name. The `use` items themselves are not waits."""
+    """Qualified sleeps and calls bound to a timer import in their brace scope.
+
+    Consume whole use items so grouped imports' braces cannot open a scope.
+    Resolve after scanning so item order within a scope does not matter.
+    The test mask limits findings, but production imports still bind names.
+    """
     code = RUST_USE.sub(lambda match: _blank(match.group(0)), tested)
     found = pattern_matches(code, RUST_WAIT)
-    names = sleep_names(whole)
-    if names:
-        call = re.compile(r"(?<![\w:.])(?:" + "|".join(sorted(map(re.escape, names))) + r")\s*\(")
-        for number, line in enumerate(code.split("\n"), 1):
-            for match in call.finditer(line):
-                # A function the file defines with that name is not an import.
-                if not re.search(r"\bfn\s+$", line[: match.start()]):
-                    found.append((number, match.end()))
+    scopes = [SleepScope()]
+    calls = []
+    for token in RUST_SCOPE_TOKEN.finditer(whole):
+        scope = scopes[-1]
+        if token.group("use"):
+            for name in sleep_names(token.group()):
+                scope.bindings.setdefault(name, True)
+            if re.search(r"\buse\s+super::\*\s*;", token.group()):
+                scope.inherits = True
+        elif token.group("module") or token.group("brace") == "{":
+            scopes.append(SleepScope(scope, module=bool(token.group("module"))))
+        elif token.group("brace") == "}":
+            scopes.pop()
+        elif token.group("function"):
+            scope.bindings[token.group("function")] = False
+        elif tested[token.start():token.end()].strip():
+            calls.append((token, scope))
+    newlines = [-1] + [match.start() for match in re.finditer("\n", whole)]
+    for token, scope in calls:
+        if scope.is_timer(token.group("call")):
+            number = bisect_right(newlines, token.start())
+            found.append((number, token.end() - newlines[number - 1] - 1))
     return sorted(found)
 
 
@@ -229,7 +272,7 @@ def write(baseline: dict) -> None:
 
 
 def git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, timeout=10)
 
 
 def base_baseline(ref: str):
