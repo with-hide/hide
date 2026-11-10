@@ -5455,7 +5455,7 @@ mod tests {
         exec_report(&engine, &pane, &id, AgentExecEvent::Ready, EXECUTOR).unwrap();
         reads(&holders, EXECUTOR, 41, words(&["claude", "--model", "x"]));
         assert_eq!(
-            gated.await_attempt(finish, Instant::now() + Duration::from_secs(30)),
+            gated.await_attempt(finish, deadline(WAIT)),
             attempt::Outcome::Started
         );
     }
