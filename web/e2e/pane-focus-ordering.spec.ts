@@ -140,7 +140,8 @@ async function focusHarness(page: Page, daemon: Daemon, panes: readonly string[]
   return { diagnostics, views, focusObservation, click, clickBurst, requested, confirmed };
 }
 
-test("keys typed after rapid pane clicks reach the last pane", { tag: "@platform" }, async ({ page }) => {
+test("keys typed after rapid pane clicks reach the last pane", { tag: "@platform" }, async ({ page }, testInfo) => {
+  expect(testInfo.repeatEachIndex, "planted failure for the repeat lane proof").not.toBe(3);
   const fixture = await startFixture();
   const focusFrames = observeFocusFrames(page);
   let daemon: Daemon | undefined;
