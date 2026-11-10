@@ -169,7 +169,7 @@ const FIXTURE_AGENTS = [
  * `panes` and `inputLogs` are read only after `startHided` returned.
  */
 export type AgentFixture = EngineServer & {
-  /** Whether the second agent is the first one's child (`family`). */
+  /** Whether the second agent is the first one's child (`family`), which opens in a tab of its own; `tab` is the parent's. */
   family: boolean;
   workspace: string;
   checkout: string;
@@ -289,7 +289,7 @@ type Caller = { workspace: string; checkout: string; tab: string; pane: string; 
 
 async function openFixture(control: HidedControl, server: EngineServer, daemon: OpenedDaemon, kind: "shells" | "agents" | "family"): Promise<Opened> {
   const dir = path.join(server.root, "fixture");
-  // A child beside its parent opens in the parent's own worktree (docs/delivery.md, Agent registration and spawning).
+  // A family's child opens on the parent's own branch, so the checkout is a Git one (docs/delivery.md, Agent registration and spawning).
   if (kind === "family") gitRepository(dir);
   const first = await openProject(control, dir, "fixture");
   const folder = first.folder;
@@ -310,17 +310,22 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   const runAs = kind === "family" ? installAgentRunner(server as AgentPaneFixture, daemon.stateDir) : undefined;
   for (const agent of FIXTURE_AGENTS) writeFixtureTranscript(claudeProjects(server), agent.session, { task: agent.task });
   const one = await startFirstAgent(control, folder);
+  let panes: [string, string];
   if (runAs) {
+    // A delegated child opens in a tab of its own: an agent beside its caller is the operator's and has no parent (docs/delivery.md).
     await parentOnItsSession(control, one.pane, runAs);
-    const spawned = await runAs(one.pane)(["agent", "spawn", "--parent", "here", "--beside", "--name", "agent-two", "--intent", "fixture-two", "--kind", "claude", "--repo", fs.realpathSync.native(dir), "--branch", "main", "--", "--resume", FIXTURE_AGENTS[1].session]);
-    if (spawned.status !== 0) throw new Error(`the fixture's parent could not spawn its child: ${spawned.out}`);
+    const spawned = await runAs(one.pane)(["agent", "spawn", "--parent", "here", "--name", "agent-two", "--intent", "fixture-two", "--kind", "claude", "--repo", fs.realpathSync.native(dir), "--branch", "main", "--", "--resume", FIXTURE_AGENTS[1].session]);
+    const answer = JSON.parse(spawned.out.trim().split("\n").at(-1) ?? "null") as { ok?: boolean; value?: { pane?: string } } | null;
+    const child = answer?.ok ? answer.value?.pane : undefined;
+    if (spawned.status !== 0 || !child) throw new Error(`the fixture's parent could not spawn its child: ${spawned.out}`);
+    panes = await control.until((rest) => (agentIn(rest, one.pane) && agentIn(rest, child) ? [one.pane, child] as [string, string] : undefined), "the fixture's child in its own tab", 30_000);
   } else {
     await startAgentInCheckout(control, folder, { resume_session_id: FIXTURE_AGENTS[1].session, target: { ...one.area, tab_id: one.tab, add_pane: true } }, "the second fixture agent");
+    panes = await control.until((rest) => {
+      const listed = tabPanes(rest, one.tab);
+      return listed.length === 2 && listed.every((pane) => agentIn(rest, pane)) ? listed as [string, string] : undefined;
+    }, "the second fixture agent beside the first", 30_000);
   }
-  const panes = await control.until((rest) => {
-    const listed = tabPanes(rest, one.tab);
-    return listed.length === 2 && listed.every((pane) => agentIn(rest, pane)) ? listed as [string, string] : undefined;
-  }, "the second fixture agent beside the first", 30_000);
   viewPane(control, panes[1]);
   // The engine learns a pane's session from the start's `--resume`
   // (docs/ARCHITECTURE.md, Agents on the core's own engine).

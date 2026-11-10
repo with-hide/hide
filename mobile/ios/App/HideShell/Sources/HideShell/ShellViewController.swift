@@ -12,7 +12,7 @@ open class ShellViewController: CAPBridgeViewController {
 
     /// The app's own plugins, the ones `BridgeGate.appPlugins` names besides Capacitor's console. A test names its own.
     open func appPlugins() -> [CAPPlugin] {
-        [HideKeychainPlugin(), HideScannerPlugin(), HideAppPlugin()]
+        [HideKeychainPlugin(), HideScannerPlugin(), HideAppPlugin(), HidePushPlugin()]
     }
 
     /// The height the keyboard covers, which the web view gives up so the page's last line stays above it.

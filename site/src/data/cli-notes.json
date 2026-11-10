@@ -1,438 +1,431 @@
 {
   "status": {
-    "line": "Placeholder note for hide status; the CLI notes replace it.",
+    "line": "Shows whether Hide is running, with its process, its port and how many clients are connected to it.",
     "example": "hide status"
   },
   "stop": {
-    "line": "Placeholder note for hide stop; the CLI notes replace it.",
+    "line": "Stops Hide's background service on this machine, so Hide is no longer running until you open it again.",
     "example": "hide stop"
   },
   "version": {
-    "line": "Placeholder note for hide version; the CLI notes replace it.",
-    "example": "hide version"
+    "line": "Shows the version and commit of this Hide build.",
+    "example": "hide version --json"
   },
   "guide": {
-    "line": "Placeholder note for hide guide; the CLI notes replace it.",
+    "line": "Prints the guide Hide gives an agent in its pane: letters, agents, the operator's screen and Project Memory.",
     "example": "hide guide"
   },
   "issue help": {
-    "line": "Placeholder note for hide issue help; the CLI notes replace it.",
+    "line": "Prints the steps for reporting a bug in Hide itself to its GitHub issues, which an agent follows once you agree.",
     "example": "hide issue help"
   },
   "contract": {
-    "line": "Placeholder note for hide contract; the CLI notes replace it.",
-    "example": "hide contract"
+    "line": "Prints the commands that tools call and the answers they get, as JSON, so a tool can check it matches this build.",
+    "example": "hide contract --json"
   },
   "request send": {
-    "line": "Placeholder note for hide request send; the CLI notes replace it.",
-    "example": "hide request send"
+    "line": "Sends a letter from an agent's pane to another agent and keeps its reply; sending again with the same --intent retries that letter without delivering it twice, and a new letter needs a new --intent.",
+    "example": "hide request send parent-name --kind progress --intent task-plan-1 --body 'Plan: core first, then web.'"
   },
   "request reply": {
-    "line": "Placeholder note for hide request reply; the CLI notes replace it.",
-    "example": "hide request reply"
+    "line": "Answers a letter you received, so the sender gets your answer with the letter it was about.",
+    "example": "hide request reply letter-1 --intent task-answer-1 --body 'The check passed.'"
   },
   "request ack": {
-    "line": "Placeholder note for hide request ack; the CLI notes replace it.",
-    "example": "hide request ack"
+    "line": "Records, from the recipient's own pane, that it received a letter, which is the receipt the sender waits for.",
+    "example": "hide request ack letter-1"
   },
   "request cancel": {
-    "line": "Placeholder note for hide request cancel; the CLI notes replace it.",
-    "example": "hide request cancel"
+    "line": "Cancels a letter you sent that is still waiting for its answer.",
+    "example": "hide request cancel letter-1"
   },
   "request show": {
-    "line": "Placeholder note for hide request show; the CLI notes replace it.",
-    "example": "hide request show"
+    "line": "Opens one letter in full, including a letter that an inbox bundle only lists by its id.",
+    "example": "hide request show letter-1"
   },
   "inbox": {
-    "line": "Placeholder note for hide inbox; the CLI notes replace it.",
+    "line": "Lists the letters waiting for you and the ones that came back undelivered, with the command that marks them taken.",
     "example": "hide inbox"
   },
   "watch start": {
-    "line": "Placeholder note for hide watch start; the CLI notes replace it.",
-    "example": "hide watch start"
+    "line": "Starts a watch on an agent, so you get a letter when that agent has been quiet for too long or has stopped at a question or a prompt; the watch ends when the agent exits, reports that it is finished, or you stop it.",
+    "example": "hide watch start child-name"
   },
   "watch assign": {
-    "line": "Placeholder note for hide watch assign; the CLI notes replace it.",
-    "example": "hide watch assign"
+    "line": "Hands a watch to another observer, so its quiet-time letters go to the new one; the current observer can hand it over, and an observer can take it for itself by naming itself with --approval and the watch's current --expected-generation.",
+    "example": "hide watch assign watch-2 --observer agent-2"
   },
   "watch stop": {
-    "line": "Placeholder note for hide watch stop; the CLI notes replace it.",
-    "example": "hide watch stop"
+    "line": "Stops a watch, so its observer no longer gets letters about that agent.",
+    "example": "hide watch stop watch-2"
   },
   "watch list": {
-    "line": "Placeholder note for hide watch list; the CLI notes replace it.",
+    "line": "Lists the watches that are running and who observes each one.",
     "example": "hide watch list"
   },
   "agent register": {
-    "line": "Placeholder note for hide agent register; the CLI notes replace it.",
-    "example": "hide agent register"
+    "line": "Adds an agent that you started yourself in a Hide pane to Hide's list of agents, with the parent you name if you name one."
   },
   "agent list": {
-    "line": "Placeholder note for hide agent list; the CLI notes replace it.",
+    "line": "Lists the agents Hide knows, with the machine each runs on and whether it is running, asleep or ended.",
     "example": "hide agent list"
   },
   "agent show": {
-    "line": "Placeholder note for hide agent show; the CLI notes replace it.",
-    "example": "hide agent show"
+    "line": "Shows one agent: its id, its parent, its machine, and what it is doing and waiting on now.",
+    "example": "hide agent show here"
   },
   "agent ask-human": {
-    "line": "Placeholder note for hide agent ask-human; the CLI notes replace it.",
-    "example": "hide agent ask-human"
+    "line": "Tells the operator that a step needs a person, such as a sign-in or a permission; you then end your turn and wait for the letter that says it is done.",
+    "example": "hide agent ask-human auth https://github.com/login"
   },
   "agent end": {
-    "line": "Placeholder note for hide agent end; the CLI notes replace it.",
-    "example": "hide agent end"
+    "line": "Ends an agent and closes its pane, keeping its conversation so the operator can resume it; with --keep-pane only the agent's registration ends, and to end yourself you need --keep-pane, since otherwise your own pane closes before the command gets its answer.",
+    "example": "hide agent end agent-7"
   },
   "agent sleep": {
-    "line": "Placeholder note for hide agent sleep; the CLI notes replace it.",
-    "example": "hide agent sleep"
+    "line": "Puts a child of yours (or yourself) to sleep, its process ending and its conversation kept, so a request or block letter wakes it again; it is refused while the agent works, waits for the operator or is on the operator's screen.",
+    "example": "hide agent sleep agent-7"
   },
   "agent archive": {
-    "line": "Placeholder note for hide agent archive; the CLI notes replace it.",
-    "example": "hide agent archive"
+    "line": "Saves an agent's conversation and closes its panes, so the operator can resume it later from the archive; a session that is working is refused, and only the operator confirms that, on Hide's screen.",
+    "example": "hide agent archive agent-7"
   },
   "agent catalog": {
-    "line": "Placeholder note for hide agent catalog; the CLI notes replace it.",
+    "line": "Lists the agent kinds and profiles Hide can start, with whether each is installed and the models and efforts each one takes.",
     "example": "hide agent catalog"
   },
   "agent profile list": {
-    "line": "Placeholder note for hide agent profile list; the CLI notes replace it.",
+    "line": "Lists this machine's agent profiles, each one a way to start an agent, with its account, program, environment variable names and installation state.",
     "example": "hide agent profile list"
   },
   "agent profile add": {
-    "line": "Placeholder note for hide agent profile add; the CLI notes replace it.",
-    "example": "hide agent profile add"
+    "line": "Adds a profile for an agent kind, such as a second account with its own folder, that a start can then choose with --profile.",
+    "example": "hide agent profile add claude work --account ~/.claude-work"
   },
   "agent profile edit": {
-    "line": "Placeholder note for hide agent profile edit; the CLI notes replace it.",
-    "example": "hide agent profile edit"
+    "line": "Changes a profile's name, program or environment variables; the built-in default profile cannot be edited.",
+    "example": "hide agent profile edit claude work --rename client"
   },
   "agent profile default": {
-    "line": "Placeholder note for hide agent profile default; the CLI notes replace it.",
-    "example": "hide agent profile default"
+    "line": "Makes a profile the one an agent starts with when nothing else chooses a profile.",
+    "example": "hide agent profile default claude work"
   },
   "agent profile remove": {
-    "line": "Placeholder note for hide agent profile remove; the CLI notes replace it.",
-    "example": "hide agent profile remove"
+    "line": "Removes a profile that no running or sleeping agent uses; the built-in default profile cannot be removed.",
+    "example": "hide agent profile remove claude work"
   },
   "agent profile reinstall": {
-    "line": "Placeholder note for hide agent profile reinstall; the CLI notes replace it.",
-    "example": "hide agent profile reinstall"
+    "line": "Installs Hide's hooks into a profile's account folder again.",
+    "example": "hide agent profile reinstall claude work"
   },
   "agent spawn": {
-    "line": "Placeholder note for hide agent spawn; the CLI notes replace it.",
-    "example": "hide agent spawn"
+    "line": "Starts a new agent in a tab of its own, or beside your pane with --beside (your own checkout only), and gives it a brief to start on; --machine starts it on a device, and only the machine that runs Hide may do that.",
+    "example": "hide agent spawn --parent here --name review-1 --intent review-1 --kind claude --repo ~/projects/app --branch review-1 --brief 'Review the diff and report.'"
   },
   "ps": {
-    "line": "Placeholder note for hide ps; the CLI notes replace it.",
-    "example": "hide ps"
+    "line": "Shows the panes and agents Hide runs, as a tree of checkouts, tabs and panes; --here keeps only this project.",
+    "example": "hide ps --here"
   },
   "device list": {
-    "line": "Placeholder note for hide device list; the CLI notes replace it.",
+    "line": "Lists the devices connected to this Hide, with each one's state and whatever it is waiting on from you; run it on the machine that runs Hide, since a device is refused.",
     "example": "hide device list"
   },
   "device add": {
-    "line": "Placeholder note for hide device add; the CLI notes replace it.",
-    "example": "hide device add"
+    "line": "Registers a computer you reach over SSH, by its Host name in ~/.ssh/config, as a device; its folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
+    "example": "hide device add mini --name 'Mac mini'"
   },
   "device remove": {
-    "line": "Placeholder note for hide device remove; the CLI notes replace it.",
-    "example": "hide device remove"
+    "line": "Forgets a device, and takes Hide's helper off it only if the helper is connected at that moment and no other registered device reaches the same account there; otherwise the helper stays and the reason goes to Hide's diagnostics. Its panes and agents keep running there.",
+    "example": "hide device remove mini"
   },
   "device retry": {
-    "line": "Placeholder note for hide device retry; the CLI notes replace it.",
-    "example": "hide device retry"
+    "line": "Starts a new attempt to connect a device, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt, and only the machine that runs Hide may ask. With --wait it waits until the device connects, needs the operator, the attempt fails or five minutes pass.",
+    "example": "hide device retry mini --wait"
   },
   "mission help": {
-    "line": "Placeholder note for hide mission help; the CLI notes replace it.",
+    "line": "Prints the guide for a mission's Conductor, the agent that plans a mission and starts the agents that do its work.",
     "example": "hide mission help"
   },
   "mission create": {
-    "line": "Placeholder note for hide mission create; the CLI notes replace it.",
-    "example": "hide mission create"
+    "line": "Creates a new mission with a title, which a plan and its agents then carry out.",
+    "example": "hide mission create --title 'Fix the lens filter'"
   },
   "mission plan": {
-    "line": "Placeholder note for hide mission plan; the CLI notes replace it.",
-    "example": "hide mission plan"
+    "line": "Sets a mission's plan from a JSON file: its nodes, their order, their checks and the worker for each.",
+    "example": "hide mission plan --file plan.json"
   },
   "mission node": {
-    "line": "Placeholder note for hide mission node; the CLI notes replace it.",
-    "example": "hide mission node"
+    "line": "Updates one node of a mission's plan, such as its status, its branch, its pull request or its worker.",
+    "example": "hide mission node fix-1487 --status working --agent-id agent-7"
   },
   "mission record": {
-    "line": "Placeholder note for hide mission record; the CLI notes replace it.",
-    "example": "hide mission record"
+    "line": "Records one finish line of a node as passed or failed, with the evidence that shows it.",
+    "example": "hide mission record fix-1487 c1 --pass --evidence 'The lens keeps its filter after a reload.'"
   },
   "mission skip": {
-    "line": "Placeholder note for hide mission skip; the CLI notes replace it.",
-    "example": "hide mission skip"
+    "line": "Marks one finish line of a node as skipped, with a reason, so the node can go on.",
+    "example": "hide mission skip cause c2 --reason 'Covered by the next node.'"
   },
   "mission defect": {
-    "line": "Placeholder note for hide mission defect; the CLI notes replace it.",
-    "example": "hide mission defect"
+    "line": "Reopens an earlier node with a defect that a later node found, so its worker can fix it.",
+    "example": "hide mission defect fix-1487 --found-by together --line 'The lens loses its filter after a reload.'"
+  },
+  "mission gate": {
+    "line": "Settles a place the operator asked to check, using the operator's own words, so the node can finish.",
+    "example": "hide mission gate fix-1487 --pass --said 'looks good'"
   },
   "mission start": {
-    "line": "Placeholder note for hide mission start; the CLI notes replace it.",
+    "line": "Moves a planned mission from Planning to Running once the operator has approved its plan; the Conductor then starts the workers.",
     "example": "hide mission start"
   },
   "mission decide": {
-    "line": "Placeholder note for hide mission decide; the CLI notes replace it.",
-    "example": "hide mission decide"
+    "line": "Puts a question for the operator on the mission's map, or clears it with --clear once it is answered.",
+    "example": "hide mission decide --line 'Ship the lens fix in this pull request?' --option yes --option no"
   },
   "mission delay": {
-    "line": "Placeholder note for hide mission delay; the CLI notes replace it.",
-    "example": "hide mission delay"
+    "line": "Records why new starts are held for a mission, such as usage near a limit; holding them is the Conductor's job, and --clear removes the reason.",
+    "example": "hide mission delay --line 'Usage is close to the limit.'"
   },
   "mission close": {
-    "line": "Placeholder note for hide mission close; the CLI notes replace it.",
-    "example": "hide mission close"
+    "line": "Closes a mission as done, as waiting for merge, or as cancelled, with a report of what it did.",
+    "example": "hide mission close --as done --report-file report.md"
   },
   "mission reopen": {
-    "line": "Placeholder note for hide mission reopen; the CLI notes replace it.",
+    "line": "Opens a mission that was closed as done or as waiting for merge again, so its nodes can continue; a cancelled mission cannot be reopened.",
     "example": "hide mission reopen"
   },
   "mission take": {
-    "line": "Placeholder note for hide mission take; the CLI notes replace it.",
-    "example": "hide mission take"
+    "line": "Takes over a mission whose Conductor is gone, so you become the one that runs its plan.",
+    "example": "hide mission take mission-3"
   },
   "mission show": {
-    "line": "Placeholder note for hide mission show; the CLI notes replace it.",
+    "line": "Shows a mission as text, or one node in full, or the whole record as JSON with --json.",
     "example": "hide mission show"
   },
   "mission list": {
-    "line": "Placeholder note for hide mission list; the CLI notes replace it.",
+    "line": "Lists the missions in this Hide, with their status and their Conductor.",
     "example": "hide mission list"
   },
   "mission settings": {
-    "line": "Placeholder note for hide mission settings; the CLI notes replace it.",
+    "line": "Shows the mission defaults: how many agents may run at once, the default scope and the worker candidates.",
     "example": "hide mission settings"
   },
   "task help": {
-    "line": "Placeholder note for hide task help; the CLI notes replace it.",
+    "line": "Prints the guide for keeping your own plan of steps, which Hide shows as a map beside your pane.",
     "example": "hide task help"
   },
   "task set": {
-    "line": "Placeholder note for hide task set; the CLI notes replace it.",
-    "example": "hide task set"
+    "line": "Puts up the steps of your task, so the operator can see where you are on the map beside your pane.",
+    "example": "hide task set --file plan.json"
   },
   "task node": {
-    "line": "Placeholder note for hide task node; the CLI notes replace it.",
-    "example": "hide task node"
+    "line": "Changes one step of your plan: its status, a line about it, or the pull request or file that finishes it.",
+    "example": "hide task node spec --status done --file docs/spec.md"
   },
   "task approve": {
-    "line": "Placeholder note for hide task approve; the CLI notes replace it.",
+    "line": "Records that the operator approved the plan you put up for review, so your writes, commits and pushes are allowed again.",
     "example": "hide task approve"
   },
   "task drop": {
-    "line": "Placeholder note for hide task drop; the CLI notes replace it.",
+    "line": "Drops a plan the operator asked you not to carry out.",
     "example": "hide task drop"
   },
   "task show": {
-    "line": "Placeholder note for hide task show; the CLI notes replace it.",
+    "line": "Shows an agent's plan, with the status of each of its steps.",
     "example": "hide task show"
   },
   "pane read": {
-    "line": "Placeholder note for hide pane read; the CLI notes replace it.",
-    "example": "hide pane read"
+    "line": "Prints the last lines of a pane, unwrapped, so you can see what its program last showed.",
+    "example": "hide pane read w1:p2 --lines 20"
   },
   "pane send": {
-    "line": "Placeholder note for hide pane send; the CLI notes replace it.",
-    "example": "hide pane send"
+    "line": "Types text into a pane, or presses keys in it such as Escape or Enter; it is refused while the pane's input box holds a draft that someone typed there, and it is input, not a letter, so nothing keeps a reply or retries it.",
+    "example": "hide pane send w1:p2 --key esc"
   },
   "pane open": {
-    "line": "Placeholder note for hide pane open; the CLI notes replace it.",
-    "example": "hide pane open"
+    "line": "Opens a new pane beside your own pane, in your checkout, and runs a command in it, without moving your keyboard focus unless you add --focus.",
+    "example": "hide pane open --beside -- npm run dev"
   },
   "agent read": {
-    "line": "Placeholder note for hide agent read; the CLI notes replace it.",
-    "example": "hide agent read"
+    "line": "Prints the last lines of an agent's pane, so you can see what the agent last showed.",
+    "example": "hide agent read agent-7 --lines 40"
   },
   "workspace purpose": {
-    "line": "Placeholder note for hide workspace purpose; the CLI notes replace it.",
-    "example": "hide workspace purpose"
+    "line": "Sets the one-line purpose of your checkout, which the sidebar shows; it can be 40 characters at most.",
+    "example": "hide workspace purpose 'Fix the lens filter'"
   },
   "workspace info": {
-    "line": "Placeholder note for hide workspace info; the CLI notes replace it.",
+    "line": "Shows the workspace and checkout Hide has for this folder, and the device they run on.",
     "example": "hide workspace info"
   },
   "file open": {
-    "line": "Placeholder note for hide file open; the CLI notes replace it.",
-    "example": "hide file open"
+    "line": "Shows a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the file waits in your session's Files list instead of taking the screen.",
+    "example": "hide file open docs/spec.md"
   },
   "diff open": {
-    "line": "Placeholder note for hide diff open; the CLI notes replace it.",
-    "example": "hide diff open"
+    "line": "Shows the changes to a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, it waits in your session's Files list instead of taking the screen.",
+    "example": "hide diff open src/lens.rs"
   },
   "browser open": {
-    "line": "Placeholder note for hide browser open; the CLI notes replace it.",
-    "example": "hide browser open"
+    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, where it waits until the operator looks at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the tab waits behind what they see. Only an http(s) or blank page can be driven by the other browser commands.",
+    "example": "hide browser open http://localhost:3000"
   },
   "browser connect": {
-    "line": "Placeholder note for hide browser connect; the CLI notes replace it.",
+    "line": "Asks Hide for the browser display of this checkout, or the one you name with --display, and prints its answer.",
     "example": "hide browser connect"
   },
   "browser snapshot": {
-    "line": "Placeholder note for hide browser snapshot; the CLI notes replace it.",
-    "example": "hide browser snapshot"
+    "line": "Reads the page in one of your own checkout's browser displays as a list of its elements, each with a ref you can act on; it also works while the display is behind another tab of its area.",
+    "example": "hide browser snapshot browser-3 --interactive"
   },
   "browser click": {
-    "line": "Placeholder note for hide browser click; the CLI notes replace it.",
-    "example": "hide browser click"
+    "line": "Clicks an element of the page, by its ref, by its visible text, or by a point, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "example": "hide browser click browser-3 @5"
   },
   "browser fill": {
-    "line": "Placeholder note for hide browser fill; the CLI notes replace it.",
-    "example": "hide browser fill"
+    "line": "Fills a form field of the page with a value.",
+    "example": "hide browser fill browser-3 @1 'a@b.c'"
   },
   "browser type": {
-    "line": "Placeholder note for hide browser type; the CLI notes replace it.",
-    "example": "hide browser type"
+    "line": "Types text into the page, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "example": "hide browser type browser-3 'hello'"
   },
   "browser press": {
-    "line": "Placeholder note for hide browser press; the CLI notes replace it.",
-    "example": "hide browser press"
+    "line": "Presses a key in the page, such as Enter, Tab or Escape, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "example": "hide browser press browser-3 Enter"
   },
   "browser hover": {
-    "line": "Placeholder note for hide browser hover; the CLI notes replace it.",
-    "example": "hide browser hover"
+    "line": "Moves the pointer over an element of the page, so a menu or tooltip can show, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "example": "hide browser hover browser-3 @3"
   },
   "browser drag": {
-    "line": "Placeholder note for hide browser drag; the CLI notes replace it.",
-    "example": "hide browser drag"
+    "line": "Drags from one element or point of the page to another, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "example": "hide browser drag browser-3 @2 @7"
   },
   "browser scroll": {
-    "line": "Placeholder note for hide browser scroll; the CLI notes replace it.",
-    "example": "hide browser scroll"
+    "line": "Scrolls the page up or down, or to an element.",
+    "example": "hide browser scroll browser-3 down"
   },
   "browser wait": {
-    "line": "Placeholder note for hide browser wait; the CLI notes replace it.",
-    "example": "hide browser wait"
+    "line": "Waits until a text or an element appears in the page; with --gone and a selector it waits until that element disappears instead. It stops at a timeout.",
+    "example": "hide browser wait browser-3 --text 'Welcome'"
   },
   "browser screenshot": {
-    "line": "Placeholder note for hide browser screenshot; the CLI notes replace it.",
-    "example": "hide browser screenshot"
+    "line": "Saves a picture of the page, or of one element with --ref, to a file, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
+    "example": "hide browser screenshot browser-3 shot.png"
   },
   "browser eval": {
-    "line": "Placeholder note for hide browser eval; the CLI notes replace it.",
-    "example": "hide browser eval"
+    "line": "Runs a JavaScript expression in the page and prints its result.",
+    "example": "hide browser eval browser-3 'document.title'"
   },
   "browser console": {
-    "line": "Placeholder note for hide browser console; the CLI notes replace it.",
-    "example": "hide browser console"
+    "line": "Shows the messages the page logged to its console, newest first.",
+    "example": "hide browser console browser-3"
   },
   "browser network": {
-    "line": "Placeholder note for hide browser network; the CLI notes replace it.",
-    "example": "hide browser network"
+    "line": "Shows the network requests the page made, with their timing but not their headers or bodies.",
+    "example": "hide browser network browser-3"
   },
   "browser help": {
-    "line": "Placeholder note for hide browser help; the CLI notes replace it.",
+    "line": "Prints the guide for driving a browser display: its refs, how actions are checked, and what each failure means.",
     "example": "hide browser help"
   },
   "view list": {
-    "line": "Placeholder note for hide view list; the CLI notes replace it.",
+    "line": "Lists the Views open in your checkout, with the ids that the other view and browser commands take.",
     "example": "hide view list"
   },
   "view status": {
-    "line": "Placeholder note for hide view status; the CLI notes replace it.",
-    "example": "hide view status"
+    "line": "Shows one View by its id, so you can read what a delegated agent opened in it.",
+    "example": "hide view status browser-3"
   },
   "view select": {
-    "line": "Placeholder note for hide view select; the CLI notes replace it.",
-    "example": "hide view select"
+    "line": "Brings a View to the front of its area when the operator is looking at your pane. If they are looking at another pane of the same checkout, the command succeeds but their selection stays as it was.",
+    "example": "hide view select browser-3"
   },
   "view close": {
-    "line": "Placeholder note for hide view close; the CLI notes replace it.",
-    "example": "hide view close"
+    "line": "Closes a View, so it leaves the operator's screen; the last View of a document with an unsaved draft is refused until the operator saves or discards the draft in Hide.",
+    "example": "hide view close browser-3"
   },
   "view split": {
-    "line": "Placeholder note for hide view split; the CLI notes replace it.",
-    "example": "hide view split"
+    "line": "Moves a View into a new area on one edge of the area you name, so it sits beside the others; the result may not have more than six areas or three levels of splits, and a View alone in its area cannot be split off from that same area.",
+    "example": "hide view split browser-3 --area area-1 --edge right"
   },
   "view move": {
-    "line": "Placeholder note for hide view move; the CLI notes replace it.",
-    "example": "hide view move"
+    "line": "Moves a View into another area, at the position you give.",
+    "example": "hide view move browser-3 --area area-2 --index 0"
   },
   "links pr": {
-    "line": "Placeholder note for hide links pr; the CLI notes replace it.",
-    "example": "hide links pr"
-  },
-  "session list": {
-    "line": "Placeholder note for hide session list; the CLI notes replace it.",
-    "example": "hide session list"
-  },
-  "session record": {
-    "line": "Placeholder note for hide session record; the CLI notes replace it.",
-    "example": "hide session record"
-  },
-  "session read": {
-    "line": "Placeholder note for hide session read; the CLI notes replace it.",
-    "example": "hide session read"
-  },
-  "memory show": {
-    "line": "Placeholder note for hide memory show; the CLI notes replace it.",
-    "example": "hide memory show"
+    "line": "Shows the projects and sessions Hide has linked to a pull request.",
+    "example": "hide links pr 2389 --all-projects"
   },
   "links issue": {
-    "line": "Placeholder note for hide links issue; the CLI notes replace it.",
-    "example": "hide links issue"
+    "line": "Shows the sessions and pull requests Hide has linked to a GitHub issue in this project."
   },
   "links branch": {
-    "line": "Placeholder note for hide links branch; the CLI notes replace it.",
-    "example": "hide links branch"
+    "line": "Shows the pull requests and sessions Hide has linked to a Git branch in this project.",
+    "example": "hide links branch main"
   },
   "links session": {
-    "line": "Placeholder note for hide links session; the CLI notes replace it.",
-    "example": "hide links session"
+    "line": "Shows the named session and the pull requests tied to it.",
+    "example": "hide links session 03293c41-46c6-4326-98d0-31f2dcce4132"
+  },
+  "session list": {
+    "line": "Lists the recent sessions of this project, one line each with a summary, and, when Hide knows this project's repository, those of the projects of the same repository on connected devices.",
+    "example": "hide session list --since 1d --limit 10"
+  },
+  "session record": {
+    "line": "Shows one session as its record: its summary, its state and the requests it received.",
+    "example": "hide session record agent-7"
+  },
+  "session read": {
+    "line": "Reads the raw events of a session around one request, for when the exact words or tool output matter.",
+    "example": "hide session read agent-7 --request 3"
+  },
+  "memory show": {
+    "line": "Prints one Project Memory card in full, with its status and where its words came from.",
+    "example": "hide memory show m508"
   },
   "memory search": {
-    "line": "Placeholder note for hide memory search; the CLI notes replace it.",
-    "example": "hide memory search"
+    "line": "Finds Project Memory cards that match some words, and prints each card's number and title.",
+    "example": "hide memory search Project"
   },
   "memory add": {
-    "line": "Placeholder note for hide memory add; the CLI notes replace it.",
-    "example": "hide memory add"
+    "line": "Sends a decision the operator made to Project Memory, which writes it as a card that later agents can read.",
+    "example": "hide memory add 'Use the staging database for migration tests.'"
   },
   "memory forget": {
-    "line": "Placeholder note for hide memory forget; the CLI notes replace it.",
-    "example": "hide memory forget"
+    "line": "Takes a Project Memory card out of use, when the operator asks for it; memory undo brings it back.",
+    "example": "hide memory forget m508"
   },
   "memory undo": {
-    "line": "Placeholder note for hide memory undo; the CLI notes replace it.",
-    "example": "hide memory undo"
+    "line": "Brings back a Project Memory card that was taken out of use.",
+    "example": "hide memory undo m508"
   },
   "memory placed": {
-    "line": "Placeholder note for hide memory placed; the CLI notes replace it.",
-    "example": "hide memory placed"
+    "line": "Records that a Project Memory card has been written into a document at a path, for the agent that moves cards into documents."
   },
   "memory building": {
-    "line": "Placeholder note for hide memory building; the CLI notes replace it.",
-    "example": "hide memory building"
+    "line": "Records the branch that implements a Project Memory card's decision and the file there that already documents it, for the agent that moves cards into documents."
   },
   "memory unbuilt": {
-    "line": "Placeholder note for hide memory unbuilt; the CLI notes replace it.",
-    "example": "hide memory unbuilt"
+    "line": "Records why a Project Memory card cannot be written into a document yet, for the agent that moves cards into documents."
   },
   "memory outdated": {
-    "line": "Placeholder note for hide memory outdated; the CLI notes replace it.",
-    "example": "hide memory outdated"
+    "line": "Records why a Project Memory card is outdated and marks it for another check, for the agent that moves cards into documents."
   },
   "memory skipped": {
-    "line": "Placeholder note for hide memory skipped; the CLI notes replace it.",
-    "example": "hide memory skipped"
+    "line": "Records why a Project Memory card was skipped when moving cards into documents."
   },
   "memory stale": {
-    "line": "Placeholder note for hide memory stale; the CLI notes replace it.",
-    "example": "hide memory stale"
+    "line": "Reports that a Project Memory card no longer matches what the operator said, so Hide holds it back from agents until the session is analyzed, the hold is released or its time runs out; a hold is only accepted for a card whose full text this session's prompt gave the agent, not for one it only looked up with memory show or saw in the starting list.",
+    "example": "hide memory stale m508 'The operator moved the issue template.'"
   },
   "memory release": {
-    "line": "Placeholder note for hide memory release; the CLI notes replace it.",
-    "example": "hide memory release"
+    "line": "Ends a hold that an agent's stale report put on a card, so agents get the card again.",
+    "example": "hide memory release m508"
   },
   "memory recheck": {
-    "line": "Placeholder note for hide memory recheck; the CLI notes replace it.",
-    "example": "hide memory recheck"
-  },
-  "mission gate": {
-    "line": "Placeholder note for hide mission gate; the CLI notes replace it.",
-    "example": "hide mission gate"
+    "line": "Asks for a Project Memory card to be checked again, and keeps it out of agents' prompts until that check ends; it needs Hide AI on, and an agent may ask only for a card its prompt gave it (the starting list counts, memory show alone does not).",
+    "example": "hide memory recheck m508"
   }
 }

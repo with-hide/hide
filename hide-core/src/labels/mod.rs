@@ -1,7 +1,7 @@
 //! Agent labels, made by the core (PRD labels-in-hided).
 //!
 //! What each agent pane is doing (the session's goal, one line for its turn,
-//! how the turn ended) used to come from a separate Herdr plugin through
+//! how the turn ended) used to come from a separate plugin through
 //! pane tokens. The core now makes them itself: each engine's
 //! session-sync coordinator owns a [`worker::LabelWorker`], the
 //! core owns one [`analyzer::LabelAnalyzer`] for all of them, and

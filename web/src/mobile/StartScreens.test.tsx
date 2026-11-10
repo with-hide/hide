@@ -29,6 +29,9 @@ it("the start settings shows no computer, the display and about rows, and a way 
   await act(async () => root.render(<StartSettings t={t} onBack={() => { back += 1; }} />));
   expect(host.querySelector('[data-phone-settings-section="computers"]')?.textContent).toContain("mobile.first.noComputers");
   expect(host.querySelector('[data-phone-setting="language"]')).not.toBeNull();
+  // No computer is connected here, so an unchosen language follows the phone, not a Mac.
+  expect(host.querySelector('[data-phone-setting="language"]')?.textContent).toContain("mobile.settings.followPhone");
+  expect(host.querySelector('[data-phone-setting="language"]')?.textContent).not.toContain("mobile.settings.followMac");
   expect(host.querySelector('[data-phone-setting="privacy"]')).not.toBeNull();
   host.querySelector<HTMLElement>("[data-phone-settings-back]")!.click();
   expect(back).toBe(1);

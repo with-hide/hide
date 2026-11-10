@@ -97,7 +97,7 @@ pub fn stamp(answer: &mut Value, own: Option<&str>) {
 }
 
 /// Whether the `ok` answer `answer` counts for a pane naming `install`: it
-/// names that same installation. A pane that names none (a Herdr pane, a
+/// names that same installation. A pane that names none (an agent outside Hide, a
 /// plain terminal) takes any answer, naming one or not.
 pub fn confirm(answer: &Value, install: Option<&str>) -> Result<(), &'static str> {
     match install {

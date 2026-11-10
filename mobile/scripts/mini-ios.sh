@@ -24,6 +24,8 @@ bundle_id=me.grab.hide.ios
 # One folder (about 0.5 GB) and one simulator per branch built here: past this many other branches the build refuses
 # and says what to remove, because the machine runs other work and nothing prunes a branch it does not own.
 max_other_branches=4
+# The simulator build is arm64 only: the build machine is Apple silicon, and the relay library is built for the two arm64
+# targets (a device and a simulator), so an x86_64 simulator slice has nothing to link.
 # Ad-hoc signed, not unsigned: the simulator gives the Keychain only to an app that carries its entitlements, which an
 # unsigned build does not (the Keychain answers -34018). No account or certificate is involved; release signing is the release workflow's.
 signing=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES)
@@ -83,23 +85,67 @@ case "$command" in
         fi
         ;;
     build)
+        # The relay protocol library: the two static libraries built on the developer's Mac (the mini has no Rust) become
+        # the xcframework the HideShell package links. Made fresh every build, so it is never older than its source.
+        relay=$base/ios/relay
+        frameworks=$project/HideShell/Frameworks
+        [[ -f "$relay/source.json" ]] || { printf 'the relay library is missing: run scripts/build-relay-ios.sh on the developer Mac\n' >&2; exit 1; }
+        rm -rf "$frameworks/HideRelayC.xcframework"
+        mkdir -p "$frameworks"
+        xcodebuild -create-xcframework \
+            -library "$relay/aarch64-apple-ios/libhide_relay_ios.a" -headers "$relay/include" \
+            -library "$relay/aarch64-apple-ios-sim/libhide_relay_ios.a" -headers "$relay/include" \
+            -output "$frameworks/HideRelayC.xcframework"
         # `-clonedSourcePackagesDirPath` keeps the Swift packages inside the branch folder, so `clean` removes them too.
         xcodebuild -project "$project/App.xcodeproj" -scheme App -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-            "${signing[@]}" build
+            ARCHS=arm64 "${signing[@]}" build
         ensure_device
         # The HideShell tests run in a real web view on the simulator: they are what proves the bridge refuses a frame.
         # Its own derived data: the app's build already holds a Capacitor framework the package's scheme must not meet.
         # A failing test fails this script, and so the build command.
         (cd "$project/HideShell" && xcodebuild test -scheme HideShell -destination "id=$id" \
             -derivedDataPath "$derived_tests" -clonedSourcePackagesDirPath "$packages")
+        # The push core the app and its notification extension share: the RFC 8291 vector, the notice, the words.
+        (cd "$project/HidePushCore" && xcodebuild test -scheme HidePushCore -destination "id=$id" \
+            -derivedDataPath "$derived_tests" -clonedSourcePackagesDirPath "$packages")
         # The app's own controller, hosted in the app on the simulator: it is what proves the app installs the gate.
         xcodebuild test -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppTests \
             "${signing[@]}"
+        # The UI test bundle that answers the notification question is built here too, so `allow` needs no build of its own.
+        xcodebuild build-for-testing -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
+            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppUITests ARCHS=arm64 "${signing[@]}"
         printf 'built: %s\n' "$derived/Build/Products/Debug-iphonesimulator/App.app"
         df -h / | tail -1 | awk '{printf "build machine free disk: %s of %s\n", $4, $2}'
+        ;;
+    allow)
+        # Answers the system's notification question for the built app on this branch's simulator: SpringBoard shows it,
+        # `simctl` cannot press it, so a UI test does (AppUITests). It launches the app with the debug taps it was sent
+        # (the same ones `run` takes), so the page asks the question itself. The grant stays in the simulator.
+        ensure_device
+        xcrun simctl bootstatus "$id" -b > /dev/null
+        TEST_RUNNER_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcodebuild test-without-building -project "$project/App.xcodeproj" -scheme App \
+            -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+            -only-testing:AppUITests "${signing[@]}"
+        ;;
+    push)
+        # Delivers one Apple-shaped push body to the installed app on this branch's simulator, the way Apple would, and
+        # captures the screen while the home screen shows the banner: the body travels in front of this script as
+        # HIDE_PUSH_B64 (base64), is written to a file of the branch's own folder and removed on the way out.
+        ensure_device
+        xcrun simctl bootstatus "$id" -b > /dev/null
+        mkdir -p "$shots"
+        body=$shots/push-body.json
+        trap 'rm -f "$body"; cleanup' EXIT
+        printf '%s' "$HIDE_PUSH_B64" | base64 -D > "$body"
+        xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+        xcrun simctl launch "$id" com.apple.springboard > /dev/null 2>&1 || true
+        xcrun simctl push "$id" "$bundle_id" "$body"
+        sleep "$settle"
+        xcrun simctl io "$id" screenshot "$shots/run.png" 2>&1 | tail -1
+        printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
         ;;
     run)
         ensure_device

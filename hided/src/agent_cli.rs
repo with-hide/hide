@@ -39,6 +39,7 @@ Choose responsibility when spawning:
 Choose where the agent opens:
   Without --beside it opens in a tab of its own.
   With --beside it opens in your tab, in the right half of your pane, and stays there.
+    It is the operator's to watch, so it takes no --parent: one that asks for both is refused.
     Only for your own checkout: --repo and --branch (and --path) must name the checkout you work in.
     A spawn that would work in another worktree or branch, or on another device, is refused before
     anything is created; run it again without --beside to open it in a new tab.
@@ -514,7 +515,7 @@ mod tests {
         }
     }
     #[test]
-    fn beside_is_a_switch_for_either_mode_and_its_help_names_the_folder_rule() {
+    fn beside_is_a_switch_and_its_help_names_the_folder_and_parent_rules() {
         let beside_of = |extra: &[&str]| {
             let mut args = vec![
                 "spawn", "--name", "worker", "--intent", "one", "--kind", "codex", "--repo",
@@ -530,7 +531,6 @@ mod tests {
         };
         assert_eq!(beside_of(&[]), Ok(false));
         assert_eq!(beside_of(&["--beside"]), Ok(true));
-        assert_eq!(beside_of(&["--parent", "here", "--beside"]), Ok(true));
         assert_eq!(
             beside_of(&["--beside", "--beside"]),
             Err("--beside is given twice".into())
@@ -538,6 +538,7 @@ mod tests {
         assert!(USAGE.contains("[--beside]"));
         assert!(SPAWN_HELP.contains("Without --beside it opens in a tab of its own."));
         assert!(SPAWN_HELP.contains("Only for your own checkout"));
+        assert!(SPAWN_HELP.contains("it takes no --parent"));
         assert!(SPAWN_HELP.contains("run it again without --beside to open it in a new tab"));
     }
 

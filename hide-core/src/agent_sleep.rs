@@ -5,7 +5,7 @@
 //! process. `agent_sleep_engine.rs` is the one boundary that does, so when
 //! the engine offers a hibernate of its own only that file changes (D-20).
 //!
-//! The engine forgets an agent whose process ended (Herdr did too): it drops it from
+//! The engine forgets an agent whose process ended: it drops it from
 //! `agent.list` together with its session ref. The record kept here is
 //! therefore the only holder of the provider, the conversation id and the
 //! row's name while the agent sleeps, and the sleeping row is drawn from it

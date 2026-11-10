@@ -1,2 +1,7 @@
 # The assembled web folder Capacitor serves: `pnpm --dir mobile bundles` rebuilds it.
 www/
+# The relay protocol as static libraries for the app: `bash scripts/build-relay-ios.sh` rebuilds it.
+ios/relay/
+# SwiftPM build folders of the local packages (a package test run by hand).
+ios/App/*/.build/
+ios/App/HideShell/Frameworks/

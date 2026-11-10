@@ -62,7 +62,7 @@ impl HerdrSession {
             Ok(workspace) => workspace.id.as_deref(),
             Err(refused) => matches!(
                 ids::workspace_of(&refused.workspace),
-                Some((Numbered::Herdr, _))
+                Some((Numbered::Imported, _))
             )
             .then_some(refused.workspace.as_str()),
         })
@@ -378,7 +378,7 @@ pub(crate) fn convert(
                 )));
                 continue;
             }
-            Some(id) if !matches!(ids::workspace_of(id), Some((Numbered::Herdr, _))) => {
+            Some(id) if !matches!(ids::workspace_of(id), Some((Numbered::Imported, _))) => {
                 converted
                     .refused
                     .push(named(format!("{id} is not a workspace id Herdr makes")));

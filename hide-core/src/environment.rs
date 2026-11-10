@@ -16,12 +16,11 @@ pub struct EnvironmentVariableSpec {
 /// `HOME`, or `USERPROFILE` on Windows.
 pub const HOME_KEY: &str = hide_platform::host::HOME_VARIABLE;
 pub const SSH_AUTH_SOCK_KEY: &str = "SSH_AUTH_SOCK";
-pub const HERDR_SOCKET_PATH_KEY: &str = "HERDR_SOCKET_PATH";
 /// Codex's own folder variable, the one its definition's `[account]` names
 /// (checked by `codex_home_key_is_codexs_account_variable`).
 pub const CODEX_HOME_KEY: &str = "CODEX_HOME";
 
-pub const REGISTRY: [EnvironmentVariableSpec; 4] = [
+pub const REGISTRY: [EnvironmentVariableSpec; 3] = [
     EnvironmentVariableSpec {
         key: HOME_KEY,
         required: false,
@@ -33,12 +32,6 @@ pub const REGISTRY: [EnvironmentVariableSpec; 4] = [
         required: false,
         format: "absolute Unix-domain socket path",
         absent_behavior: "A device whose ssh config names no IdentityFile or IdentityAgent cannot authenticate and says so on its row; every other device connects",
-    },
-    EnvironmentVariableSpec {
-        key: HERDR_SOCKET_PATH_KEY,
-        required: false,
-        format: "absolute Unix-domain socket path",
-        absent_behavior: "Moving from Herdr reads Herdr's account default socket",
     },
     EnvironmentVariableSpec {
         key: CODEX_HOME_KEY,
@@ -112,20 +105,6 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
                 ),
                 Some(_) => ("available", "SSH agent socket configuration is available"),
             },
-            HERDR_SOCKET_PATH_KEY => match value {
-                None => (
-                    "default",
-                    "Herdr socket override is absent; moving from Herdr reads Herdr's default socket",
-                ),
-                Some(value) if value.is_empty() || !Path::new(&value).is_absolute() => (
-                    "invalid",
-                    "Herdr socket override is invalid; moving from Herdr cannot read it",
-                ),
-                Some(_) => (
-                    "available",
-                    "Herdr socket override is available for moving from Herdr",
-                ),
-            },
             CODEX_HOME_KEY => {
                 // Codex's default account as this process's variable moves it.
                 let codex = AgentId::Codex.adapter();
@@ -198,11 +177,11 @@ mod tests {
 
     #[test]
     fn registry_is_enumerable_and_does_not_expose_values() {
-        assert_eq!(REGISTRY.len(), 4);
+        assert_eq!(REGISTRY.len(), 3);
         assert_eq!(REGISTRY[0].key, hide_platform::host::HOME_VARIABLE);
         let secret_like_value = native("/private/tmp/private-agent.sock").into_os_string();
         let report = validate_with(|key| match key {
-            SSH_AUTH_SOCK_KEY | HERDR_SOCKET_PATH_KEY => Some(secret_like_value.clone()),
+            SSH_AUTH_SOCK_KEY => Some(secret_like_value.clone()),
             _ => None,
         });
         let encoded = serde_json::to_string(&report.statuses).unwrap();
@@ -215,7 +194,6 @@ mod tests {
         assert_eq!(report.statuses[1].state, "absent");
         assert!(!report.statuses[1].required);
         assert!(report.statuses[1].message.contains("IdentityFile"));
-        assert_eq!(report.statuses[2].state, "default");
         assert!(report.home_path.is_none());
         assert!(report.codex_home.is_none());
     }
@@ -256,15 +234,13 @@ mod tests {
     }
 
     #[test]
-    fn socket_override_is_reported_alongside_the_ssh_agent_socket() {
+    fn the_ssh_agent_socket_is_reported_available() {
         let report = validate_with(|key| match key {
             SSH_AUTH_SOCK_KEY => Some(native("/private/tmp/agent.sock").into_os_string()),
-            HERDR_SOCKET_PATH_KEY => Some(native("/private/tmp/herdr.sock").into_os_string()),
             _ => None,
         });
 
         assert_eq!(report.statuses[1].state, "available");
-        assert_eq!(report.statuses[2].state, "available");
     }
 
     #[test]
@@ -278,7 +254,7 @@ mod tests {
             report.codex_home,
             Some(native("/private/tmp/hide-home").join(".codex"))
         );
-        assert_eq!(report.statuses[3].state, "default");
+        assert_eq!(report.statuses[2].state, "default");
     }
 
     #[test]
@@ -291,6 +267,6 @@ mod tests {
 
         assert_eq!(report.home_path, Some(native("/private/tmp/hide-home")));
         assert!(report.codex_home.is_none());
-        assert_eq!(report.statuses[3].state, "invalid");
+        assert_eq!(report.statuses[2].state, "invalid");
     }
 }

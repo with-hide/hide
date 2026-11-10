@@ -71,8 +71,8 @@ const FLUSH_LIMIT: Duration = Duration::from_secs(2);
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 
 /// The least time between two fragments a connection is sent for output the
-/// program makes on its own, as Herdr draws at most once per frame of a
-/// 60 Hz screen; the program's answer to input does not wait for it
+/// program makes on its own, so a screen of 60 Hz is drawn at most once per
+/// frame; the program's answer to input does not wait for it
 /// ([`Pending::input`]).
 const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -666,7 +666,7 @@ impl Holder {
         let mut command = CommandBuilder::from_argv(config.program.clone());
         command.cwd(&config.cwd);
         // The terminal the program writes to is the holder's, and nothing
-        // else's: no Herdr pane, outer terminal or parent agent (D-9).
+        // else's: no outer Hide pane, outer terminal or parent agent (D-9).
         crate::pane_env::apply(&mut command);
         command.env_remove(hide_platform::process::LENT_KEY);
         // The holder's own launch metadata, never its program's: a guarded
@@ -1810,7 +1810,7 @@ fn write_pty(
                 gap,
                 enter,
             } => {
-                // Herdr's `agent.prompt`: the gap runs from the text's
+                // A submission: the gap runs from the text's
                 // flush, the program's answers go on meanwhile, and the
                 // input after it waits until the submit was written.
                 write_input(&mut *writer, events, generation, &text, &mut refused);

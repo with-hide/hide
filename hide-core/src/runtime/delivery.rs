@@ -1588,6 +1588,19 @@ impl Runtime {
         }
         // A spawn of Desk's past its places waits in Desk's queue (B21).
         let queued = self.desk_spawn_admission(&actor, &command)?;
+        // `parent` names the sender's own parent, which a child is never told
+        // by id, so its report reaches whoever answers for it; it is read
+        // before the retry check, so a retry compares the same recipient. A
+        // sender Hide cannot find registered is told why, as `here` is.
+        if let Command::Send { target, .. } = &mut command
+            && target == crate::coordination::PARENT
+        {
+            let ledger = self.delivery_state()?;
+            *target = crate::coordination::here(&ledger, &actor)?
+                .parent
+                .clone()
+                .ok_or("no_parent")?;
+        }
         // A send under an intent its sender already used is a retry only of
         // the same letter; another recipient, kind or body is refused here,
         // before a target is looked for.
@@ -3635,6 +3648,88 @@ pub(crate) mod tests {
         assert_eq!(
             ask(&checkout, Some("sender"), "agent-7").err().as_deref(),
             Some("agent_pane_required")
+        );
+        drop(worker);
+    }
+
+    /// A child is never told its parent's id, so `parent` names the sender's
+    /// own parent as a recipient; a sender with no parent is told it has
+    /// none, not that nobody answers.
+    #[test]
+    fn a_letter_to_parent_reaches_the_senders_own_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, target, path) = fixture(root.path());
+        {
+            let mut guard = runtime.lock().unwrap();
+            // A registration keeps its native session, which the pane's
+            // observation carries as its digest.
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
+                 "lineage_session":crate::engine::tokens::session_digest("sender-session")},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":1,
+                 "lineage_session":crate::engine::tokens::session_digest("recipient-session")},
+            ]}))
+            .unwrap();
+            guard.observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &payload,
+                Some("fixture-scope"),
+                None,
+            );
+            let mut ledger = crate::delivery::ledger::Ledger::default();
+            for (id, pane, parent) in [
+                ("agent-1", "recipient", None),
+                ("agent-2", "sender", Some("agent-1")),
+            ] {
+                ledger.agents.push(crate::coordination::AgentRecord {
+                    id: id.into(),
+                    name: Some(format!("{pane}-agent")),
+                    machine: crate::node::TEST_NODE.into(),
+                    host_scope: "fixture-scope".into(),
+                    native_machine: "fixture-machine".into(),
+                    session: format!("{pane}-session"),
+                    instance: format!("terminal-{pane}"),
+                    pane: pane.into(),
+                    parent: parent.map(str::to_owned),
+                    origin: None,
+                    project: None,
+                    actor: guard.delivery_observations[pane].actor.clone(),
+                    ended: false,
+                    terminal_id: None,
+                    forked: false,
+                });
+            }
+            ledger.next_id = 3;
+            ledger.validate().unwrap();
+            crate::delivery::ledger::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+        }
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        runtime.lock().unwrap().install_delivery_client(client);
+        let context = authority(&target.actor).context;
+        let send = |caller: &str, intent: &str| {
+            let prepared = runtime.lock().unwrap().prepare_delivery(
+                crate::node::TEST_NODE,
+                caller,
+                &context,
+                None,
+                report_to("parent", intent),
+            )?;
+            prepared.run(Duration::from_secs(5))
+        };
+        let result = send("sender", "to-parent").unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "recipient");
+        // The same letter again is its retry, not a second letter.
+        let again = send("sender", "to-parent").unwrap();
+        assert_eq!(again["id"], result["id"]);
+        assert_eq!(
+            send("recipient", "no-parent").err().as_deref(),
+            Some("no_parent")
         );
         drop(worker);
     }

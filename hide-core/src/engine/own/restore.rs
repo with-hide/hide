@@ -320,8 +320,8 @@ fn was_cut(catalog: &Catalog, home: &Path, resume: &Resume) -> bool {
 /// `argv`, a resume of `agent` in `restart`'s pane, followed by the model
 /// and effort its pane's launch record keeps when the record describes it
 /// (`launch_describes`, the rule a pane's row reads the record by). A saved
-/// choice the agent does not take is refused with why, as a restart Hide
-/// made of it on Herdr refused it, rather than resumed on another model.
+/// choice the agent does not take is refused with why, rather than resumed
+/// on another model.
 fn with_launch_choice(
     mut argv: Vec<String>,
     launches: &BTreeMap<String, PaneLaunch>,

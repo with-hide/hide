@@ -40,11 +40,18 @@ The site is pinned to pnpm 10.34.9 (`packageManager` in `package.json`, and the 
 `--hide <path>` (or `HIDE_BIN`) names the one `hide` whose `--help` owns which commands exist; the default is `target/debug/hide`, a build of this checkout (`bash scripts/verify-cargo.sh build -p hided --bin hide`). An installed app's `hide`, such as `/Applications/hide.app/Contents/Resources/hide`, is accepted but may be older than this commit, so `check-all` says so: a local pass with it is a limited check, and CI, which builds `hide` from the commit and passes it with `--ci`, is the gate.
 `--checks-only` runs the first two steps for a quick loop.
 For writing pages with a reload, run `check-all` once (it writes the generated files and builds the live parts), then `cd site && pnpm dev`; the live frames load only from the built site, so check them with the preview below.
-The download-policy tests stay a plain `node` run:
+The download-policy tests and the checks on the privacy and support pages stay a plain `node` run:
 
 ```sh
-node --test site/tests/downloads.test.mjs
+node --test site/tests/downloads.test.mjs site/tests/legal.test.mjs
 ```
+
+`privacy.html` and `support.html` are the two pages the App Store listing points at
+as its privacy policy URL and support URL. Each carries an English and a Korean body
+in one file, linked from the footer and from each other's header, and each states
+only what the shipped code does: [`public/privacy.html`](public/privacy.html) is the authority for
+what the desktop app, this site, the relay, the phone app and Hide AI send, and a
+change to any of those changes this page in the same release.
 
 Use Node.js 22.7 or later, which recognizes the browser ES module in `public/downloads.js` without a package manifest of its own.
 To preview the built site, run `cd site && pnpm preview --host 127.0.0.1 --port 4399` and open `http://127.0.0.1:4399/` and `/docs/`.

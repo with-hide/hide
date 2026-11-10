@@ -176,7 +176,7 @@ fn processes_name_the_shell_and_the_program_that_holds_the_terminal() {
         .unwrap();
 }
 
-/// A styled read (Herdr's `ansi` format, of the rows on screen and of the
+/// A styled read (of the rows on screen and of the
 /// last rows) keeps the color the program wrote as an escape sequence, and
 /// the plain read of the same rows does not; a styled read past its rows is
 /// refused as a plain one is.

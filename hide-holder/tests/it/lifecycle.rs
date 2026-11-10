@@ -79,8 +79,8 @@ fn a_holder_runs_its_shell_and_carries_input_and_output_across_connections() {
     );
 }
 
-/// The pane's program is told the terminal it writes to, as a Herdr pane
-/// tells it, and that it shows hyperlinks, whatever its starter's
+/// The pane's program is told the terminal it writes to, as a terminal
+/// pane tells it, and that it shows hyperlinks, whatever its starter's
 /// environment said.
 #[cfg(unix)]
 #[test]

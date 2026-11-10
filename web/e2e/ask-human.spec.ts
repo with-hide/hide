@@ -8,7 +8,7 @@
 
 import { expect, test } from "@playwright/test";
 import type { HideAnswer } from "./agent-pane";
-import { withControl, viewPane } from "./daemon-actions";
+import { focusPane, withControl, viewPane } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, showTasks } from "./wire";
@@ -52,8 +52,11 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     await expect(task.locator("[data-human-turn-place]")).toHaveText(`Sign-in · ${place}`);
     await screenshot(page, "ask-human-task-row");
 
-    // The child's own pane head says it with Done (B15).
-    await withControl(daemon, async (control) => viewPane(control, child));
+    // The child's own pane head, in its own tab, says it with Done (B15).
+    await withControl(daemon, async (control) => {
+      viewPane(control, child);
+      await focusPane(control, child);
+    });
     const band = page.locator(`[data-pane-header-band="answer"]`).filter({ has: page.locator("[data-human-turn-done]") });
     await expect(band).toContainText(`Sign-in · ${place}`);
     await screenshot(page, "ask-human-pane-head");

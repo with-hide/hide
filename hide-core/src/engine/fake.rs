@@ -140,7 +140,7 @@ pub(crate) fn delivery_agent(agent: &Value) -> DeliveryAgent {
     }
 }
 
-/// A fixture agent's readiness from its Herdr-shaped flags: launching while
+/// A fixture agent's readiness from its fixture flags: launching while
 /// `launch_pending`, not ready when `interactive_ready` is false, and ready
 /// otherwise, including a fixture that names neither.
 fn readiness(interactive_ready: Option<bool>, launch_pending: Option<bool>) -> Readiness {

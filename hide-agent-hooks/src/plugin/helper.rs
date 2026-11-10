@@ -42,7 +42,7 @@ struct Input {
     session_id: Option<String>,
     /// The agent's own id for the session, which Memory and its receipts know
     /// it by; Pi's and omp's extension names the session by its file for
-    /// letters, as Herdr's did, and sends this beside it.
+    /// letters and sends this beside it.
     native_session: Option<String>,
     prompt: Option<String>,
     cwd: Option<PathBuf>,
@@ -494,7 +494,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
 /// command hook's session start is, so the core knows the pane's session
 /// before its first turn and letters and the inbox reach it from the start
 /// (PRD engine-bundle-4-herdr-removal, mission c3): on the core's own engine
-/// nothing else names it, as Herdr's integration did before. The counts are the
+/// nothing else names it. The counts are the
 /// script's to send; a session start says nothing of them.
 fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     let Some(pane) = pane() else {

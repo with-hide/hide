@@ -25,7 +25,7 @@ pub(crate) const INSTALL_ARGUMENT: &str = "--install-b64";
 const STATE_VARIABLE: &str = "HIDE_STATE_DIR";
 /// The variable a pane names the Hide installation that started it by: a
 /// pane holder's pane carries its node's ([`APP_INSTALL`] or [`install_of_root`]), and a
-/// pane that names none (a Herdr pane, a plain terminal) is anyone's.
+/// pane that names none (an agent outside Hide, a plain terminal) is anyone's.
 pub const INSTALL_VARIABLE: &str = "HIDE_INSTALL";
 /// The variable a pane names its installation's own `hide` command by: a
 /// `hide` that another installation put first on the pane's `PATH` hands the
@@ -215,7 +215,7 @@ pub fn pane_records_of(home: &Path, install: Option<&str>) -> PathBuf {
     records_of(home, install)
 }
 
-/// The file of `pane_id`'s record in `folder`. A pane id is in Herdr's shape
+/// The file of `pane_id`'s record in `folder`. A pane id has a colon in it
 /// (`w7B:pM`, `h7B:pM`), so it is folded into a file name rather than used
 /// as one.
 pub fn pane_file(folder: &Path, pane_id: &str) -> PathBuf {

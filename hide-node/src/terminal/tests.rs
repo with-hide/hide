@@ -1090,7 +1090,7 @@ fn written_at(writes: &[(Instant, Vec<u8>)], byte: usize) -> Instant {
 fn a_held_enter_reaches_the_fork_a_moment_after_its_writer_wrote_the_keys_before_it() {
     // Codex reads an Enter that arrives with the keys before it as a
     // newline of a paste; the operator had pressed it after a pause. As
-    // Herdr's `agent.prompt` waits from its text's flush, the gap is
+    // An agent prompt waits from its text's flush, the gap is
     // measured between the writer's own writes, and a key typed while the
     // Enter waits goes behind it.
     let harness = harness(RetryPolicy::Automatic);
@@ -1259,7 +1259,7 @@ fn a_holder_built_before_submissions_drops_a_forks_released_keys_and_reports_the
 
 #[test]
 fn released_keys_whose_submission_would_outlast_the_holds_age_are_dropped_and_reported() {
-    // Herdr's Windows submission: one that cannot finish its gap before its
+    // A Windows submission: one that cannot finish its gap before its
     // deadline is not started, so no text is left without its submit.
     let harness = harness(RetryPolicy::Automatic);
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
@@ -2314,7 +2314,7 @@ fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_las
         harness.key("w1:p1", b"x");
         let second = scope.spawn(|| letter(b"b", 600));
         // Each letter is one submission: the second waits behind the
-        // first's submit, as Herdr's `agent.prompt` holds what follows it.
+        // first's submit, as an agent prompt holds what follows it.
         assert_eq!(input_bytes(&opened, b"\rb\r".len()), b"\rb\r");
         first.join().unwrap();
         second.join().unwrap();

@@ -298,8 +298,7 @@ use crate::error::HostError;
 /// 71: a node answers where a holder pane's screen is in its scrollback,
 /// moves it, and reads the rows it shows (`holders::PaneCall::Scroll`,
 /// `holders::PaneCall::ReadVisible`), so the core's own engine routes a pane
-/// search and shows its matches as Herdr's `pane.get`, `pane.scroll` and
-/// `visible` read let it. A helper on 70 would refuse both asks, so it is
+/// search and shows its matches. A helper on 70 would refuse both asks, so it is
 /// refused at Hello and upgraded.
 /// 72: pane mutations require connection ownership and a durable reserved
 /// existence record. An older node cannot fence late requests on reconnect.

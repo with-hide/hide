@@ -12,8 +12,8 @@
 //!
 //! The state is what the screen rules read: working, waiting on the operator
 //! (blocked), or at rest, and at rest after working is a finished turn
-//! (`done`, with the sequence it finished at), as Herdr reports it. A screen
-//! no rule matches is at rest, as Herdr reads it. The core lays the agent's
+//! (`done`, with the sequence it finished at). A screen no rule matches is
+//! at rest. The core lays the agent's
 //! hook and session file over this ([`crate::agent_state`]), so the screen
 //! fills only what they do not report (D-18). An agent whose screen cannot be
 //! read, with no rules or a holder that cannot run them, is `unknown`.
@@ -32,7 +32,7 @@ use crate::session_sync::NotResumed;
 
 /// How long a start the engine typed may take to show its program in the
 /// pane's foreground before it is taken as a start that did not happen, and
-/// to settle before it ends unsettled: the deadline Hide gave Herdr's starts,
+/// to settle before it ends unsettled: the deadline of a start,
 /// counted from the start ([`Live::started`]) and moved by nothing.
 pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT_START_DEADLINE;
 
@@ -67,7 +67,7 @@ impl Definitions {
 }
 
 /// The definition a caller's kind names: its id or one of its other
-/// spellings, as Herdr's names (`claude`) reach the engine too.
+/// spellings (`claude`).
 pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Definition> {
     hide_agent_adapter::definition::find(&catalog.definitions, kind)
 }
@@ -96,9 +96,9 @@ fn recognized<'c>(catalog: &'c Catalog, program: &ForegroundProgram) -> Option<&
         })
 }
 
-/// The name the core knows an agent kind by: Herdr's spelling for an agent
-/// with Hide's own features (`claude`), the definition's id for any other,
-/// so a row reads alike on both engines.
+/// The name the core knows an agent kind by: the adapter's engine kind for
+/// an agent with Hide's own features (`claude`), the definition's id for any
+/// other.
 pub(super) fn kind_name(definition: &Definition) -> String {
     std::iter::once(&definition.id)
         .chain(&definition.aliases)
@@ -307,9 +307,8 @@ pub(super) struct Live {
     /// When the engine typed its start, until the start settled
     /// ([`PaneAgent::launch_pending`]): the start's deadline runs from here
     /// and nothing moves it, so a program that keeps restarting its settle
-    /// still ends its start at [`START_DEADLINE`], as Herdr's
-    /// `ManagedAgentPhase::Pending` keeps its `deadline` apart from its
-    /// `ready_after`.
+    /// still ends its start at [`START_DEADLINE`]: the deadline is kept apart from
+    /// the settle, so a restarting settle cannot hold a start open.
     pub(super) started: Option<Instant>,
     /// When the start's settle began ([`START_SETTLE`]): at the start, and
     /// again when its program takes the terminal's keys or its screen's
@@ -462,10 +461,9 @@ impl PaneAgent {
                 .is_some_and(|started| now.duration_since(started) < START_DEADLINE)
     }
 
-    /// Whether the start the engine typed is still pending, as Herdr's
-    /// `launch_pending` reads a start of its own: until its settle passed and
-    /// the agent's program shows and its screen is at rest
-    /// ([`Self::settled`]). A screen that asks a question (Claude Code's
+    /// Whether the start the engine typed is still pending
+    /// (`launch_pending`): until its settle passed and the agent's program
+    /// shows and its screen is at rest ([`Self::settled`]). A screen that asks a question (Claude Code's
     /// folder trust) keeps the start pending past its deadline, since what
     /// is typed there answers the question; anything else ends it at the
     /// deadline, however its settle was restarted.
@@ -570,7 +568,7 @@ pub(super) enum StartReady {
     Shown,
 }
 
-/// An agent's state as Herdr's `agent_status` names it.
+/// An agent's state, as `agent_status` names it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Status {
     #[default]
@@ -675,8 +673,8 @@ pub(super) fn apply(
         applied.changed = true;
     }
     // The title is compared, and projected, without the activity glyph an
-    // agent turns in front of it every frame (Claude Code's spinner), as
-    // Herdr compares it: a turning glyph alone is no change of the session.
+    // agent turns in front of it every frame (Claude Code's spinner): a turning glyph alone is no change of the
+    // session.
     if stripped(&before) != stripped(facts) {
         applied.changed = true;
     }
@@ -693,7 +691,7 @@ pub(super) fn apply(
         // The program of the agent the pane runs is in the foreground, or a
         // program no definition names where that agent was started or ran:
         // the agent itself, run by a wrapper or a runtime under another
-        // name (`node …/cli.js`), as Herdr reads an agent it launched.
+        // name (`node …/cli.js`).
         (Some(current), _, Some(definition)) if definition.id == current.kind => {
             applied.changed |= current.show();
         }
@@ -751,7 +749,7 @@ pub(super) fn apply(
             applied.changed |= current.live.started.is_some();
         }
         // A start that settled on what the screen read last stays settled
-        // whatever this screen reads, as Herdr's active agent does. Facts
+        // whatever this screen reads. Facts
         // that first show the program are its first read: judged on the
         // read before them, an agent with no screen rules (omp) that showed
         // past its settle settled at once, its terminal still editing lines
@@ -781,9 +779,9 @@ pub(super) fn apply(
         }
         let mut status = status_of(&facts.screen, current.live.status);
         // A screen no rules read never says the agent rests, so once its
-        // program takes input it reads idle, as Herdr reads an agent it
-        // started, and its integration's turns say when it works (they
-        // outrank this, `agent_state::axes`). Read unknown, a woken or
+        // program takes input it reads idle, and its integration's turns say
+        // when it works (they outrank this, `agent_state::axes`). Read unknown,
+        // a woken or
         // forked omp stayed a starting row with no state change to publish
         // its settle (journey 41850644522).
         if current.live.rest_unread && status == Status::Unknown && current.interactive() {
@@ -830,8 +828,7 @@ fn status_of(screen: &ScreenRead, before: Status) -> Status {
             state: ScreenState::Blocked,
             ..
         } => Status::Blocked,
-        // No rule matched: at rest, as Herdr reads a screen it knows nothing
-        // of for an agent whose rules it has.
+        // No rule matched: at rest, for an agent whose rules the engine has.
         ScreenRead::Read {
             state: ScreenState::Idle,
             ..
@@ -985,7 +982,7 @@ mod tests {
     }
 
     /// Claude Code turns a spinner glyph in front of its title every frame:
-    /// the title's text alone is the session's, as Herdr compares it.
+    /// the title's text alone is the session's.
     #[test]
     fn a_title_whose_spinner_alone_turns_changes_nothing_and_new_text_does() {
         let mut pane = Pane::new();
@@ -1127,7 +1124,7 @@ mod tests {
         );
     }
 
-    /// Herdr's `launch_pending` for a start of its own: the agent takes
+    /// `launch_pending` for a start of its own: the agent takes
     /// input once its screen rests after the settle delay, and a question on
     /// its screen (Claude Code's folder trust, whose default answer exits)
     /// keeps the start pending past its deadline. Typing into it there on

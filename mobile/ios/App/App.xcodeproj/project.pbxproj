@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D40000000000000101 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000100 /* NotificationService.swift */; };
+		A1B2C3D40000000000000103 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000102 /* PrivacyInfo.xcprivacy */; };
+		A1B2C3D4000000000000011E /* HidePushCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000011D /* HidePushCore */; };
+		A1B2C3D40000000000000105 /* HidePushCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000104 /* HidePushCore */; };
+		A1B2C3D40000000000000107 /* HideNotification.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000106 /* HideNotification.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A1B2C3D40000000000000109 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000108 /* Localizable.strings */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		A1B2C3D40000000000000001 /* HideShell in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000002 /* HideShell */; };
@@ -21,10 +27,22 @@
 		D0C5E1EA0000000000000002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D0C5E1EA0000000000000001 /* PrivacyInfo.xcprivacy */; };
 		A1B2C3D40000000000000022 /* PairingKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000021 /* PairingKeychainTests.swift */; };
 		A1B2C3D40000000000000032 /* QRScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000031 /* QRScannerTests.swift */; };
+		A1B2C3D4000000000000011B /* PushKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000011C /* PushKeychainTests.swift */; };
 		A1B2C3D40000000000000027 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000024 /* InfoPlist.strings */; };
+		A1B2C3D4000000000000020D /* AllowNotificationsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */; };
+		A1B2C3D4000000000000F012 /* NoticeSealer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000F011 /* NoticeSealer.swift */; };
+		A1B2C3D4000000000000F022 /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000F021 /* NotificationServiceTests.swift */; };
+		A1B2C3D4000000000000F041 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000100 /* NotificationService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D40000000000000100 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000102 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A1B2C3D40000000000000106 /* HideNotification.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HideNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4000000000000010A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D4000000000000010B /* HideNotification.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HideNotification.entitlements; sourceTree = "<group>"; };
+		A1B2C3D4000000000000010C /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A1B2C3D4000000000000010D /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/Localizable.strings; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -40,11 +58,30 @@
 		A1B2C3D40000000000000011 /* ShellViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellViewControllerTests.swift; sourceTree = "<group>"; };
 		D0C5E1EA0000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A1B2C3D40000000000000021 /* PairingKeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingKeychainTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000011C /* PushKeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushKeychainTests.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000031 /* QRScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000023 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		A1B2C3D40000000000000025 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A1B2C3D40000000000000028 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllowNotificationsUITests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000020C /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4000000000000F011 /* NoticeSealer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoticeSealer.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000F021 /* NotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1B2C3D40000000000000112 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A1B2C3D40000000000000107 /* HideNotification.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		504EC3011FED79650016851F /* Frameworks */ = {
@@ -56,7 +93,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D4000000000000010E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D40000000000000105 /* HidePushCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A1B2C3D40000000000000015 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4000000000000011E /* HidePushCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D40000000000000205 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -66,7 +119,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXContainerItemProxy section */
+		A1B2C3D40000000000000110 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1B2C3D40000000000000111;
+			remoteInfo = HideNotification;
+		};
 		A1B2C3D40000000000000017 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 504EC3031FED79650016851F;
+			remoteInfo = App;
+		};
+		A1B2C3D40000000000000207 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
 			proxyType = 1;
@@ -82,6 +149,8 @@
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
 				A1B2C3D40000000000000013 /* AppTests */,
+				A1B2C3D40000000000000113 /* HideNotification */,
+				A1B2C3D40000000000000208 /* AppUITests */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -91,6 +160,8 @@
 			children = (
 				504EC3041FED79650016851F /* App.app */,
 				A1B2C3D40000000000000010 /* AppTests.xctest */,
+				A1B2C3D40000000000000106 /* HideNotification.appex */,
+				A1B2C3D4000000000000020C /* AppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -110,8 +181,20 @@
 				2FAD9762203C412B000D30F8 /* config.xml */,
 				50B271D01FEDC1A000F3C39B /* public */,
 				D0C5E1EA0000000000000001 /* PrivacyInfo.xcprivacy */,
+				A1B2C3D40000000000000108 /* Localizable.strings */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40000000000000113 /* HideNotification */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40000000000000100 /* NotificationService.swift */,
+				A1B2C3D4000000000000010A /* Info.plist */,
+				A1B2C3D4000000000000010B /* HideNotification.entitlements */,
+				A1B2C3D40000000000000102 /* PrivacyInfo.xcprivacy */,
+			);
+			path = HideNotification;
 			sourceTree = "<group>";
 		};
 		A1B2C3D40000000000000013 /* AppTests */ = {
@@ -120,8 +203,19 @@
 				A1B2C3D40000000000000011 /* ShellViewControllerTests.swift */,
 				A1B2C3D40000000000000021 /* PairingKeychainTests.swift */,
 				A1B2C3D40000000000000031 /* QRScannerTests.swift */,
+				A1B2C3D4000000000000011C /* PushKeychainTests.swift */,
+				A1B2C3D4000000000000F021 /* NotificationServiceTests.swift */,
+				A1B2C3D4000000000000F011 /* NoticeSealer.swift */,
 			);
 			path = AppTests;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40000000000000208 /* AppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40000000000000202 /* AllowNotificationsUITests.swift */,
+			);
+			path = AppUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -134,10 +228,12 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				A1B2C3D40000000000000112 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1B2C3D40000000000000114 /* PBXTargetDependency */,
 			);
 			name = App;
 			packageProductDependencies = (
@@ -161,9 +257,49 @@
 				A1B2C3D40000000000000018 /* PBXTargetDependency */,
 			);
 			name = AppTests;
+			packageProductDependencies = (
+				A1B2C3D4000000000000011D /* HidePushCore */,
+			);
 			productName = AppTests;
 			productReference = A1B2C3D40000000000000010 /* AppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A1B2C3D40000000000000111 /* HideNotification */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40000000000000115 /* Build configuration list for PBXNativeTarget "HideNotification" */;
+			buildPhases = (
+				A1B2C3D40000000000000116 /* Sources */,
+				A1B2C3D4000000000000010E /* Frameworks */,
+				A1B2C3D40000000000000117 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = HideNotification;
+			packageProductDependencies = (
+				A1B2C3D40000000000000104 /* HidePushCore */,
+			);
+			productName = HideNotification;
+			productReference = A1B2C3D40000000000000106 /* HideNotification.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		A1B2C3D40000000000000200 /* AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40000000000000209 /* Build configuration list for PBXNativeTarget "AppUITests" */;
+			buildPhases = (
+				A1B2C3D40000000000000203 /* Sources */,
+				A1B2C3D40000000000000205 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1B2C3D40000000000000206 /* PBXTargetDependency */,
+			);
+			name = AppUITests;
+			productName = AppUITests;
+			productReference = A1B2C3D4000000000000020C /* AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -182,6 +318,9 @@
 					A1B2C3D40000000000000016 = {
 						TestTargetID = 504EC3031FED79650016851F;
 					};
+					A1B2C3D40000000000000111 = {
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 504EC2FF1FED79650016851F /* Build configuration list for PBXProject "App" */;
@@ -197,6 +336,7 @@
 			packageReferences = (
 				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
 				A1B2C3D40000000000000003 /* XCLocalSwiftPackageReference "HideShell" */,
+				A1B2C3D40000000000000118 /* XCLocalSwiftPackageReference "HidePushCore" */,
 			);
 			productRefGroup = 504EC3051FED79650016851F /* Products */;
 			projectDirPath = "";
@@ -204,6 +344,8 @@
 			targets = (
 				504EC3031FED79650016851F /* App */,
 				A1B2C3D40000000000000016 /* AppTests */,
+				A1B2C3D40000000000000111 /* HideNotification */,
+				A1B2C3D40000000000000200 /* AppUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -215,12 +357,21 @@
 			files = (
 				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
 				A1B2C3D40000000000000027 /* InfoPlist.strings in Resources */,
+				A1B2C3D40000000000000109 /* Localizable.strings in Resources */,
 				50B271D11FEDC1A000F3C39B /* public in Resources */,
 				D0C5E1EA0000000000000002 /* PrivacyInfo.xcprivacy in Resources */,
 				504EC30F1FED79650016851F /* Assets.xcassets in Resources */,
 				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D40000000000000117 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D40000000000000103 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -243,6 +394,26 @@
 				A1B2C3D40000000000000012 /* ShellViewControllerTests.swift in Sources */,
 				A1B2C3D40000000000000022 /* PairingKeychainTests.swift in Sources */,
 				A1B2C3D40000000000000032 /* QRScannerTests.swift in Sources */,
+				A1B2C3D4000000000000011B /* PushKeychainTests.swift in Sources */,
+				A1B2C3D4000000000000F041 /* NotificationService.swift in Sources */,
+				A1B2C3D4000000000000F022 /* NotificationServiceTests.swift in Sources */,
+				A1B2C3D4000000000000F012 /* NoticeSealer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D40000000000000116 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D40000000000000101 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D40000000000000203 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4000000000000020D /* AllowNotificationsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,6 +424,16 @@
 			isa = PBXTargetDependency;
 			target = 504EC3031FED79650016851F /* App */;
 			targetProxy = A1B2C3D40000000000000017 /* PBXContainerItemProxy */;
+		};
+		A1B2C3D40000000000000114 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1B2C3D40000000000000111 /* HideNotification */;
+			targetProxy = A1B2C3D40000000000000110 /* PBXContainerItemProxy */;
+		};
+		A1B2C3D40000000000000206 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 504EC3031FED79650016851F /* App */;
+			targetProxy = A1B2C3D40000000000000207 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -280,6 +461,15 @@
 				A1B2C3D40000000000000028 /* ko */,
 			);
 			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40000000000000108 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A1B2C3D4000000000000010C /* en */,
+				A1B2C3D4000000000000010D /* ko */,
+			);
+			name = Localizable.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -398,6 +588,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
+				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
@@ -422,6 +613,7 @@
 		504EC3181FED79650016851F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CAPACITOR_DEBUG = false;
 				CODE_SIGN_STYLE = Automatic;
@@ -486,6 +678,84 @@
 			};
 			name = Release;
 		};
+		A1B2C3D40000000000000119 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = HideNotification/HideNotification.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GH6F6ZA497;
+				INFOPLIST_FILE = HideNotification/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.grab.hide.ios.notification-service;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A1B2C3D4000000000000011A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = HideNotification/HideNotification.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GH6F6ZA497;
+				INFOPLIST_FILE = HideNotification/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.grab.hide.ios.notification-service;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A1B2C3D4000000000000020A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = GH6F6ZA497;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.grab.hide.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = App;
+			};
+			name = Debug;
+		};
+		A1B2C3D4000000000000020B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = GH6F6ZA497;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.grab.hide.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = App;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -516,6 +786,24 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A1B2C3D40000000000000115 /* Build configuration list for PBXNativeTarget "HideNotification" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D40000000000000119 /* Debug */,
+				A1B2C3D4000000000000011A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D40000000000000209 /* Build configuration list for PBXNativeTarget "AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4000000000000020A /* Debug */,
+				A1B2C3D4000000000000020B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -526,6 +814,10 @@
 		A1B2C3D40000000000000003 /* XCLocalSwiftPackageReference "HideShell" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = HideShell;
+		};
+		A1B2C3D40000000000000118 /* XCLocalSwiftPackageReference "HidePushCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = HidePushCore;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -539,6 +831,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D40000000000000003 /* XCLocalSwiftPackageReference "HideShell" */;
 			productName = HideShell;
+		};
+		A1B2C3D40000000000000104 /* HidePushCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D40000000000000118 /* XCLocalSwiftPackageReference "HidePushCore" */;
+			productName = HidePushCore;
+		};
+		A1B2C3D4000000000000011D /* HidePushCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D40000000000000118 /* XCLocalSwiftPackageReference "HidePushCore" */;
+			productName = HidePushCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

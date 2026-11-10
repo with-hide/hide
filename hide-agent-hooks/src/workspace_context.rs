@@ -55,7 +55,7 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
     let mut commands = vec!["workspace info"];
     if has("request.send") {
         commands.push(
-            "request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now] (report says the work is finished and ends your parent's watch on you; progress is an interim report such as a plan and ends nothing; a recipient that is working reads a letter after five minutes of its work, and --now at its next tool call instead)",
+            "request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now] (`parent` names your parent; report says the work is finished and ends your parent's watch on you; progress is an interim report such as a plan and ends nothing; a recipient that is working reads a letter after five minutes of its work, and --now at its next tool call instead)",
         );
     }
     if has("inbox") {

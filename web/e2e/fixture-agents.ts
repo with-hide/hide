@@ -152,8 +152,7 @@ export async function sessionIn(daemon: Pick<Daemon, "origin" | "token">, pane: 
  * Has the agent in `parent`, an agent of a family fixture
  * (`startFixture({ family: true })`), spawn a child as a real agent
  * delegates (`hide agent spawn --parent here`), in the checkout of `repo` on
- * `branch` (its own tab), or beside the parent in the parent's own checkout
- * with `beside`. With `session`, the child resumes that session, whose
+ * `branch`, in a tab of its own. With `session`, the child resumes that session, whose
  * transcript the spec wrote. Waits until the daemon lists the child as
  * `parent`'s and returns its pane.
  */
@@ -161,9 +160,9 @@ export async function spawnChild(
   fixture: AgentFixture,
   daemon: Pick<Daemon, "origin" | "token">,
   parent: string,
-  { name, repo, branch = "main", beside = false, session }: { name: string; repo: string; branch?: string; beside?: boolean; session?: string },
+  { name, repo, branch = "main", session }: { name: string; repo: string; branch?: string; session?: string },
 ): Promise<string> {
-  const args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(beside ? ["--beside"] : []), ...(session ? ["--", "--resume", session] : [])];
+  const args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(session ? ["--", "--resume", session] : [])];
   type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
   const deadline = Date.now() + 30_000;
   let pane: string | undefined;

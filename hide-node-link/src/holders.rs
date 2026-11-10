@@ -181,7 +181,7 @@ pub struct HolderRecovery {
 }
 
 /// Where a pane's screen is in its scrollback, in rows above the bottom
-/// (Herdr's `pane.get` scroll metrics).
+/// (the scroll metrics a client reads).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderScroll {
     pub offset_from_bottom: u64,
@@ -273,8 +273,7 @@ pub struct PaneFacts {
     /// startup files are done.
     pub prompts: u64,
     /// Whether the program has bracketed paste on (mode 2004), so a text
-    /// typed for it as one paste is wrapped as Herdr's `agent.prompt` wraps
-    /// it.
+    /// typed for it as one paste is wrapped in its start and end marks.
     pub bracketed_paste: bool,
     /// Whether the terminal edits input a line at a time before its program
     /// reads it (canonical mode), as the holder read it: a program reads
@@ -305,7 +304,7 @@ pub struct ForegroundProgram {
     pub pid: u32,
     /// The program's name without its folder or `.exe`; for a runtime that
     /// runs a script (node, bun, deno, python), the script's name without
-    /// its folder or extension, as Herdr recognizes a wrapped agent.
+    /// its folder or extension, so a wrapped agent is recognized.
     pub name: String,
     /// The installed package, when the holder can identify it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,7 +312,7 @@ pub struct ForegroundProgram {
     /// Its arguments, the program first; empty when the system cannot
     /// read them. At most
     /// [`MAX_FOREGROUND_ARGS`] of at most [`MAX_FOREGROUND_ARGV_BYTES`] in
-    /// all, as Herdr bounds a resume's arguments.
+    /// all, the bounds on a resume's arguments.
     pub argv: Vec<String>,
 }
 
@@ -385,16 +384,15 @@ pub struct RuleSet {
 }
 
 /// A read of a pane's screen with its styling kept, as escape sequences
-/// ([`PaneHolders::read_styled`]), as Herdr's `pane.read --format ansi`
-/// answers it.
+/// ([`PaneHolders::read_styled`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "read", content = "rows", rename_all = "snake_case")]
 pub enum StyledRead {
-    /// The rows the screen shows now (Herdr's `visible` source), which an
+    /// The rows the screen shows now which an
     /// agent's composer is judged on.
     Screen,
     /// The last rows of the screen and its scrollback as the terminal drew
-    /// them, soft wraps kept (Herdr's `recent` source), at most this many.
+    /// them, soft wraps kept, at most this many.
     Rows(u16),
 }
 
@@ -512,12 +510,11 @@ pub trait PaneHolders: Send + Sync {
     /// [`UNSUPPORTED_HOLDER`].
     fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError>;
     /// The rows the pane's screen shows now, wherever it is scrolled to,
-    /// as text with soft wraps joined (Herdr's `visible` read); a holder
+    /// as text with soft wraps joined; a holder
     /// built before visible reads is refused [`UNSUPPORTED_HOLDER`].
     fn read_visible(&self, pane: &str) -> Result<String, HolderError>;
     /// Where the pane's screen is in its scrollback, after moving it to
-    /// `to` rows above the bottom when asked (Herdr's `pane.get` and
-    /// `pane.scroll`); the connection that holds the screen is sent the
+    /// `to` rows above the bottom when asked; the connection that holds the screen is sent the
     /// moved screen. A holder built before scroll asks is refused
     /// [`UNSUPPORTED_HOLDER`].
     fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError>;
@@ -596,7 +593,7 @@ pub trait PaneHolders: Send + Sync {
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
     /// Tells `ended`, from now on, the id of each pane whose program exits
     /// on its own while the node holds its screen, so the engine closes it
-    /// as Herdr closed a pane whose program ends. A pane ended by
+    /// when its program ends. A pane ended by
     /// [`PaneHolders::terminate`] is not told.
     fn watch_ends(&self, ended: PaneEnded);
     /// Tells `sink`, from now on, each pane's facts whenever they change,
