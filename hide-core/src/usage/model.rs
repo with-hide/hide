@@ -54,10 +54,12 @@ pub struct ProfileUsage {
     /// The profile's id.
     pub id: String,
     /// Another profile listed before it, or the agent's default account,
-    /// runs in the same account, whose figure is that one's: drawn `—`.
+    /// runs in the same account: Settings › Agents draws `—` for it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub shared: bool,
-    /// Its account's limits; absent where `shared`.
+    /// Its account's limits, the same on every profile of that account; absent
+    /// for a profile in the agent's default account, whose figure is the
+    /// agent's own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limits: Option<Cell<LimitReading>>,
 }

@@ -91,10 +91,11 @@ function SelectLabel({ className, ...props }: ComponentProps<typeof SelectPrimit
 }
 
 /**
- * One option. A `description` is a caption line under the option's name inside the open list only: the trigger
- * shows the name alone, since Radix copies only `ItemText` into the value.
+ * One option. A `description` is a caption line under the option's name inside the open list only, and `trailing`
+ * a quiet figure at the option's right end on its line (a percent left): the trigger shows the name alone, since
+ * Radix copies only `ItemText` into the value.
  */
-function SelectItem({ className, children, description, ...props }: ComponentProps<typeof SelectPrimitive.Item> & { description?: ReactNode }) {
+function SelectItem({ className, children, description, trailing, ...props }: ComponentProps<typeof SelectPrimitive.Item> & { description?: ReactNode; trailing?: ReactNode }) {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
@@ -108,7 +109,14 @@ function SelectItem({ className, children, description, ...props }: ComponentPro
       </span>
       {/* Radix drops ItemText's className, so the row lays its mark beside its name from here, as a menu item does. */}
       {description === undefined ? (
-        <SelectPrimitive.ItemText data-slot="select-item-text">{children}</SelectPrimitive.ItemText>
+        <>
+          <SelectPrimitive.ItemText data-slot="select-item-text">{children}</SelectPrimitive.ItemText>
+          {trailing === undefined ? null : (
+            <span className="ml-auto shrink-0 pl-md text-caption tabular-nums text-muted-foreground" data-slot="select-item-trailing">
+              {trailing}
+            </span>
+          )}
+        </>
       ) : (
         <span className="flex min-w-0 flex-col gap-xxs">
           <span className="flex min-w-0 items-center gap-sm">

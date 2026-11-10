@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentProfilesView, startProfiles, signInStart } from "./agentProfiles";
+import { agentProfilesView, preselectedProfile, signInStart, startItems } from "./agentProfiles";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
 import type { AgentProfileWire, MachineAgentProfiles, SnapshotRest } from "./snapshot";
 import type { StartTarget, StartTargets } from "./startTargets";
@@ -72,12 +72,39 @@ describe("signInStart", () => {
   });
 });
 
-describe("startProfiles", () => {
-  it("shows the core's final automatic selection without repeating its priority", () => {
-    const rest = {
-      navigator: { devices: [{ id: "mac", kit: { profiles: { ...machine([wire("p-side"), wire("p-new")]), defaults: { "claude-code": "p-side" } } } }] },
+describe("startItems", () => {
+  const usage = {
+    nodes: [{ node: "mac", agents: [{ agent: "claude", limits: weekly(60), consumption: { state: "unsupported" }, profiles: [{ id: "work", limits: weekly(28.4) }, { id: "work-too", shared: true, limits: weekly(28.4) }, { id: "gateway", shared: true }, { id: "fresh", limits: { state: "loading" } }] }] }],
+  } as unknown as Parameters<typeof startItems>[2];
+  const rest = (profiles: AgentProfileWire[]) =>
+    ({ navigator: { devices: [{ id: "mac", kit: { profiles: machine(profiles) } }, { id: "box", kit: { profiles: machine(profiles) } }] } }) as unknown as SnapshotRest;
+  const claude = (menu: ReturnType<typeof startItems>) => menu.items.filter((item) => item.kind === "claude").map((item) => [item.profile, item.name, item.left]);
+
+  it("lists each agent's built-in item and then its profiles, with the percent left of each item's account and none for an account it cannot read (B2, B3)", () => {
+    const menu = startItems(rest([wire("work"), wire("work-too", { account: "/accounts/work" }), wire("gateway", { account: null, program: "claude-gateway" }), wire("fresh")]), "mac", usage, NOW);
+    // Two items of one account show that account's figure twice; the default account's wrapper shows the agent's own.
+    expect(claude(menu)).toEqual([["default", null, 40], ["work", "work", 72], ["work-too", "work-too", 72], ["gateway", "gateway", 40], ["fresh", "fresh", null]]);
+    expect(menu).toMatchObject({ showLeft: true, listed: true });
+    // An agent with no profile is its built-in item alone.
+    expect(menu.items.filter((item) => item.kind === "codex")).toEqual([{ kind: "codex", profile: "default", name: null, version: null, left: null }]);
+  });
+
+  it("is the agent names alone while the machine lists no profile, and has no figure for a device (B1, B6)", () => {
+    const none = startItems(rest([]), "mac", usage, NOW);
+    expect(none.showLeft).toBe(false);
+    expect(none.items.every((item) => item.name === null && item.profile === "default")).toBe(true);
+    // The usage read is this machine's: a device's items carry none.
+    expect(claude(startItems(rest([wire("work")]), "box", usage, NOW))).toEqual([["default", null, null], ["work", "work", null]]);
+    // A machine whose profiles were never read lists the built-in items and names no profile for a start.
+    expect(startItems({ navigator: { devices: [{ id: "old" }] } } as unknown as SnapshotRest, "old", null, NOW)).toMatchObject({ showLeft: false, listed: false });
+  });
+
+  it("preselects the core's final automatic choice without repeating its priority (D-03)", () => {
+    const state = {
       status: { start_profiles: { project: { device_id: "mac", root: "/project", profiles: { "claude-code": "p-new" } } } },
     } as unknown as SnapshotRest;
-    expect(startProfiles(rest, "mac", "project", "claude-code")?.picked).toBe("p-new");
+    expect(preselectedProfile(state, "mac", "project", "claude")).toBe("p-new");
+    expect(preselectedProfile(state, "mac", "project", "codex")).toBe("default");
+    expect(preselectedProfile(state, "other", "project", "claude")).toBe("default");
   });
 });

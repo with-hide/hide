@@ -129,7 +129,7 @@ test("a profile added in the Agents settings page is offered by the start panel 
 
     // B14: the start panel opens on the project's choice and lists every profile.
     await openStartPanel(page);
-    await expect(page.locator("[data-profile-pick]")).toHaveAttribute("data-profile-pick", work.id);
+    await expect(page.locator("[data-agent-item]")).toHaveAttribute("data-agent-item", `claude/${work.id}`);
     await closeAll(page);
 
     for (const theme of ["dark", "light"] as const) {
@@ -142,9 +142,9 @@ test("a profile added in the Agents settings page is offered by the start panel 
       await capture(app, page, `06-edit-profile-dialog-${theme}`);
       await closeAll(page);
       await openStartPanel(page);
-      await page.locator("[data-profile-pick]").click();
-      await expect(page.locator(`[data-profile-pick-option="${work.id}"]`)).toBeVisible();
-      await capture(app, page, `07-start-panel-profile-menu-${theme}`);
+      await page.locator("[data-agent-item]").click();
+      await expect(page.locator(`[data-agent-item-option="claude/${work.id}"]`)).toBeVisible();
+      await capture(app, page, `07-start-panel-items-${theme}`);
       await closeAll(page);
       await openWorkingStyle(page);
       await expect(page.locator('[data-project-agent-account-value]')).toHaveAttribute("data-project-agent-account-value", work.id);

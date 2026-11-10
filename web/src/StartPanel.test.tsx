@@ -180,7 +180,30 @@ it("offers Add a project in place of Start when the device has no project, and o
   }
 });
 
-it("shows the profile the core would pick, the project's first, and sends a profile only when the operator picks one (agent-profiles B1, B14)", async () => {
+const profileFixture = {
+  listed: (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null, startable: true }),
+  project: (id: string) => ({ id, label: id, path: `/local/${id}`, device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: `${id}-main`, workspace_id: id, label: "main", path: `/local/${id}`, exists: true, is_primary: true }] }),
+};
+
+/** A core machine with projects `blog` and `docs`, the given profiles and the core's automatic choice per project. */
+function profileSnapshot(profiles: unknown, automatic: Record<string, string>, projectProfile: string | null = null) {
+  return {
+    navigator: {
+      focused_device_id: "core-machine",
+      workspaces: [profileFixture.project("blog"), profileFixture.project("docs")],
+      devices: [{ id: "core-machine", kind: "local", label: "Core machine", state: "local", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], profiles } }],
+    },
+    ui_state: {
+      agent_start: { kind: "claude", models: {} },
+      project_settings: projectProfile ? { blog: { version: 1, device_id: "core-machine", root: "/local/blog", agent_profiles: { "claude-code": projectProfile } } } : {},
+    },
+    status: { start_profiles: Object.fromEntries(Object.entries(automatic).map(([id, profile]) => [id, { device_id: "core-machine", root: `/local/${id}`, profiles: { "claude-code": profile } }])) },
+  } as unknown as SnapshotRest;
+}
+
+const weeklyLimits = (used: number) => ({ state: "reading", freshness: "fresh", observed_at_ms: Date.now(), value: { windows: [{ kind: "weekly", scope: { kind: "all" }, outcome: { state: "open", used_percent: used, resets_at_s: Date.now() / 1000 + 3600 } }] } });
+
+async function withPanel(run: (panel: { render: (rest: SnapshotRest, project?: string) => Promise<void>; events: { kind: string; payload: Record<string, unknown> }[]; q: (selector: string) => HTMLElement | null; openItems: () => Promise<void>; pickItem: (key: string) => Promise<void>; root: ReturnType<typeof createRoot> }) => Promise<void>) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
@@ -188,66 +211,297 @@ it("shows the profile the core would pick, the project's first, and sends a prof
   const ui = useUiStore.getState();
   const panel = useStartPanel.getState();
   const events: { kind: string; payload: Record<string, unknown> }[] = [];
-  const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null, startable: true });
-  const snapshot = (profiles: unknown, projectProfile: string | null, automaticProfile: string) => ({
-    navigator: {
-      focused_device_id: "core-machine",
-      workspaces: [{ id: "blog", label: "blog", path: "/local/blog", device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: "blog-main", workspace_id: "blog", label: "main", path: "/local/blog", exists: true, is_primary: true }] }],
-      devices: [{ id: "core-machine", kind: "local", label: "Core machine", state: "local", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], profiles } }],
-    },
-    ui_state: {
-      agent_start: { kind: "claude", models: {} },
-      project_settings: projectProfile ? { blog: { version: 1, device_id: "core-machine", root: "/local/blog", agent_profiles: { "claude-code": projectProfile } } } : {},
-    },
-    status: { start_profiles: { blog: { device_id: "core-machine", root: "/local/blog", profiles: { "claude-code": automaticProfile } } } },
-  }) as unknown as SnapshotRest;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const q = (selector: string) => document.body.querySelector<HTMLElement>(selector);
-  const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
-  const render = async (rest: SnapshotRest) => {
+  const key = async (element: HTMLElement) => {
+    element.focus();
+    await act(async () => { element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  };
+  try {
+    await run({
+      root,
+      events,
+      q,
+      render: async (rest, project = "blog") => {
+        await act(async () => {
+          useShellStore.setState({ rest, connection: "live" });
+          useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null });
+          useStartPanel.setState(panel, true);
+          useStartPanel.getState().open(false, { projectId: project, kind: "claude" });
+          root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+        });
+      },
+      openItems: () => key(q("[data-agent-item], [data-agent-kind]")!),
+      pickItem: (item) => key(q(`[data-agent-item-option="${item}"]`)!),
+    });
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
+}
+
+it("lists each agent with its profiles as items, shows the core's choice chosen and starts the item shown, the built-in one included (agent-profiles-phase2 B1-B5)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem, root }) => {
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    // No profile on the machine: the agent names alone, no profile menu, no figure, and the start names none (B1).
+    await render(profileSnapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, { blog: "default" }));
+    expect(q("[data-profile-pick]")).toBeNull();
+    await openItems();
+    expect(document.querySelectorAll("[data-slot=select-item-trailing]")).toHaveLength(0);
+    expect(q('[data-agent-kind-option="claude"]')?.textContent).toBe("Claude");
+    // The screen is as before, but a machine that keeps profiles is started on the item shown: the core would pick again at start (D-02).
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ provider: "claude", profile: "default" });
+    await act(async () => root.render(<></>));
+
+    // Profiles on the machine: one item each, the project's work chosen, no profile menu beside the agent (B2).
+    const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-side", "side")], defaults: { "claude-code": "p-side" } };
+    await render(profileSnapshot(profiles, { blog: "p-work" }, "p-work"));
+    expect(q("[data-profile-pick]")).toBeNull();
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-work");
+    await openItems();
+    const claude = [...document.querySelectorAll("[data-agent-item-option^='claude/']")].map((option) => option.getAttribute("data-agent-item-option"));
+    expect(claude).toEqual(["claude/default", "claude/p-work", "claude/p-side"]);
+    expect(q('[data-agent-item-option="claude/p-side"]')?.textContent).toContain("Claude Code · side");
+    // Without a reading every item says it does not know (B3).
+    expect(q('[data-agent-item-option="claude/p-work"]')?.textContent).toContain("—");
+    // The chosen item starts as shown, though nothing was picked (D-02, B5).
+    await pickItem("claude/p-work");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ checkout_path: "/local/blog", provider: "claude", profile: "p-work" });
+    await act(async () => root.render(<></>));
+
+    // `Claude Code` is the built-in account whatever the project preselected (B4).
+    await render(profileSnapshot(profiles, { blog: "p-work" }, "p-work"));
+    await openItems();
+    await pickItem("claude/default");
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ provider: "claude", profile: "default" });
+  });
+});
+
+it("shows each item's account usage left, the same figure on two items of one account, and a dash where it is not known (agent-profiles-phase2 B3, D-11)", async () => {
+  await withPanel(async ({ render, q, openItems }) => {
+    const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-also", "also"), profileFixture.listed("p-gate", "gate")], defaults: {} };
+    useShellStore.setState({
+      usage: { nodes: [{ node: "core-machine", agents: [{ agent: "claude", limits: weeklyLimits(60), consumption: { state: "unsupported" }, profiles: [{ id: "p-work", limits: weeklyLimits(28) }, { id: "p-also", shared: true, limits: weeklyLimits(28) }, { id: "p-gate", limits: { state: "unavailable", cause: "no_account", last_checked_at_ms: null } }] }] }] },
+    } as never);
+    try {
+      await render(profileSnapshot(profiles, { blog: "default" }));
+      await openItems();
+      const text = (item: string) => q(`[data-agent-item-option="claude/${item}"]`)?.textContent ?? "";
+      expect(text("default")).toContain("40% left");
+      expect(text("p-work")).toContain("72% left");
+      expect(text("p-also")).toContain("72% left");
+      expect(text("p-gate")).toContain("—");
+    } finally {
+      useShellStore.setState({ usage: null } as never);
+    }
+  });
+});
+
+it("shows the core's choice for another project and opens again on the core's choice rather than the last pick (agent-profiles I-1.8)", async () => {
+  await withPanel(async ({ render, q, openItems, pickItem, root }) => {
+    const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-side", "side")], defaults: {} };
+    const rest = profileSnapshot(profiles, { blog: "p-side", docs: "default" });
+    await render(rest);
+    await openItems();
+    await pickItem("claude/p-work");
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-work");
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/docs")));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => root.render(<></>));
+    await render(rest);
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-side");
+  });
+});
+
+it("opens a profile item on its own default model when the remembered model is not in its list, and sends the listed one as it is (agent-profiles-phase2 B5)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem, root }) => {
+    const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-gate", "gate")], defaults: {} };
+    const rest = profileSnapshot(profiles, { blog: "p-gate" }) as unknown as { ui_state: { agent_start: unknown }; status: Record<string, unknown> };
+    rest.ui_state.agent_start = { kind: "claude", models: { claude: "opus" } };
+    rest.status.background_ai = { providers: [{ id: "claude", agent: "claude-code", state: "ready", selectable: true, models: ["opus", "sonnet"], profile_models: [{ profile: "p-gate", version: 1, models: ["deepseek-v4", "glm-5"], model_labels: { "deepseek-v4": "DeepSeek V4" }, models_fixed: false }] }] };
+    await render(rest as unknown as SnapshotRest);
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    // The remembered `opus` is the agent's, not this item's: the item opens on its default.
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "p-gate" });
+    expect(started().at(-1)).not.toHaveProperty("model");
+    await act(async () => root.render(<></>));
+    await render(rest as unknown as SnapshotRest);
+    // The item's own models show their labels and are sent by value.
+    const model = q("[data-agent-model-kind]");
+    expect(model).not.toBeNull();
+    expect(model!.hasAttribute("disabled")).toBe(false);
+    model!.focus();
+    await act(async () => { model!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect([...document.querySelectorAll("[data-agent-model-option]")].map((row) => row.getAttribute("data-agent-model-option"))).toEqual(["", "deepseek-v4", "glm-5"]);
+    expect(q('[data-agent-model-option="deepseek-v4"]')?.textContent).toBe("DeepSeek V4");
+    const option = q('[data-agent-model-option="deepseek-v4"]')!;
+    option.focus();
+    await act(async () => { option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "p-gate", model: "deepseek-v4" });
+    // The built-in item takes the agent's remembered model again.
+    await act(async () => root.render(<></>));
+    await render(rest as unknown as SnapshotRest);
+    await openItems();
+    await pickItem("claude/default");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default", model: "opus" });
+  });
+});
+
+
+it("keeps the item shown when the project's preselection moves under the open panel, and names the last list kept when a list could not be read (agent-profiles-phase2 D-02, I-1.20)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem, root }) => {
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    const work = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work")], defaults: {} };
+    const moved = async (rest: SnapshotRest) => act(async () => useShellStore.setState({ rest }));
+    // The panel opens on `Claude Code`; pressing the item already shown makes no change event, and another window then
+    // preselects work: the item shown, and started, is still `Claude Code`.
+    await render(profileSnapshot(work, { blog: "default" }));
+    await openItems();
+    await pickItem("claude/default");
+    await moved(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+    await act(async () => root.render(<></>));
+    // The same holds with nothing touched, and a panel opened again reads the core again.
+    await render(profileSnapshot(work, { blog: "default" }));
+    await moved(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+    await act(async () => root.render(<></>));
+    await render(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-work");
+    await act(async () => root.render(<></>));
+    // A list that could not be read now is the last one kept: its item is named too, the built-in one included.
+    await render(profileSnapshot({ ...work, state: "unreadable" }, { blog: "default" }));
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+    expect(q("[data-agent-item-note]")).toBeNull();
+  });
+});
+
+it("holds a replacement for an item the machine stops listing, and drops the held item when the project changes (agent-profiles-phase2 D-02, I-1.8)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem }) => {
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    const moved = async (rest: SnapshotRest) => act(async () => useShellStore.setState({ rest }));
+    const both = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-side", "side")], defaults: {} };
+    const sideOnly = { ...both, version: 3, profiles: [profileFixture.listed("p-side", "side")] };
+    // The panel held work; work is deleted and the menu shows `Claude Code`, which the operator confirms; then the project's choice becomes side.
+    await render(profileSnapshot(both, { blog: "p-work", docs: "default" }, "p-work"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-work");
+    await moved(profileSnapshot(sideOnly, { blog: "default", docs: "default" }));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await openItems();
+    await pickItem("claude/default");
+    await moved(profileSnapshot(sideOnly, { blog: "p-side", docs: "default" }, "p-side"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+  });
+});
+
+it("drops the item the operator picked when the project changes, and shows the core's choice when they return (agent-profiles I-1.8)", async () => {
+  await withPanel(async ({ render, q, openItems, pickItem }) => {
+    const both = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-side", "side")], defaults: {} };
+    await render(profileSnapshot(both, { blog: "p-side", docs: "default" }));
+    await openItems();
+    await pickItem("claude/p-work");
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/docs")));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/blog")));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-side");
+  });
+});
+
+it("lists a device's items by whether it is connected and whether its Hide keeps profiles (agent-profiles-phase2 B6)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const events: { kind: string; payload: Record<string, unknown> }[] = [];
+  const remote = "mini";
+  const project = { id: "remote-project", label: "app", path: "/remote/app", device_id: remote, remote_target_id: remote, registered: true, temporary: false, is_git: false, checkouts: [{ id: "remote-main", workspace_id: "remote-project", label: "main", path: "/remote/app", exists: true, is_primary: true }] };
+  const snapshot = (profiles: unknown, connected: boolean) => ({
+    navigator: {
+      focused_device_id: remote,
+      workspaces: [],
+      devices: [
+        { id: "core-machine", kind: "local", label: "Core machine", state: "local" },
+        { id: remote, kind: "remote", label: "Mac mini", state: "ready", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], ...(profiles ? { profiles } : {}) } },
+      ],
+    },
+    ui_state: { agent_start: { kind: "claude", models: {} } },
+    status: { remote: [{ target_id: remote, state: connected ? "connected" : "disconnected", session: connected ? { workspaces: [project] } : null }] },
+  }) as unknown as SnapshotRest;
+  const listed = { state: "listed", version: 1, profiles: [profileFixture.listed("p-work", "work")], defaults: {} };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const q = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+  const options = () => [...document.querySelectorAll("[data-agent-item-option^='claude/']")].map((option) => option.getAttribute("data-agent-item-option"));
+  const show = async (rest: SnapshotRest) => {
     await act(async () => {
       useShellStore.setState({ rest, connection: "live" });
       useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null });
-      useStartPanel.setState(panel, true);
-      useStartPanel.getState().open(false, { projectId: "blog", kind: "claude" });
-      root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
     });
   };
-  try {
-    // No profile on the machine: no menu, and the start names none.
-    await render(snapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, null, "default"));
-    expect(q("[data-profile-pick]")).toBeNull();
-    await act(async () => q("[data-start-submit]")!.click());
-    expect(started().at(-1)).not.toHaveProperty("profile");
-    await act(async () => root.render(<></>));
-
-    const profiles = { state: "listed", version: 2, profiles: [listed("p-work", "work"), listed("p-side", "side")], defaults: { "claude-code": "p-side" } };
-    await render(snapshot(profiles, "p-work", "p-work"));
-    // The project's choice is shown chosen and sent as no choice at all.
-    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
-    await act(async () => q("[data-start-submit]")!.click());
-    expect(started().at(-1)).not.toHaveProperty("profile");
-    await act(async () => root.render(<></>));
-
-    // A project that names the built-in profile opens on it, though the agent's default is side.
-    await render(snapshot(profiles, "default", "default"));
-    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("default");
-    await act(async () => root.render(<></>));
-
-    await render(snapshot(profiles, null, "p-side"));
-    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-side");
-    const trigger = q("[data-profile-pick]")!;
+  const open = async () => {
+    const trigger = q("[data-agent-item]");
+    if (!trigger) throw new Error(`no item menu: ${document.body.querySelector("[data-start-panel]")?.textContent ?? "no panel"}`);
     trigger.focus();
     await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
-    expect([...document.querySelectorAll("[data-profile-pick-option]")].map((option) => option.getAttribute("data-profile-pick-option"))).toEqual(["default", "p-work", "p-side"]);
-    const option = q('[data-profile-pick-option="p-work"]')!;
-    option.focus();
-    await act(async () => { option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
-    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
-    await act(async () => q("[data-start-submit]")!.click());
-    expect(started().at(-1)).toMatchObject({ checkout_path: "/local/blog", provider: "claude", profile: "p-work" });
+  };
+  try {
+    await show(snapshot(listed, true));
+    await act(async () => {
+      useStartPanel.setState(panel, true);
+      useStartPanel.getState().open(false, { projectId: project.id, kind: "claude" });
+      root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+    });
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey(remote, "/remote/app")));
+    // Connected: its profiles, with no figure, since a device's usage is not read here.
+    await open();
+    expect(options()).toEqual(["claude/default", "claude/p-work"]);
+    expect(q('[data-agent-item-option="claude/p-work"]')?.textContent).toContain("—");
+    expect(q("[data-agent-item-note]")).toBeNull();
+    await act(async () => { q('[data-agent-item-option="claude/default"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    // Connected, then it stops answering: the panel holds the target, the menu goes back to the built-in items and says why.
+    await show(snapshot(listed, false));
+    await open();
+    expect(options()).toEqual(["claude/default"]);
+    expect(q("[data-agent-item-note]")?.textContent).toContain("Mac mini");
+    expect(q("[data-agent-item-note]")?.textContent).toContain("not connected");
+    await act(async () => root.render(<></>));
+    // A device whose Hide predates profiles: the built-in items, the reason, and a start that names no profile.
+    for (const profiles of [{ state: "unsupported", version: 0, profiles: [], defaults: {} }, null]) {
+      await show(snapshot(profiles, true));
+      await act(async () => {
+        useStartPanel.setState(panel, true);
+        useStartPanel.getState().open(false, { projectId: project.id, kind: "claude" });
+        root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+      });
+      await open();
+      expect(options()).toEqual(["claude/default"]);
+      expect(q("[data-agent-item-note]")?.textContent).toContain("does not support profiles");
+      await act(async () => q("[data-start-submit]")!.click());
+      expect(events.filter((event) => event.kind === "agent_start_in_checkout").at(-1)?.payload).not.toHaveProperty("profile");
+      await act(async () => root.render(<></>));
+    }
   } finally {
     await act(async () => root.unmount());
     container.remove();

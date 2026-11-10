@@ -403,9 +403,10 @@ impl UsageDriver {
         }
     }
 
-    /// Each profile's row of its agent's usage: its account's reading, for
-    /// the first profile in that account; shared for one in an account a
-    /// profile before it, or the agent's default, already shows (B23).
+    /// Each profile's row of its agent's usage: its account's reading, with
+    /// `shared` marking one in an account a profile before it, or the agent's
+    /// default, already shows (B23); a profile in the default account has no
+    /// reading of its own and shows the agent's.
     fn profile_rows(
         &self,
         profiles: &[UsageProfile],
@@ -418,8 +419,11 @@ impl UsageDriver {
             .filter(|profile| profile.agent == agent)
             .map(|profile| {
                 let first = !profile.account.is_default() && seen.insert(&profile.account);
+                // Every profile of an account carries its figure, so a screen
+                // that shows each item's own account shows the same one on
+                // both rows; the agent's default account is the agent's row.
                 let mut limits: Option<Cell<LimitReading>> = None;
-                if first {
+                if !profile.account.is_default() {
                     for (_, read) in self
                         .accounts
                         .iter()
@@ -721,8 +725,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 ("work", false, Some(Cell::Loading)),
+                // The default account is the agent's own row's; a second
+                // profile of the work account shows its figure too.
                 ("gateway", true, None),
-                ("work-too", true, None),
+                ("work-too", true, Some(Cell::Loading)),
             ]
         );
         // A profile that goes takes its account's read with it.
