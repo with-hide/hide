@@ -1536,7 +1536,9 @@ export type DecisionReopen = { request_id: string; refused?: boolean };
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
 export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
-export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
+/** What a waiting answer waits for (`mission_answer_hold`, `AnswerHold`): the Conductor works, the operator's own typing is in its input, the quiet period just after either, a menu of its own waits, another wait that ends on its own, or `지금 보내기` was pressed. */
+export type MissionAnswerHold = "working" | "typing" | "recent" | "approval" | "other" | "forced";
+export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState; /** Absent from an older core and from the phone's relay. */ hold?: MissionAnswerHold };
 /** Why the last answer did not reach the Conductor, or why one still waits (`session_unreadable`) (`mission_answer_failure`, B28, B39). */
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed" | "session_unreadable";
 

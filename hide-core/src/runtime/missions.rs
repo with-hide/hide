@@ -135,6 +135,28 @@ pub struct AnswerView {
     pub text: String,
     pub option: Option<u8>,
     pub state: AnswerState,
+    /// What the answer waits for while it is `waiting`, so the banner says it
+    /// and offers `지금 보내기` where pressing could help.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<AnswerHold>,
+}
+
+/// Why a waiting answer is not typed yet, in the words the operator can act
+/// on: the Conductor works, the operator's own typing is in its input, the
+/// quiet period after either, or a menu of its own waits; every other wait ends on its own and has no word.
+/// `Forced` is the press of `지금 보내기`, until the doorbell types it or
+/// finds text in the input and gives the earlier reason back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerHold {
+    Working,
+    Typing,
+    /// The quiet period after the Conductor's last work or input: the input is
+    /// empty, but a press may not be wanted yet, so it says what happened.
+    Recent,
+    Approval,
+    Other,
+    Forced,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -520,7 +542,12 @@ pub(crate) struct MissionRuntime {
     /// The answers the doorbell tried and held, by mission: shown as
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
-    pub(crate) answers_held: std::collections::HashSet<String>,
+    pub(crate) answers_held: HashMap<String, AnswerHold>,
+    /// The answers the operator pressed `지금 보내기` for, by mission and the
+    /// question's key: the doorbell types them past the Conductor's work, the
+    /// quiet period and a draft it reads empty. Memory only, and only the
+    /// missions whose answer still waits are kept (`mission_answers_due`).
+    pub(crate) answers_forced: HashMap<String, u64>,
     /// The answers whose `agent.prompt` the doorbell has asked and not yet
     /// heard back from, by mission: shown as sending. Memory only; the book
     /// already holds them as unconfirmed, so a stop in between never types
@@ -3695,11 +3722,20 @@ impl Runtime {
                     AnswerState::Sending
                 } else if answer.unconfirmed {
                     AnswerState::Unconfirmed
-                } else if self.missions.answers_held.contains(&mission.id) {
+                } else if self.missions.answers_held.contains_key(&mission.id) {
                     AnswerState::Waiting
                 } else {
                     AnswerState::Sending
                 },
+                hold: (!answer.unconfirmed && !self.missions.answers_typing.contains(&mission.id))
+                    .then(|| {
+                        if self.missions.answers_forced.get(&mission.id) == Some(&answer.key) {
+                            Some(AnswerHold::Forced)
+                        } else {
+                            self.missions.answers_held.get(&mission.id).copied()
+                        }
+                    })
+                    .flatten(),
             }),
             // A reason holds only while its cause does: a Conductor that took
             // the mission over, or a device back, can be answered again (B39).
@@ -3717,7 +3753,7 @@ impl Runtime {
                     // An answer the doorbell holds on a session it cannot
                     // read says so, for as long as the read refuses.
                     (mission.answer.is_some()
-                        && self.missions.answers_held.contains(&mission.id)
+                        && self.missions.answers_held.contains_key(&mission.id)
                         && self.delivery_unreadable(&mission.conductor.actor).is_some())
                     .then_some(AnswerFailure::SessionUnreadable)
                 }),
