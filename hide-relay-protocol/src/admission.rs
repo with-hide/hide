@@ -169,6 +169,7 @@ pub enum ClientMessage {
     /// A notification for Apple's push service, carried over the admitted
     /// device socket only. The relay fixes the topic, the push type and the
     /// key ids itself and keeps nothing (`docs/RELAY_PROTOCOL.md`, Push relay).
+    #[serde(rename = "push_request")]
     Push(PushRequest),
 }
 
@@ -279,7 +280,7 @@ pub fn decode_push(text: &str) -> PushAttempt {
     let Some(object) = value.as_object() else {
         return PushAttempt::NotPush;
     };
-    if object.get("type").and_then(|value| value.as_str()) != Some("push") {
+    if object.get("type").and_then(|value| value.as_str()) != Some("push_request") {
         return PushAttempt::NotPush;
     }
     let id = object

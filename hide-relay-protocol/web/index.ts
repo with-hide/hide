@@ -23,7 +23,7 @@ export type ClientMessage =
   | { type: 'proof'; signature: string }
   | { type: 'phone'; version: 1; room: string }
   | { type: 'close'; connection: number }
-  | ({ type: 'push' } & PushRequest);
+  | ({ type: 'push_request' } & PushRequest);
 export type Refusal = 'invalid_message' | 'invalid_proof' | 'unsupported_version' |
   'device_offline' | 'room_occupied' | 'connection_limit' | 'room_limit' |
   'rate_limit' | 'frame_limit' | 'daily_limit' | 'timeout';

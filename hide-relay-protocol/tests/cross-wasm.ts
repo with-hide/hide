@@ -37,7 +37,7 @@ try {
   assert.throws(() => decodeClient('{"type":"close","connection":0}'));
   // The push vocabulary is the same on both sides of the browser ABI.
   const push = {
-    type: 'push' as const,
+    type: 'push_request' as const,
     id: 3,
     environment: 'sandbox' as const,
     token: 'ab'.repeat(32),

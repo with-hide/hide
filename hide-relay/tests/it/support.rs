@@ -36,6 +36,9 @@ pub struct Fixture {
     pub address: SocketAddr,
     pub events: Arc<Mutex<Vec<Event>>>,
     pub clock: Arc<AtomicU64>,
+    /// The Unix time Apple's client reads, in milliseconds, moved by a test
+    /// to walk the provider token's schedule.
+    pub unix: Arc<AtomicU64>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<std::io::Result<()>>>,
 }
@@ -50,8 +53,8 @@ impl Fixture {
         Self::build(limits, PushLimits::default(), address, trusted, None).await
     }
     /// A relay with a stand-in for Apple's push service, forwarding to it.
-    /// Both clocks are the fixture's: a test moves the provider token's
-    /// schedule without waiting.
+    /// Apple's client reads `unix`, which starts at the real time, so a test
+    /// moves the provider token's schedule without waiting.
     pub async fn pushing(push: PushLimits, apple: &Apple, key: &TestKey) -> Self {
         let endpoint = apple.url();
         let origin = key.provider();
@@ -79,8 +82,14 @@ impl Fixture {
         let log = events.clone();
         let clock = Arc::new(AtomicU64::new(0));
         let time = clock.clone();
+        let unix = Arc::new(AtomicU64::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        ));
         let apns = {
-            let time = clock.clone();
+            let time = unix.clone();
             apns.map(|make| {
                 make(Arc::new(move || {
                     Duration::from_millis(time.load(Ordering::SeqCst))
@@ -109,6 +118,7 @@ impl Fixture {
             address,
             events,
             clock,
+            unix,
             stop: Some(stop),
             task: Some(task),
         }
@@ -368,7 +378,7 @@ pub async fn text(socket: &mut Socket, text: &str) {
 /// One push message as the wire spells it, so a test can make a field wrong.
 pub fn push_message(id: u32, token: &str, collapse: &str, payload: &str) -> String {
     format!(
-        r#"{{"type":"push","id":{id},"environment":"sandbox","token":"{token}","collapse":"{collapse}","payload":"{payload}"}}"#
+        r#"{{"type":"push_request","id":{id},"environment":"sandbox","token":"{token}","collapse":"{collapse}","payload":"{payload}"}}"#
     )
 }
 /// Sends one push message and reads the result that answers it.
