@@ -19,6 +19,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import cells, hook_records
 from agent_journey.journey import Journey
+from agent_journey.report import markdown
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 REFUSED = {"ok": False, "error": {"code": "native_identity_unavailable", "message": "not reported yet",
@@ -91,6 +92,19 @@ class Spawn(unittest.TestCase):
         other = {"ok": False, "error": {"code": "spawn_busy", "message": "wait"}}
         self.assertEqual(cells.spawn_verdict(other, "hook_record_refused (h4:p2, SessionStart): denied"),
                          (cells.FAIL, "spawn refused: spawn_busy: wait"))
+
+
+class Reported(unittest.TestCase):
+    def test_a_refused_record_reaches_the_report_as_its_own_section(self):
+        report = {"mode": "local", "holders": {}, "table": {}, "systems": {}, "agents": [],
+                  "hook_records": {"last_failure": {"pane_id": "h3:p2"},
+                                   "cause": "hook_record_refused (h3:p2, UserPromptSubmit): "
+                                            "the pane's count could not be changed: File exists (os error 17)"}}
+        text = markdown(report)
+        self.assertIn("## Hook records", text)
+        self.assertIn("hook_record_refused (h3:p2, UserPromptSubmit)", text)
+        # A run whose hooks kept their records says nothing rather than a clean bill.
+        self.assertNotIn("## Hook records", markdown({**report, "hook_records": None}))
 
 
 class JourneyStarts(unittest.TestCase):

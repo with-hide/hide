@@ -782,6 +782,13 @@ def main(argv=None):
                 if source.is_file() and not source.is_symlink():
                     with open(source, "rb") as stream:
                         write_private(run / f"hook-{name}", stream.read(64 * 1024))
+            # The hook's own last outcome, named in the report itself so a run
+            # whose agent never read idle says which hook outcome explains it
+            # instead of leaving it to a file the reader must go looking for.
+            failure = hook_records.last_failure(runtime)
+            if failure is not None:
+                report["hook_records"] = {"last_failure": failure,
+                                          "cause": hook_records.cause(failure) or "the hook's record carries no cause"}
         if local and not fake:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
