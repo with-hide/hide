@@ -9,8 +9,9 @@
 #           HIDE_IOS_CAPTURE=<file.png> copies the capture back here; HIDE_IOS_SETTLE=<seconds>, default 15)
 #   clean  delete that simulator and this branch's whole folder on the mini
 #
-# Every command ends what it started on the mini: its simulator is shut down and deleted and the pairing link file is
-# removed, on any way out. HIDE_IOS_KEEP_SIMULATOR=1 keeps the simulator for a check by hand.
+# Every command ends what it started on the mini: its simulator is shut down and deleted, on any way out (the pairing
+# link is never a file there). HIDE_IOS_KEEP_SIMULATOR=1 keeps the simulator for a check by hand; the next command
+# of the branch that does not ask for it ends that simulator too, so `clean` is not the only way it goes.
 # A branch's state is one folder, about 0.5 GB, ~/hide-ios-build/<branch>/; past 4 other branches' folders the build
 # refuses and says which to remove.
 #
@@ -45,18 +46,18 @@ case "$command" in
             --exclude 'App/build' --exclude 'DerivedData' --exclude 'xcuserdata' --exclude '.build' \
             mobile/ios/ "$host:$remote/ios/"
         ;;
-    run)
-        # Debug builds only: a pairing link the simulator follows at launch (see ShellViewController).
-        if [[ -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then
-            printf '%s' "$HIDE_IOS_PAIR_LINK" | ssh "$host" "umask 077; mkdir -p '$remote' && cat > '$remote/pair-link'"
-        fi
-        ;;
+    run) ;;
     clean) ;;
     *) printf 'usage: %s [build | run | clean]\n' "$0" >&2; exit 2 ;;
 esac
 
-ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
-    bash -s -- "$command" "$slug" < mobile/scripts/mini-ios.sh
+# Debug builds only: a pairing link the simulator follows at launch (see ShellViewController). It travels in front of
+# the script on the same standard input, so it is in no argument and in no file, and there is nothing to leave behind.
+{
+    if [[ "$command" == run && -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then printf 'HIDE_PAIR_LINK=%q\n' "$HIDE_IOS_PAIR_LINK"; fi
+    cat mobile/scripts/mini-ios.sh
+} | ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
+    bash -s -- "$command" "$slug"
 if [[ "$command" == run && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_IOS_CAPTURE"
 fi

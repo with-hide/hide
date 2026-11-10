@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Runs on the build machine (piped by build-ios.sh): xcodebuild and simctl for one branch's copy of the project.
 #
-# Everything this starts it ends: the simulator it created is shut down and deleted, one it found is shut down if it
-# found it off, and the pairing link file is removed, on every way out including a failure. HIDE_IOS_KEEP_SIMULATOR=1
-# leaves the simulator booted for a check by hand; `clean` removes it later.
+# Everything this starts it ends: the simulator it created is shut down and deleted, and one it found is shut down if it
+# found it off, on every way out including a failure. The pairing link of a `run` is the variable HIDE_PAIR_LINK that
+# build-ios.sh puts in front of this script on its standard input: no argument, no file.
+# HIDE_IOS_KEEP_SIMULATOR=1 leaves the simulator booted for a check by hand and marks it; the next command of this
+# branch that does not ask to keep it ends it (as does `clean`), so a kept simulator is never left for good.
 set -euo pipefail
 
 command=$1
@@ -16,7 +18,7 @@ derived=$base/DerivedData
 derived_tests=$base/DerivedDataTests
 packages=$base/SourcePackages
 shots=$base/shots
-link_file=$base/pair-link
+kept_marker=$base/kept-simulator
 device_name=hide-ios-$slug
 bundle_id=me.grab.hide.ios
 # One folder (about 0.5 GB) and one simulator per branch built here: past this many other branches the build refuses
@@ -31,10 +33,13 @@ created=0
 was_booted=0
 id=
 cleanup() {
-    rm -f "$link_file"
-    [[ "${HIDE_IOS_KEEP_SIMULATOR:-}" == 1 ]] && return 0
+    if [[ "${HIDE_IOS_KEEP_SIMULATOR:-}" == 1 ]]; then
+        [[ -n "$id" && -d "$base" ]] && touch "$kept_marker"
+        return 0
+    fi
     [[ -n "$id" ]] || return 0
     if [[ $created == 1 ]]; then
+        rm -f "$kept_marker"
         xcrun simctl shutdown "$id" 2> /dev/null || true
         xcrun simctl delete "$id" 2> /dev/null || true
     elif [[ $was_booted == 0 ]]; then
@@ -53,6 +58,8 @@ ensure_device() {
     else
         id=${line%% *}
         [[ "${line#* }" == Booted ]] && was_booted=1
+        # A simulator an earlier command was told to keep is this command's to end, unless this one is told to keep it too.
+        [[ -f "$kept_marker" && "${HIDE_IOS_KEEP_SIMULATOR:-}" != 1 ]] && created=1
     fi
 }
 
@@ -90,10 +97,9 @@ case "$command" in
         xcrun simctl bootstatus "$id" -b > /dev/null
         xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
-        # A pairing link for the simulator check (debug builds only) arrives in a private file, never in an argument.
-        if [[ -f "$link_file" ]]; then
-            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=$(cat "$link_file") xcrun simctl launch "$id" "$bundle_id"
-            rm -f "$link_file"
+        # A pairing link for the simulator check (debug builds only), from the variable the script was sent with.
+        if [[ -n "${HIDE_PAIR_LINK:-}" ]]; then
+            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=$HIDE_PAIR_LINK xcrun simctl launch "$id" "$bundle_id"
         else
             xcrun simctl launch "$id" "$bundle_id"
         fi

@@ -75,16 +75,26 @@ export function parsePins(value) {
   return pins;
 }
 
+/** The one place the protocol this source speaks is read: `PHONE_PROTOCOL`, which the phone build and the pin generator both follow. */
+export async function sourceProtocol(root = ROOT) {
+  const source = await readFile(resolve(root, 'web/src/mobile/phoneVersion.ts'), 'utf8');
+  const current = Number(source.match(/PHONE_PROTOCOL = (\d+)/)?.[1]);
+  if (!Number.isSafeInteger(current) || current < 1) throw new Error('phone protocol missing');
+  return current;
+}
+
 /**
  * @param {{dist: string, out: string, pins: ReturnType<typeof parsePins>, origin?: string, fetcher?: typeof fetch}} options
  * @returns {Promise<number[]>} the protocols the folder carries
  */
-export async function assemble({ dist, out, pins, origin = ORIGIN, fetcher = fetch }) {
+export async function assemble({ dist, out, pins, expected, origin = ORIGIN, fetcher = fetch }) {
   const built = JSON.parse(await readFile(resolve(dist, 'protocols.json'), 'utf8'));
   if (!Array.isArray(built) || built.length !== 1 || !Number.isSafeInteger(built[0]) || built[0] < 1) {
     throw new Error('The phone build must contain exactly its own protocol');
   }
   const [current] = built;
+  // The build's own protocol is the source's: a phone-dist built from another revision is refused, not shipped.
+  if (expected !== undefined && current !== expected) throw new Error(`web/phone-dist speaks protocol ${current} but this source speaks ${expected}; rebuild it`);
   // The current protocol is built from this source; a pin for it would let the site's copy stand in for the source.
   if (pins.has(current)) throw new Error(`Protocol ${current} is this source's own; remove it from retained-bundles.json`);
 
@@ -127,7 +137,7 @@ export async function assemble({ dist, out, pins, origin = ORIGIN, fetcher = fet
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const pins = parsePins(JSON.parse(await readFile(PINS, 'utf8')));
-    const protocols = await assemble({ dist: resolve(ROOT, 'web/phone-dist'), out: resolve(ROOT, 'mobile/www'), pins });
+    const protocols = await assemble({ dist: resolve(ROOT, 'web/phone-dist'), out: resolve(ROOT, 'mobile/www'), pins, expected: await sourceProtocol() });
     console.log(`phone bundles in the app: ${protocols.join(', ')}`);
   } catch (error) {
     console.error(`App bundle assembly stopped: ${error.message}`);
