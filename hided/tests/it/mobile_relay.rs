@@ -759,11 +759,27 @@ async fn an_app_phone_is_notified_through_the_relay_and_a_gone_token_is_dropped(
     let again = push_request(&mut device, &mut session).await;
     assert_eq!(again.collapse, request.collapse);
     assert_ne!(again.id, request.id);
-    // Apple called the token gone: hided drops it and does not retry.
+    // Apple refused the token itself (the wrong environment or topic, or a malformed token): that is a
+    // configuration problem, so hided keeps the registration and does not retry.
     control(
         &mut device,
         ServerMessage::PushResult(PushResult {
             id: again.id,
+            result: PushOutcome::TokenRejected,
+        }),
+    )
+    .await;
+    assert_eq!(sent.await.unwrap(), Err("token_rejected"));
+    assert!(phones_file(dir.path()).contains(APP_TOKEN));
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    let (id, payload) = (phone_id.clone(), notice.clone());
+    let sent = tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload));
+    let third = push_request(&mut device, &mut session).await;
+    // Apple called the token gone: hided drops it and does not retry.
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: third.id,
             result: PushOutcome::TokenGone,
         }),
     )

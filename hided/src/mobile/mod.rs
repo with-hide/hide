@@ -130,6 +130,22 @@ struct Held {
     at: std::time::Instant,
 }
 
+/// Puts a notice at the end of a phone's held queue: it replaces the one held for the same agent tag, and the oldest
+/// go past `HELD_PER_PHONE`.
+fn hold_in(held: &mut VecDeque<Held>, payload: Value, at: std::time::Instant) {
+    let tag = payload.get("tag").cloned();
+    held.retain(|older| older.payload.get("tag") != tag.as_ref());
+    held.push_back(Held { payload, at });
+    while held.len() > HELD_PER_PHONE {
+        held.pop_front();
+    }
+}
+
+/// A held notice waits at most `HELD_MAX_AGE`: a flush after that drops it instead of sending a stale question.
+fn held_expired(at: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(at) > HELD_MAX_AGE
+}
+
 struct Inner {
     settings: MobileSettings,
     phones: Phones,
@@ -1867,6 +1883,18 @@ impl Mobile {
             })
     }
 
+    /// Where a request id stands, when this phone has sent it before; nothing is claimed. A repeat is answered from
+    /// this before anything else about the request is judged, because what the first write changed (the agent left
+    /// its question, its pane may have closed) must not turn the answer to the same intent into a refusal.
+    pub fn claimed_input(&self, phone_id: &str, request_id: &str) -> Option<InputState> {
+        self.lock()
+            .inputs
+            .get(phone_id)?
+            .iter()
+            .find(|(id, _)| id == request_id)
+            .map(|(_, state)| *state)
+    }
+
     /// Claims an input request id before it is written, in one step, so a
     /// repeat on this or another socket of the phone never writes it twice.
     pub fn reserve_input(&self, phone_id: &str, request_id: &str) -> Reservation {
@@ -1967,6 +1995,17 @@ impl Mobile {
                 }
                 Err("token_gone")
             }
+            // Apple refuses the token itself: the build's environment or topic and the relay's do not agree, or the
+            // token is malformed. That is a configuration problem to read in the log, not a gone install, so the
+            // registration stays: dropping it would only make the app register the same token again on the next
+            // connection and be refused again.
+            PushOutcome::TokenRejected => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "registration.rejected", "phone_id": phone_id,
+                    "environment": registration.environment,
+                }));
+                Err("token_rejected")
+            }
             PushOutcome::RateLimited => Err("rate_limited"),
             PushOutcome::Unavailable => Err("unavailable"),
             PushOutcome::Failed => Err("failed"),
@@ -2001,17 +2040,9 @@ impl Mobile {
     /// Keeps a notice for `phone_id` until the relay link is up, replacing the one held for the same agent tag and
     /// dropping the oldest past `HELD_PER_PHONE`.
     fn hold(&self, phone_id: &str, payload: Value) {
-        let tag = payload.get("tag").cloned();
         let mut inner = self.lock();
         let held = inner.held.entry(phone_id.to_owned()).or_default();
-        held.retain(|older| older.payload.get("tag") != tag.as_ref());
-        held.push_back(Held {
-            payload,
-            at: std::time::Instant::now(),
-        });
-        while held.len() > HELD_PER_PHONE {
-            held.pop_front();
-        }
+        hold_in(held, payload, std::time::Instant::now());
     }
 
     /// Drops what is held for the tag of a notice that has just gone out live.
@@ -2042,7 +2073,7 @@ impl Mobile {
                 if *mobile.stopping.borrow() {
                     return;
                 }
-                if held.at.elapsed() > HELD_MAX_AGE {
+                if held_expired(held.at, std::time::Instant::now()) {
                     hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.expired", "phone_id": phone_id,
                     }));
@@ -2484,6 +2515,52 @@ mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
     use hide_core::agent_state::phone::project;
+
+    #[test]
+    fn a_phones_held_queue_keeps_one_per_agent_and_at_most_eight() {
+        let at = std::time::Instant::now();
+        let notice = |tag: &str, title: &str| json!({"tag": tag, "title": title});
+        let titles = |held: &VecDeque<Held>| -> Vec<String> {
+            held.iter()
+                .map(|held| held.payload["title"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut held = VecDeque::new();
+        hold_in(&mut held, notice("a", "first"), at);
+        hold_in(&mut held, notice("b", "other"), at);
+        hold_in(&mut held, notice("a", "newer"), at);
+        assert_eq!(
+            titles(&held),
+            ["other", "newer"],
+            "a newer notice replaces the tag's older one"
+        );
+        for number in 0..12 {
+            hold_in(
+                &mut held,
+                notice(&format!("t{number}"), &format!("n{number}")),
+                at,
+            );
+        }
+        assert_eq!(held.len(), HELD_PER_PHONE, "past the cap the oldest go");
+        assert_eq!(
+            titles(&held),
+            ["n4", "n5", "n6", "n7", "n8", "n9", "n10", "n11"]
+        );
+    }
+
+    #[test]
+    fn a_held_notice_is_dropped_after_sixty_seconds_and_not_before() {
+        let at = std::time::Instant::now();
+        let second = Duration::from_secs(1);
+        assert!(!held_expired(at, at));
+        assert!(
+            !held_expired(at, at + HELD_MAX_AGE),
+            "exactly sixty seconds still goes out"
+        );
+        assert!(held_expired(at, at + HELD_MAX_AGE + second));
+        // A clock that did not move forward never expires one.
+        assert!(!held_expired(at + HELD_MAX_AGE * 2, at));
+    }
 
     /// Two changes that arrive before a pass starts are one pass, a pass that
     /// already read them leaves nothing for the next, and a forced pass runs
