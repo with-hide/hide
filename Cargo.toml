@@ -16,6 +16,7 @@ members = [
     "hide-project",
     "hide-relay",
     "hide-relay-protocol",
+    "hide-relay-ios",
     "hide-session",
     "hide-screen-rules",
     "hide-shell",
