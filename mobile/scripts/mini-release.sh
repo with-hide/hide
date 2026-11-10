@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Runs on the build machine (piped by build-ios.sh release): archive, sign, check and upload one release build.
 #
-# Usage: mini-release.sh <branch slug> <marketing version> <build number>
+# Usage: mini-release.sh release <branch slug> <marketing version> <build number>
+#        mini-release.sh status <branch slug> <delivery id>
 #   The project and its release inputs are already in ~/hide-ios-build/<slug>/ (ios/ and release-inputs/).
+#   `status` reads what Apple says about one upload (the delivery id `release` printed) and changes nothing.
 #
 # Secrets: the three keys of release-env.json, from the environment or from the file that registry names, read as
 # plain KEY=VALUE lines and never run as a script. Every key is checked before anything is built, and a problem names
@@ -19,7 +21,7 @@
 set -euo pipefail
 umask 077
 
-slug=$1 version=$2 build=$3
+mode=$1 slug=$2
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 base=$HOME/hide-ios-build/$slug
 inputs=$base/release-inputs
@@ -125,6 +127,18 @@ trap 'exit 143' TERM HUP INT
 
 # ---- start ---------------------------------------------------------------------------------------------------------
 
+if [[ "$mode" == status ]]; then
+    delivery=${3:-}
+    [[ "$delivery" =~ ^[0-9a-f-]{36}$ ]] || die "status needs the delivery id the release printed"
+    [[ -f "$registry" ]] || die "$registry is missing: run the release command once from this branch first"
+    load_secrets
+    xcrun altool --build-status --delivery-id "$delivery" --api-key "$HIDE_IOS_ASC_KEY_ID" --api-issuer "$HIDE_IOS_ASC_ISSUER_ID" \
+        --p8-file-path "$HIDE_IOS_ASC_KEY_PATH" 2>&1 | redact
+    finished=1
+    exit 0
+fi
+[[ "$mode" == release ]] || die "unknown mode '$mode'"
+version=$3 build=$4
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version '$version' is not three numbers"
 [[ "$build" =~ ^[0-9]{1,18}$ ]] || die "build number '$build' is not a number"
 for file in "$registry" "$expect" "$inputs/check-release-app.sh" "$inputs/bundle-manifest.json"; do
@@ -135,7 +149,6 @@ free_gb=$(df -g / | awk 'NR==2 {print $4}')
 
 load_secrets
 team=$(jq -r .teamId "$expect")
-apple_id=$(jq -r .appleId "$expect")
 rm -rf "$work"
 mkdir -p "$work/facts"
 : > "$log"
@@ -194,10 +207,12 @@ bash "$inputs/check-release-app.sh" "$app" "$facts" "$expect" "$inputs/bundle-ma
 
 logged "validate" xcrun altool --validate-app -f "$ipa" --type ios "${altool_auth[@]}"
 logged "upload" xcrun altool --upload-app -f "$ipa" --type ios "${altool_auth[@]}"
+delivery=$(sed -n 's/^Delivery UUID: //p' "$log" | tail -n 1)
+[[ "$delivery" =~ ^[0-9a-f-]{36}$ ]] || die "the upload printed no delivery id"
 
-# Apple processes the build after the upload; this reads the state once and does not wait for it.
+# Apple processes the build after the upload; this reads its state once and does not wait for it.
 step "build status"
-{ xcrun altool --build-status --apple-id "$apple_id" --bundle-version "$build" "${altool_auth[@]}" 2>&1 || true; } | redact | tee -a "$log" | tail -n 8
-printf 'uploaded: %s (%s) to TestFlight; Apple now processes it. Log: %s\n' "$version" "$build" "$log"
+{ xcrun altool --build-status --delivery-id "$delivery" "${altool_auth[@]}" 2>&1 || true; } | redact | tee -a "$log" | tail -n 8
+printf 'uploaded: %s (%s), delivery id %s. Apple now processes it; `build-ios.sh status %s` reads its state again. Log: %s\n' "$version" "$build" "$delivery" "$delivery" "$log"
 df -h / | tail -1 | awk '{printf "build machine free disk: %s of %s\n", $4, $2}'
 finished=1

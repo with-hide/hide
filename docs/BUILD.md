@@ -722,7 +722,7 @@ It refuses a working tree with tracked changes, runs everything `build` runs (th
 2. archives the app in the Release configuration with signing off, with the version and build number given on the command line (never written into the repository);
 3. exports the archive with automatic signing, which makes the App Store profile and signs with the team's cloud-managed Apple Distribution certificate, so no distribution private key exists on the mini and no keychain is read or changed;
 4. unpacks the signed ipa, reads its property lists and signature, and runs the release checks ([Release checks](#release-checks)); one failed check stops the command with every failure named, before anything is uploaded;
-5. validates and uploads that same ipa with `xcrun altool --validate-app` and `--upload-app`, then prints the build's state once.
+5. validates and uploads that same ipa with `xcrun altool --validate-app` and `--upload-app`, then prints the build's state once with the delivery id Apple gave the upload.
 
 It exits non-zero with the reason at the first failure, prints the end of the redacted log when a tool fails, and removes the archive, the export, the unpacked ipa and the derived data on every way out, including an interrupt or a dropped connection.
 Only the redacted log stays, as `~/hide-ios-build/<branch>/release.log`, and `clean` removes it with the branch's folder.
@@ -733,7 +733,7 @@ The version is the numeric part of the repository's own (`HIDE_VERSION`, else th
 The build number is the UTC time the run reaches the mini, `YYYYMMDDHHMMSS`: it rises with every run, a second run on the same commit uploads under a new number, and nothing is edited by hand.
 App Store Connect refuses a build number that is not higher than every earlier build of the same version, so two runs that overlap are decided by the order they upload in, and a mini whose clock runs backwards is refused after the upload with Apple's own message.
 A run that stops after the bytes left (a dropped connection, a processing error) is run again as it is: the retry takes a new number, and the half-finished one is at most an unprocessed or failed build in TestFlight, which expires by itself after 90 days.
-`altool --build-status --apple-id <id> --bundle-version <number>` on the mini (with the key flags the command passes) reads one build's state.
+`bash mobile/scripts/build-ios.sh status <delivery id>` reads that upload's state again (`altool --build-status`, with the key from the same files) and changes nothing.
 
 **Why altool uploads.**
 Xcode 26.6 also uploads from `xcodebuild -exportArchive` with `destination` set to `upload`, but that signs again while it uploads, so the bytes that were checked are not the bytes that went.

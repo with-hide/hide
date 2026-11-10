@@ -1,7 +1,6 @@
 {
   "bundleId": "me.grab.hide.ios",
   "teamId": "GH6F6ZA497",
-  "appleId": "6832780181",
   "minimumOS": "15.0",
   "sdkPrefix": "iphoneos26",
   "entitlements": {

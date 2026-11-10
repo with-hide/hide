@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Builds the Hide iOS app with the phone bundle inside it, on the Mac mini, and runs it in a simulator.
 #
-# Usage: build-ios.sh [build | release | run | clean]
+# Usage: build-ios.sh [build | release | status <delivery id> | run | clean]
 #   release  everything `build` does, then on the mini: archive, sign with the App Store Connect API key, check the
 #          signed app against mobile/release-expect.json, validate and upload it to TestFlight; the build number is the
 #          UTC time of the run, the version the repository's own (mobile/scripts/release-version.mjs). The key never
 #          leaves the mini (~/.config/hide-ios, mobile/release-env.json); a missing secret stops the command naming it
+#   status <delivery id>  what Apple says about one upload (the id `release` printed); changes nothing
 #   build  (default) the phone bundle, `cap sync`, copy the project to the mini, build the app for the simulator
 #          and run the HideShell tests there; a failing test fails the command
 #   run    install the built app in a simulator of its own on the mini, launch it, wait, capture the screen
@@ -61,7 +62,11 @@ case "$command" in
         fi
         ;;
     clean) ;;
-    *) printf 'usage: %s [build | release | run | clean]\n' "$0" >&2; exit 2 ;;
+    status)
+        [[ -n "${2:-}" ]] || { printf 'usage: %s status <delivery id>\n' "$0" >&2; exit 2; }
+        exec ssh "$host" bash -s -- status "$slug" "$2" < mobile/scripts/mini-release.sh
+        ;;
+    *) printf 'usage: %s [build | release | status <delivery id> | run | clean]\n' "$0" >&2; exit 2 ;;
 esac
 
 # `release` runs the same build and Swift tests first: a build whose tests fail is never signed.
@@ -76,7 +81,7 @@ if [[ "$command" == release ]]; then
     # The time is taken here, after the tests, so the number is as close to the upload as the command can make it.
     read -r version build < <(node mobile/scripts/release-version.mjs)
     printf 'release %s (build %s) from %s\n' "$version" "$build" "$(git rev-parse --short=8 HEAD)"
-    ssh "$host" bash -s -- "$slug" "$version" "$build" < mobile/scripts/mini-release.sh
+    ssh "$host" bash -s -- release "$slug" "$version" "$build" < mobile/scripts/mini-release.sh
 fi
 if [[ "$command" == run && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_IOS_CAPTURE"

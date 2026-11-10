@@ -38,7 +38,7 @@ describe.skipIf(process.platform !== 'darwin')('the release command on the build
   });
   afterEach(() => { rmSync(home, { recursive: true, force: true }); });
 
-  const run = () => spawnSync('bash', [join(mobile, 'scripts/mini-release.sh'), 'branch', '1.2.5', '20261110120000'], {
+  const run = () => spawnSync('bash', [join(mobile, 'scripts/mini-release.sh'), 'release', 'branch', '1.2.5', '20261110120000'], {
     encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: home },
   });
 
