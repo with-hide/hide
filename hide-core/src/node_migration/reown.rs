@@ -46,9 +46,9 @@ pub struct OwnerChange {
     /// Each machine's engine socket path, which names it in the ledger's host
     /// scopes while it owns the core. Both are required: a scope naming a
     /// machine whose socket is unknown would keep its old id unnoticed.
-    #[serde(rename = "old_owner_herdr_socket")]
+    #[serde(rename = "old_owner_engine_socket", alias = "old_owner_herdr_socket")]
     pub old_owner_engine_socket: String,
-    #[serde(rename = "new_owner_herdr_socket")]
+    #[serde(rename = "new_owner_engine_socket", alias = "new_owner_herdr_socket")]
     pub new_owner_engine_socket: String,
 }
 
@@ -455,7 +455,7 @@ impl Mapper<'_> {
                 // The old core held the new owner as a device, whose
                 // selection is that machine's own engine focus and is never
                 // saved, so the new core opens there.
-                value["focus_from_herdr"] = Value::Bool(true);
+                value["focus_from_engine"] = Value::Bool(true);
                 // A recent entry is its checkout: one whose checkout neither
                 // machine still has goes, as a fold's does (its id was
                 // counted as it was cleared).
@@ -1811,7 +1811,7 @@ mod tests {
 
         let core = read(&state.join(CORE_STATE));
         assert_eq!(
-            core["focus_from_herdr"],
+            core["focus_from_engine"],
             json!(true),
             "the new core opens on its own Herdr's focus"
         );
@@ -1975,7 +1975,7 @@ mod tests {
         // next save drops the key; the move back leaves it again.
         let take_hint = || {
             let mut core = read(&state.join(CORE_STATE));
-            let hint = core.as_object_mut().unwrap().remove("focus_from_herdr");
+            let hint = core.as_object_mut().unwrap().remove("focus_from_engine");
             std::fs::write(state.join(CORE_STATE), serde_json::to_vec(&core).unwrap()).unwrap();
             hint
         };
@@ -3053,11 +3053,11 @@ mod tests {
         assert_eq!(core["device_registrations"][1]["label"], json!("MacBook"));
     }
 
-    /// A move's owner change in the shape 1.2.1 wrote it reads, and is
-    /// written back, as the same document: each machine's engine socket keeps
-    /// its 1.2.1 key (`old_owner_herdr_socket`, `new_owner_herdr_socket`).
+    /// A move's owner change in the shape 1.2.1 wrote it reads: each machine's
+    /// engine socket is read under its 1.2.1 key (`old_owner_herdr_socket`,
+    /// `new_owner_herdr_socket`), and this build writes the engine key.
     #[test]
-    fn an_owner_change_in_the_1_2_1_shape_is_written_back_as_the_same_document() {
+    fn an_owner_change_in_the_1_2_1_shape_is_read_and_written_under_engine_keys() {
         let written = include_str!("../../tests/fixtures/release-1.2.1/owner-change.json");
         let change: OwnerChange = serde_json::from_str(written).unwrap();
         assert_eq!(
@@ -3068,9 +3068,20 @@ mod tests {
             change.new_owner_engine_socket,
             "/Users/remote/.config/herdr/herdr.sock"
         );
+        let saved = serde_json::to_value(&change).unwrap();
         assert_eq!(
-            serde_json::to_value(&change).unwrap(),
-            serde_json::from_str::<Value>(written).unwrap()
+            saved["old_owner_engine_socket"],
+            json!("/Users/alice/.config/herdr/herdr.sock")
         );
+        assert!(saved.get("old_owner_herdr_socket").is_none());
+    }
+
+    /// Spoiling this alias makes the 1.2.1 owner change fail to read.
+    #[test]
+    fn a_1_2_1_owner_change_names_its_sockets_under_the_1_2_1_keys() {
+        let written = include_str!("../../tests/fixtures/release-1.2.1/owner-change.json");
+        let value: Value = serde_json::from_str(written).unwrap();
+        assert!(value.get("old_owner_herdr_socket").is_some());
+        assert!(serde_json::from_str::<OwnerChange>(written).is_ok());
     }
 }

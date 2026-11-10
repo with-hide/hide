@@ -30,8 +30,8 @@ export function referenceText(name: string, id: string, task?: string | null): s
 }
 
 /** An agent's reference: the name the engine knows it by, else its kind, then its task label. */
-export function agentReference(agent: Pick<AgentRow, "pane_id" | "herdr_name" | "agent_kind" | "identity_label">): string {
-  return referenceText(agent.herdr_name || agent.agent_kind, agent.pane_id, agent.identity_label);
+export function agentReference(agent: Pick<AgentRow, "pane_id" | "given_name" | "agent_kind" | "identity_label">): string {
+  return referenceText(agent.given_name || agent.agent_kind, agent.pane_id, agent.identity_label);
 }
 
 /** The device a pane belongs to: its remote target, else this machine. */

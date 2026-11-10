@@ -348,7 +348,7 @@ export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null
 
 /** Engine tabs: the Agent area's strip, in the core's order. */
 export function agentEntries(checkout: Checkout): StripTab[] {
-  return checkout.strip.filter((entry) => entry.kind === "herdr");
+  return checkout.strip.filter((entry) => entry.kind === "engine");
 }
 
 /**

@@ -35,7 +35,7 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
 }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((s) => s.rest);
-  const profiles = rest?.status?.herdr_profiles;
+  const profiles = rest?.status?.machine_profiles;
   const [picked, setPicked] = useState<ReadonlySet<string> | null>(() => {
     const draft = rest?.ui_state?.first_run_choices?.devices;
     return draft ? new Set(draft) : null;

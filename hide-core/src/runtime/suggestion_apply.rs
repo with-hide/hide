@@ -567,7 +567,7 @@ impl Runtime {
         };
         let engine = self.delivery_engine(node.as_str());
         if decision == BranchDecision::Discard && engine.is_none() {
-            return refused("herdr_unavailable");
+            return refused("engine_unavailable");
         }
         let own = attempt
             .agent_id

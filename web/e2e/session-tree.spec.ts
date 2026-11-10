@@ -11,7 +11,7 @@ import { setAgentState, spawnChild } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { measure } from "./session-panel-geometry.mjs";
-import { chooseTheme, screenshot, showTasks } from "./wire";
+import { chooseTheme, hoverSettledTaskRow, screenshot, showTasks } from "./wire";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
@@ -86,7 +86,8 @@ test("the 태스크 list opens a five-level tree, stops the indent at three and 
     // Branch, label and facts stay inside each row, with no part over another.
     expect(await measure(page)).toEqual({ partProblems: [], rowsFit: [], overflow: [] });
     // Under the pointer the row's buttons take the time's place and cover nothing on the line.
-    await panel.locator(`[data-task-row="${root}"]`).hover();
+    // The root waits on its working descendants; its buttons show only once the core has settled it there.
+    await hoverSettledTaskRow(panel.locator(`[data-task-row="${root}"]`), "waiting");
     await expect(panel.locator(`[data-task-more="${root}"]`)).toBeVisible();
     await expect(panel.locator(`[data-task-row="${root}"] [data-agent-elapsed]`)).toBeHidden();
     expect(await measure(page)).toEqual({ partProblems: [], rowsFit: [], overflow: [] });

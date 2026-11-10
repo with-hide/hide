@@ -3148,7 +3148,7 @@ fn tab_strip_reorder_asks_the_engine_and_lands_only_once_the_engine_reports_the_
     assert!(reorder_tab(
         &mut runtime,
         &checkout_id,
-        "herdr:w-order:t1",
+        "engine:w-order:t1",
         1
     ));
     fake.wait_for_calls(1, Duration::from_secs(5));
@@ -3177,8 +3177,8 @@ fn tab_strip_reorder_asks_the_engine_and_lands_only_once_the_engine_reports_the_
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t2".to_owned(),
-            "herdr:w-order:t1".to_owned(),
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t1".to_owned(),
             file_entry
         ]
     );
@@ -3204,9 +3204,9 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t1".to_owned(),
-            "herdr:w-order:t2".to_owned(),
-            "herdr:w-order:t3".to_owned()
+            "engine:w-order:t1".to_owned(),
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t3".to_owned()
         ],
         "the repository's checkout holds only its own three tabs"
     );
@@ -3222,7 +3222,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
     assert!(reorder_tab(
         &mut runtime,
         &checkout_id,
-        "herdr:w-order:t1",
+        "engine:w-order:t1",
         2
     ));
     fake.wait_for_calls(1, Duration::from_secs(5));
@@ -3249,9 +3249,9 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t2".to_owned(),
-            "herdr:w-order:t3".to_owned(),
-            "herdr:w-order:t1".to_owned()
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t3".to_owned(),
+            "engine:w-order:t1".to_owned()
         ]
     );
     assert!(runtime.pending_tab_move.is_empty());
@@ -3274,7 +3274,10 @@ fn tab_strip_reorder_keeps_the_engine_s_order_and_reports_when_a_move_is_refused
     runtime.pending_tab_move.insert(
         checkout_id.clone(),
         PendingTabMove {
-            desired: vec!["herdr:w-order:t2".to_owned(), "herdr:w-order:t1".to_owned()],
+            desired: vec![
+                "engine:w-order:t2".to_owned(),
+                "engine:w-order:t1".to_owned(),
+            ],
             workspace_id: "w-order".to_owned(),
             engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
             target_id: "w-order:t1".to_owned(),
@@ -3344,7 +3347,7 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
     assert!(reorder_tab(
         &mut runtime,
         &checkout_id,
-        "herdr:w-order:t1",
+        "engine:w-order:t1",
         1
     ));
     let generation = runtime.pending_tab_move[&checkout_id].generation;
@@ -3383,7 +3386,7 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
     assert!(reorder_tab(
         &mut runtime,
         &checkout_id,
-        "herdr:w-order:t1",
+        "engine:w-order:t1",
         1
     ));
     fake.wait_for_calls(2, Duration::from_secs(5));
@@ -3409,7 +3412,10 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
     ))));
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
-        vec!["herdr:w-order:t2".to_owned(), "herdr:w-order:t1".to_owned()]
+        vec![
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t1".to_owned()
+        ]
     );
     assert!(runtime.pending_tab_move.is_empty());
 
@@ -3427,7 +3433,10 @@ fn tab_strip_reorder_ignores_a_result_a_later_drag_has_replaced() {
         "w-order:t1"
     ))));
     let live = PendingTabMove {
-        desired: vec!["herdr:w-order:t2".to_owned(), "herdr:w-order:t1".to_owned()],
+        desired: vec![
+            "engine:w-order:t2".to_owned(),
+            "engine:w-order:t1".to_owned(),
+        ],
         workspace_id: "w-order".to_owned(),
         engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
         target_id: "w-order:t1".to_owned(),
@@ -4299,7 +4308,10 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
         .collect::<Vec<_>>();
     assert_eq!(
         right,
-        vec!["herdr:w-right:t2".to_owned(), "herdr:w-right:t1".to_owned()],
+        vec![
+            "engine:w-right:t2".to_owned(),
+            "engine:w-right:t1".to_owned()
+        ],
         "the move Herdr granted did not land: {after:?}"
     );
     assert!(
@@ -4333,9 +4345,9 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
     assert_eq!(
         before,
         vec![
-            "herdr:w-left:t1".to_owned(),
-            "herdr:w-right:t1".to_owned(),
-            "herdr:w-right:t2".to_owned()
+            "engine:w-left:t1".to_owned(),
+            "engine:w-right:t1".to_owned(),
+            "engine:w-right:t2".to_owned()
         ],
         "the fixture strip is not the order this test reasons about: {before:?}"
     );
@@ -4348,7 +4360,7 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
     assert!(reorder_tab(
         &mut runtime,
         &checkout_id,
-        "herdr:w-right:t2",
+        "engine:w-right:t2",
         0
     ));
     fake.wait_for_calls(1, Duration::from_secs(5));
@@ -4381,9 +4393,9 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-right:t2".to_owned(),
-            "herdr:w-left:t1".to_owned(),
-            "herdr:w-right:t1".to_owned()
+            "engine:w-right:t2".to_owned(),
+            "engine:w-left:t1".to_owned(),
+            "engine:w-right:t1".to_owned()
         ],
         "the drag did not stay where the operator dropped it"
     );

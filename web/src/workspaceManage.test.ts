@@ -260,7 +260,7 @@ describe("row menus", () => {
       id,
       device_id: "local",
       device_pane_id: id,
-      herdr_label: null,
+      engine_label: null,
       terminal_title: null,
       cwd: "/Users/example/hide.worktrees/feature",
       status_code: status,

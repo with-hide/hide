@@ -257,8 +257,8 @@ fn judge(engine: &dyn Engine, read: &Read) -> Reading {
     let screen = engine
         .read_screen(Wait::Small(READ_TIMEOUT), &read.observed.raw_pane_id)
         .map_err(|error| match error {
-            EngineError::Request(_) => "herdr_parameters",
-            EngineError::Answer(_) => "herdr_format",
+            EngineError::Request(_) => "engine_parameters",
+            EngineError::Answer(_) => "engine_format",
             _ => "read_failed",
         })?;
     // A cut screen may have lost the composer's rows, which no verdict
