@@ -5,7 +5,7 @@
 // 2. The app links Capacitor itself and no plugin. A plugin runs with the whole app's rights and is reachable from
 //    every script the app serves, so adding one is a change to this list, made with `BridgeGate.appPlugins` in the
 //    same pull request, never a side effect of an install.
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -39,6 +39,17 @@ export async function check(root = ROOT) {
     const products = [...new Set([...text.matchAll(/\.product\(name:\s*"([^"]+)"/g)].map((match) => match[1]))].sort();
     if (JSON.stringify(products) !== JSON.stringify(LINKED_SWIFT_PRODUCTS)) problems.push(`${name} links ${products.join(', ')}; the app links only ${LINKED_SWIFT_PRODUCTS.join(', ')}`);
   }
+
+  // The plugins a page may call (BridgeGate.appPlugins) and the plugin classes this package links are one list: a
+  // plugin added to either alone is either unreachable or, worse, reachable without anyone having decided it.
+  const sources = resolve(root, 'ios/App/HideShell/Sources/HideShell');
+  const gate = await readFile(resolve(sources, 'BridgeGate.swift'), 'utf8');
+  const exposed = [...(gate.match(/appPlugins: Set<String> = \[([^\]]*)\]/)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((match) => match[1]).sort();
+  const linked = ['Console'];
+  for (const file of (await readdir(sources)).filter((name) => name.endsWith('.swift'))) {
+    linked.push(...[...(await readFile(resolve(sources, file), 'utf8')).matchAll(/public let jsName = "([^"]+)"/g)].map((match) => match[1]));
+  }
+  if (JSON.stringify(exposed) !== JSON.stringify(linked.sort())) problems.push(`BridgeGate.appPlugins is ${exposed.join(', ')}; the plugin classes in HideShell are ${linked.join(', ')} (Console is Capacitor's own)`);
   return problems;
 }
 

@@ -7,14 +7,17 @@ import { useLoaderTranslation } from "./loaderTranslation";
 import { Button } from "../components/ui/button";
 import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
-import { ScanQr } from "./ScanQr";
-import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
-import { appHost, serviceWorkerAllowed } from "./appHost";
+import { ScanQr, scanInApp } from "./ScanQr";
+import { FirstScreen, StartSettings } from "./StartScreens";
+import { bundlePath, hostStore, MAX_HOSTS, type PairedHost } from "./hosts";
+import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
+import { followNativeLinks } from "./nativeLink";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 import { PlayIcon } from "lucide-react";
 
+markAppHost();
 followPhoneTheme();
 // Take and clear secrets synchronously before any React effects or resource loading.
 const pairing = takePairing();
@@ -48,14 +51,17 @@ function Loader() {
   const [pair, setPair] = useState<PairingQr | null>(null);
   const [adding, setAdding] = useState(new URLSearchParams(location.search).has("add"));
   const [target, setTarget] = useState<PairedHost | PairingQr | null>(null);
-  const [error, setError] = useState<"qrError" | "storage" | "loadError" | "limit" | null>(null);
+  const [error, setError] = useState<"qrError" | "cameraError" | "storage" | "loadError" | "limit" | null>(null);
   const [version, setVersion] = useState<{ device: number; supported: number[] } | null>(null);
+  // How many computers this phone knows: none shows the first screen, any shows the list. Null while it is read.
+  const [known, setKnown] = useState<number | null>(null);
+  const [settings, setSettings] = useState(false);
+  useEffect(() => { void hostStore().list().then((hosts) => setKnown(hosts.length), () => setKnown(-1)); }, []);
   useEffect(() => {
     void pairing.then((qr) => {
       if (qr) { setPair(qr); return; }
       const host = new URLSearchParams(location.search).get("host");
-      try { if (host) setTarget(readHosts(localStorage).find((candidate) => candidate.room === host) ?? null); }
-      catch { setError("storage"); }
+      if (host) void hostStore().list().then((hosts) => setTarget(hosts.find((candidate) => candidate.room === host) ?? null)).catch(() => setError("storage"));
     }).catch(() => setError("qrError"));
     const followQr = () => {
       void takePairing().then((qr) => {
@@ -64,8 +70,10 @@ function Loader() {
       }).catch(() => setError("qrError"));
     };
     window.addEventListener("hashchange", followQr);
+    // A link that opened the app lands on the same pairing screen a scanned QR does, and waits for the person's tap.
+    const stopLinks = followNativeLinks((qr) => { setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
     if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
-    return () => window.removeEventListener("hashchange", followQr);
+    return () => { window.removeEventListener("hashchange", followQr); stopLinks(); };
   }, []);
   useEffect(() => {
     if (!target) return;
@@ -74,7 +82,7 @@ function Loader() {
     const open = async () => {
       try {
         if ("code" in target) {
-          const hosts = readHosts(localStorage);
+          const hosts = await hostStore().list();
           if (hosts.length >= MAX_HOSTS && !hosts.some((host) => host.room === target.room)) { setError("limit"); return; }
         }
         await relayReady();
@@ -118,13 +126,24 @@ function Loader() {
   </Landing>;
   if (target) return <DeviceConnecting t={t} name={target.name} error={error}
     onChoose={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }} />;
+  const demo = () => window.location.assign(`/p/${PHONE_PROTOCOL}/?demo=1`);
+  if (!adding && known === null) return <main className="min-h-full" />;
+  if (!adding && known === 0) {
+    if (settings) return <StartSettings t={t} onBack={() => setSettings(false)} />;
+    return <>
+      <FirstScreen t={t} onDemo={demo} onSettings={() => setSettings(true)}
+        // The app reads the code in its own camera view at once; a browser has the camera and paste page.
+        onScan={() => { setError(null); if (appHost()) void scanInApp(t, (qr) => setPair(qr), (failure) => setError(failure)); else setAdding(true); }} />
+      {error ? <p role="alert" className="px-xl pb-lg text-center text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
+    </>;
+  }
   return <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col gap-lg px-xl">
     <h1 className="pt-lg text-headline font-semibold">hide</h1>
     {adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
       <h2 className="text-title">{t("mobile.relay.devices")}</h2>
       <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
       <div className="flex flex-col gap-xs">
-        <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={() => window.location.assign(`/p/${PHONE_PROTOCOL}/?demo=1`)}>
+        <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={demo}>
           <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
         </Button>
         <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>

@@ -5,7 +5,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { stop, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
-import { SettingsSheet, PRIVACY_POLICY_URL } from "./SettingsSheet";
+import { SettingsScreen } from "./SettingsScreen";
+import { PRIVACY_POLICY_URL } from "./SettingsParts";
 import { setTab, openMission, usePhone } from "./store";
 import { blockNetwork, type NetworkGuard } from "./demoNetworkGuard";
 
@@ -83,14 +84,22 @@ describe("the sample host's screens", () => {
   });
 });
 
-describe("the settings sheet", () => {
+describe("the Settings tab", () => {
   it("links to the privacy policy, opened outside the app", async () => {
-    await act(async () => root.render(<><PhoneLanguageBoundary /><SettingsSheet defaultOpen /></>));
-    const link = document.querySelector<HTMLAnchorElement>("[data-phone-privacy-link]")!;
+    await act(async () => root.render(<><PhoneLanguageBoundary /><SettingsScreen /></>));
+    const link = document.querySelector<HTMLAnchorElement>("[data-phone-setting=privacy]")!;
     expect(link.textContent).toBe("Privacy policy");
     expect(link.getAttribute("href")).toBe("https://withhide.dev/privacy");
     expect(PRIVACY_POLICY_URL).toBe(link.href);
     expect(link.target).toBe("_blank");
     expect(link.rel).toContain("noopener");
+  });
+
+  it("shows the sample computer with a way out that only leaves the demo, and no notification control", async () => {
+    await act(async () => { usePhone.setState({ demo: true }); root.render(<><PhoneLanguageBoundary /><SettingsScreen /></>); });
+    expect(document.querySelector("[data-phone-demo-panel]")).not.toBeNull();
+    expect(document.querySelector("[data-phone-demo-sample]")).not.toBeNull();
+    expect(document.querySelector("[data-phone-demo-exit], [data-phone-demo-connect]")).not.toBeNull();
+    await act(async () => usePhone.setState({ demo: false }));
   });
 });

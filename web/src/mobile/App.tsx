@@ -3,7 +3,7 @@ import { OfflineText } from "./OfflineText";
 // B30, B38): pairing, the refused and unpaired guidance, and the list; the
 // detail is `Detail.tsx`. Every value comes from the store the socket writes.
 
-import { BellIcon, ChevronRightIcon, LaptopIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
+import { LaptopIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
@@ -14,7 +14,7 @@ import { MissionDetail } from "./MissionDetail";
 import { MissionsScreen } from "./MissionsScreen";
 import { PrDetail } from "./PrDetail";
 import { PrsScreen } from "./PrsScreen";
-import { SettingsSheet } from "./SettingsSheet";
+import { SettingsScreen } from "./SettingsScreen";
 import { StartSheet } from "./StartSheet";
 import { TabBar } from "./TabBar";
 import {
@@ -23,9 +23,8 @@ import {
   headerLine,
   machinesName,
   noticeText,
-  notificationRow,
 } from "./protocol";
-import { closeStaleNotifications, enableNotifications, permission, pushSupported } from "./push";
+import { closeStaleNotifications } from "./push";
 import { patch, usePhone } from "./store";
 import { appHost } from "./appHost";
 import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
@@ -63,6 +62,7 @@ function Screens() {
   if (detail) return <Detail onBack={closeDetail} />;
   if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;
   if (tab === "prs") return prOpen ? <PrDetail /> : <PrsScreen />;
+  if (tab === "settings") return <SettingsScreen />;
   return <ListScreen />;
 }
 
@@ -116,9 +116,9 @@ function standalone(): boolean {
 
 /**
  * `hosted` and `picker` are the gallery's: the list as a hosted phone draws it,
- * with the device sheet already open on the Mac it names, or the settings sheet open. A phone passes none.
+ * with the device sheet already open on the Mac it names. A phone passes none.
  */
-export function ListScreen({ hosted = hostedPhone(), picker, settingsOpen = false }: { hosted?: boolean; picker?: { room: string; open: boolean }; settingsOpen?: boolean }) {
+export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolean; picker?: { room: string; open: boolean } }) {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const otherPhones = usePhone((s) => s.otherPhones);
@@ -139,7 +139,6 @@ export function ListScreen({ hosted = hostedPhone(), picker, settingsOpen = fals
         <div className="flex items-center justify-between pt-lg">
           <h1 className="text-headline font-semibold text-foreground">hide</h1>
           <div className="flex items-center">
-            <SettingsSheet defaultOpen={settingsOpen} />
             <button
               type="button"
               aria-label={t("mobile.start.title")}
@@ -166,7 +165,6 @@ export function ListScreen({ hosted = hostedPhone(), picker, settingsOpen = fals
       ) : null}
       {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
-      {connected ? <NotificationRow /> : null}
       <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
         {groups && groups.length === 0 ? (
           <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-empty="true">
@@ -211,39 +209,5 @@ function InstallHint() {
         <XIcon aria-hidden="true" className="size-(--size-icon)" />
       </Button>
     </div>
-  );
-}
-
-/** Turn on notifications, the Home Screen first, or the OS setting that is off (B30). */
-function NotificationRow() {
-  const { t } = useInterfaceTranslation();
-  const pushMode = usePhone((s) => s.pushMode);
-  const notifications = usePhone((s) => s.notifications);
-  const [asking, setAsking] = useState(false);
-  const row = notificationRow({ pushMode, notifications, permission: permission(), supported: pushSupported() });
-  if (!row) return null;
-  if (row === "enable") {
-    return (
-      <Button
-        variant="ghost"
-        disabled={asking}
-        data-phone-notifications="enable"
-        className="mx-xl mt-sm h-auto min-h-(--size-touch-target) justify-start gap-sm whitespace-normal px-none text-left text-subhead font-normal text-subtle-foreground"
-        onClick={() => {
-          setAsking(true);
-          void enableNotifications().finally(() => setAsking(false));
-        }}
-      >
-        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        <span className="flex-1">{t("mobile.notifications.enable")}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />
-      </Button>
-    );
-  }
-  return (
-    <p className="mx-xl mt-sm flex items-start gap-sm py-sm text-body leading-relaxed text-muted-foreground" data-phone-notifications={row}>
-      <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
-      <span>{row === "denied" ? t("mobile.notifications.denied") : t("mobile.notifications.installFirst")}</span>
-    </p>
   );
 }

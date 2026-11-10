@@ -3111,16 +3111,35 @@ A press repeated, from a slow connection or a second tap, reaches GitHub once; t
 Away from the Mac the page keeps its last content dimmed under the unreachable line, and `머지`, `맡기기` and `다시 확인` are off.
 Left out on purpose: a `초록 N개 머지` chip on the list and the `머지 순서` line on a page, since merging many pull requests in order is the lead's and the desktop's job (D-12).
 
-The list's header carries a gear beside 에이전트 시작; it opens a bottom sheet, 설정, with two choices that belong to that phone alone.
+The phone's bottom bar has four places, 에이전트, 미션, PR and 설정, and the last is the Settings tab (`web/src/mobile/SettingsScreen.tsx`).
+It replaces the gear and its sheet that the list's header carried, and it reads top to bottom as the computers this phone is connected to, 알림, 표시, 정보.
+연결된 컴퓨터 lists each paired computer with its state and counts; a press switches to it, `다른 기기 연결` opens the QR scan and paste page, and the trash on a row asks `컴퓨터 이름: 이 폰에서 연결을 지울까요? 다시 연결하려면 새 QR이 필요해요.` before it removes the computer from this phone.
+알림 shows only what works where the phone runs: in a browser it is `알림 켜기`, or the one line that says why it cannot be turned on (the Home Screen first, or the system setting that is off), and in the iOS app it is the one line `이 앱에서는 아직 알림을 켤 수 없어요`, with no control that does nothing.
+표시 has 언어 and 화면 as one-line values that open a bottom sheet to choose from, and under them `이 폰에만 저장돼요`.
 언어 offers Mac 따라가기, 한국어, English, 简体中文 and 日本語, each language named in itself; 화면 offers 시스템 따라가기, 밝게 and 어둡게.
 Both start on the follow choice: Mac 따라가기 keeps the rule the phone already had (the core's language from the last agents frame, else the phone's own language), and 시스템 따라가기 keeps the phone's light or dark setting.
-A choice applies as soon as it is tapped, with no reload, and the sheet says `이 폰에만 저장돼요`.
+A choice applies as soon as it is tapped, with no reload, and in the iOS app a 화면 choice also sets the app's own light or dark style, so its status bar and keyboard follow.
 It is kept in that browser's storage (one key, `hide.phone.settings`), so it survives a reload, and the start page that lists the paired devices reads the same key, so its first paint is already in the chosen language and theme.
 Nothing is sent to the Mac: the desktop's language and mode, the phone protocol and the core are unchanged, and a different Mac's phone settings never move this phone's choice.
-When the browser refuses the write, or its storage cannot be read, the page still works: a read failure shows the follow choices, a refused write keeps the choice for this visit and the sheet says `이 폰에 저장하지 못했어요. 앱을 닫으면 원래대로 돌아가요.`
+When the browser refuses the write, or its storage cannot be read, the page still works: a read failure shows the follow choices, a refused write keeps the choice for this visit and the note says `이 폰에 저장하지 못했어요. 앱을 닫으면 원래대로 돌아가요.`
 The notification words follow the language in effect, so an explicit language also changes the words of the next notification.
-The sheet ends with `개인정보 처리방침`, a link to `https://withhide.dev/privacy` that opens outside the app.
+정보 holds `개인정보 처리방침` (`https://withhide.dev/privacy`) and `지원` (`https://withhide.dev/support`), which open outside the app, then, in the iOS app, the app's version and build, and the phone protocol number.
 The app follows the phone's light or dark choice, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
+In the iOS app every screen keeps clear of the notch, the home indicator and the keyboard, the page does not rubber-band or zoom, and a press on a control selects nothing and opens no callout.
+
+The start page with no computer connected is a first screen that says what to do, in order (`web/src/mobile/StartScreens.tsx`).
+It has `hide` with a gear at the right, the title `컴퓨터를 연결하세요`, one line (`Hide는 내 컴퓨터에서 도는 에이전트를 폰에서 보고 답하는 앱이에요.`) and three steps: `컴퓨터에 Hide 설치` (`맥, 윈도우, 리눅스` and a `withhide.dev` link that opens outside the app), `설정 > 모바일 열기` (`컴퓨터의 Hide에서 QR이 보여요`) and `아래 버튼으로 QR 스캔`.
+At the bottom is the big `QR 스캔` button, and under it `체험해 보기` with its one line.
+With one computer or more, or a computer whose connection was refused, the page is the list of computers it was.
+In the iOS app `QR 스캔` opens the camera at once; in a browser, which has no native scanner, it opens the scan and paste page, where the browser's own camera or a pasted link connects.
+The gear opens the same display and about rows as the Settings tab, with `연결한 컴퓨터가 아직 없어요` under 연결된 컴퓨터, and a back arrow returns to the first screen; a language chosen there applies at once.
+The demo's own Settings tab is unchanged.
+
+The iOS app's scanner is a full-screen camera view (`HideScannerPlugin.swift`) with the title `QR 코드 스캔`, the line `틀 안에 QR을 맞추면 바로 읽어요`, a frame with the rest dimmed (only what is inside the frame is read), `QR은 어디 있나요? 컴퓨터의 Hide > 설정 > 모바일` at the bottom, and a close button at the top right.
+The camera permission is asked when `QR 스캔` is pressed, never at launch.
+Only a Hide pairing link ends the scan; any other QR code is ignored and the camera keeps looking.
+When the camera is refused, or cannot be opened (another app holds it), the view is not black: it says `카메라를 쓸 수 없어요` with `QR을 읽으려면 카메라 권한이 필요해요. iPhone 설정에서 Hide의 카메라를 켜 주세요.` and a `설정 열기` button that opens the app's page in iPhone Settings, and the close button is there in every state.
+The words are sent by the page, in the language and with the catalog it shows, so the scanner never disagrees with the page.
 
 Directional terminal focus stays within the keyboard owner's drawn tab and Agent area, on local and remote devices.
 It selects the pane sharing the requested edge, preferring the greatest shared edge, then the closest perpendicular centre, then layout order.

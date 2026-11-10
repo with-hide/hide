@@ -35,6 +35,8 @@ async function build() {
   await mkdir(join(dist, 'p/5'), { recursive: true });
   await writeFile(join(dist, 'index.html'), page('loader'));
   await writeFile(join(dist, 'sw.js'), 'worker');
+  await mkdir(join(dist, '.well-known'), { recursive: true });
+  await writeFile(join(dist, '.well-known/apple-app-site-association'), '{}');
   await writeFile(join(dist, 'p/5/index.html'), page('five-built'));
   await writeFile(join(dist, 'protocols.json'), '[5]');
   return dist;
@@ -50,6 +52,13 @@ describe('the folder the app serves', () => {
     expect(await readFile(join(out, 'p/5/index.html'), 'utf8')).toContain('five-built');
     expect(await readFile(join(out, 'p/3/assets/a-1.js'), 'utf8')).toBe('old script');
     await expect(readFile(join(out, 'sw.js'))).rejects.toThrow();
+    // The file iOS reads from the hosted site to open the app is the site's, not the app's.
+    await expect(readFile(join(out, '.well-known/apple-app-site-association'))).rejects.toThrow();
+  });
+
+  it('refuses a phone build made from another revision than the source it is assembled with', async () => {
+    await expect(assemble({ dist: await build(), out: join(root, 'www'), pins: pins(), expected: 6, fetcher: site() })).rejects.toThrow(/speaks protocol 5 but this source speaks 6/);
+    expect(await assemble({ dist: await build(), out: join(root, 'www'), pins: pins(), expected: 5, fetcher: site() })).toEqual([3, 5]);
   });
 
   it('stops when a pinned file differs, even when the site\'s own inventory agrees with the changed file', async () => {
