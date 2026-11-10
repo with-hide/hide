@@ -275,7 +275,7 @@ jobs:
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          args=()
+          args=(--trace retain-on-failure)
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
           if [ -n "$SPECS" ]; then
             # The repeat lane: these spec files, `REPEAT` times each, no retry

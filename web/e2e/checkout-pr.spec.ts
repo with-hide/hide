@@ -10,6 +10,7 @@
 // and Dark captures land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test } from "@playwright/test";
+import "./checkout-hover-probe";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
