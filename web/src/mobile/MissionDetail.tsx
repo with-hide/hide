@@ -45,6 +45,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
   const open = missionOpen(mission);
   const { done, total } = progress(mission);
   const steps = missionSteps(mission);
+  const ahead = mission.status === "running" ? gatesAhead(mission).filter((node) => node.status === "planned") : [];
   const foldKey = `done:${mission.id}`;
   const doneOpen = usePhone((s) => s.missionFolds[foldKey] === true);
   const stateWord = open ? (mission.conductor.present ? t("mobile.mission.conductor") : t("mission.noConductor")) : t(STATE_PILL[mission.status]);
@@ -101,6 +102,14 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
             <ul className="divide-y divide-border border-b border-border">
               {steps.hold.map((node) => <Step key={node.key} mission={mission} node={node} kind="hold" />)}
               {steps.working.map((node) => <Step key={node.key} mission={mission} node={node} kind="working" />)}
+            </ul>
+          </section>
+        ) : null}
+        {ahead.length > 0 ? (
+          <section className="pt-lg" data-phone-mission-ahead="true">
+            <h2 className="pb-xs text-body text-muted-foreground">{t("mission.gate.planTitle", { count: ahead.length })}</h2>
+            <ul className="divide-y divide-border border-b border-border">
+              {ahead.map((node) => <Step key={node.key} mission={mission} node={node} kind="ahead" />)}
             </ul>
           </section>
         ) : null}
@@ -310,7 +319,7 @@ function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connecte
  * waits on or follows and its worker; pressing it opens the worker's detail
  * when the phone's list holds that agent.
  */
-function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissionNode; kind: "hold" | "working" | "done" }) {
+function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissionNode; kind: "hold" | "working" | "done" | "ahead" }) {
   const { t } = useInterfaceTranslation();
   const mark = kind === "hold" ? "turn" : nodeMark(node, null);
   const detail = stepLine(mission, node, kind, t);
@@ -374,7 +383,8 @@ function StepPr({ number, state }: { number: number; state: PrState | null | und
 }
 
 /** What a step's second line says besides its pull request (B36): why it waits, what it follows, where its work stands, or how it ended. */
-function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | "working" | "done", t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | "working" | "done" | "ahead", t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+  if (kind === "ahead") return t("mission.gate.when");
   if (kind === "hold") {
     const reason = holdReason(mission, node, workerOf);
     switch (reason?.kind) {

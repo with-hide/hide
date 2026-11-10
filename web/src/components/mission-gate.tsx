@@ -49,16 +49,16 @@ export function GatePlanList({ nodes, onSelect, className }: { nodes: readonly {
       </h3>
       <ul className="flex min-w-0 flex-col gap-xxs">
         {nodes.map((node) => (
-          <li key={node.key} className="flex min-w-0 flex-wrap items-center gap-x-xs text-body" data-mission-gate-row={node.key}>
+          <li key={node.key} className="flex min-w-0 flex-col items-start gap-xxs text-body sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-xs" data-mission-gate-row={node.key}>
             {onSelect ? (
               <Button variant="secondary" size="sm" onClick={() => onSelect(node.key)} title={node.title} className="max-w-(--size-flow-title) shrink-0 justify-start" data-mission-gate-node={node.key}>
                 <span className="min-w-0 truncate">{node.title}</span>
               </Button>
             ) : (
-              <span className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-secondary px-xs text-caption" data-mission-gate-node={node.key}>{node.title}</span>
+              <span className="min-w-0 break-keep rounded-xs bg-secondary px-xs text-caption wrap-anywhere" data-mission-gate-node={node.key}>{node.title}</span>
             )}
-            <span className="min-w-0 flex-1 truncate font-semibold" title={node.gate?.look}>{node.gate?.look}</span>
-            <span className="shrink-0 truncate text-caption text-muted-foreground" data-mission-gate-when="true">{t("mission.gate.when")}</span>
+            <span className="min-w-0 break-keep font-semibold wrap-anywhere sm:flex-1">{node.gate?.look}</span>
+            <span className="min-w-0 break-keep text-caption text-muted-foreground wrap-anywhere" data-mission-gate-when="true">{t("mission.gate.when")}</span>
           </li>
         ))}
       </ul>

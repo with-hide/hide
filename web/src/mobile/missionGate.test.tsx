@@ -94,7 +94,7 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
     mission("m-run", { created_at_unix_ms: 900, nodes: [
       node("a", "done", { gate: gate("passed", "the cause written down", { via: "phone", said: "Go on" }) }),
       node("b", "working", { gate: gate("open", "two screen drafts", { since_unix_ms: since, long_wait_at_unix_ms: since + 24 * HOUR }) }),
-      node("c", "working", { gate: gate("ahead", "the merged screen") }),
+      node("c", "planned", { gate: gate("ahead", "the merged screen") }),
     ] }),
   ];
   const { container, click, unmount } = await connect(items);
@@ -121,6 +121,32 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
     await click('[data-phone-fold^="done:"]');
     expect(container.querySelector('[data-phone-step="a"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("passed");
     expect(container.querySelector('[data-phone-step="a"] [data-phone-step-gate-via="phone"]')?.textContent).toBe("Answered on the phone · “Go on”");
+  } finally {
+    await unmount();
+  }
+});
+
+it("keeps the later planned review visible after a two-step plan starts, without adding a turn", async () => {
+  const planned = mission("m-start", { status: "planning", started_at_unix_ms: null, nodes: [
+    node("first", "planned"),
+    node("later", "planned", { depends_on: ["first"], gate: gate("ahead", "the finished screen") }),
+  ] });
+  const { container, click, serve, unmount } = await connect([planned]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-start"]');
+    expect(container.querySelector("[data-mission-gate-row]")?.textContent).toContain("the finished screen");
+    await serve({ type: "missions", failed: false, items: [{ ...planned, status: "running", started_at_unix_ms: 2_000, nodes: [
+      { ...planned.nodes[0]!, status: "working" },
+      planned.nodes[1]!,
+    ] }] });
+    const later = container.querySelector('[data-phone-step="later"]');
+    expect(later?.textContent).toContain("Step later");
+    expect(later?.querySelector('[data-node-gate="ahead"]')?.textContent).toBe("the finished screen");
+    expect(container.querySelector('[data-phone-mission-now]')?.contains(later)).toBe(false);
+    await click('[data-phone-back="missions"]');
+    expect(container.querySelector('[data-phone-tab="missions"]')!.getAttribute("data-phone-tab-count")).toBeNull();
+    expect(container.querySelector('[data-phone-mission="m-start"] [data-mission-row-gates]')?.textContent).toBe("1");
   } finally {
     await unmount();
   }
