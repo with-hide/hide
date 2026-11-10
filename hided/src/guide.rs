@@ -24,6 +24,8 @@ mod tests {
         assert_eq!(TEXT.matches(SESSION_RULES).count(), 1);
         let guide = text();
         assert_eq!(guide.matches(hide_agent_hooks::PURPOSE_CONTEXT).count(), 1);
+        // A pane pasted from another machine is read by its full address.
+        assert!(guide.contains("remote:<device id>:pane:<id>"));
         // B9: the top-level guide routes planning to missions; workers keep
         // their node steps in the mission guide.
         assert!(!guide.contains("hide task help"));

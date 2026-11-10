@@ -25,6 +25,8 @@ Target names and pane IDs resolve against the daemon's current observations.
 Each machine's engine numbers its panes, and an agent learns the numbers from its own machine's engine, so a bare pane ID (`w1:p2`) names the pane on the caller's own machine: a device agent's `w1:p2` is that device's pane, and the core's own agent's `w1:p2` is the core's.
 A bare pane ID never reaches a pane on another machine, even when only that machine has the number: the command is refused `target_unavailable`.
 A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
+The reference the shell copies for a device's pane (Copy name and ID, a dragged agent row, a pane's `@`) carries that full address, so an agent anywhere can read, type into or write to it as written; a pane of the caller's machine is copied bare.
+The session-start text and `hide guide` (`PURPOSE_CONTEXT`) say so, and the `pane_unavailable` and `agent_unavailable` refusals name the full address in their `next_action`.
 The same reading applies to the pane IDs of `--actor` and `--observer`.
 A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
 Each refusal's `next_action` says so: `target_ambiguous` points to the registration ID from `hide agent list` or the full address, and `target_unavailable` says a bare pane ID names a pane on the caller's own machine and points to the name or registration ID; neither is told to retry.
