@@ -2,7 +2,7 @@
 // commit 2ecf19a), src/worktree.rs (`branch_to_path_slug`).
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
-// Changed by Hide: an empty slug falls back to `worktree` rather than Herdr's
+// Changed by Hide: an empty slug falls back to `worktree`
 // branch prefix; the rest of this file is Hide's own.
 
 //! The worktrees of the core's own engine (PRD engine-bundle-3-core-owns
