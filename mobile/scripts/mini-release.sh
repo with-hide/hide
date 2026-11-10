@@ -164,6 +164,14 @@ logged "archive" xcodebuild archive -project "$project/App.xcodeproj" -scheme Ap
     -clonedSourcePackagesDirPath "$packages" CODE_SIGNING_ALLOWED=NO \
     MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build"
 
+# An archive made with signing off carries none of the project's entitlements, and the export only keeps what the archive
+# holds, so the entitlements file the project names is put into the archived app first (an ad hoc signature, which the
+# export replaces with the distribution one; no certificate or keychain is involved).
+entitlements=$project/App/App.entitlements
+[[ -f "$entitlements" ]] || die "the project's App.entitlements is missing"
+archived=$work/App.xcarchive/Products/Applications/App.app
+logged "embed entitlements" codesign --force --sign - --entitlements "$entitlements" --timestamp=none "$archived"
+
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +72,32 @@ describe('what the project builds for the store', () => {
   it('leaves the export compliance answer to the operator, and ships a privacy manifest in the app', () => {
     expect(read('ios/App/App/Info.plist')).not.toMatch(/ITSAppUsesNonExemptEncryption|ITSEncryptionExportComplianceCode/);
     expect(read('ios/App/App.xcodeproj/project.pbxproj')).toContain('PrivacyInfo.xcprivacy in Resources');
+  });
+});
+
+// Apple's required-reason API categories, and the Swift each one is called through. A category the app's own sources
+// reach must be declared in PrivacyInfo.xcprivacy; Apple's validation at upload is the final judge, this catches it earlier.
+const REQUIRED_REASON_APIS = {
+  NSPrivacyAccessedAPICategoryUserDefaults: /\bUserDefaults\b/,
+  NSPrivacyAccessedAPICategoryFileTimestamp: /\b(creationDate|modificationDate|fileModificationDate|NSFileCreationDate|NSFileModificationDate|contentModificationDateKey|creationDateKey)\b|\b(f|l)?stat\(/,
+  NSPrivacyAccessedAPICategorySystemBootTime: /\b(systemUptime|mach_absolute_time)\b/,
+  NSPrivacyAccessedAPICategoryDiskSpace: /\b(volumeAvailableCapacity\w*|systemFreeSize|NSFileSystemFreeSize|statfs|statvfs|getattrlist)\b/,
+  NSPrivacyAccessedAPICategoryActiveKeyboards: /\bactiveInputModes\b/,
+};
+
+describe('the privacy manifest', () => {
+  const sources = execFileSync('git', ['ls-files', '*.swift'], { cwd: join(mobile, 'ios'), encoding: 'utf8' })
+    .split('\n').filter((file) => file && !/(^|\/)(Tests|AppTests)\//.test(file));
+  const manifest = read('ios/App/App/PrivacyInfo.xcprivacy');
+  const declared = new Set(manifest.match(/NSPrivacyAccessedAPICategory\w+/g) ?? []);
+
+  it('declares every required-reason API category the app\'s own Swift reaches, and no other', () => {
+    const reached = new Set();
+    for (const file of sources) {
+      const text = readFileSync(join(mobile, 'ios', file), 'utf8').replace(/\/\/.*$/gm, '');
+      for (const [category, pattern] of Object.entries(REQUIRED_REASON_APIS)) if (pattern.test(text)) reached.add(category);
+    }
+    expect([...declared].sort()).toEqual([...reached].sort());
   });
 });
 
