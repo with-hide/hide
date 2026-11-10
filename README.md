@@ -39,52 +39,6 @@ It works with the agent CLIs you already signed in to: no new API key, no hosted
   <kbd>Claude Code</kbd> <kbd>Codex</kbd> <kbd>Antigravity</kbd> <kbd>OpenCode</kbd> <kbd>Grok</kbd> <kbd>Pi</kbd> <kbd>omp</kbd>
 </p>
 
-## Install
-
-[withhide.dev](https://withhide.dev) picks the installer for your system, or download it from the [latest release](https://github.com/with-hide/hide/releases/latest):
-
-| System | Package | First launch |
-| --- | --- | --- |
-| macOS 14+, Apple Silicon | `hide-v<version>-macos-arm64.dmg` | Drag hide to Applications; it opens like any app |
-| Windows x64 | `hide-v<version>-windows-x64-setup.exe` | Installs for you only; unsigned, so SmartScreen asks once: **More info**, **Run anyway** |
-| Debian, Ubuntu (x64) | `hide-v<version>-linux-x64.deb` | `sudo apt install ./hide-v<version>-linux-x64.deb`, then hide is in the app menu |
-| Fedora and other rpm systems (x64) | `hide-v<version>-linux-x64.rpm` | `sudo dnf install ./hide-v<version>-linux-x64.rpm`, then hide is in the app menu |
-
-Check the installer against its `.sha256` file before you open it.
-After that one install, hide updates itself.
-Install and sign in to the agent CLIs you want hide to start; hide never asks for their credentials.
-hide runs its own terminals: each pane lives in a small holder process that keeps running across an app restart.
-
-[Install hide](docs/INSTALL.md) covers checksums, Gatekeeper, each system's steps, updates, uninstalling and troubleshooting, and [What each system supports](docs/INSTALL.md#what-each-system-supports) records where each system stands.
-
-<details>
-<summary><strong>Build from source</strong></summary>
-
-<br>
-
-You need Rust with 2024 edition support, Node.js 22.12.0 or later and pnpm 10.
-
-```sh
-git clone https://github.com/with-hide/hide.git
-cd hide
-pnpm install --frozen-lockfile
-pnpm --dir desktop package
-```
-
-On macOS this writes an ad-hoc signed `hide.app` under `desktop/out/`, and the dmg, the zip the updater reads, their SHA-256 files and the update file under `desktop/out/release/`; install the app with:
-
-```sh
-sudo /usr/bin/ditto --rsrc --extattr --qtn desktop/out/hide-darwin-arm64/hide.app /Applications/hide.app
-open /Applications/hide.app
-```
-
-A local build is named after the newest release before it and its commit, such as `1.1.1-main.6afb9543`; leave `HIDE_VERSION` unset, since it is the release workflow's switch.
-Windows and Linux source builds are in [Build and install from source](docs/INSTALL.md#build-and-install-from-source).
-
-To look at hide in a browser without installing the app, `bash scripts/web-dev.sh` builds the daemon, starts it and opens the address ([Try hide in a browser](docs/INSTALL.md#try-hide-in-a-browser)).
-
-</details>
-
 ## Features
 
 <table>
@@ -263,6 +217,52 @@ hide device add workbox                                               # another 
 ```
 
 `hide guide` prints how an agent works inside hide, and `hide --help` lists every command.
+
+## Install
+
+[withhide.dev](https://withhide.dev) picks the installer for your system, or download it from the [latest release](https://github.com/with-hide/hide/releases/latest):
+
+| System | Package | First launch |
+| --- | --- | --- |
+| macOS 14+, Apple Silicon | `hide-v<version>-macos-arm64.dmg` | Drag hide to Applications; it opens like any app |
+| Windows x64 | `hide-v<version>-windows-x64-setup.exe` | Installs for you only; unsigned, so SmartScreen asks once: **More info**, **Run anyway** |
+| Debian, Ubuntu (x64) | `hide-v<version>-linux-x64.deb` | `sudo apt install ./hide-v<version>-linux-x64.deb`, then hide is in the app menu |
+| Fedora and other rpm systems (x64) | `hide-v<version>-linux-x64.rpm` | `sudo dnf install ./hide-v<version>-linux-x64.rpm`, then hide is in the app menu |
+
+Check the installer against its `.sha256` file before you open it.
+After that one install, hide updates itself.
+Install and sign in to the agent CLIs you want hide to start; hide never asks for their credentials.
+hide runs its own terminals: each pane lives in a small holder process that keeps running across an app restart.
+
+[Install hide](docs/INSTALL.md) covers checksums, Gatekeeper, each system's steps, updates, uninstalling and troubleshooting, and [What each system supports](docs/INSTALL.md#what-each-system-supports) records where each system stands.
+
+<details>
+<summary><strong>Build from source</strong></summary>
+
+<br>
+
+You need Rust with 2024 edition support, Node.js 22.12.0 or later and pnpm 10.
+
+```sh
+git clone https://github.com/with-hide/hide.git
+cd hide
+pnpm install --frozen-lockfile
+pnpm --dir desktop package
+```
+
+On macOS this writes an ad-hoc signed `hide.app` under `desktop/out/`, and the dmg, the zip the updater reads, their SHA-256 files and the update file under `desktop/out/release/`; install the app with:
+
+```sh
+sudo /usr/bin/ditto --rsrc --extattr --qtn desktop/out/hide-darwin-arm64/hide.app /Applications/hide.app
+open /Applications/hide.app
+```
+
+A local build is named after the newest release before it and its commit, such as `1.1.1-main.6afb9543`; leave `HIDE_VERSION` unset, since it is the release workflow's switch.
+Windows and Linux source builds are in [Build and install from source](docs/INSTALL.md#build-and-install-from-source).
+
+To look at hide in a browser without installing the app, `bash scripts/web-dev.sh` builds the daemon, starts it and opens the address ([Try hide in a browser](docs/INSTALL.md#try-hide-in-a-browser)).
+
+</details>
 
 ## Start with one task
 
