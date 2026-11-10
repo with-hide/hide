@@ -93,7 +93,7 @@
             <li>A security problem: report it privately through <a href="https://github.com/with-hide/hide/security/advisories/new">a security advisory</a>. Do not open a public issue for it.</li>
             <li>Anything else, including privacy questions: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a>.</li>
           </ul>
-          <p>When you report a problem, the diagnostic log helps. It is a file on your computer, under hide's state folder in <code>~/.hide/Logs</code> (on Windows, your home folder's <code>.hide\Logs</code>). It records what hide itself did and is never uploaded. Read it before you attach it, and take out anything you would rather not share.</p>
+          <p>When you report a problem, the diagnostic log helps. It is a file on your computer, under hide's state folder in <code>~/.hide/state/Logs</code> (on Windows, <code>.hide\state\Logs</code> in your user folder). The desktop app's window has its own log, <code>desktop.log</code>, in its <code>logs</code> folder inside <code>hide-desktop</code> (<code>~/Library/Application Support/hide-desktop</code> on macOS, <code>%APPDATA%\hide-desktop</code> on Windows, <code>~/.config/hide-desktop</code> on Linux). Both record what hide itself did and are never uploaded. Read them before you attach it, and take out anything you would rather not share.</p>
           <p>What each part of hide sends is on the <a href="./privacy">privacy page</a>.</p>
 
           <h3>Remove a paired phone</h3>
@@ -124,7 +124,7 @@
             </details>
             <details id="statistics">
               <summary>How do I stop the desktop app sending usage statistics?</summary>
-              <p>Turn off <strong>Share usage statistics</strong> in <strong>Settings › Privacy</strong>. Wait no longer than whatever is already on its way; nothing further is sent. The <a href="./privacy">privacy page</a> lists exactly what is sent when it is on.</p>
+              <p>Turn off <strong>Share usage statistics</strong> in <strong>Settings › Privacy</strong>. Only a request already on its way may still arrive; nothing further is sent. The <a href="./privacy">privacy page</a> lists exactly what is sent when it is on.</p>
             </details>
           </div>
         </section>
@@ -166,7 +166,7 @@
             <li>보안 문제는 <a href="https://github.com/with-hide/hide/security/advisories/new">보안 권고</a>로 비공개로 알려 주세요. 공개 이슈로 열지 마세요.</li>
             <li>그 밖의 일과 개인정보 관련 문의: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a>.</li>
           </ul>
-          <p>문제를 알릴 때는 진단 로그가 도움이 됩니다. 사용자의 컴퓨터에 있는 hide 상태 폴더의 <code>~/.hide/Logs</code>(Windows에서는 사용자 폴더의 <code>.hide\Logs</code>)에 있는 파일입니다. hide가 한 일만 적히며 어디로도 올라가지 않습니다. 첨부하기 전에 읽어 보고, 나누고 싶지 않은 내용은 지우세요.</p>
+          <p>문제를 알릴 때는 진단 로그가 도움이 됩니다. 사용자의 컴퓨터에 있는 hide 상태 폴더의 <code>~/.hide/state/Logs</code>(Windows에서는 사용자 폴더의 <code>.hide\state\Logs</code>)에 있는 파일입니다. 데스크톱 앱의 창에는 자체 로그 <code>desktop.log</code>가 <code>hide-desktop</code> 안의 <code>logs</code> 폴더에 따로 있습니다(macOS는 <code>~/Library/Application Support/hide-desktop</code>, Windows는 <code>%APPDATA%\hide-desktop</code>, Linux는 <code>~/.config/hide-desktop</code>). 둘 다 hide가 한 일만 적히며 어디로도 올라가지 않습니다. 첨부하기 전에 읽어 보고, 나누고 싶지 않은 내용은 지우세요.</p>
           <p>hide의 각 부분이 무엇을 보내는지는 <a href="./privacy">개인정보 처리방침</a>에 있습니다.</p>
 
           <h3>연결한 폰 지우기</h3>
