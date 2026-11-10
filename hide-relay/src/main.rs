@@ -15,15 +15,6 @@ fn log(event: Event) {
     }
 }
 
-fn event(name: &'static str) -> Event {
-    Event {
-        event: name,
-        room: None,
-        size: None,
-        cap: None,
-    }
-}
-
 /// Apple's `.p8` and its ids, read once at start. A key that is missing, wide
 /// or unreadable stops the relay rather than serving with push quietly off
 /// (`docs/RELAY_PROTOCOL.md`, Push relay).
@@ -60,24 +51,19 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         }
         Err(event) => {
-            log(Event {
-                event,
-                room: None,
-                size: None,
-                cap: None,
-            });
+            log(Event::new(event, None));
             return std::process::ExitCode::FAILURE;
         }
     };
     let apns = match config.apns.as_ref().map(apns).transpose() {
         Ok(apns) => apns,
         Err(name) => {
-            log(event(name));
+            log(Event::new(name, None));
             return std::process::ExitCode::FAILURE;
         }
     };
     let Ok(listener) = tokio::net::TcpListener::bind(config.listen).await else {
-        log(event("bind_failed"));
+        log(Event::new("bind_failed", None));
         return std::process::ExitCode::FAILURE;
     };
     let started = std::time::Instant::now();
@@ -89,19 +75,9 @@ async fn main() -> std::process::ExitCode {
         apns,
     )
     .expect("valid production limits");
-    log(Event {
-        event: "server_started",
-        room: None,
-        size: None,
-        cap: None,
-    });
+    log(Event::new("server_started", None));
     if relay.serve(listener, shutdown()).await.is_err() {
-        log(Event {
-            event: "server_failed",
-            room: None,
-            size: None,
-            cap: None,
-        });
+        log(Event::new("server_failed", None));
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS

@@ -106,7 +106,9 @@ Clients own reconnect backoff and application intent deduplication; relay restar
 
 ### Logs and deployment boundary
 
-The binary writes JSON lines to stderr with only `event`, optional validated `room` hash, optional byte `size`, and optional `cap` name.
+The binary writes JSON lines to stderr with only `event`, optional byte `size`, and optional `cap` name.
+No line names a computer or a phone: not the room hash, an address, a key or a push token, so a log cannot tell which computer a line belongs to or link two lines to one computer.
+The collector's own receive time dates each line, and `size` keeps the byte counts.
 `peer_closed` includes the bytes received for forwarding; refusals name their category and cap, never a wire object or underlying exception.
 No IP address, key, credential, URL, application payload or close reason supplied by a peer is logged.
 A disconnected stderr collector does not panic connection tasks; deployment must monitor its collector too.

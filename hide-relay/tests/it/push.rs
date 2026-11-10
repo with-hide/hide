@@ -22,7 +22,7 @@ async fn a_push_reaches_apple_with_the_fixed_headers_and_a_token_signed_by_the_c
     let key = TestKey::new();
     let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
     let mut device = fixture.socket("192.0.2.1").await;
-    register_push(&mut device, &DeviceKey::from_seed(&[71; 32])).await;
+    let hello = register_push(&mut device, &DeviceKey::from_seed(&[71; 32])).await;
     let payload = payload();
     let outcome = answer_push(
         &mut device,
@@ -60,12 +60,14 @@ async fn a_push_reaches_apple_with_the_fixed_headers_and_a_token_signed_by_the_c
     let (header, claims) = key.verify(sent.header("authorization").unwrap());
     assert_eq!(header["alg"], "ES256");
     assert_eq!(claims["iss"], "TEAMID5678");
-    // Nothing the relay logged carries the token, the ciphertext or the JWT.
+    // Nothing the relay logged carries the token, the ciphertext, the JWT or
+    // the room.
     let log = serde_json::to_string(&*fixture.events.lock().unwrap()).unwrap();
     for secret in [
         TOKEN,
         payload.as_str(),
         sent.header("authorization").unwrap(),
+        hello.room.as_str(),
     ] {
         assert!(!log.contains(secret), "the event log carries {secret}");
     }

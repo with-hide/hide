@@ -393,11 +393,6 @@ impl State {
         Ok(())
     }
 
-    /// The room a peer belongs to, for a message the peer is about to answer.
-    pub fn room_of(&self, id: u64) -> Option<String> {
-        self.room(id)
-    }
-
     pub fn set_push_limits(&mut self, push: PushLimits) {
         self.push = push;
     }
@@ -461,15 +456,11 @@ impl State {
             return Vec::new();
         };
         peer.end.send_replace(Some(end));
-        let mut event = Event::new("peer_closed", peer.role.room().map(str::to_owned), None);
+        let mut event = Event::new("peer_closed", None);
         event.size = Some(peer.bytes);
         let mut events = vec![event];
         if let End::Refused(error) = end {
-            events.push(Event::new(
-                error.event,
-                peer.role.room().map(str::to_owned),
-                error.cap,
-            ));
+            events.push(Event::new(error.event, error.cap));
         }
         match peer.role {
             Role::Pending => {}
@@ -488,7 +479,7 @@ impl State {
                     entry.phones.remove(&connection);
                     let device = entry.device;
                     let Some(capacity) = peer.departure_capacity.take() else {
-                        events.push(Event::new("departure_capacity_missing", Some(room), None));
+                        events.push(Event::new("departure_capacity_missing", None));
                         events.extend(self.remove(
                             device,
                             End::Refused(Rejection::new(
@@ -536,7 +527,7 @@ impl State {
             .into_values()
             .map(|peer| {
                 peer.end.send_replace(Some(End::Restart));
-                Event::new("peer_closed", peer.role.room().map(str::to_owned), None)
+                Event::new("peer_closed", None)
             })
             .collect()
     }

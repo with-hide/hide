@@ -62,13 +62,12 @@ impl Shared {
     }
     fn rejected(&self, id: Option<u64>, error: Rejection) {
         let state = self.state.lock().unwrap();
-        // Owner removal already logged the refusal with the room identity.
+        // Owner removal already logged the refusal.
         if id.is_some_and(|id| state.role(id).is_err()) {
             return;
         }
-        let room = id.and_then(|id| state.room(id));
         drop(state);
-        (self.events)(Event::new(error.event, room, error.cap));
+        (self.events)(Event::new(error.event, error.cap));
     }
 }
 struct Registration {
@@ -197,7 +196,7 @@ impl Relay {
         drop(listener);
         let events = self.shared.state.lock().unwrap().restart();
         self.shared.emit(events);
-        (self.shared.events)(Event::new("server_stopping", None, None));
+        (self.shared.events)(Event::new("server_stopping", None));
         let drained = timeout(SHUTDOWN_TIMEOUT, async {
             while let Some(result) = tasks.join_next().await {
                 result.map_err(|_| io::Error::other("connection_task_failed"))?;
@@ -208,7 +207,7 @@ impl Relay {
         if !matches!(drained, Ok(Ok(()))) {
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
-            (self.shared.events)(Event::new("shutdown_timeout", None, None));
+            (self.shared.events)(Event::new("shutdown_timeout", None));
             return Err(io::Error::other("shutdown_incomplete"));
         }
         result
@@ -271,13 +270,13 @@ async fn connection(stream: TcpStream, remote: IpAddr, proxy: Option<IpAddr>, sh
         .serve_connection(TokioIo::new(stream), service)
         .with_upgrades();
     if !matches!(timeout(HTTP_TIMEOUT, http).await, Ok(Ok(()))) {
-        (shared.events)(Event::new("http_failed", None, None));
+        (shared.events)(Event::new("http_failed", None));
         return;
     }
     let next = upgrade.lock().unwrap().take();
     let Some(next) = next else { return };
     let Ok(Ok(io)) = timeout(HTTP_TIMEOUT, next.on_upgrade).await else {
-        (shared.events)(Event::new("upgrade_failed", None, None));
+        (shared.events)(Event::new("upgrade_failed", None));
         return;
     };
     let config = WebSocketConfig::default()
@@ -479,29 +478,28 @@ fn push(
     request: Result<PushRequest, hide_relay_protocol::admission::PushField>,
 ) -> Result<(), Rejection> {
     let now = (shared.clock)();
-    let (room, is_device) = {
-        let state = shared.state.lock().unwrap();
-        (state.room_of(id), state.is_device(id))
-    };
-    // Only a room's device socket asks for a push; a phone socket keeps the
-    // existing closed refusal.
-    if !is_device {
-        return Err(Rejection::new(
-            Refusal::InvalidMessage,
-            "invalid_transition",
-        ));
-    }
-    let room = room.ok_or_else(|| Rejection::new(Refusal::InvalidMessage, "invalid_routing"))?;
     // Every request is counted, a malformed one included, so a room cannot
     // spend the relay without a ceiling.
-    let cap = shared.state.lock().unwrap().push_cap(&room, now);
+    let cap = {
+        let mut state = shared.state.lock().unwrap();
+        // Only a room's device socket asks for a push; a phone socket keeps
+        // the existing closed refusal.
+        if !state.is_device(id) {
+            return Err(Rejection::new(
+                Refusal::InvalidMessage,
+                "invalid_transition",
+            ));
+        }
+        let room = state.room(id).ok_or_else(invalid_routing)?;
+        state.push_cap(&room, now)
+    };
     if let Err(cap) = cap {
-        return answer_push_result(shared, id, push_id, rate_limited(shared, &room, cap));
+        return answer_push_result(shared, id, push_id, rate_limited(shared, cap));
     }
     let request = match request {
         Ok(request) => request,
         Err(field) => {
-            (shared.events)(Event::new(field_event(field), Some(room), None));
+            (shared.events)(Event::new(field_event(field), None));
             return answer_push_result(shared, id, push_id, PushOutcome::Failed);
         }
     };
@@ -513,7 +511,7 @@ fn push(
             shared,
             id,
             push_id,
-            rate_limited(shared, &room, "concurrent_pushes"),
+            rate_limited(shared, "concurrent_pushes"),
         );
     };
     // Beside the socket loop: waiting out Apple must not stop the room from
@@ -521,14 +519,18 @@ fn push(
     let shared = Arc::clone(shared);
     tokio::spawn(async move {
         let sent = apns.send(&request, slot).await;
-        (shared.events)(Event::new(sent.reason, Some(room), None));
+        (shared.events)(Event::new(sent.reason, None));
         let _ = answer_push_result(&shared, id, push_id, sent.outcome);
     });
     Ok(())
 }
 
-fn rate_limited(shared: &Shared, room: &str, cap: &'static str) -> PushOutcome {
-    (shared.events)(Event::new("cap_exceeded", Some(room.to_owned()), Some(cap)));
+fn invalid_routing() -> Rejection {
+    Rejection::new(Refusal::InvalidMessage, "invalid_routing")
+}
+
+fn rate_limited(shared: &Shared, cap: &'static str) -> PushOutcome {
+    (shared.events)(Event::new("cap_exceeded", Some(cap)));
     PushOutcome::RateLimited
 }
 
