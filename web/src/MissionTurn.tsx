@@ -96,7 +96,8 @@ function AttentionCard({ mission, node, attention, actions, onSelect }: { missio
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   const lines = failedLines(node, false);
-  const what = attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes);
+  // A reached gate with no Conductor says what to look at, not only that it was reached (PRD mission-human-gate D-23).
+  const what = attention.reason === "human_gate" && node.gate ? node.gate.look : attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes);
   const why = raisedWhy(mission, attention);
   return (
     <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-mission-hold/10 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>

@@ -111,6 +111,8 @@ export type PhoneMissionNode = MissionNodeBrief & {
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
   agent: AgentKey | null;
   escalation: WorkerEscalation | null;
+  /** The place the plan has the operator look before the step is done (`PhoneGate`, PRD mission-human-gate B13); absent for a step without one or from an older Mac. */
+  gate?: MissionGate;
 };
 
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */

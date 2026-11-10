@@ -7,13 +7,14 @@
 import { CheckIcon, ChevronRightIcon, Loader2Icon, XIcon } from "lucide-react";
 import { PILL_TONE, ProgressCells, STATE_PILL_TONE } from "../components/mission-tone";
 import { useElapsed } from "../components/elapsed";
+import { GateAheadCount } from "../components/mission-gate";
 import { RowButton } from "../components/ui/row-button";
 import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { CLOSED_SHOWN, groupMissions, missionPillKey, rowLine, rowLineText, type MissionEntry, type MissionGroup } from "../missionList";
-import { missionCells } from "../missions";
+import { gatesAhead, missionCells } from "../missions";
 import { cn } from "../lib/utils";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
@@ -129,6 +130,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
           <>
             <ProgressCells tones={missionCells(mission)} size="chip" />
             <span className="shrink-0 font-mono" data-phone-mission-counts={`${done}/${total}`}>{done}/{total}</span>
+            <GateAheadCount count={gatesAhead(mission).length} />
           </>
         ) : null}
         {elapsed ? <span className="shrink-0 font-mono">· {elapsed}</span> : null}

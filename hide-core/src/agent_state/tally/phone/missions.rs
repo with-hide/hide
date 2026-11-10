@@ -170,6 +170,28 @@ pub struct PhoneNode {
     pub agent: Option<AgentKey>,
     /// The core raised the worker past its Conductor to the operator.
     pub escalation: Option<PhoneEscalation>,
+    /// The place the plan has the operator look before the step is done
+    /// (`GateView`, PRD mission-human-gate B13); absent for a step without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<PhoneGate>,
+}
+
+/// A step's gate as the map reads it (`GateView`), copied field by field: a
+/// field the core adds stays on the Mac until it is named here.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneGate {
+    pub state: String,
+    pub look: String,
+    #[serde(default)]
+    pub ask: Option<u64>,
+    #[serde(default)]
+    pub since_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub long_wait_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub via: Option<String>,
+    #[serde(default)]
+    pub said: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -298,6 +320,8 @@ struct NodeIn {
     agent_runtime: Option<String>,
     #[serde(default)]
     worker: Option<WorkerIn>,
+    #[serde(default)]
+    gate: Option<PhoneGate>,
 }
 
 #[derive(Deserialize)]
@@ -479,6 +503,11 @@ fn phone_mission(
                 worker_agent: source.worker.map(|worker| worker.agent),
                 agent: pane.and_then(listed),
                 escalation,
+                gate: source.gate.map(|gate| PhoneGate {
+                    look: cut(&gate.look),
+                    said: gate.said.as_deref().map(cut),
+                    ..gate
+                }),
             }
         })
         .collect();
@@ -695,6 +724,27 @@ mod tests {
             sent[1]["landing"],
             json!({"state": "left", "action": "merge"})
         );
+        assert!(!sent.to_string().contains("private"));
+    }
+
+    #[test]
+    fn a_steps_gate_reaches_the_phone_by_its_named_fields_only() {
+        let gate = json!({"state": "passed", "look": "화면 시안 2장", "ask": null, "since_unix_ms": null, "long_wait_at_unix_ms": null, "via": "pane", "said": "ㄱㄱ", "note": "private"});
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![node("a", json!({"gate": gate})), node("b", json!({}))],
+            )],
+            json!({}),
+        );
+        let sent = serde_json::to_value(&projected(&rest).items[0].nodes).unwrap();
+        assert_eq!(
+            sent[0]["gate"],
+            json!({"state": "passed", "look": "화면 시안 2장", "ask": null, "since_unix_ms": null, "long_wait_at_unix_ms": null, "via": "pane", "said": "ㄱㄱ"})
+        );
+        assert!(sent[1].get("gate").is_none());
         assert!(!sent.to_string().contains("private"));
     }
 
