@@ -176,9 +176,9 @@ jobs:
             args+=(--test-list "$shard_file")
           fi
           if [ "$RUNNER_OS" = Linux ]; then
-            xvfb-run -a bash scripts/verify-web.sh desktop e2e "${args[@]}"
+            xvfb-run -a bash scripts/verify-web.sh desktop e2e "${args[@]}" --repeat-each 10 --retries 0
           else
-            bash scripts/verify-web.sh desktop e2e "${args[@]}"
+            bash scripts/verify-web.sh desktop e2e "${args[@]}" --repeat-each 10 --retries 0
           fi
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
@@ -199,7 +199,7 @@ jobs:
         # step: the step's annotations are its failed tests, and GitHub keeps
         # 10 per step.
         id: flaky
-        if: ${{ !cancelled() }}
+        if: ${{ false }}
         continue-on-error: true
         timeout-minutes: 5
         env:
