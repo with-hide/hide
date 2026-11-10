@@ -5,8 +5,8 @@
 <h1 align="center">hide</h1>
 
 <p align="center">
-  <strong>Run more agents. Hold less.</strong><br>
-  The multi-agent IDE for Claude Code, Codex and whatever comes next.
+  <strong>The ADE for humans.</strong><br>
+  Your agents run the work. hide reads every session and brings you only what needs a person.
 </p>
 
 <p align="center">
