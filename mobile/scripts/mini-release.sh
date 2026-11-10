@@ -21,8 +21,9 @@
 # token, and the command fails and deletes the log if one is there.
 #
 # xcodebuild writes its distribution logs (which hold a signed token and the key's ids) into the account's temporary
-# folder, so every tool here runs with TMPDIR inside the work folder and they go with it on every way out; a copy that
-# still appears in the account's own temporary folder is deleted by name and fails the run.
+# folder, which it takes from the system (confstr), not from $TMPDIR; run 10 on the mini showed it. So every way out,
+# including a failed step, an interrupt and a dropped connection, deletes by name the logs xcodebuild made there since
+# the release started, without reading them. The work folder's own TMPDIR still keeps the other tools' files out.
 #
 # Signing: the archive is built unsigned and `-exportArchive` signs it, with the cloud-managed Apple Distribution
 # certificate and an App Store profile that Xcode makes from the API key, so no distribution private key exists on this
@@ -166,16 +167,18 @@ logged() {
     fi
 }
 
-# xcodebuild ignored the temporary folder if one of its logs is in the account's own: delete it by name, and fail.
+# xcodebuild's distribution logs hold a token: delete the ones it made in the account's temporary folder since the
+# release started, by name, never reading them. Another release of the same account at the same moment is the one
+# case this would reach; the lock is per branch, and the docs say to run one release at a time.
 stray_logs() {
-    local found=0 path
+    local path
+    [[ -n "${account_tmp:-}" && -e "$work/started" ]] || return 0
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         rm -rf "$path"
-        printf 'release stopped: xcodebuild wrote its distribution logs outside the work folder (%s), deleted\n' "$(basename "$path")" >&2
-        found=1
+        printf 'removed xcodebuild distribution log %s from the account temporary folder\n' "$(basename "$path")"
     done < <(find "$account_tmp" -maxdepth 1 \( -name 'App_*.xcdistributionlogs' -o -name 'XcodeDistPipeline.*' \) -newer "$work/started" 2> /dev/null)
-    return "$found"
+    return 0
 }
 
 owns_lock=0 owns_work=0 finished=0
@@ -183,6 +186,7 @@ cleanup() {
     local code=$?
     trap - ERR
     if (( owns_work == 1 )); then
+        stray_logs
         if [[ -n "${HIDE_IOS_ASC_KEY_PATH:-}" ]] && ! log_is_clean; then
             rm -f "$log"
             printf 'release stopped: a secret value reached the log, which is deleted; this is a bug in the redaction\n' >&2

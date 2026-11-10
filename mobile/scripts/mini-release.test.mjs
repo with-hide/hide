@@ -140,13 +140,19 @@ exit 0`);
       expect(existsSync(join(base(), 'release.log'))).toBe(false);
     });
 
-    it('delete a distribution log Xcode wrote outside the work folder, and fail', () => {
-      stub('xcodebuild', `case "$*" in *-exportArchive*) mkdir -p "${accountTmp}/XcodeDistPipeline.~~~abc";; esac
-while [ $# -gt 0 ]; do case "$1" in -archivePath) mkdir -p "$2/Products/Applications/App.app";; -exportPath) mkdir -p "$2"; : > "$2/App.ipa";; esac; shift; done; exit 0`);
-      const result = run();
+    it('delete, unread, the distribution logs Xcode wrote in the account temporary folder, on success and on a failed step', () => {
+      const writes = `case "$*" in *-exportArchive*) mkdir -p "${accountTmp}/XcodeDistPipeline.~~~abc" "${accountTmp}/App_2026.xcdistributionlogs";; esac`;
+      const tail = 'while [ $# -gt 0 ]; do case "$1" in -archivePath) mkdir -p "$2/Products/Applications/App.app";; -exportPath) mkdir -p "$2"; : > "$2/App.ipa";; esac; shift; done';
+      mkdirSync(join(accountTmp, 'unrelated'));
+      stub('xcodebuild', `${writes}\n${tail}; exit 0`);
+      let result = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('removed xcodebuild distribution log XcodeDistPipeline.~~~abc');
+      expect(readdirSync(accountTmp)).toEqual(['unrelated']);
+      stub('xcodebuild', `${writes}\n${tail}; exit 65`);
+      result = run();
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain('wrote its distribution logs outside the work folder (XcodeDistPipeline.~~~abc), deleted');
-      expect(readdirSync(accountTmp)).toEqual([]);
+      expect(readdirSync(accountTmp)).toEqual(['unrelated']);
     });
   });
 
