@@ -135,6 +135,7 @@ export type AgentRow = {
   agent_kind?: string | null;
   status_code?: string | null;
   activity?: string | null;
+  demand?: string | null;
   blocked?: boolean;
   unread?: boolean;
   session_id?: string | null;
