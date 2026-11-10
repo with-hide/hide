@@ -6,40 +6,100 @@
 // Usage: cli-reference.mjs <hide-binary> <contracts/hide-cli.json> <notes.json> > cli.md
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
+const isArgument = (word) => /^[<\[(-]/.test(word) || word === "…";
+
+/** Splits a syntax line at the ` | ` that stand between whole commands, not at one inside `[...]`, `(...)` or `<...>`. */
+function splitCommands(syntax) {
+  const parts = [];
+  let depth = 0;
+  let current = "";
+  for (let i = 0; i < syntax.length; i++) {
+    const char = syntax[i];
+    if ("[(<".includes(char)) depth++;
+    else if ("])>".includes(char)) depth = Math.max(0, depth - 1);
+    if (depth === 0 && syntax.startsWith(" | ", i)) {
+      parts.push(current);
+      current = "";
+      i += 2;
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim());
+}
+
+/**
+ * The commands one `--help` syntax line stands for, each as its words before the first argument.
+ * Two shapes, and a line may use both:
+ *   `request ack|cancel|show <id>`: alternatives inside one word, one command each;
+ *   `memory show <card> | search <words> | add <text>`: a `|` between whole commands, each with its own
+ *   arguments, where every command after the first takes the first one's words before its last word as its prefix.
+ */
+export function expand(syntax) {
+  const [first, ...rest] = splitCommands(syntax.replace(/^hide\s*/, ""));
+  const head = (text) => {
+    const words = [];
+    for (const word of text.split(/\s+/)) {
+      if (!word || isArgument(word)) break;
+      words.push(word);
+    }
+    return words;
+  };
+  const lead = head(first);
+  if (lead.length === 0) return [];
+  const prefix = lead.slice(0, -1);
+  const commands = [];
+  const add = (words) => {
+    const last = words.pop();
+    for (const alternative of last.split("|")) commands.push([...words, alternative].join(" "));
+  };
+  add([...lead]);
+  for (const segment of rest) {
+    const words = head(segment);
+    if (words.length) add([...prefix, ...words]);
+  }
+  return commands;
+}
+
+/** Every command `hide --help` lists: `Map<name, { group, syntax }>`. */
+export function commandsOf(help) {
+  const commands = new Map();
+  let group = "";
+  for (const line of help.split("\n")) {
+    if (/^[A-Z]/.test(line) && !line.startsWith("A command") && !line.startsWith("Commands") && !line.startsWith("On a ")) { group = line.trim(); continue; }
+    if (!line.startsWith("  hide ")) continue;
+    const syntax = line.trim().split(/\s{2,}/)[0];
+    for (const name of expand(syntax)) if (name && !commands.has(name)) commands.set(name, { group, syntax });
+  }
+  return commands;
+}
+
+/** The problems between the commands and the notes: a command with no note, a note for a gone command. */
+export function noteProblems(commands, notes) {
+  const missing = [...commands.keys()].filter((name) => !notes[name]);
+  const stale = Object.keys(notes).filter((name) => !commands.has(name));
+  const problems = [];
+  if (missing.length) problems.push(`commands with no note (${missing.length}): ${missing.join(", ")}`);
+  if (stale.length) problems.push(`notes for commands that are gone (${stale.length}): ${stale.join(", ")}`);
+  return problems;
+}
+
+if (import.meta.url !== pathToFileURL(process.argv[1] ?? "").href) {
+  // Imported by the tests: nothing below runs.
+} else {
 const [hide, contractPath, notesPath] = process.argv.slice(2);
 if (!notesPath) throw new Error("usage: cli-reference.mjs <hide-binary> <hide-cli.json> <notes.json>");
 const help = execFileSync(hide, ["--help"], { encoding: "utf8" });
 const contract = new Map(JSON.parse(readFileSync(contractPath, "utf8")).commands.map((command) => [command.command, command]));
 const notes = JSON.parse(readFileSync(notesPath, "utf8"));
+const commands = commandsOf(help);
 
-/** The commands one `--help` syntax line stands for: `request ack|cancel|show <id>` is three. */
-function expand(syntax) {
-  const words = syntax.replace(/^hide\s*/, "").split(/\s+/);
-  const head = [];
-  for (const word of words) {
-    if (/^[<\[(-]/.test(word) || word === "…") break;
-    head.push(word);
-  }
-  if (head.length === 0) return [];
-  const last = head.pop();
-  return last.split("|").map((alternative) => [...head, alternative].join(" "));
-}
-
-const commands = new Map();
-let group = "";
-for (const line of help.split("\n")) {
-  if (/^[A-Z]/.test(line) && !line.startsWith("A command") && !line.startsWith("Commands") && !line.startsWith("On a ")) { group = line.trim(); continue; }
-  if (!line.startsWith("  hide ")) continue;
-  const syntax = line.trim().split(/\s{2,}/)[0];
-  for (const name of expand(syntax)) if (name && !commands.has(name)) commands.set(name, { group, syntax });
-}
-
-const missing = [...commands.keys()].filter((name) => !notes[name]);
-const stale = Object.keys(notes).filter((name) => !commands.has(name));
-if (missing.length || stale.length) {
-  if (missing.length) console.error(`commands with no note (${missing.length}): ${missing.join(", ")}`);
-  if (stale.length) console.error(`notes for commands that are gone (${stale.length}): ${stale.join(", ")}`);
+const problems = noteProblems(commands, notes);
+if (problems.length) {
+  console.error(problems.join("\n"));
   process.exit(1);
 }
 
@@ -68,3 +128,4 @@ for (const [first, list] of byFirstWord) {
 }
 console.log(out.join("\n"));
 console.error(`ok: ${commands.size} commands from --help, ${[...commands.keys()].filter((n) => contract.has(n)).length} also in the contract`);
+}

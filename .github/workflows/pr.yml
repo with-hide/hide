@@ -418,8 +418,8 @@ jobs:
   # docs): the guides and the feature pages hold each other, the CLI reference is read
   # from the `hide` this checkout builds and fails on a command with no note, and the
   # site builds with the live parts it frames, made from the web shell's own components.
-  # It plans for `site/`, the web shell, `scripts/docs/`, `hided/src/cli.rs` and the CLI
-  # contract, and needs only `hide`, so its cargo build is the one binary.
+  # It plans for `site/`, the web shell, `scripts/docs/`, the files that own `hide --help`'s
+  # text (`HELP_SOURCES` in scripts/ci-plan.py) and the CLI contract, and needs only `hide`, so its cargo build is the one binary.
   docs:
     name: user docs
     needs: plan

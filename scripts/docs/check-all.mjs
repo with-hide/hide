@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // The user docs' one check: what CI runs, and what to run before a docs change is pushed.
+//   0. the CLI reference reader's own test (cli-reference.test.mjs), over the usage strings in hided/src;
 //   1. the guides and feature pages hold each other (check-features.mjs), and writes each feature's
 //      "Used in guides" list from the guides' `features:` headers;
 //   2. the CLI reference is generated from `hide --help` and contracts/hide-cli.json, and fails on a
@@ -36,6 +37,7 @@ function run(title, command, commandArgs, options = {}) {
   return result.stdout;
 }
 
+run("the CLI reference reader finds every command of the real usage strings", "node", ["--test", "scripts/docs/*.test.mjs"]);
 mkdirSync(generated, { recursive: true });
 run("guides and features hold each other", "node", ["scripts/docs/check-features.mjs", content, "--write", join(generated, "used-in.json")]);
 
