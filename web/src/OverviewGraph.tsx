@@ -548,7 +548,7 @@ function SessionPreview({ row, model, actions, openRecord, close, choose }: { ro
   const talks = model.communication.filter((pair) => pair.source === row.id || pair.target === row.id).map((pair) => exchange(pair, row.id)).filter((talk) => rows.has(talk.other));
   const ask = row.agent.state.ask;
   const launch = launchWords(row);
-  return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
+  return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-overlay" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
     <div className="og-details-head"><strong><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
     <p className="og-detail-status"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} />{markWords(t, row.agent)}</p>
     <p className="og-context">{row.project.label} · {row.checkout.branch ?? row.checkout.label}{row.device ? ` · ${row.device}` : ""}</p>

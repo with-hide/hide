@@ -233,7 +233,7 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
   // operator closes it, with ⌘E, or Escape for an unpinned one (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, view.pinned, actions);
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : "inset-y-0 right-0 z-20";
-  const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-lg" : "";
+  const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-overlay" : "";
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane

@@ -235,7 +235,7 @@ export function NoteFormCard({ form, meta, full, workspace, actions, add, close 
   };
   return (
     <div
-      className="flex w-full flex-col gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-md"
+      className="flex w-full flex-col gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-overlay"
       data-view-note-form={form.displayId}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
@@ -306,7 +306,7 @@ export function CommentCard({ comment, workspace, displayId, actions }: { commen
   const quoted = comment.changed && comment.anchor.kind === "lines" ? comment.anchor.lines.join(" ") : null;
   return (
     <div
-      className="flex w-full items-start gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-sm"
+      className="flex w-full items-start gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-raised"
       data-view-comment={comment.id}
       data-view-comment-number={comment.number}
       data-view-comment-changed={comment.changed ? "true" : "false"}
@@ -967,7 +967,7 @@ export function RegionHint({ displayId }: { displayId: string }) {
   if (!on) return null;
   return (
     <div className="pointer-events-none sticky top-sm z-20 flex h-0 justify-end pr-md" data-view-comment-hint={displayId}>
-      <span className="flex h-(--size-control-sm) items-center gap-xs rounded-full border border-border bg-popover px-sm text-caption text-foreground shadow-sm">
+      <span className="flex h-(--size-control-sm) items-center gap-xs rounded-full border border-border bg-popover px-sm text-caption text-foreground shadow-raised">
         {t("feedback.hint.region")}
       </span>
     </div>

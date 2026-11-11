@@ -151,7 +151,7 @@ function OverviewDetail({ kind, wide, children }: { kind: string; wide: boolean;
     (target ?? frame.current)?.focus({ preventScroll: true });
     return () => queueMicrotask(() => returnFocus(new Event("closeAutoFocus", { cancelable: true })));
   }, [returnFocus]);
-  return <aside ref={frame} tabIndex={-1} className={cn("flex shrink-0 flex-col bg-background outline-none", wide ? "absolute inset-0 z-10 overflow-y-auto" : "w-(--size-lane-min) border-l border-border overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:z-10 overview-narrow:shadow-lg")} data-overview-panel={kind}>{children}</aside>;
+  return <aside ref={frame} tabIndex={-1} className={cn("flex shrink-0 flex-col bg-background outline-none", wide ? "absolute inset-0 z-10 overflow-y-auto" : "w-(--size-lane-min) border-l border-border overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:z-10 overview-narrow:shadow-overlay")} data-overview-panel={kind}>{children}</aside>;
 }
 
 function Count({ value }: { value: number }) {

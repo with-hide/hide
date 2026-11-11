@@ -40,7 +40,7 @@ export function holdShellDrag(drag: ShellDrag, attribute: ShellDragAttribute = "
 }
 
 /** The chip a dragged pane or agent shows under the pointer, one look for both drags. */
-export const DRAG_CHIP_CLASS = "max-w-(--size-search-sheet-w) truncate rounded-sm border border-border bg-popover px-sm py-xxs text-caption text-popover-foreground shadow-sm";
+export const DRAG_CHIP_CLASS = "max-w-(--size-search-sheet-w) truncate rounded-sm border border-border bg-popover px-sm py-xxs text-caption text-popover-foreground shadow-raised";
 
 /** Whether a shell drag is running now. */
 export function shellDragging(): boolean {

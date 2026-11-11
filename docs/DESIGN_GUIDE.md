@@ -85,7 +85,10 @@ These already draw a thing Hide shows in several places; use them instead of dra
 - Radius: `rounded-xs` to `rounded-xl`.
 - Text color by weight: `text-foreground`, then `text-subtle-foreground`, then `text-muted-foreground`.
 - Surfaces: `bg-background`, `bg-card`, `bg-secondary`, `bg-accent` (hover), `bg-popover`.
-- A modal (`Dialog`, `AlertDialog`, `Sheet`) draws on `bg-dialog`, darker than `bg-popover`, so a menu, select or tooltip opened inside it stands above it; the modal sets `--secondary` and `--accent` to `--dialog-raised` for its subtree, so a secondary button or a hovered row stays distinct from that surface without a modal-only class.
+- Every neutral color is a step of the generated palette (`--gray-*`, `--teal-*` for the Hide theme, and one step each of amber, red, green, blue and violet for status), named by its OKLCH lightness; a semantic token names its step under `palette` in `design/tokens.json`, and the generator refuses a recorded hex that its step does not draw. A new color picks a step; a new step is added only when no existing one fits, and screens use the semantic token, never the step.
+- Surfaces climb one step at a time: `bg-background`, `bg-sidebar`, `bg-card`, `bg-secondary`, `bg-accent` (hover); `scripts/check-token-contrast.mjs` checks the minimum distance between neighbouring layers and from `--border` to the surfaces it sits on.
+- A modal (`Dialog`, `AlertDialog`, `Sheet`) draws on `bg-dialog`, darker than `bg-popover`, so a menu, select or tooltip opened inside it stands above it; the modal sets `--secondary` to `--dialog-raised` and `--accent` to `--dialog-hover` for its subtree, so a secondary button and a hovered row stay distinct from that surface and from each other without a modal-only class.
+- Elevation has three levels and no others: `shadow-raised` for a control that sits on its surface, `shadow-overlay` for a popover, menu, select, tooltip or toast, and `shadow-modal` for a dialog, alert or sheet. A modal dims what is behind it with `bg-scrim`, never with an opacity on `bg-background`. Tailwind's own `shadow-sm`/`shadow-md`/`shadow-lg` are removed.
 - Dimming and disabled use the opacity tokens (`opacity-(--opacity-disabled)`, `--opacity-dimmed`), never a raw number.
 
 ## Screen rules
