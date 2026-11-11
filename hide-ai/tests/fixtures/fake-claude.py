@@ -18,7 +18,8 @@ FAKE_ARGS_FILE records the argument vector, FAKE_STDIN_FILE the prompt body,
 FAKE_ENV_FILE the account and gateway variables a model list read received
 (the `ENV_SEEN` names, null for one unset),
 FAKE_THINKING_FILE the MAX_THINKING_TOKENS value the child received ("unset"
-when it had none). FAKE_STARTED_FILE is created once a slow turn has started
+when it had none), and FAKE_CACHE_TTL_FILE the CLAUDE_CODE_PROMPT_CACHE_TTL
+value it received the same way. FAKE_STARTED_FILE is created once a slow turn has started
 waiting.
 
 A `/usage` run receives a whitelisted environment, so it reads no FAKE_*
@@ -46,6 +47,10 @@ if path := os.environ.get("FAKE_ARGS_FILE"):
 if path := os.environ.get("FAKE_THINKING_FILE"):
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(os.environ.get("MAX_THINKING_TOKENS", "unset"))
+
+if path := os.environ.get("FAKE_CACHE_TTL_FILE"):
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(os.environ.get("CLAUDE_CODE_PROMPT_CACHE_TTL", "unset"))
 
 
 def emit(obj, code=0):

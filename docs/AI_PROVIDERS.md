@@ -86,7 +86,7 @@ Moved to a private document: `docs/suggestion-investigation.md` in with-hide/hid
 
 The user's installed and logged-in CLIs are the only credentials for background AI requests.
 Hide's integration code reads no token file: the codex backend references the user's `auth.json` only through a symlink in the private `CODEX_HOME` it sets, and OMP delegates credential discovery and use to its public SDK (see [Oh My Pi](#oh-my-pi)).
-It sets two environment variables: that `CODEX_HOME`, pointing the app-server at the private directory, and `MAX_THINKING_TOKENS=0` on a claude model turn (see the claude bullet).
+It sets three environment variables: that `CODEX_HOME`, pointing the app-server at the private directory, and `MAX_THINKING_TOKENS=0` and `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` on a claude model turn (see the claude bullet and [Where the tokens go](#where-the-tokens-go)).
 `hide-ai` is also the only code that starts a background AI child of any agent: the Weekly Usage reader below asks the same `ClaudeCliBackend` for its `/usage` text rather than running the CLI itself.
 
 Which agents are providers is each agent's declaration (`hide_agent_adapter::AgentAdapter::ai`): a provider id, or the reason the agent is not one, as retired Cursor's is.
@@ -147,6 +147,7 @@ A request reports progress once a second while it runs, and a cancel in the core
   Dropping any of those three is not a cost regression, it is a wrong answer, so `hide-ai/tests/it/claude_cli.rs` asserts the vector the child actually received.
 
   A model turn runs with thinking off where the model honours it: the child gets `MAX_THINKING_TOKENS=0` whatever the operator's environment says, and the same test file asserts the value the child received.
+  Every model turn, with thinking on or off, also gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` whatever the operator's environment says, which writes its prompt cache for five minutes instead of an hour (see [Where the tokens go](#where-the-tokens-go)); the same test file asserts that value too.
   Print mode thinks by default, and a background answer is a short JSON object; on 2026-10-02 the context label spent a median 2,656 output tokens (at most 9,425) to return about 100, which put its median at 28 seconds and 43 of 252 requests past the 60-second deadline.
   No flag turns it off: `--settings '{"alwaysThinkingEnabled":false}'` left the thinking in place, and the variable removed it.
   Measured on claude 2.1.287 with the same label-style prompt, haiku with thinking answered in 56 to 81 seconds, haiku without it in 5 to 8 seconds but broke the prompt's rules (step verbs, listed items), and sonnet without it in 3.6 to 7 seconds with about 165 output tokens and the best answers, which is why `sonnet` is the default.
@@ -671,7 +672,18 @@ Measured from the usage ledger (`ai_daily`) on 2026-10-15 and 2026-10-16, per ca
 A new `claude -p` process reads the previous call's cache when the tools, the system prompt and the messages before the changing part are identical and the model is the same, so the fixed prefix (the system prompt and, in `Schema` mode, the schema) is read and the part that differs per call is written and not read again.
 Subscription turns are written with a one-hour lifetime, which prices a write at twice the input rate, so at the list prices the writes of the changing part are the larger share of a call's cost: about two thirds of an agent summary's and about nine tenths of a Memory call's, with the output second.
 The share is a statement about prices; how the subscription's limit counts a cache write or read is not documented.
-Setting `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is documented to write at 1.25 times instead, and has not been tried on a call whose input differs, so it is not used.
+So every model turn's child gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which Claude Code documents as the lifetime of the main conversation's cache writes, `-p` runs included ([Prompt caching](https://code.claude.com/docs/en/prompt-caching)), and which the API prices at 1.25 times the input rate instead of 2 ([Anthropic's prompt caching prices](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)).
+Measured 2026-11-11 on claude 2.1.322 with `claude-haiku-5-5`, the child's own argument vector and working directory, and two different transcripts of about 8 KB after the same system prompt:
+
+| Call | Cache read | Cache write |
+| --- | --- | --- |
+| first | 0 | 5,788 (the 2,281-token prefix and the transcript) |
+| second, another transcript | 2,281 | 3,472 (the transcript) |
+
+Without the variable both writes were one-hour writes; with it set, the second call read the same prefix and wrote its transcript as five-minute writes (`usage.cache_creation.ephemeral_5m_input_tokens`).
+So the variable moves exactly the part that is never read again to the cheaper write, and the prefix stays read while calls arrive within five minutes of each other.
+At the ledger's per-call counts of 2026-11-11 (agent summaries read 4,037 and wrote 1,984, Project Memory read 3,552 and wrote 11,744) the variable takes the input side of a call down by about a third at the list prices: 4,374 to 2,886 input-token equivalents for an agent summary and 23,846 to 15,038 for a Memory call.
+`DISABLE_PROMPT_CACHING=1` was not chosen: measured, it sends every token as plain input, which at the same counts costs an agent summary 6,023, more than today, because its read prefix is the larger part.
 
 ## Selection and fallback
 
