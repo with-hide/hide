@@ -35,6 +35,7 @@ device_line() { xcrun simctl list devices | sed -n "s/^ *$device_name (\\([0-9A-
 device_id() { device_line | cut -d' ' -f1; }
 
 recording=
+fixture_app=0
 created=0
 was_booted=0
 id=
@@ -50,6 +51,11 @@ stop_recording() {
     fi
 }
 cleanup() {
+    # A fixture app holds SSH's forwarded connections open even when capture or launch failed. Close this run's app
+    # before any other cleanup and before the keep-simulator return; a failed terminate must preserve the first error.
+    if [[ "$fixture_app" == 1 && -n "$id" ]]; then
+        xcrun simctl terminate "$id" "$bundle_id" 2>/dev/null || true
+    fi
     stop_recording
     if [[ -n "$found_appearance" && "$created" == 0 && -n "$id" ]]; then
         xcrun simctl ui "$id" appearance "$found_appearance" 2> /dev/null || true
@@ -278,6 +284,8 @@ case "$command" in
             xcrun simctl io "$id" recordVideo --codec=h264 "$shots/launch.mp4" > "$shots/record.log" 2>&1 &
             recording=$!
         fi
+        # A launch can fail after starting the app. Own that possibility before asking the tool to launch it.
+        if [[ -n "${HIDE_IOS_RELAY_PORT:-}" ]]; then fixture_app=1; fi
         if [[ -n "${HIDE_IOS_JOURNEY:-}" ]]; then
             journey_status=0
             case "$HIDE_IOS_JOURNEY" in
@@ -302,8 +310,6 @@ case "$command" in
         xcrun simctl io "$id" screenshot "$shots/run.png" 2>&1 | tail -1
         [[ "${HIDE_IOS_LAUNCH_SCREEN:-}" == 1 ]] && xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         stop_recording
-        # Close this command's forwarded fixture connections before SSH waits for those channels to end.
-        if [[ -n "${HIDE_IOS_RELAY_PORT:-}" ]]; then xcrun simctl terminate "$id" "$bundle_id" 2>/dev/null || true; fi
         printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
         exit "${journey_status:-0}"
         ;;
