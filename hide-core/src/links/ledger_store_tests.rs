@@ -2644,6 +2644,51 @@ fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_
     assert!(store.ledger_record(&session()).unwrap().asks.is_empty());
 }
 
+/// A project with more sessions than the summary names is summarized by its
+/// newest ones: the summary once failed whole there, so no row of the
+/// project learned of a new question.
+#[test]
+fn a_project_past_the_session_limit_is_summarized_by_its_newest_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let project = origin_project("device-a", "acme/app", 0);
+    store.apply_project(&project, 500).unwrap();
+    let old = |index: usize| SessionIdentity {
+        session_id: format!("old-{index}"),
+        ..session()
+    };
+    for index in 0..SUMMARY_SESSION_LIMIT + 5 {
+        origin_native(&mut store, &old(index), "/repo", 1_000 + index as u64);
+    }
+    origin_native(&mut store, &session(), "/repo", 10_000_000);
+    request(&mut store, 1, "인터뷰 계속해줘");
+    chapter(&mut store);
+    end(
+        &mut store,
+        1,
+        TurnJudgment {
+            missed: vec![NewMissedWork {
+                kind: MissedKind::Ask,
+                text: "Q4 범위를 정해 주세요".into(),
+            }],
+            ..Default::default()
+        },
+    );
+    let summaries = store.ledger_summaries(&project.key).unwrap();
+    assert_eq!(summaries.len(), SUMMARY_SESSION_LIMIT);
+    let mine = summaries
+        .iter()
+        .find(|summary| summary.session == session())
+        .unwrap();
+    assert_eq!(mine.asks.len(), 1);
+    assert!(summaries.iter().all(|summary| summary.session != old(0)));
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.session == old(SUMMARY_SESSION_LIMIT + 4))
+    );
+}
+
 /// PRD project-panel-results D-20, D-21: a session's summary carries the
 /// line its last judged turn left, skipping a turn that left none, and the
 /// time of its last `git commit` call, which a later read never moves back.
