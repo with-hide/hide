@@ -59,7 +59,7 @@ export function StartSettings({ t, onBack }: { t: TFunction; onBack: () => void 
         <h1 className="text-headline font-semibold">{t("mobile.settings.title")}</h1>
       </header>
       <Section title={t("mobile.settings.computers")} data-phone-settings-section="computers">
-        <p className={`py-sm text-body text-muted-foreground ${ROW_INSET}`}>{t("mobile.first.noComputers")}</p>
+        <p className={`break-keep py-sm text-body text-muted-foreground wrap-anywhere ${ROW_INSET}`}>{t("mobile.first.noComputers")}</p>
       </Section>
       <DisplaySection t={t} follows="phone" />
       <AboutSection t={t} />

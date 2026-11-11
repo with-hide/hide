@@ -28,7 +28,8 @@ const THEMES = ["system", "light", "dark"] as const satisfies readonly ThemeChoi
 export function Section({ title, note, children, ...marker }: { title: string; note?: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
   return (
     <div className="px-xl pt-lg">
-      <Group title={title} note={note} {...marker}>{children}</Group>
+      {/* The note keeps Korean words whole, as the phone's other lines do, and still breaks a long unbroken string. */}
+      <Group title={title} note={note ? <span className="break-keep wrap-anywhere">{note}</span> : undefined} {...marker}>{children}</Group>
     </div>
   );
 }

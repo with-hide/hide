@@ -47,7 +47,7 @@ function BrowserNotifications() {
     );
   }
   return (
-    <p className={`flex items-start gap-md py-sm text-body leading-relaxed text-muted-foreground ${ROW_INSET}`} data-phone-notifications={row}>
+    <p className={`flex items-start gap-md py-sm text-body leading-relaxed break-keep text-muted-foreground wrap-anywhere ${ROW_INSET}`} data-phone-notifications={row}>
       <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
       <span>{row === "denied" ? t("mobile.notifications.denied") : t("mobile.notifications.installFirst")}</span>
     </p>
@@ -87,7 +87,7 @@ function AppNotifications() {
           onCheckedChange={(on) => { void (on ? turnOnAppPush() : turnOffAppPush()); }}
         />
       </div>
-      <p className="pl-xl text-body leading-relaxed text-muted-foreground" role={row === "failed" ? "alert" : "status"}>{hint}</p>
+      <p className="break-keep pl-xl text-body leading-relaxed text-muted-foreground wrap-anywhere" role={row === "failed" ? "alert" : "status"}>{hint}</p>
       {row === "refused" ? <Button variant="text" className="min-h-(--size-touch-target) self-start px-none pl-xl text-body" data-phone-notifications-settings="true" onClick={() => void push.openSettings().catch(() => undefined)}>{t("mobile.settings.notificationsOpenSettings")}</Button> : null}
     </div>
   );
