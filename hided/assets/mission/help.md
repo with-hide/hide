@@ -57,6 +57,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 - If the goal, the finish line or your permissions are unclear, ask before you plan.
 - Create the mission with `hide mission create --title <short title>` (add `--scope` or `--cap` only when the operator said so).
 - The mission records its destination, the branch its results go to: the branch your checkout is on when you create it, or the repository's default branch when that checkout is detached. `hide mission show` prints it (`도착 · <branch>`).
+  When it prints no `도착` line, Hide had not read your checkout's branch yet and the results go to the default branch: when your checkout is on another branch, name it in the plan.
   Every change starts from the destination's newest commit, a pull request takes it as its base, a `direct` change is merged into it, and Hide reads whether a change is in from it. "main" in this guide means the repository's default branch and nothing else.
   When the operator names another branch for the results, put it in the plan as `"destination": "<branch>"` and say it in the plan in one line (`결과는 release/1.3로 · 지금 폴더는 main`); a plan that leaves it out keeps the one the mission has.
   Once the mission started, another destination is a change of scope: ask the operator with `hide mission decide` before you plan it.
