@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -114,6 +114,12 @@ export type PhoneMissionNode = MissionNodeBrief & {
   pr_more?: number;
   /** The pull request an outside step watches; absent for one that watches a branch and from a Mac before it. */
   external_pr?: number;
+  /** The branch an outside step watches, its first station; absent otherwise and from a Mac before it. */
+  external_branch?: string;
+  /** Where an outside step's work goes, its pull request's base or the default branch its branch is judged against; absent until read and from a Mac before it. */
+  external_base?: string;
+  /** An outside step's pull request state as GitHub last answered; absent for a branch, until read and from a Mac before it. */
+  external_state?: PrState;
   stage: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
