@@ -29,7 +29,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v25";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v26";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
