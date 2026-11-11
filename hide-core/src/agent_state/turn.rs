@@ -1225,6 +1225,54 @@ pub mod push {
         roots
     }
 
+    /// The notice a root says in `state`, worded from its row as it is now.
+    fn notice_of(
+        key: &AgentKey,
+        agent: &PhoneAgent,
+        state: NoticeState,
+        look: bool,
+        subject: Option<crate::model::AskSubject>,
+    ) -> Notice {
+        Notice {
+            key: key.clone(),
+            title: agent.title.clone(),
+            state,
+            // `look` is the eye's word, `볼 것`, and the newest View is the
+            // sentence (`볼 것 · report.html · app`).
+            status_code: Some(if look {
+                "look".to_owned()
+            } else {
+                agent.status_code.clone()
+            }),
+            detail: if look {
+                agent.look.clone()
+            } else {
+                agent.detail.clone()
+            },
+            subject: if look { None } else { subject },
+            place: agent
+                .place
+                .as_deref()
+                .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The notice a root that waits on the operator says now: the person's
+    /// turn `declared` while it still stands on the row, otherwise the row's
+    /// own ask, so a notice held back for a moment says the row's latest state.
+    pub fn waiting_notice(
+        key: &AgentKey,
+        agent: &PhoneAgent,
+        declared: Option<&crate::model::AskSubject>,
+    ) -> Notice {
+        let subject = declared
+            .filter(|declared| agent.human_turns.values().any(|turn| turn == *declared))
+            .cloned()
+            .or_else(|| agent.subject.clone());
+        notice_of(key, agent, NoticeState::NeedsYou, false, subject)
+    }
+
     /// Follows root agents across projections and says which entered Needs You
     /// or Done, and which the desktop made Seen. The first projection it sees
     /// only seeds it: nothing that was already waiting is announced.
@@ -1254,6 +1302,16 @@ pub mod push {
         /// Whether a projection has seeded it since it was made or reset.
         pub fn seeded(&self) -> bool {
             self.last.is_some()
+        }
+
+        /// Whether the last projection observed has `key` waiting on the
+        /// operator's answer: a question, an approval, a block, a raised ask
+        /// or a person's turn, unread; never a finished turn or a View alone.
+        pub fn waits_on_operator(&self, key: &AgentKey) -> bool {
+            self.last
+                .as_ref()
+                .and_then(|last| last.get(key))
+                .is_some_and(|(state, _)| *state == Effective::NeedsYou)
         }
 
         pub fn observe(&mut self, projection: &Projection) -> (Vec<Notice>, BTreeSet<AgentKey>) {
@@ -1321,29 +1379,7 @@ pub mod push {
                         .map(|subject| Some((*subject).clone()))
                         .collect::<Vec<_>>();
                     for subject in entered.into_iter().chain(declarations) {
-                        notices.push(Notice {
-                            key: key.clone(),
-                            title: agent.title.clone(),
-                            state: announced,
-                            // `look` is the eye's word, `볼 것`, and the newest
-                            // View is the sentence (`볼 것 · report.html · app`).
-                            status_code: Some(if look {
-                                "look".to_owned()
-                            } else {
-                                agent.status_code.clone()
-                            }),
-                            detail: if look {
-                                agent.look.clone()
-                            } else {
-                                agent.detail.clone()
-                            },
-                            subject: if look { None } else { subject },
-                            place: agent
-                                .place
-                                .as_deref()
-                                .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
-                                .unwrap_or_default(),
-                        });
+                        notices.push(notice_of(key, agent, announced, look, subject));
                     }
                 } else if (*state == Effective::Seen
                     && matches!(before, Effective::NeedsYou | Effective::Done))

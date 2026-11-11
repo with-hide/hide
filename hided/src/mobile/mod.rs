@@ -2201,7 +2201,7 @@ impl Mobile {
         let mut stopping = self.stopping.subscribe();
         let mut cursor = 0_u64;
         let mut rest = Value::Null;
-        let mut transitions = push::Transitions::default();
+        let mut phone_notices = push::PhoneNotices::default();
         loop {
             if *stopping.borrow() {
                 return;
@@ -2209,7 +2209,7 @@ impl Mobile {
             if !self.follower_active() {
                 cursor = 0;
                 rest = Value::Null;
-                transitions.reset();
+                phone_notices.reset();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
                 self.answers.send_replace(Arc::new(Vec::new()));
@@ -2337,16 +2337,23 @@ impl Mobile {
             }
             let current = Arc::clone(&self.projection.borrow());
             if let Some((notices, seen)) = judge_pass(
-                &mut transitions,
+                &mut phone_notices,
                 self.keep_alive(),
                 &self.config.desktop,
                 &current,
                 changed,
                 cursor != 0,
+                std::time::Instant::now(),
             ) {
                 self.deliver(notices, seen, &current);
             }
+            // A phone notice waiting out its moment wakes the follower when
+            // it is due, with or without another change.
+            let settle = phone_notices.next_due();
             tokio::select! {
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    settle.unwrap_or_else(std::time::Instant::now),
+                )), if settle.is_some() => {}
                 changed = changes.recv() => {
                     if matches!(changed, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
                         return;
@@ -2483,18 +2490,20 @@ impl Mobile {
 /// projection that `changed` is observed by each side on; once `read`, a side
 /// that is on but unseeded is seeded from what this follower last read, so a
 /// wait that began while that side was off is never announced late (B33). The
-/// phones' notices to deliver are returned; the desktop's go out as a frame.
+/// phones' notices due `at` and the agents whose notices to close are
+/// returned; the desktop's go out as a frame.
 fn judge_pass(
-    phone: &mut push::Transitions,
+    phone: &mut push::PhoneNotices,
     phone_on: bool,
     desktop: &crate::desktop_notices::DesktopNotices,
     current: &Projection,
     changed: bool,
     read: bool,
+    at: std::time::Instant,
 ) -> Option<(Vec<push::Notice>, BTreeSet<AgentKey>)> {
-    let mut delivered = None;
+    let (mut notices, mut seen) = (Vec::new(), BTreeSet::new());
     if changed && phone_on {
-        delivered = Some(phone.observe(current));
+        (notices, seen) = phone.observe(current, at);
     }
     if changed && desktop.wanted() {
         desktop.observe(current);
@@ -2502,12 +2511,15 @@ fn judge_pass(
     if !phone_on {
         phone.reset();
     } else if read && !phone.seeded() {
-        phone.observe(current);
+        phone.seed(current, at);
     }
     if read && desktop.seed_pending() {
         desktop.observe(current);
     }
-    delivered.filter(|(notices, seen)| !notices.is_empty() || !seen.is_empty())
+    if phone_on {
+        notices.extend(phone.due(current, at));
+    }
+    (!notices.is_empty() || !seen.is_empty()).then_some((notices, seen))
 }
 
 #[cfg(test)]
@@ -2597,17 +2609,24 @@ mod tests {
         )
     }
 
-    /// What one pass hands each side: the phones' notice count, and whether
-    /// a desktop frame went out.
+    /// What one pass hands each side, the phones' after their notices'
+    /// moment is up: the phones' notice count, and whether a desktop frame
+    /// went out.
     fn pass(
-        phone: &mut push::Transitions,
+        phone: &mut push::PhoneNotices,
         phone_on: bool,
         desktop: &DesktopNotices,
         current: &Projection,
     ) -> (usize, bool) {
         let mut frames = desktop.subscribe();
-        let phones = judge_pass(phone, phone_on, desktop, current, true, true)
-            .map_or(0, |(notices, _)| notices.len());
+        let at = std::time::Instant::now();
+        let phones = [(true, at), (false, at + push::SETTLE)]
+            .into_iter()
+            .filter_map(|(changed, at)| {
+                judge_pass(phone, phone_on, desktop, current, changed, true, at)
+            })
+            .map(|(notices, _)| notices.len())
+            .sum();
         (phones, frames.try_recv().is_ok())
     }
 
@@ -2618,7 +2637,7 @@ mod tests {
     fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
         for (phone_on, desktop_on) in [(true, true), (true, false), (false, true), (false, false)] {
             let label = format!("phone {phone_on}, desktop {desktop_on}");
-            let mut phone = push::Transitions::default();
+            let mut phone = push::PhoneNotices::default();
             let desktop = DesktopNotices::default();
             desktop.set(1, desktop_on);
             assert_eq!(
@@ -2645,7 +2664,7 @@ mod tests {
 
         // A side turned on while an agent already waits is seeded, not told,
         // and the other side keeps announcing as before.
-        let mut phone = push::Transitions::default();
+        let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         let waiting = projected("needs_you", "approval");
         assert_eq!(
@@ -2655,7 +2674,18 @@ mod tests {
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, false));
         desktop.set(1, true);
         let mut frames = desktop.subscribe();
-        assert!(judge_pass(&mut phone, true, &desktop, &waiting, false, true).is_none());
+        assert!(
+            judge_pass(
+                &mut phone,
+                true,
+                &desktop,
+                &waiting,
+                false,
+                true,
+                std::time::Instant::now()
+            )
+            .is_none()
+        );
         assert!(
             frames.try_recv().is_err(),
             "the desktop is seeded with the wait that was there"
@@ -2665,7 +2695,7 @@ mod tests {
             "and clears it once seen"
         );
 
-        let mut phone = push::Transitions::default();
+        let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         desktop.set(1, true);
         assert_eq!(
@@ -2674,7 +2704,16 @@ mod tests {
         );
         assert_eq!(pass(&mut phone, false, &desktop, &waiting), (0, true));
         assert!(
-            judge_pass(&mut phone, true, &desktop, &waiting, false, true).is_none(),
+            judge_pass(
+                &mut phone,
+                true,
+                &desktop,
+                &waiting,
+                false,
+                true,
+                std::time::Instant::now()
+            )
+            .is_none(),
             "Mobile turned on later is seeded with the wait, not told"
         );
         assert_eq!(

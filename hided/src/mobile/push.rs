@@ -5,18 +5,21 @@
 //! `ring` for the curve, HMAC and AES-GCM and `ureq` over rustls for the
 //! POST: both are already in the build, and no other TLS stack is added.
 //!
-//! What is sent: one notification per root entering Needs You or Done (a
-//! raised descendant reaches the phone as its lineage root), as data: the task as
-//! the title, the state (`needs_you` or `done`), the row's status code and
-//! chosen second-line sentence, and the project; never terminal content.
+//! What is sent: one notification per root that comes to wait on the
+//! operator's answer (a question, an approval, a block, a raised ask or a
+//! person's turn; a raised descendant reaches the phone as its lineage root),
+//! never a finished turn or a View alone, and only once the root has stayed
+//! waiting for `SETTLE` (`PhoneNotices`). It goes as data: the task as the
+//! title, the state (`needs_you`), the row's status code and chosen
+//! second-line sentence, and the project; never terminal content.
 //! The sentence stays untranslated and is never logged. Status words belong to
 //! the phone's language, so the phone page hands them to its service worker
 //! and the worker composes the body (`web/public/m/sw.js`). A later
-//! transition of the same agent replaces it (same tag). Agents the desktop
+//! notice of the same agent replaces it (same tag). Agents the desktop
 //! has since made Seen ride along as tags to close.
 
-use std::collections::BTreeSet;
-use std::time::Duration;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -26,7 +29,7 @@ use serde_json::{Value, json};
 
 use hide_relay_protocol::admission::{self, PushRequest};
 
-use super::projection::AgentKey;
+use super::projection::{AgentKey, Projection};
 use super::store::{ApnsRegistration, PushMode, PushSubscription};
 #[cfg(test)]
 use hide_core::agent_state::push::VANISHED_TTL;
@@ -411,6 +414,145 @@ pub fn notice_route(
         return Err("no_subscription");
     }
     Ok(())
+}
+
+/// How long a root must keep waiting on the operator before its phone notice
+/// goes out. An agent that passes through a state on its way to a question
+/// (a stop, then the question its label or hook reports; an approval, then
+/// a question) settles within the core's notification bursts, well under a
+/// second, so one notice of where it came to rest goes out instead of one per
+/// step, and three seconds is still at once for a phone in a pocket.
+pub const SETTLE: Duration = Duration::from_secs(3);
+
+/// How many roots may be waiting out `SETTLE` at once. Past it the one due
+/// first goes out at once, unsettled, so nothing is dropped.
+pub const SETTLE_CAP: usize = 64;
+
+/// The phones' notice state: the ledger of transitions every phone shares,
+/// and the roots that entered the operator's turn and are waiting out
+/// `SETTLE`. A root that leaves the operator's turn before its moment is up
+/// is dropped and sends nothing; the deadline is set when it enters and never
+/// moves, so a notice is late by at most `SETTLE` and one follower pass.
+/// Nothing pending survives a restart, and a fresh ledger seeds silently, so
+/// a restart never sends a notice twice.
+#[derive(Default)]
+pub struct PhoneNotices {
+    ledger: Transitions,
+    pending: BTreeMap<AgentKey, Pending>,
+    /// Whether the cap was crossed and not yet left, so a crossing is
+    /// recorded once.
+    capped: bool,
+}
+
+struct Pending {
+    due: Instant,
+    /// The newest notice the ledger announced for the root: the person's
+    /// turn it says is kept while that turn still stands on the row;
+    /// otherwise the row's own ask is said.
+    newest: Notice,
+}
+
+impl PhoneNotices {
+    pub fn reset(&mut self) {
+        self.ledger.reset();
+        self.pending.clear();
+        self.capped = false;
+    }
+
+    pub fn seeded(&self) -> bool {
+        self.ledger.seeded()
+    }
+
+    /// Judges a changed projection: the roots that entered the operator's
+    /// turn start waiting out `SETTLE`, the ones that left it stop. Returns
+    /// what goes out now (only past the cap) and the agents whose notices to
+    /// close.
+    pub fn observe(
+        &mut self,
+        projection: &Projection,
+        at: Instant,
+    ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
+        let (announced, seen) = self.ledger.observe_at(projection, at);
+        let ledger = &self.ledger;
+        self.pending.retain(|key, _| ledger.waits_on_operator(key));
+        for notice in announced {
+            // A finished turn, a View to look at or anything else the ledger
+            // announces for the desktop is no phone notice.
+            if !self.ledger.waits_on_operator(&notice.key) {
+                continue;
+            }
+            match self.pending.get_mut(&notice.key) {
+                Some(pending) => pending.newest = notice,
+                None => {
+                    self.pending.insert(
+                        notice.key.clone(),
+                        Pending {
+                            due: at + SETTLE,
+                            newest: notice,
+                        },
+                    );
+                }
+            }
+        }
+        let mut now = Vec::new();
+        if self.pending.len() > SETTLE_CAP {
+            if !self.capped {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.settle_capped",
+                    "pending": self.pending.len(), "cap": SETTLE_CAP,
+                }));
+            }
+            self.capped = true;
+            while self.pending.len() > SETTLE_CAP {
+                let Some(first) = self
+                    .pending
+                    .iter()
+                    .min_by_key(|(_, pending)| pending.due)
+                    .map(|(key, _)| key.clone())
+                else {
+                    break;
+                };
+                now.extend(self.send(&first, projection));
+            }
+        } else if self.pending.len() < SETTLE_CAP {
+            self.capped = false;
+        }
+        (now, seen)
+    }
+
+    /// Seeds the ledger with what already waits, which is never announced.
+    pub fn seed(&mut self, projection: &Projection, at: Instant) {
+        self.ledger.observe_at(projection, at);
+    }
+
+    /// The notices whose moment is up at `at`, each worded from its root's
+    /// row as it is now.
+    pub fn due(&mut self, projection: &Projection, at: Instant) -> Vec<Notice> {
+        let due: Vec<AgentKey> = self
+            .pending
+            .iter()
+            .filter(|(_, pending)| pending.due <= at)
+            .map(|(key, _)| key.clone())
+            .collect();
+        due.iter()
+            .filter_map(|key| self.send(key, projection))
+            .collect()
+    }
+
+    /// When the next pending notice is due.
+    pub fn next_due(&self) -> Option<Instant> {
+        self.pending.values().map(|pending| pending.due).min()
+    }
+
+    fn send(&mut self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
+        let pending = self.pending.remove(key)?;
+        let agent = projection.find(key)?;
+        Some(hide_core::agent_state::push::waiting_notice(
+            key,
+            agent,
+            pending.newest.subject.as_ref(),
+        ))
+    }
 }
 
 /// Whether an iOS app phone's registration can be stored: a device token the
@@ -1243,6 +1385,220 @@ mod tests {
             ["w1:p1"],
             "gone for good, its notification closes"
         );
+    }
+
+    /// One root row in `group` with `demand`, its status code and sentence.
+    fn rested(group: &str, demand: &str, status: &str, detail: &str) -> Projection {
+        let mut agent = row("w1:p1", group, demand, None);
+        agent["status_code"] = json!(status);
+        agent["detail"] = json!(detail);
+        project(&rest(json!([agent])), "local")
+    }
+
+    fn said(notices: &[Notice]) -> Vec<(NoticeState, Option<String>, Option<String>)> {
+        notices
+            .iter()
+            .map(|notice| {
+                (
+                    notice.state,
+                    notice.status_code.clone(),
+                    notice.detail.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn question() -> (NoticeState, Option<String>, Option<String>) {
+        (
+            NoticeState::NeedsYou,
+            Some("question".to_owned()),
+            Some("Ship it?".to_owned()),
+        )
+    }
+
+    /// The operator's report: a stop and then the question it ended on, a
+    /// moment apart, were two notifications. The phone sends one, the
+    /// question, once the row has waited out its moment.
+    #[test]
+    fn a_stop_then_a_question_is_one_notice_of_the_question() {
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&rested("working", "none", "working", ""), t0);
+        let stopped = rested("done", "none", "stopped", "");
+        assert_eq!(phone.observe(&stopped, t0).0, Vec::new());
+        assert_eq!(phone.next_due(), None, "a stop never waits to be sent");
+        let asking = rested("needs_you", "question", "question", "Ship it?");
+        let t1 = t0 + Duration::from_millis(500);
+        assert_eq!(phone.observe(&asking, t1).0, Vec::new(), "not at once");
+        assert_eq!(phone.next_due(), Some(t1 + SETTLE));
+        assert!(
+            phone
+                .due(&asking, t1 + SETTLE - Duration::from_millis(1))
+                .is_empty()
+        );
+        assert_eq!(said(&phone.due(&asking, t1 + SETTLE)), [question()]);
+        assert_eq!(phone.next_due(), None);
+        assert!(phone.due(&asking, t1 + SETTLE * 10).is_empty(), "sent once");
+    }
+
+    #[test]
+    fn an_ask_answered_inside_its_moment_sends_nothing() {
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&rested("working", "none", "working", ""), t0);
+        let asking = rested("needs_you", "approval", "approval", "Run tests?");
+        phone.observe(&asking, t0);
+        let working = rested("working", "none", "working", "");
+        phone.observe(&working, t0 + Duration::from_secs(1));
+        assert_eq!(phone.next_due(), None);
+        assert!(phone.due(&working, t0 + SETTLE).is_empty());
+    }
+
+    /// The moment starts when the row enters the operator's turn and never
+    /// moves; the notice says the row as it is when the moment is up.
+    #[test]
+    fn a_notice_goes_out_on_time_with_the_rows_latest_ask() {
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&rested("working", "none", "working", ""), t0);
+        phone.observe(
+            &rested("needs_you", "approval", "approval", "Run tests?"),
+            t0,
+        );
+        let asking = rested("needs_you", "question", "question", "Ship it?");
+        phone.observe(&asking, t0 + Duration::from_millis(2900));
+        assert_eq!(phone.next_due(), Some(t0 + SETTLE), "the deadline holds");
+        assert_eq!(said(&phone.due(&asking, t0 + SETTLE)), [question()]);
+    }
+
+    /// Operator decision 2026-11-11: a phone hears only what waits on the
+    /// operator's answer. The desktop's ledger still announces a finished
+    /// turn and a View, under its own switches.
+    #[test]
+    fn only_a_wait_on_the_operators_answer_reaches_a_phone() {
+        let looking = {
+            let mut agent = row("w1:p1", "needs_you", "none", None);
+            agent["status_code"] = json!("idle");
+            agent["look"] =
+                json!({"group": "working", "count": 1, "view_id": "d1", "label": "report.html"});
+            agent["mark"] = json!("look");
+            project(&rest(json!([agent])), "local")
+        };
+        let steps = [
+            rested("done", "none", "done", "Build fixed"),
+            rested("seen", "none", "idle", ""),
+            rested("done", "none", "unfinished", "Three tests remain"),
+            rested("working", "none", "working", ""),
+            rested("done", "none", "stopped", ""),
+            rested("working", "none", "working", ""),
+            looking,
+            rested("seen", "none", "idle", ""),
+            rested("needs_you", "error", "blocked", "Login required"),
+        ];
+        let t0 = Instant::now();
+        let seed = rested("working", "none", "working", "");
+        let mut phone = PhoneNotices::default();
+        let mut desktop = Transitions::default();
+        phone.seed(&seed, t0);
+        desktop.observe_at(&seed, t0);
+        let (mut sent, mut announced) = (Vec::new(), Vec::new());
+        for (n, step) in steps.iter().enumerate() {
+            let at = t0 + SETTLE * (n as u32 + 1);
+            sent.extend(phone.observe(step, at).0);
+            sent.extend(phone.due(step, at + SETTLE));
+            announced.extend(desktop.observe_at(step, at).0);
+        }
+        assert_eq!(
+            said(&sent),
+            [(
+                NoticeState::NeedsYou,
+                Some("blocked".to_owned()),
+                Some("Login required".to_owned())
+            )],
+            "only the block"
+        );
+        let codes: Vec<_> = announced
+            .iter()
+            .map(|notice| notice.status_code.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            codes,
+            ["done", "unfinished", "stopped", "look", "blocked"],
+            "the desktop's ledger is unchanged"
+        );
+    }
+
+    /// PRD ask-human B17 on the phone: a declaration raised under a row
+    /// already in the operator's turn is one notice in its own words; a
+    /// second inside the same moment makes it say the newest, on the first
+    /// one's deadline.
+    #[test]
+    fn a_new_declaration_is_one_notice_in_its_own_words() {
+        let turn = |id: &str| json!({"cause": "human_turn", "id": id, "kind": "auth", "place": "github.com/login", "device": "mini"});
+        let root = |raised: &[&str]| {
+            let mut row = row("w1:p1", "needs_you", "none", None);
+            row["raised"] = json!(
+                raised
+                    .iter()
+                    .map(|id| json!({"subject": turn(id)}))
+                    .collect::<Vec<_>>()
+            );
+            row["human_turn"] = json!({"id": raised[0], "own": false});
+            project(&rest(json!([row])), "local")
+        };
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&root(&["agent-3.1"]), t0);
+        let both = root(&["agent-3.1", "agent-4.2"]);
+        assert!(phone.observe(&both, t0).0.is_empty());
+        let notices = phone.due(&both, t0 + SETTLE);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&notices[0].subject).unwrap(),
+            turn("agent-4.2")
+        );
+        let t1 = t0 + SETTLE * 2;
+        phone.observe(&root(&["agent-3.1", "agent-4.2", "agent-5.3"]), t1);
+        let all = root(&["agent-3.1", "agent-4.2", "agent-5.3", "agent-6.4"]);
+        phone.observe(&all, t1 + Duration::from_secs(2));
+        assert_eq!(phone.next_due(), Some(t1 + SETTLE), "the deadline holds");
+        let notices = phone.due(&all, t1 + SETTLE);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&notices[0].subject).unwrap(),
+            turn("agent-6.4"),
+            "the newest declaration"
+        );
+    }
+
+    #[test]
+    fn past_the_cap_the_first_due_goes_out_at_once_and_none_is_dropped() {
+        let rows = |group: &str, demand: &str| {
+            let agents: Vec<Value> = (0..=SETTLE_CAP)
+                .map(|n| row(&format!("w1:p{n}"), group, demand, None))
+                .collect();
+            project(&rest(json!(agents)), "local")
+        };
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&rows("working", "none"), t0);
+        let asking = rows("needs_you", "question");
+        let (now, _) = phone.observe(&asking, t0);
+        assert_eq!(now.len(), 1, "one over the cap goes out at once");
+        assert_eq!(phone.due(&asking, t0 + SETTLE).len(), SETTLE_CAP);
+    }
+
+    /// A restart begins with an empty phone state: a fresh ledger seeds on
+    /// what already waits, so nothing is sent a second time.
+    #[test]
+    fn a_restart_sends_nothing_for_what_already_waits() {
+        let t0 = Instant::now();
+        let asking = rested("needs_you", "question", "question", "Ship it?");
+        let mut phone = PhoneNotices::default();
+        phone.seed(&asking, t0);
+        assert!(phone.observe(&asking, t0).0.is_empty());
+        assert_eq!(phone.next_due(), None);
+        assert!(phone.due(&asking, t0 + SETTLE).is_empty());
     }
 
     #[test]
