@@ -412,12 +412,18 @@ fn each_way_a_state_route_fails_is_the_diagnosiss_own_error_and_never_the_accoun
     }
 }
 
-/// The writer and the reader name one folder: a failure record written by the
-/// hook's own path ([`hide_agent_hooks::report::record_outcome`], which
-/// resolves its folder from the pane's environment) is the one a node's
-/// diagnosis reads for the daemon that wrote it, with no `records_error`.
+/// A failure record written into a daemon's own records folder is the one a
+/// node's diagnosis reads for that daemon, with no `records_error`.
+///
+/// The writer here is [`hide_agent_hooks::report::record_outcome_at`], whose
+/// folder the test names: this proves the reader's side of one folder, not
+/// that the hook's environment-resolving writer
+/// ([`hide_agent_hooks::report::record_outcome`]) chose it.
+/// `records_refused::a_refused_pane_record_is_kept_under_the_installations_own_mark`
+/// is the real hook binary run with `HIDE_STATE_DIR` and `HIDE_INSTALL`, and
+/// fails if that writer drops the pane's installation.
 #[test]
-fn the_failure_record_the_hook_wrote_is_the_one_the_diagnosis_reads() {
+fn a_failure_record_in_the_daemons_folder_is_the_one_its_diagnosis_reads() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir_all(&home).unwrap();

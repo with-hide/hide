@@ -98,6 +98,88 @@ fn a_refused_pane_record_still_reports_the_sessions_identity_and_is_recorded() {
     );
 }
 
+/// A hook of an installation other than the app writes its refusal under that
+/// installation's own mark, and the diagnosis that installation reads sees it.
+///
+/// The hook's writer resolves its folder from its own environment
+/// ([`hide_agent_hooks::report::record_outcome`], which reads `HIDE_STATE_DIR`
+/// and `HIDE_INSTALL`), so this runs the real hook binary with both named.
+/// A writer that took the daemon's folder and dropped the pane's installation
+/// would put the file in the root records folder, where the app's own reading
+/// of a reused pane id could show it as its own. Planted and watched: with
+/// `record_outcome` resolving `route::records_folder` instead of
+/// `route::pane_records`, this fails on the record being under the mark.
+#[test]
+fn a_refused_pane_record_is_kept_under_the_installations_own_mark() {
+    const INSTALL: &str = "root:/other-helper";
+    let machine = Machine::new("registered");
+    let state = machine.records().parent().unwrap().to_path_buf();
+    let root = machine.records();
+    let own = hide_agent_hooks::route::records_of_state(&machine.home, Some(&state), Some(INSTALL))
+        .unwrap();
+    assert!(
+        own.starts_with(root.join("installs")),
+        "the installation's own folder is under its mark: {}",
+        own.display()
+    );
+    refuse_pane_records(&own);
+    let run = machine.run_event(
+        "claude-code",
+        "SessionStart",
+        &json!({"session_id": SESSION, "hook_event_name": "SessionStart", "source": "startup"})
+            .to_string(),
+        Some(PANE),
+        &[("HIDE_INSTALL", INSTALL)],
+    );
+    assert!(run.status_ok, "{run:?}");
+    // The identity still reached the daemon the pane names.
+    let reports = machine.status_reports();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert_eq!(reports[0]["session"], SESSION);
+    assert_eq!(reports[0]["session_start"], true);
+
+    // The refusal is kept in the installation's folder and nowhere else.
+    assert!(
+        own.join("last-report-failure.json").exists(),
+        "the failure record is under the installation's mark"
+    );
+    assert!(
+        !root.join("last-report-failure.json").exists(),
+        "the app's folder holds no record this installation wrote"
+    );
+
+    // The reader of that installation sees it, and the app's reader does not.
+    let search = hide_platform::programs::account_path_now().unwrap_or_default();
+    let diagnosis = hide_agent_hooks::Diagnosis::read_at(
+        &machine.home,
+        &search,
+        hide_agent_hooks::route::records_of_state(&machine.home, Some(&state), Some(INSTALL)),
+    );
+    assert_eq!(
+        diagnosis.records_error, None,
+        "{:?}",
+        diagnosis.records_error
+    );
+    let read = diagnosis
+        .last_report_failure
+        .as_ref()
+        .expect("the installation's diagnosis reads the refusal its hook kept");
+    assert_eq!(read.pane_id, PANE);
+    assert_eq!(
+        read.kind,
+        Some(hide_agent_hooks::report::FailureKind::Record)
+    );
+    let app = hide_agent_hooks::Diagnosis::read_at(
+        &machine.home,
+        &search,
+        hide_agent_hooks::route::records_of_state(&machine.home, Some(&state), None),
+    );
+    assert_eq!(
+        app.last_report_failure, None,
+        "another installation's refusal is not the app's"
+    );
+}
+
 #[test]
 fn a_plugins_refused_record_still_reports_its_session_start() {
     let machine = opencode_helper::Machine::new();
