@@ -577,8 +577,11 @@ pub(crate) const STOPPED_THAT_WARNS_MS: u64 = 5 * 60_000;
 /// nothing of its own to wait on (`NodeFacts::stopped`), and the node
 /// waiting on no one: no delay, hold, decision or gate (`stall_excused`),
 /// no raise, no question about it, and no pull request that waits on CI, a
-/// review or the merge (`quiet_waits`), which a stale answer leaves unknown,
-/// so nothing is said. The one rule the warning and the map's stopped node
+/// review or the merge (`owed_elsewhere`), which a stale answer leaves
+/// unknown, so nothing is said. A raise a told warning became
+/// (`WarningStood`) is the Conductor's move still owed on the same stop,
+/// not someone else's wait, so it never ends the warning that raised it.
+/// The one rule the warning's raise, its keeping and the map's stopped node
 /// read; how the turn ended is its cause, never its condition.
 pub(crate) fn stopped_worker<'a>(
     mission: &Mission,
@@ -587,10 +590,15 @@ pub(crate) fn stopped_worker<'a>(
     pulls: Option<&GithubProjectSnapshot>,
     operator_waits: bool,
 ) -> Option<&'a WorkerStopped> {
+    let raised = node
+        .attention
+        .as_ref()
+        .is_some_and(|raise| raise.reason != AttentionReason::WarningStood);
     let stands = node_works(mission, node)
         && fact.worker == Some(WorkerLife::Running)
         && !stall_excused(mission, node, operator_waits)
-        && quiet_waits(mission, node, pulls) == Some(false);
+        && !raised
+        && owed_elsewhere(mission, node, pulls) == Some(false);
     fact.stopped.as_ref().filter(|_| stands)
 }
 
@@ -629,9 +637,11 @@ pub(crate) enum WarnAct {
 /// with one; a node that has none yet is judged without it.
 /// A node whose worker stood stopped `STOPPED_THAT_WARNS_MS`
 /// (`stopped_worker`) warns once with its cause, and the warning goes once
-/// the worker works, waits or ends; while it stands no quiet warning rises,
-/// since its letter already asked the Conductor to move. `facts` and
-/// `operator_waits` hold one entry per node, in the record's order.
+/// that rule no longer holds: the worker works, waits or ends, or the node
+/// waits on someone. While the rule holds the worker, the quiet warning
+/// goes and none rises, since the stop's letter is the one that asks the
+/// Conductor to move; once it lets go, the quiet is judged again. `facts`
+/// and `operator_waits` hold one entry per node, in the record's order.
 pub(crate) fn warn_acts(
     mission: &Mission,
     pulls: Option<&GithubProjectSnapshot>,
@@ -647,14 +657,8 @@ pub(crate) fn warn_acts(
         let stopped = fact
             .zip(operator_waits.get(at))
             .and_then(|(fact, waits)| stopped_worker(mission, node, fact, pulls, *waits));
-        // The worker stopped as its row still reads, whatever since moved
-        // the node to wait on someone: the warning told stands until then.
-        let still_stopped = works
-            && fact.is_some_and(|fact| {
-                fact.worker == Some(WorkerLife::Running) && fact.stopped.is_some()
-            });
         match standing(WarningKind::Stopped) {
-            Some(_) if !still_stopped => acts.push(WarnAct::Clear {
+            Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
                 node: at,
                 kind: WarningKind::Stopped,
             }),
@@ -688,14 +692,18 @@ pub(crate) fn warn_acts(
         }
         let quiet = node.quiet_since();
         match standing(WarningKind::NoPush) {
-            Some(warning) if !works || quiet.is_some_and(|since| since > warning.from_unix_ms) => {
+            Some(warning)
+                if !works
+                    || stopped.is_some()
+                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
+            {
                 acts.push(WarnAct::Clear {
                     node: at,
                     kind: WarningKind::NoPush,
                 });
             }
             None if works
-                && !still_stopped
+                && stopped.is_none()
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && quiet_waits(mission, node, pulls) == Some(false) =>
@@ -975,7 +983,22 @@ pub(crate) fn quiet_waits(
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
 ) -> Option<bool> {
-    if node.attention.is_some() || mission.deciding_on(&node.key) {
+    if node.attention.is_some() {
+        return Some(true);
+    }
+    owed_elsewhere(mission, node, pulls)
+}
+
+/// Whether the next move on `node` is someone else's besides a raise on
+/// it: the Conductor's question about it, or a pull request that waits on
+/// CI, a review or the merge (`worker_waits`); unknown while GitHub's
+/// answer does not hold the pull request.
+fn owed_elsewhere(
+    mission: &Mission,
+    node: &MissionNode,
+    pulls: Option<&GithubProjectSnapshot>,
+) -> Option<bool> {
+    if mission.deciding_on(&node.key) {
         return Some(true);
     }
     worker_waits(node, pulls)

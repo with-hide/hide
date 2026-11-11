@@ -8597,10 +8597,11 @@ const MINUTE: u64 = 60_000;
 
 /// The `fix` node at work with `agent-2` for 100 minutes with no push,
 /// whose own row rests since `STOPPED_SINCE` as `shape` leaves it, after
-/// `setup`; what the node
-/// carries once the minute decision ran `after` later: its warnings with
-/// their letters' bodies, its `work` on the map, and whether the worker's
-/// watch reads it as waiting.
+/// `setup`; with `stood_first`, the plain stop is warned at five minutes
+/// before `shape` and `setup` change it. What the node carries once the
+/// minute decision ran `after` later: its warnings with their letters'
+/// bodies, its `work` on the map, and whether the worker's watch reads it
+/// as waiting.
 struct StoppedCase {
     warnings: Vec<crate::missions::NodeWarning>,
     letters: Vec<String>,
@@ -8612,6 +8613,7 @@ fn stopped_case(
     shape: impl FnOnce(&mut crate::model::SidebarAgentSnapshot),
     setup: impl FnOnce(&mut Runtime),
     after: u64,
+    stood_first: bool,
 ) -> StoppedCase {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -8629,6 +8631,15 @@ fn stopped_case(
     let mut row = shown_row("recipient", "recipient", "idle");
     row.lineage_session = worker.session.clone();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    if stood_first {
+        runtime.snapshot.navigator.agents = vec![row.clone()];
+        runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
+        assert_eq!(
+            warnings_of(&runtime).0,
+            [crate::missions::WarningKind::Stopped],
+            "the plain stop warns first"
+        );
+    }
     shape(&mut row);
     runtime.snapshot.navigator.agents = vec![row];
     setup(&mut runtime);
@@ -8677,7 +8688,10 @@ fn worker_letter(runtime: &mut Runtime, kind: &str, to_worker: bool, at: u64) {
 /// nothing warns its Conductor once, five minutes on, with why the turn
 /// ended when the agent's hook said, and the map draws it stopped with that
 /// cause and since when; every wait such a worker can be in stays unwarned
-/// and keeps the node's work as it was.
+/// and keeps the node's work as it was. Each row is judged twice: as the
+/// worker first stands so, and as a stop already warned turns into it,
+/// where a wait takes the warning and its unsent letter away and a stop
+/// keeps its one warning.
 #[test]
 fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() {
     use crate::agent_hooks::facts::TurnRefused;
@@ -8685,16 +8699,19 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
     use crate::model::AgentWait;
     use crate::runtime::missions::NodeWork;
     use hide_node_link::panes::{HookRefusal, RefusalKind};
-    type Shape = Box<dyn FnOnce(&mut crate::model::SidebarAgentSnapshot)>;
-    type Setup = Box<dyn FnOnce(&mut Runtime)>;
-    let refused = |kind, line: &str| {
+    type Shape = Box<dyn Fn(&mut crate::model::SidebarAgentSnapshot)>;
+    type Setup = Box<dyn Fn(&mut Runtime)>;
+    let refused = |kind: RefusalKind, line: &str| {
         let line = line.to_owned();
         Box::new(move |row: &mut crate::model::SidebarAgentSnapshot| {
             // The turn ended when the hook said; the engine last moved
             // before it, as a screen waiting for a limit's reset does.
             row.changed_at_unix_ms = Some(STOPPED_SINCE - 30 * MINUTE);
             row.refused = Some(TurnRefused {
-                refusal: HookRefusal { kind, line },
+                refusal: HookRefusal {
+                    kind,
+                    line: line.clone(),
+                },
                 at_unix_ms: STOPPED_SINCE,
             });
         }) as Shape
@@ -8747,6 +8764,23 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
                 let answer = checked(7, "c3", PullRequestChecks::Failed, &["verify"]);
                 runtime.note_mission_pulls(crate::node::TEST_NODE, &answer);
                 runtime.github = answer;
+            }),
+            stopped(None),
+        ),
+        (
+            // The Conductor's move still owed on the stop, not a wait.
+            "the raise its own warning became",
+            Box::new(|_| {}),
+            Box::new(|runtime| {
+                let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+                mission.nodes[0].attention = Some(crate::missions::Attention {
+                    reason: crate::missions::AttentionReason::WarningStood,
+                    pr: None,
+                    agent: None,
+                    key: 1,
+                    since_unix_ms: STOPPED_SINCE + 35 * MINUTE,
+                    notified: false,
+                });
             }),
             stopped(None),
         ),
@@ -8889,8 +8923,33 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
     // Every row is judged before the test fails, so a rule taken out shows
     // each row it was holding.
     let mut wrong = Vec::new();
+    for (name, shape, setup, expected) in &rows {
+        // Already warned, then turned into the row: a stop keeps its one
+        // warning and letter, a wait takes both away.
+        let case = stopped_case(shape, setup, 6 * MINUTE, true);
+        let kinds: Vec<_> = case.warnings.iter().map(|warning| warning.kind).collect();
+        let stop_letters = case
+            .letters
+            .iter()
+            .filter(|letter| letter.contains("has a worker whose turn ended"))
+            .count();
+        let holds = match expected {
+            Some(_) => {
+                kinds == [WarningKind::Stopped]
+                    && case.letters.len() == 1
+                    && matches!(case.work, Some(NodeWork::Stopped { .. }))
+            }
+            None => !kinds.contains(&WarningKind::Stopped) && stop_letters == 0,
+        };
+        if !holds {
+            wrong.push(format!(
+                "{name}, warned first: {kinds:?} {:?} {:?}",
+                case.work, case.letters
+            ));
+        }
+    }
     for (name, shape, setup, expected) in rows {
-        let case = stopped_case(shape, setup, 5 * MINUTE);
+        let case = stopped_case(shape, setup, 5 * MINUTE, false);
         let kinds: Vec<_> = case.warnings.iter().map(|warning| warning.kind).collect();
         let holds = match expected {
             Some(cause) => {
@@ -8927,7 +8986,7 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
-    let early = stopped_case(|_| {}, |_| {}, 5 * MINUTE - 1);
+    let early = stopped_case(|_| {}, |_| {}, 5 * MINUTE - 1, false);
     assert!(
         early
             .warnings
@@ -8983,6 +9042,62 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
         [WarningKind::Stopped],
         "a new stop"
     );
+}
+
+/// Review of with-hide/hide#2447: a worker that stops while its node warns
+/// of no push, the warning not told yet because the Conductor's queue was
+/// full, hands the node to the stopped rule: the no-push warning goes at
+/// once and is never told, the stop warns alone five minutes on, and once
+/// the worker works again the no-push warning stands again.
+#[test]
+fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
+        Some(STOPPED_SINCE - 100 * MINUTE);
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    assert!(runtime.warn_missions(STOPPED_SINCE - MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::NoPush]);
+    // As a full queue leaves it: standing, untold, no letter queued.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.nodes[0].warnings[0].told_unix_ms = None;
+    mission
+        .wakes
+        .retain(|wake| wake.event != crate::missions::WakeEvent::Warning);
+
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    assert!(runtime.warn_missions(STOPPED_SINCE + MINUTE));
+    assert_eq!(
+        warnings_of(&runtime),
+        (vec![], vec![]),
+        "the stop takes the node's quiet"
+    );
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    let (kinds, letters) = warnings_of(&runtime);
+    assert_eq!(kinds, [WarningKind::Stopped]);
+    assert_eq!(letters.len(), 1, "one letter, the stop's");
+    assert!(letters[0].contains("warn:stopped"), "{letters:?}");
+
+    row.activity = "working".into();
+    runtime.snapshot.navigator.agents = vec![row];
+    assert!(runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
+    let (kinds, letters) = warnings_of(&runtime);
+    assert_eq!(kinds, [WarningKind::NoPush], "the quiet is judged again");
+    assert_eq!(letters.len(), 1);
+    assert!(letters[0].contains("warn:no_push"), "{letters:?}");
 }
 
 /// The missions are drawn again when a row they read moves, and only then:

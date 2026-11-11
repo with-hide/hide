@@ -294,8 +294,8 @@ A worker is stopped when its program runs, its turn ended and it waits on nothin
 Its letter says why the turn ended when the agent said: a usage limit, with the agent's own line and its reset time when it gave one, or an API error; otherwise that it ended with no report.
 Send it on with a letter saying what is left, or give the node a fresh worker; on a usage limit, send it on once the limit resets (hold the mission until then with `hide mission delay`) or give the node a fresh worker on another model.
 The map draws the node `멈춤` with its cause and how long ago from the moment it stops, before the letter.
-Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, a new push, or the stopped worker at work again takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
-While a stopped worker's warning stands, no no-push warning rises beside it and its watch sends you no no-activity letter.
+Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, a new push, or the stopped worker at work or waiting again, or its node waiting on someone, takes it off with its letter if not sent yet, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
+While a worker stands stopped, its node's no-push warning goes and none rises, so you get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise a warning that stood 30 minutes becomes does not take that warning off.
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
 The three thresholds are fixed: two failed reviews in a row, 90 minutes with no push, and 5 minutes stopped.
 
