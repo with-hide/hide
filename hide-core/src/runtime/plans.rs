@@ -1941,16 +1941,18 @@ mod tests {
                 .extend(link.as_object().unwrap().clone());
             serde_json::from_value(value).unwrap()
         };
-        let mut ledger = crate::delivery::ledger::Ledger::default();
-        ledger.spawns = vec![
-            spawn(
-                40,
-                serde_json::json!({"plan": {"plan": "1", "step": "s", "attempt": 1,
+        let ledger = crate::delivery::ledger::Ledger {
+            spawns: vec![
+                spawn(
+                    40,
+                    serde_json::json!({"plan": {"plan": "1", "step": "s", "attempt": 1,
                     "parent_session": session}}),
-            ),
-            spawn(50, serde_json::json!({"mission": "mission-1"})),
-            spawn(60, serde_json::json!({})),
-        ];
+                ),
+                spawn(50, serde_json::json!({"mission": "mission-1"})),
+                spawn(60, serde_json::json!({})),
+            ],
+            ..Default::default()
+        };
         runtime.delivery_ledger = Ok(std::sync::Arc::new(ledger));
         let ids = |held: &crate::coordination::Held| {
             (
