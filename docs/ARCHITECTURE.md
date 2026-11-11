@@ -4468,7 +4468,7 @@ The words it draws come with the call (`ScannerText`), from the page's own catal
 A pairing link `https://app.withhide.dev/#pair=<code>` opens the app through a universal link (the `applinks:app.withhide.dev` entitlement and the `apple-app-site-association` file the hosted phone site serves, which `scripts/phone-release.mjs` publishes and checks); the app registers no URL scheme of its own.
 `SceneDelegate` hands the link to `PairLinkInbox` and does not pass a pairing link on to Capacitor's scene proxy, which would keep it in `lastURL` for the life of the process.
 The inbox accepts only that exact form (no query, port or user, at most 1024 bytes), keeps it in memory for one minute and gives it out once, to the page's `takeLink`; the web app then asks the person before it connects, so a link never pairs a phone by itself.
-The page tells the host its light or dark choice through `HideApp.appearance`, which sets the window's interface style so the status bar and keyboard follow it, and the shell turns the web view's bounce and zoom off, shrinks its frame for the keyboard so the reply field stays visible, and supports the portrait iPhone only.
+The page tells the host its light or dark choice through `HideApp.appearance`, which sets the window's interface style so the status bar and keyboard follow it, and the shell turns the web view's bounce and zoom off, gives the keyboard the bottom of its frame so the reply field stays visible (measured from the window, since the web view is the controller's own view, and with the web view's own keyboard handling taken off so room is made once), and supports the portrait iPhone only.
 The build is in [BUILD.md](BUILD.md#the-ios-app).
 
 ### The desktop host
