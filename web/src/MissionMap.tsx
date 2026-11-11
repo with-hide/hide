@@ -317,8 +317,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const merging = mergeOverridden(mission.scope, node);
   const minute = useMinuteClock();
   const long = gateWaitedLong(gate, minute);
-  // Only a card waiting on the operator is the operator's turn: a raised reason to them, an open gate, or a merge its plan gives them now due (PRD mission-destination B21); one waiting on the Conductor, or a gate or merge still ahead, reads as work in progress (B9).
-  const yours = (attention !== null && node.attention!.to === "operator") || gate?.state === "open" || (merging && node.merge?.state === "due");
+  // Only a card waiting on the operator is the operator's turn: a raised reason to them, an open gate, or a merge the core says is theirs now (PRD mission-destination B21); one waiting on the Conductor, or a gate or merge still ahead, reads as work in progress (B9).
+  const yours = (attention !== null && node.attention!.to === "operator") || gate?.state === "open" || node.merge?.state === "due";
   const warning = warningWords(mission, node, t);
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);

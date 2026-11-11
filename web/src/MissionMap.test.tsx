@@ -599,11 +599,9 @@ it("draws `👤 머지는 내가` as the card's second-line strip only where the
     expect([both.querySelector("[data-node-gate]") !== null, both.querySelector<HTMLElement>("[data-node-merge-strip]")?.dataset.nodeMergeStrip]).toEqual([true, "ahead"]);
   } finally { await map.unmount(); }
   // A scope `pr` mission leaves every merge to the operator: no strip, only the faint orange 👤 on the destination station (D-35).
-  const scoped = await mount({ items: [mission({ scope: "pr", destination: "main", nodes: [node("pr", { status: "working", pr: 36, pr_state: "pending", merge: { by: "operator", state: "ahead", prs: [36] } }), node("ready", { status: "done", pr: 37, pr_state: "mergeable", merge: { by: "operator", why: "DB change", state: "due", prs: [37] } })] })] });
+  const scoped = await mount({ items: [mission({ scope: "pr", destination: "main", nodes: [node("pr", { status: "working", pr: 36, pr_state: "pending", merge: { by: "operator", state: "ahead", prs: [36] } })] })] });
   try {
     expect(card(scoped, "pr").querySelector("[data-node-merge-strip], [data-node-human-strip]")).toBeNull();
-    // Nor is its due merge the operator's turn card.
-    expect([card(scoped, "ready").querySelector("[data-node-merge-strip], [data-node-turn]"), card(scoped, "ready").className.includes("border-mission-hold")]).toEqual([null, false]);
     const last = card(scoped, "pr").querySelector<HTMLElement>('[data-station="land"]')!;
     expect([last.dataset.stationState, last.dataset.stationPlace]).toEqual(["ahead", "destination"]);
   } finally { await scoped.unmount(); }
