@@ -95,7 +95,7 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
     [{ status: "planning", nodes: [] }, "planning", "M1 · Planning", undefined],
     [{}, "running", "M1 · 1/3", "done working waiting"],
     // A decision keeps the progress and adds `!` in its colour (needs-you-cleanup B6).
-    [{ decision: "Which base for the screen PR?" }, "decision", "! M1 · 1/3", "done working waiting"],
+    [{ decision: "Which base for the screen PR?" }, "turn", "! M1 · 1/3", "done working waiting"],
     [{ status: "merge_wait" }, "merge_wait", "M1 · Waiting to merge", "done working waiting"],
     [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "M1 · 3/3", "done done done"],
     [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "M1 · Cancelled", "done cancelled cancelled"],
@@ -108,7 +108,7 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
       // One cell per node in the plan, in its state's colour; no cell before the first plan.
       expect(view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells).toBe(cells);
       // A decision and a done mission keep their colour while the popover is open.
-      if (state === "decision") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-hold");
+      if (state === "turn") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-hold");
       if (state === "done") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-done");
       expect(view.chip()?.getAttribute("aria-label")).toMatch(/^Mission Ship the API · /);
       // The name says the exact count and the node at work, since the cells are not read out.

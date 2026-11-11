@@ -101,6 +101,8 @@ pub struct MissionView {
     /// (with-hide/hide-private#678).
     pub conductor_letters: Option<crate::delivery::held::HeldLetters>,
     pub delay: Option<String>,
+    /// When the delay ends by itself (`Mission::delay_until_unix_ms`).
+    pub delay_until_unix_ms: Option<u64>,
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
     pub started_at_unix_ms: Option<u64>,
@@ -259,6 +261,8 @@ pub struct NodeView {
     pub asks_push: bool,
     /// The warnings it carries, its Conductor's alone: the card's `⚠`.
     pub warnings: Vec<crate::missions::NodeWarning>,
+    /// Why and until when its Conductor holds it (`MissionNode::hold`).
+    pub hold: Option<crate::missions::NodeHold>,
     /// Who or what it waits on now (`waiting_on`), which `hide mission show`
     /// prints; none for a node that waits on nothing.
     pub waiting_on: Option<WaitingOn>,
@@ -574,6 +578,12 @@ pub(crate) struct MissionRuntime {
     pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
     /// What the last health evaluation read (PRD mission-node-simple D-08).
     pub(super) health_made: super::mission_health::HealthMadeFrom,
+    /// Since when each stall standing now has stood, by mission, node and
+    /// cause, as the minute decision first saw it (`stall_missions`). Memory
+    /// only: a restart or an update starts every clock again, so nothing that
+    /// rested before it is raised at once; an entry goes once its stall
+    /// stops standing, so it holds at most one per node standing.
+    pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
@@ -923,7 +933,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 _ => "shows signs its worker is stuck".to_owned(),
             };
             format!(
-                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is not told.",
+                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is told if the warning still stands in 30 minutes.",
                 wake.node, mission.id, mission.title, wake.node, mission.id
             )
         }
@@ -965,7 +975,15 @@ fn attention_words(
             "its gate waits on the operator".to_owned(),
             "nothing: the operator answers on the decision card",
         ),
-        Some(Reason::ConductorFailed) | None => (
+        Some(Reason::NotStarted) => (
+            "it could start and was not started".to_owned(),
+            "start its worker; or, to hold it, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`; the operator is told in ten minutes",
+        ),
+        Some(Reason::WaitStood) => (
+            format!("{pr} has waited over an hour on CI, a review or the merge"),
+            "find what it waits on and move it, or merge it; the operator is told in ten minutes",
+        ),
+        Some(Reason::ConductorFailed | Reason::WarningStood) | None => (
             "the operator is asked to look".to_owned(),
             "nothing unless the operator asks",
         ),
@@ -1594,6 +1612,7 @@ impl Runtime {
                     answer: None,
                     answer_failed: None,
                     delay: None,
+                    delay_until_unix_ms: None,
                     report: None,
                     created_at_unix_ms: now,
                     updated_at_unix_ms: now,
@@ -1697,6 +1716,20 @@ impl Runtime {
                     &node,
                     &patch,
                 )?;
+                // A worker whose spawn is under way has started the node, so
+                // a hold set now could not stop it.
+                if matches!(patch.hold, Some(Some(_)))
+                    && ledger.as_deref().is_some_and(|ledger| {
+                        let intent = format!("{id}:{node}");
+                        ledger.spawns.iter().any(|spawn| {
+                            !spawn.completed
+                                && spawn.mission.as_deref() == Some(id.as_str())
+                                && spawn.intent == intent
+                        })
+                    })
+                {
+                    return Err(crate::coordination::refusal("mission_node_started", &node));
+                }
                 let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
                 let index = current
                     .nodes
@@ -1800,6 +1833,11 @@ impl Runtime {
                         self.follow_mission_outside(&id);
                     }
                 }
+                // A hold set or lifted is the Conductor's move on the node:
+                // whatever stood before it is counted again from now.
+                if patch.hold.is_some() {
+                    self.restart_stall_clock(&id, Some(&node));
+                }
                 // What the Conductor just did may follow a pull request it
                 // pushed: its project is read again within the read's own
                 // spacing (D-09, B23).
@@ -1851,9 +1889,11 @@ impl Runtime {
                 )?;
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
-            MissionCommand::Delay { mission, line } => {
-                self.set_mission_delay(&actor, mission.as_deref(), line, now)
-            }
+            MissionCommand::Delay {
+                mission,
+                line,
+                for_minutes,
+            } => self.set_mission_delay(&actor, mission.as_deref(), line, for_minutes, now),
             MissionCommand::Close {
                 mission,
                 end,
@@ -2069,14 +2109,18 @@ impl Runtime {
         actor: &Actor,
         mission: Option<&str>,
         line: Option<String>,
+        for_minutes: Option<u32>,
         now: u64,
     ) -> Result<(Value, bool), String> {
         let id = self.conducted_mission(actor, mission, true)?;
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
-        let changed = target.delay != line;
+        let until = for_minutes.map(|minutes| now + u64::from(minutes) * 60_000);
+        let changed = target.delay != line || target.delay_until_unix_ms != until;
         target.delay = line;
+        target.delay_until_unix_ms = until;
         if changed {
             target.updated_at_unix_ms = now;
+            self.restart_stall_clock(&id, None);
             self.save_missions();
         }
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))
@@ -2464,6 +2508,17 @@ impl Runtime {
     /// project's that may not run it (`admit_elsewhere`), or when it is none
     /// of the operator's worker candidates,
     /// and otherwise the mission whose cap the ledger checks.
+    /// Whether the node `intent` names in `mission` is held now
+    /// (`MissionNode::hold`): its worker's spawn is refused at its admission
+    /// and again where its place is reserved (`delivery::worker`).
+    pub(crate) fn mission_intent_held(&self, mission: &str, intent: &str) -> bool {
+        self.missions
+            .book
+            .get(mission)
+            .and_then(|mission| mission.intent_node(intent))
+            .is_some_and(|node| node.hold.is_some())
+    }
+
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
@@ -2485,6 +2540,11 @@ impl Runtime {
         // run its first turn (delivery.md, session_unread).
         if !briefed && node.is_some() {
             return Err("mission_brief_missing".into());
+        }
+        // A held node's worker waits for the hold to be lifted, as a start
+        // by `hide mission node` does (`apply_patch`).
+        if let Some(node) = node.filter(|node| node.hold.is_some()) {
+            return Err(crate::coordination::refusal("mission_node_held", &node.key));
         }
         let worker_machine = machine.unwrap_or(actor.device_id.as_str());
         if worker_machine != mission.device_id {
@@ -3649,6 +3709,7 @@ impl Runtime {
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
                     asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
+                    hold: node.hold.clone(),
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),
@@ -3762,6 +3823,7 @@ impl Runtime {
                 .conductor_letters(mission, ledger, crate::delivery::worker::now())
                 .0,
             delay: mission.delay.clone(),
+            delay_until_unix_ms: mission.delay.as_ref().and(mission.delay_until_unix_ms),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,
             started_at_unix_ms: mission.started_at_unix_ms,

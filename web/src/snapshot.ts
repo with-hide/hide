@@ -1399,7 +1399,7 @@ export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 export type MissionBlocked = "upstream_dropped";
 
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
-export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate"] as const;
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1655,7 +1655,12 @@ export type MissionNode = {
   work?: MissionNodeWork | null;
   /** The node's gate (PRD mission-human-gate); absent for a node without one. */
   gate?: MissionGate;
+  /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
+  hold?: MissionNodeHold | null;
 };
+
+/** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
+export type MissionNodeHold = { why: string; until_unix_ms: number };
 
 /** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
 export type MissionNodeWork = { state: "working" } | { state: "waiting"; on: MissionWaitingOn } | { state: "no_worker" };
@@ -1713,6 +1718,8 @@ export type Mission = {
   conductor_letters?: MissionHeldLetters | null;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
+  /** When the delay ends by itself; every delay has an end (`Mission::delay_until_unix_ms`). */
+  delay_until_unix_ms?: number | null;
   report: string | null;
   created_at_unix_ms: number;
   started_at_unix_ms: number | null;
@@ -3054,7 +3061,10 @@ export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thum
 /** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
 export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
-export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; deciding: boolean };
+/** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
+export type MissionTurn = "decision" | "attention";
+
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null };
 /** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
 export type DeskJob = {
   id: string;

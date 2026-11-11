@@ -311,6 +311,8 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
+  // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, and reached the operator; `hold`: its Conductor holds one node back for nine hours.
+  if (shown === "delay" || shown === "stall" || shown === "hold") return stalledOrHeld(missionFixture("running", now), now, shown);
   // An answer sent from the banner draws the decision with that answer on it.
   const held = shown.startsWith("decision-hold-") ? (shown.slice("decision-hold-".length) as MissionAnswerHold) : undefined;
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed" || held !== undefined;
@@ -428,6 +430,24 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       if (session.pane_id === SCREEN_PANE || session.pane_id === REVIEW_PANE) session.device_id = "mini";
     }
   }
+  return { mission, rest };
+}
+
+/** The running mission held as a whole (`delay`), with one node held back (`hold`), or with one node stalled and raised to the operator (`stall`). */
+function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "delay" | "stall" | "hold"): { mission: Mission; rest: SnapshotRest } {
+  mission.decision = null;
+  mission.question = null;
+  if (shown === "delay") {
+    mission.delay = "디스크 여유 4 GiB, 빌드 하나 끝나면 재개";
+    mission.delay_until_unix_ms = now + 40 * MINUTE;
+    return { mission, rest };
+  }
+  const node = mission.nodes.find((one) => one.status === "planned") ?? mission.nodes[mission.nodes.length - 1]!;
+  if (shown === "hold") {
+    node.hold = { why: "아침에 실기기로 확인", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE };
+    return { mission, rest };
+  }
+  node.attention = { reason: "not_started", pr: null, to: "operator", since_unix_ms: now - 31 * MINUTE, on_row: false, item: true, choices: ["leave", "drop"] };
   return { mission, rest };
 }
 

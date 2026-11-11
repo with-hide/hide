@@ -10341,3 +10341,351 @@ fn the_operators_done_passes_a_gate_through_its_one_entry() {
             .any(|wake| wake.event == WakeEvent::GatePassed && wake.node == "fix")
     );
 }
+
+/// A delay ends by itself: one set with `--for` at its end, and one a build
+/// before that end kept is given a day from the first judgment.
+#[test]
+fn a_mission_delay_ends_by_itself() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    let now = crate::runtime::unix_milliseconds();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    let delay = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        (mission.delay.clone(), mission.delay_until_unix_ms)
+    };
+    let until = delay(&runtime).1.expect("a delay has an end");
+    assert!(until >= now + 30 * minute);
+    runtime.stall_missions(until - 1);
+    assert_eq!(delay(&runtime).0.as_deref(), Some("disk"));
+    assert!(runtime.stall_missions(until));
+    assert_eq!(delay(&runtime), (None, None));
+    // A delay kept with no end is given a day.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.delay = Some("usage".into());
+    assert!(runtime.stall_missions(until + minute));
+    assert_eq!(delay(&runtime).1, Some(until + minute + 24 * 60 * minute));
+    // A delay with no end is refused.
+    assert!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "delay", "line": "disk"})
+        )
+        .is_err()
+    );
+}
+
+/// A node that could start and was not is raised to its Conductor twenty
+/// minutes after the minute decision first saw it, not a moment before, and
+/// a delay set meanwhile starts that clock again once it is lifted.
+#[test]
+fn a_node_not_started_is_raised_twenty_minutes_after_it_was_first_seen() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    let raised = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .attention
+            .as_ref()
+            .map(|attention| attention.reason)
+    };
+    let t0 = crate::runtime::unix_milliseconds();
+    runtime.stall_missions(t0);
+    // A delay holds it for a while: no clock runs, and lifting it starts one.
+    runtime.stall_missions(t0 + 10 * minute);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    runtime.stall_missions(t0 + 15 * minute);
+    command(&mut runtime, "sender", json!({"op": "delay", "line": null})).unwrap();
+    let lifted = t0 + 16 * minute;
+    runtime.stall_missions(lifted);
+    runtime.stall_missions(lifted + 20 * minute - 1);
+    assert_eq!(raised(&runtime), None);
+    assert!(runtime.stall_missions(lifted + 20 * minute));
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+    let letters = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        mission
+            .wakes
+            .iter()
+            .filter(|wake| {
+                wake.event == crate::missions::WakeEvent::Attention && wake.node == "fix"
+            })
+            .map(|wake| super::super::missions::wake_intent(mission, wake))
+            .collect::<Vec<_>>()
+    };
+    let first = letters(&runtime);
+    assert_eq!(first.len(), 1, "one letter to the Conductor");
+    // Held, the stall goes; standing again after, it is a new one with a
+    // letter of its own.
+    let held = lifted + 21 * minute;
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(held);
+    assert_eq!(raised(&runtime), None);
+    command(&mut runtime, "sender", json!({"op": "delay", "line": null})).unwrap();
+    runtime.drive_mission_health(held + minute);
+    runtime.stall_missions(held + minute);
+    assert!(runtime.stall_missions(held + 21 * minute));
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+    let again = letters(&runtime);
+    assert!(
+        again.iter().any(|letter| !first.contains(letter)),
+        "{first:?} then {again:?}"
+    );
+    // A full cap takes it off with its waiting letter; once a place is
+    // free it stands again from then, as a new one.
+    let full = held + 22 * minute;
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(super::super::mission_health::lower_not_started(
+        mission, full
+    ));
+    assert_eq!(raised(&runtime), None);
+    assert!(letters(&runtime).is_empty(), "its letter went with it");
+    runtime.stall_missions(full + minute);
+    runtime.stall_missions(full + 21 * minute - 1);
+    assert_eq!(raised(&runtime), None);
+    assert!(runtime.stall_missions(full + 21 * minute));
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+    let third = letters(&runtime);
+    assert!(
+        third.iter().all(|letter| !again.contains(letter)),
+        "{again:?} then {third:?}"
+    );
+}
+
+/// A node not yet started is held for a while: it raises no stall, it
+/// cannot start, and its hold ends by itself; a node at work is not held.
+#[test]
+fn a_held_node_raises_no_stall_cannot_start_and_ends_by_itself() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"hold": {"why": "tonight", "for_minutes": 30}}}),
+    )
+    .unwrap();
+    let node = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().nodes[0].clone();
+    let until = node(&runtime).hold.expect("held").until_unix_ms;
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_node_held"), "{refused}");
+    // Held, it raises nothing however long it waits.
+    runtime.stall_missions(until - 25 * minute);
+    runtime.stall_missions(until - 1);
+    assert_eq!(node(&runtime).attention, None);
+    // Its end lifts it, and it is counted from then.
+    assert!(runtime.stall_missions(until));
+    assert_eq!(node(&runtime).hold, None);
+    runtime.stall_missions(until + 20 * minute - 1);
+    assert_eq!(node(&runtime).attention, None);
+    runtime.stall_missions(until + 20 * minute);
+    assert_eq!(
+        node(&runtime).attention.map(|attention| attention.reason),
+        Some(AttentionReason::NotStarted)
+    );
+    // A node at work cannot be held.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"hold": {"why": "later", "for_minutes": 30}}}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_node_started"), "{refused}");
+}
+
+/// Desk's mission card marks the operator's turn and a delay as every
+/// mission chip does: a decision while the mission is open, its delay, and
+/// nothing of either once it closed.
+#[test]
+fn a_desk_mission_card_says_the_operators_turn_and_the_delay() {
+    use crate::model::DeskMissionTurn;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let card = |runtime: &Runtime| {
+        crate::runtime::desk::jobs::desk_job_mission(&runtime.mission_view_of("mission-1").unwrap())
+    };
+    assert_eq!((card(&runtime).turn, card(&runtime).delay), (None, None));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    assert_eq!(
+        (card(&runtime).turn, card(&runtime).delay),
+        (Some(DeskMissionTurn::Decision), Some("disk".to_owned()))
+    );
+}
+
+/// A hold, on a node or the whole mission, set and lifted between two
+/// judgments still counts the stall again from then: the clock that stood
+/// before it is not reused.
+#[test]
+fn a_hold_set_and_lifted_between_judgments_counts_the_stall_again() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    let raised = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .attention
+            .as_ref()
+            .map(|attention| attention.reason)
+    };
+    let t0 = crate::runtime::unix_milliseconds();
+    runtime.stall_missions(t0);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "delay", "line": null})).unwrap();
+    runtime.stall_missions(t0 + 20 * minute);
+    assert_eq!(raised(&runtime), None);
+    for patch in [
+        json!({"hold": {"why": "tonight", "for_minutes": 30}}),
+        json!({"hold": null}),
+    ] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": patch}),
+        )
+        .unwrap();
+    }
+    runtime.stall_missions(t0 + 39 * minute);
+    runtime.stall_missions(t0 + 58 * minute);
+    assert_eq!(raised(&runtime), None);
+    runtime.stall_missions(t0 + 59 * minute);
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+}
+
+/// A held node's worker is not spawned, and outside work is never held:
+/// a hold on an outside node is refused, and replanning a held node as
+/// outside work drops its hold.
+#[test]
+fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let hold = json!({"hold": {"why": "tonight", "for_minutes": 30}});
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": hold}),
+    )
+    .unwrap();
+    let refused = prepare_spawn_of(
+        &mut runtime,
+        &conductor,
+        None,
+        "mission-1:docs",
+        Some("Write it."),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_node_held"), "{refused}");
+    // The same rule stops it again where its place is reserved.
+    assert!(runtime.mission_intent_held("mission-1", "mission-1:docs"));
+    assert!(!runtime.mission_intent_held("mission-1", "mission-1:fix"));
+    command(&mut runtime, "sender", json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+         "criteria": ["the parser keeps v1 files"],
+         "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]},
+        {"key": "docs", "title": "Docs", "kind": "external", "external": {"branch": "feat/docs"}},
+    ]}}))
+    .unwrap();
+    let docs = runtime.missions.book.get("mission-1").unwrap().nodes[1].clone();
+    assert_eq!((docs.key.as_str(), docs.hold), ("docs", None));
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": hold}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_external_invalid"), "{refused}");
+}

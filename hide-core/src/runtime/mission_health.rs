@@ -138,6 +138,11 @@ pub(super) fn raise_for(
     if reason == AttentionReason::CloseRefused {
         raise_key = format!("{raise_key}:{}", close_key(mission));
     }
+    // A stall that went and stands again is a new one: its own letter and
+    // history entry, named by the raise's count.
+    if reason.stall() {
+        raise_key = format!("{raise_key}:{}", mission.attention_seq + 1);
+    }
     // A cause the node cannot remember is not raised: raised with no
     // memory of it, it would come again once settled (B27).
     if !mission.nodes[at].note_handled(cause) {
@@ -212,17 +217,56 @@ pub(super) fn conductor_unanswered(mission: &Mission) -> bool {
     })
 }
 
+/// A key naming `attention`'s raise, its letter or its reaching the
+/// operator: a stall's carries the raise's count, since the same stall that
+/// went and stands again is a new one (`AttentionReason::stall`).
+fn stall_named(key: String, attention: &crate::missions::Attention) -> String {
+    if attention.reason.stall() {
+        format!("{key}:{}", attention.key)
+    } else {
+        key
+    }
+}
+
+/// Takes off each `not_started` raise of `mission` and its waiting letter,
+/// for a mission whose cap is full: a node waiting for a place owes no
+/// start, and stands again as a new stall once a place is free. Whether
+/// one went.
+pub(super) fn lower_not_started(mission: &mut Mission, now: u64) -> bool {
+    let id = mission.id.clone();
+    let mut lowered = false;
+    for node in &mut mission.nodes {
+        let Some(cause) = node
+            .attention
+            .as_ref()
+            .filter(|attention| attention.reason == AttentionReason::NotStarted)
+            .map(crate::missions::Attention::cause)
+        else {
+            continue;
+        };
+        settle(&id, node, "hide");
+        node.handled.retain(|handled| *handled != cause);
+        lowered = true;
+    }
+    if lowered {
+        mission.updated_at_unix_ms = now;
+        prune_attention_wakes(mission);
+    }
+    lowered
+}
+
 /// A Conductor that took the mission over is asked first again for what
 /// reached the operator because its predecessor did not answer (B15): its
 /// own ten minutes start now, so the old timeout never hands it on.
 pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
     let mut asked = Vec::new();
     for node in &mut mission.nodes {
-        let Some(key) = node
-            .attention
-            .as_ref()
-            .map(|attention| act_key(node, &format!("raise:{}", attention.cause())))
-        else {
+        let Some(key) = node.attention.as_ref().map(|attention| {
+            stall_named(
+                act_key(node, &format!("raise:{}", attention.cause())),
+                attention,
+            )
+        }) else {
             continue;
         };
         let Some(attention) = node.attention.as_mut() else {
@@ -551,7 +595,10 @@ impl Runtime {
                 // again after a restart makes the same key, and one asked
                 // again of a Conductor that took over is its own act (B27).
                 let Some(key) = node.attention.as_ref().map(|attention| {
-                    act_key(node, &format!("operator:{}:{asked}", attention.cause()))
+                    stall_named(
+                        act_key(node, &format!("operator:{}:{asked}", attention.cause())),
+                        attention,
+                    )
                 }) else {
                     continue;
                 };
@@ -666,6 +713,152 @@ impl Runtime {
                 changed = true;
             }
         }
+        if changed {
+            self.save_missions();
+            self.flush_mission_wakes();
+        }
+        changed
+    }
+
+    /// Ends each delay that ran out, gives an end to one a build before
+    /// `Mission::delay_until_unix_ms` set, and raises each node that stood
+    /// where a move did not come (`mission_health::stalls`) for as long as
+    /// its reason allows (`stall_after`), counted from the first judgment
+    /// that saw it stand: a hold lifted, a place freed, a decision answered
+    /// or a restart starts its clock again. Run in the minute decision, the
+    /// only clock a stall needs. A mission whose device does not answer is
+    /// left as it is (B29). Whether the book changed.
+    /// A hold set, lifted or ended is a move on the mission (`node` none)
+    /// or on one node: whatever stood before it is counted again from the
+    /// next judgment, even when no judgment ran while it held.
+    pub(super) fn restart_stall_clock(&mut self, mission: &str, node: Option<&str>) {
+        self.missions
+            .stall_clock
+            .retain(|(of, at, _), _| of != mission || node.is_some_and(|node| at != node));
+    }
+
+    pub(crate) fn stall_missions(&mut self, now: u64) -> bool {
+        let ledger = self.delivery_state().ok();
+        let closed: Vec<String> = self.closed_registration_ids().into_iter().collect();
+        let mut clock = std::collections::HashMap::new();
+        let mut changed = false;
+        for index in 0..self.missions.book.missions.len() {
+            let mission = &mut self.missions.book.missions[index];
+            let mut delay_ended = false;
+            if mission.delay.is_some() {
+                let moved = match mission.delay_until_unix_ms {
+                    None => {
+                        let limit = u64::from(crate::missions::DELAY_LIMIT_MINUTES) * 60_000;
+                        mission.delay_until_unix_ms = Some(now + limit);
+                        true
+                    }
+                    Some(until) if now >= until => {
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.delay_ended",
+                            "mission": mission.id,
+                        }));
+                        mission.delay = None;
+                        mission.delay_until_unix_ms = None;
+                        delay_ended = true;
+                        true
+                    }
+                    Some(_) => false,
+                };
+                if moved {
+                    mission.updated_at_unix_ms = now;
+                    changed = true;
+                }
+            }
+            // A node's hold ends by itself too.
+            let mut lifted = Vec::new();
+            for node in &mut mission.nodes {
+                if node
+                    .hold
+                    .as_ref()
+                    .is_some_and(|hold| now >= hold.until_unix_ms)
+                {
+                    crate::diagnostic!(json!({
+                        "component": "missions", "kind": "mission.node_hold_ended",
+                        "mission": mission.id, "node": node.key,
+                    }));
+                    node.hold = None;
+                    lifted.push(node.key.clone());
+                }
+            }
+            if !lifted.is_empty() {
+                mission.updated_at_unix_ms = now;
+                changed = true;
+            }
+            let id = mission.id.clone();
+            if delay_ended {
+                self.restart_stall_clock(&id, None);
+            }
+            for key in &lifted {
+                self.restart_stall_clock(&id, Some(key));
+            }
+            let mission = &self.missions.book.missions[index];
+            if self.mission_stale(mission) {
+                continue;
+            }
+            let cap_full = ledger.as_deref().is_some_and(|ledger| {
+                crate::coordination::mission_workers(ledger, &mission.id, &closed, now)
+                    >= usize::from(mission.cap)
+            });
+            // A node waiting for a place under the cap owes no start: a
+            // `not_started` already raised goes, to stand again once a place
+            // is free.
+            if cap_full {
+                changed |= lower_not_started(&mut self.missions.book.missions[index], now);
+            }
+            let mission = &self.missions.book.missions[index];
+            let operator_waits: Vec<bool> = mission
+                .nodes
+                .iter()
+                .map(|node| self.gate_open(mission, node))
+                .collect();
+            let standing = crate::mission_health::stalls(
+                mission,
+                self.mission_pulls(mission),
+                cap_full,
+                &operator_waits,
+            );
+            let mut due = Vec::new();
+            for stall in standing {
+                let node = &mission.nodes[stall.node];
+                // A new push to the pull request is a move: its wait is
+                // counted from the head it waits on.
+                let cause = crate::missions::cause_key(stall.reason, stall.pr, None);
+                let since_key = format!("{cause}:{}", stall.head.as_deref().unwrap_or_default());
+                let key = (mission.id.clone(), node.key.clone(), since_key);
+                let since = self.missions.stall_clock.get(&key).copied().unwrap_or(now);
+                // A stall raised now keeps no clock: should it go and stand
+                // again, it is counted from then.
+                if now.saturating_sub(since) >= crate::mission_health::stall_after(stall.reason) {
+                    due.push(stall);
+                } else {
+                    clock.insert(key, since);
+                }
+            }
+            if due.is_empty() {
+                continue;
+            }
+            let id = mission.id.clone();
+            let mission = &mut self.missions.book.missions[index];
+            let mut events = Vec::new();
+            for stall in due {
+                let key = mission.nodes[stall.node].key.clone();
+                events.extend(raise_for(mission, &key, stall.reason, stall.pr, None, now));
+            }
+            if !events.is_empty() {
+                mission.updated_at_unix_ms = now;
+                prune_attention_wakes(mission);
+                self.record_mission_events(&id, events);
+                changed = true;
+            }
+        }
+        // Only what stands now keeps its clock, so the map holds at most one
+        // entry per node standing and a move that came starts it again.
+        self.missions.stall_clock = clock;
         if changed {
             self.save_missions();
             self.flush_mission_wakes();
@@ -808,7 +1001,24 @@ impl Runtime {
                     // went back to work did not end the mission's closing:
                     // the next refusal is raised again, not held back as
                     // the one already handled.
-                    if let Some((AttentionReason::CloseRefused, cause)) = cleared {
+                    // A stall Hide took off because its move came, or none is
+                    // owed now, may stand again later as a new one, with
+                    // its own clock and letter.
+                    if let Some((
+                        AttentionReason::NotStarted
+                        | AttentionReason::WarningStood
+                        | AttentionReason::WaitStood,
+                        _,
+                    )) = cleared
+                    {
+                        let key = mission.nodes[node].key.clone();
+                        self.missions
+                            .stall_clock
+                            .retain(|(of, at, _), _| !(of == id && *at == key));
+                    }
+                    if let Some((reason, cause)) = cleared
+                        && (reason == AttentionReason::CloseRefused || reason.stall())
+                    {
                         mission.nodes[node]
                             .handled
                             .retain(|handled| *handled != cause);

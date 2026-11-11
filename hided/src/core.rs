@@ -57,7 +57,7 @@ enum Command {
         pane_id: String,
         expected: Context,
         hint: Option<String>,
-        command: hide_core::delivery::Command,
+        command: Box<hide_core::delivery::Command>,
         reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
     },
     MemoryPrepare {
@@ -396,7 +396,7 @@ impl CoreHandle {
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
                 hint,
-                command,
+                command: Box::new(command),
                 reply,
             })
             .map_err(|_| "delivery_unavailable".to_owned())?;
@@ -1719,7 +1719,7 @@ fn owner_loop(
                     &pane_id,
                     &expected,
                     hint.as_deref(),
-                    command,
+                    *command,
                 ));
             }
             Command::SetDesk { platform } => core.set_desk(platform),

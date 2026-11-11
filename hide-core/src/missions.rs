@@ -267,13 +267,26 @@ pub enum AttentionReason {
     /// ask it on its row (PRD mission-human-gate D-23): the mission's own
     /// item, answered on the decision card.
     HumanGate,
+    /// The node could start, nothing holds it, and it was not started
+    /// (`mission_health::stall_acts`).
+    NotStarted,
+    /// A warning its Conductor was sent stood with nothing moving
+    /// (`mission_health::stall_acts`): the Conductor already had its letter,
+    /// so it reaches the operator at once.
+    WarningStood,
+    /// The node's pull request waited on CI, a review or the merge for longer
+    /// than any of those takes (`mission_health::stall_acts`).
+    WaitStood,
 }
 
 impl AttentionReason {
     /// A reason only the operator can settle goes to them at once (B26);
     /// the others ask the Conductor first (D-05).
     pub fn operator_first(self) -> bool {
-        matches!(self, Self::ConductorFailed | Self::HumanGate)
+        matches!(
+            self,
+            Self::ConductorFailed | Self::HumanGate | Self::WarningStood
+        )
     }
 
     /// The operator's choices for a raise of this reason, in the order the
@@ -290,7 +303,12 @@ impl AttentionReason {
         use OperatorAction::{Attach, Done, Drop, Leave, Resume};
         let own: &[OperatorAction] = match self {
             Self::MergedUnproven | Self::CloseRefused => &[Done],
-            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused => &[Drop],
+            Self::WorkerEnded
+            | Self::PrClosed
+            | Self::WakeRefused
+            | Self::NotStarted
+            | Self::WarningStood
+            | Self::WaitStood => &[Drop],
             Self::UnplannedPr => &[Attach],
             Self::ConductorFailed => &[Resume, Drop],
             // Answered on the gate's decision card, never past it here.
@@ -304,6 +322,16 @@ impl AttentionReason {
         leave.chain(own.iter().copied()).collect()
     }
 
+    /// A move that did not come (`mission_health::stalls`): raised once
+    /// while it stands, and again as a new one, with its own letter, once it
+    /// went and stands again.
+    pub fn stall(self) -> bool {
+        matches!(
+            self,
+            Self::NotStarted | Self::WarningStood | Self::WaitStood
+        )
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MergedUnproven => "merged_unproven",
@@ -314,6 +342,9 @@ impl AttentionReason {
             Self::WakeRefused => "wake_refused",
             Self::CloseRefused => "close_refused",
             Self::HumanGate => "human_gate",
+            Self::NotStarted => "not_started",
+            Self::WarningStood => "warning_stood",
+            Self::WaitStood => "wait_stood",
         }
     }
 }
@@ -1071,6 +1102,27 @@ pub struct MissionNode {
     /// The warnings the node carries now, at most one of each kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<NodeWarning>,
+    /// The Conductor holds this node, not yet started, on purpose: why and
+    /// until when, at most `DELAY_LIMIT_MINUTES` (`hide mission node --hold
+    /// --for`). No stall is raised on it, it cannot start, and it ends by
+    /// itself (`Runtime::stall_missions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<NodeHold>,
+}
+
+/// Why and until when a node is held (`MissionNode::hold`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeHold {
+    pub why: String,
+    pub until_unix_ms: u64,
+}
+
+/// A hold as a command asks for it: why, and for how many minutes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoldInput {
+    pub why: String,
+    pub for_minutes: u32,
 }
 
 /// The agent item, model and effort Hide started a node's worker with,
@@ -1398,6 +1450,13 @@ pub struct Mission {
     /// Why new nodes wait on usage (B13).
     #[serde(default)]
     pub delay: Option<String>,
+    /// When `delay` ends by itself: a hold always has an end, at most
+    /// `DELAY_LIMIT_MINUTES` after it was set, so a mission never rests
+    /// unseen behind one. A delay a build before this kept, with no end,
+    /// is given one `DELAY_LIMIT_MINUTES` after this build first reads it
+    /// (`Runtime::warn_missions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_until_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
@@ -1438,6 +1497,10 @@ pub struct Mission {
 
 /// How long the operator's handover waits for the session it started.
 pub const HANDOVER_TTL_MS: u64 = 10 * 60_000;
+
+/// The longest a mission's delay holds: one day, after which the mission
+/// goes on and a node still not started is a stall (`mission_health`).
+pub const DELAY_LIMIT_MINUTES: u32 = 24 * 60;
 
 /// Whether `token` can name a handover: 16 to 64 letters, digits and `-`.
 pub(crate) fn valid_handover(token: &str) -> bool {
@@ -1921,7 +1984,7 @@ pub enum MissionCommand {
         #[serde(default)]
         mission: Option<String>,
         node: String,
-        patch: NodePatch,
+        patch: Box<NodePatch>,
     },
     Start {
         #[serde(default)]
@@ -1949,7 +2012,8 @@ pub enum MissionCommand {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         show: Vec<String>,
     },
-    /// Sets or clears why new nodes wait on usage (B13).
+    /// Sets or clears why new nodes wait on usage (B13), for at most
+    /// `DELAY_LIMIT_MINUTES`.
     Delay {
         #[serde(default)]
         mission: Option<String>,
@@ -1957,6 +2021,10 @@ pub enum MissionCommand {
         /// out is refused rather than read as a clear.
         #[serde(deserialize_with = "present")]
         line: Option<String>,
+        /// How long the delay holds, in minutes: required with a line,
+        /// absent with a clear.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_minutes: Option<u32>,
     },
     Close {
         #[serde(default)]
@@ -2126,11 +2194,20 @@ impl MissionCommand {
                         .iter()
                         .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
             }
-            Self::Delay { mission, line } => {
+            Self::Delay {
+                mission,
+                line,
+                for_minutes,
+            } => {
                 id_ok(mission)
                     && line
                         .as_deref()
                         .is_none_or(|line| valid_text(line, LINE_LIMIT))
+                    && match (line, for_minutes) {
+                        (Some(_), Some(minutes)) => (1..=DELAY_LIMIT_MINUTES).contains(minutes),
+                        (None, None) => true,
+                        _ => false,
+                    }
             }
             Self::Close {
                 mission, report, ..
@@ -2315,6 +2392,13 @@ pub struct NodePatch {
     pub reviewer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifier: Option<String>,
+    /// Holds the node, not yet started (`MissionNode::hold`); `null` lifts it.
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold: Option<Option<HoldInput>>,
 }
 
 impl NodePatch {
@@ -2339,8 +2423,10 @@ impl NodePatch {
             checks,
             reviewer,
             verifier,
+            hold,
         } = self;
-        status.is_none()
+        hold.is_none()
+            && status.is_none()
             && agent_id.is_none()
             && base_pr.is_none()
             && attempts.is_none()
@@ -2588,9 +2674,15 @@ pub(crate) fn apply_plan(
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
                 warnings: Vec::new(),
+                hold: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
+            // A node planned as outside work loses its hold: outside work
+            // moves it, and no hold can stop that.
+            if node.kind == NodeKind::External {
+                node.hold = None;
+            }
             node.depends_on.clone_from(&input.depends_on);
             node.delivery = input.delivery;
             node.worker.clone_from(&input.worker);
@@ -2829,7 +2921,37 @@ pub(crate) fn apply_patch(
             &node.key,
         ));
     }
+    if let Some(Some(hold)) = &patch.hold {
+        // An outside node moves on outside work, which no hold can stop.
+        if node.kind == NodeKind::External {
+            return Err(crate::coordination::refusal(
+                "mission_external_invalid",
+                &node.key,
+            ));
+        }
+        if !valid_line(&Some(hold.why.clone()), LINE_LIMIT)
+            || !(1..=DELAY_LIMIT_MINUTES).contains(&hold.for_minutes)
+        {
+            return Err("mission_text_invalid".into());
+        }
+        if node.started() {
+            return Err(crate::coordination::refusal(
+                "mission_node_started",
+                &node.key,
+            ));
+        }
+    }
     let mut next = node.clone();
+    match &patch.hold {
+        Some(Some(hold)) => {
+            next.hold = Some(NodeHold {
+                why: hold.why.trim().to_owned(),
+                until_unix_ms: now + u64::from(hold.for_minutes) * 60_000,
+            });
+        }
+        Some(None) => next.hold = None,
+        None => {}
+    }
     if let Some(status) = patch.status {
         if status == NodeStatus::Working && next.started_at_unix_ms.is_none() {
             next.started_at_unix_ms = Some(now);
@@ -2884,6 +3006,10 @@ pub(crate) fn apply_patch(
     // judged against its folder, and a fresh check.
     if next.status != NodeStatus::Done {
         next.done_head = None;
+    }
+    // A held node starts only once its hold is lifted.
+    if next.hold.is_some() && next.started() {
+        return Err(crate::coordination::refusal("mission_node_held", &node.key));
     }
     Ok(next)
 }
@@ -3093,6 +3219,12 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_checkers_invalid" => {
             "Name each of review and verify at most once per node, each with one to five agents in \"by\""
+        }
+        "mission_node_held" => {
+            "The node is held: lift it with `hide mission node <key> --no-hold` before you start it"
+        }
+        "mission_node_started" => {
+            "Only a node not yet started can be held; a node at work that waits on something says so in its line"
         }
         "mission_external_invalid" => {
             "An external node names one pull request (\"external\": {\"pr\": <n>}) or branch (\"external\": {\"branch\": \"<name>\"}) and no worker, delivery, criteria or checks; Hide marks it done when it reaches main, and you can only drop it"
@@ -3607,6 +3739,7 @@ pub(crate) mod tests {
             answer: None,
             answer_failed: None,
             delay: None,
+            delay_until_unix_ms: None,
             report: None,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,

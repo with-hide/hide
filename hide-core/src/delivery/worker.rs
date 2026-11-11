@@ -1210,11 +1210,29 @@ fn current(
 ) -> Result<(), String> {
     match &request.effect {
         Effect::Agents {
-            authority, actor, ..
+            authority,
+            actor,
+            mutation,
         } => runtime
             .lock()
             .map_err(|_| "delivery_unavailable".to_owned())
             .and_then(|guard| {
+                // A mission worker's spawn waits on its device out of the
+                // lock after its admission: a hold set on its node meanwhile
+                // stops it here, where its place is reserved.
+                if let crate::coordination::Mutation::Reserve {
+                    command:
+                        crate::coordination::Command::Spawn {
+                            mission: Some(admission),
+                            intent,
+                            ..
+                        },
+                    ..
+                } = &**mutation
+                    && guard.mission_intent_held(&admission.mission, intent)
+                {
+                    return Err("mission_node_held".into());
+                }
                 if actor.code_owned() {
                     // Only the core's code-owned callers
                     // hold this authority; neither has a pane to

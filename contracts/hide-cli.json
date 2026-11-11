@@ -5855,9 +5855,47 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "conflicts": [
+                        "--no-hold"
+                    ],
+                    "name": "--hold",
+                    "required": false,
+                    "requires": [
+                        "--for"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-hold"
+                    ],
+                    "name": "--for",
+                    "required": false,
+                    "requires": [
+                        "--hold"
+                    ],
+                    "value": {
+                        "type": "span"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--hold",
+                        "--for"
+                    ],
+                    "name": "--no-hold",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
             ],
             "refusals": [
+                "mission_node_held",
+                "mission_node_started",
                 "mission_node_unknown",
                 "mission_not_conductor",
                 "mission_ambiguous",
@@ -6257,7 +6295,19 @@
                 },
                 {
                     "conflicts": [
-                        "--line"
+                        "--clear"
+                    ],
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "span"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--line",
+                        "--for"
                     ],
                     "name": "--clear",
                     "required": false,
@@ -6615,7 +6665,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6d75ef4cfd8a37d93551710e5eb0f96f3fe5b6c2c7827ed1482cd0446156ac9a",
+    "digest": "sha256:a418b93b401556dfb20b1f2d60f26a10ae46a5f46cda0c6cc9f4f40f0986dcf9",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -6679,6 +6729,7 @@
         "paste_text": "non-empty, at most 16384 bytes, no control characters but line breaks (LF, CR) and tabs",
         "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",
+        "span": "whole minutes or hours, such as 30m or 2h",
         "text": "non-empty, no control characters, does not start with --",
         "unsigned": "a decimal integer from 0 to 18446744073709551615"
     }

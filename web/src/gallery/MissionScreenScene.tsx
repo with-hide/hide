@@ -18,7 +18,7 @@ import { missionScreenMissions } from "./missionScreenSceneData";
 import { OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["table", "filtered", "detail", "closed-all", "empty", "loading", "failed", "offline"] as const;
+const STATES = ["table", "filtered", "detail", "closed-all", "empty", "loading", "failed", "offline", "held"] as const;
 type MissionScreenState = (typeof STATES)[number];
 
 /** The second project the missions spread over, so the table shows its chips. */
@@ -43,6 +43,16 @@ export function MissionScreenScene({ theme, scale, content, state, window }: Mis
     const other = projects.find((project) => project.id === OTHER)!;
     const device = state === "offline" ? OFFLINE_DEVICE : "local";
     const missions = missionScreenMissions(hide.id, hide.checkouts[0]!.path, other.id, other.checkouts[0]!.path, now).map((mission) => ({ ...mission, device_id: device, stale: state === "offline" }));
+    // `held`: the first running mission's Conductor holds back one node that has not started, which its row counts as a grey `⏸1`, and the next open one is held as a whole by a delay, a grey `⏸` alone.
+    if (state === "held") {
+      const held = missions.find((mission) => mission.status === "running" && mission.nodes.some((one) => one.status === "planned"));
+      const node = held?.nodes.find((one) => one.status === "planned");
+      const delayed = missions.find((mission) => mission !== held && (mission.status === "running" || mission.status === "planning") && !mission.decision);
+      if (!node || !delayed) throw new Error("held scene needs a running mission with a planned node and another open one");
+      node.hold = { why: "아침에 실기기로 확인", until_unix_ms: now + 9 * 3_600_000 - 60_000 };
+      delayed.delay = "디스크 여유 4 GiB, 빌드 하나 끝나면 재개";
+      delayed.delay_until_unix_ms = now + 40 * 60_000;
+    }
     scene.rest.missions = state === "empty" ? { items: [] } : state === "failed" ? { items: [], failed: "mission book: unreadable" } : { items: missions };
     if (state === "loading") delete scene.rest.missions;
     const place: MissionPlace = {

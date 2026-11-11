@@ -10306,6 +10306,9 @@ mod wire_enum_tests {
                 AttentionReason::WakeRefused,
                 AttentionReason::CloseRefused,
                 AttentionReason::HumanGate,
+                AttentionReason::NotStarted,
+                AttentionReason::WarningStood,
+                AttentionReason::WaitStood,
             ];
             for variant in reasons {
                 match variant {
@@ -10316,7 +10319,10 @@ mod wire_enum_tests {
                     | AttentionReason::ConductorFailed
                     | AttentionReason::WakeRefused
                     | AttentionReason::CloseRefused
-                    | AttentionReason::HumanGate => {}
+                    | AttentionReason::HumanGate
+                    | AttentionReason::NotStarted
+                    | AttentionReason::WarningStood
+                    | AttentionReason::WaitStood => {}
                 }
             }
             assert_wire(&contract, "mission_attention_reason", &reasons);
