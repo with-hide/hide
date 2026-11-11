@@ -532,7 +532,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "raised").querySelector("[data-node-turn]")).not.toBeNull();
     expect(card(map, "asked").className).not.toContain("border-mission-hold");
     expect(card(map, "asked").querySelector("[data-node-turn]")).toBeNull();
-    expect(card(map, "raised").getAttribute("aria-label")).toBe(`Node raised · In progress · PR ${"#"}1840 · Needs a look · You · PR ${"#"}1840 merged, a finish line missing or failed`);
+    expect(card(map, "raised").getAttribute("aria-label")).toBe(`Node raised · In progress · PR ${"#"}1840 · Needs a look · You · PR ${"#"}1840 merged with a finish line not passed`);
     // Hide's mark on the card it changed last, what it did and why in the name (B3).
     expect(card(map, "api").querySelector("[data-node-hide]")).not.toBeNull();
     expect(card(map, "api").getAttribute("aria-label")).toContain("Hide · Marked done · merged + criteria 1/1");
@@ -898,7 +898,7 @@ it("draws a raise in 내 차례 as a card saying what happened, why it reached t
     const item = map.q('[data-mission-turn-item="attention"]')!;
     expect(item.querySelector("[data-mission-turn-what]")?.textContent).toBe("Worker ended with work leftFinish lines failed: 2");
     expect(item.querySelector("[data-mission-turn-why]")?.getAttribute("data-mission-turn-why")).toBe("waited");
-    expect(item.querySelector("[data-mission-turn-why]")?.textContent).toBe("The Conductor did not settle it");
+    expect(item.querySelector("[data-mission-turn-why]")?.textContent).toBe("The Conductor could not settle it in 10 minutes");
     expect(item.querySelector("[data-mission-turn-details]")).toBeNull();
     await act(async () => item.querySelector<HTMLButtonElement>("[data-mission-turn-details-toggle]")!.click());
     expect([...item.querySelectorAll("[data-mission-turn-details] li")].map((li) => li.textContent)).toEqual(["Pi wake failed, as it did beforeAgents resume after the upgrade failed", "The OS table matches failed"]);

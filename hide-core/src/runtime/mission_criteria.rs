@@ -183,6 +183,7 @@ impl Runtime {
         let heads = crate::mission_criteria::Heads {
             work: head.as_deref(),
             pull: pull_head(node, pulls),
+            landed: landed(node, pulls),
         };
         let mut out: Vec<String> = crate::mission_criteria::unmet(&node.criteria, heads)
             .into_iter()
@@ -219,6 +220,7 @@ impl Runtime {
         let heads = crate::mission_criteria::Heads {
             work: head.as_deref(),
             pull: pull_head(node, pulls),
+            landed: landed(node, pulls),
         };
         node.criteria
             .iter()
@@ -902,6 +904,29 @@ fn pull_head<'a>(node: &MissionNode, pulls: Option<&'a GithubProjectSnapshot>) -
     node.current_pr()
         .and_then(|number| pull_in(pulls, number))
         .and_then(|pull| pull.head_oid.as_deref())
+}
+
+/// Whether `node`'s pull request is merged with its CI line passed on the
+/// merged head: the work reached main proved there, so a check that passed
+/// on an earlier commit of it, before a merge of main moved the head, stands
+/// (`Criterion::shown`).
+fn landed(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> bool {
+    let Some(head) = node
+        .current_pr()
+        .and_then(|number| pull_in(pulls, number))
+        .filter(|pull| merged(pull))
+        .and_then(|pull| pull.head_oid.as_deref())
+    else {
+        return false;
+    };
+    node.criteria.iter().any(|line| {
+        line.kind == CriterionKind::Ci
+            && line.state == crate::mission_criteria::CriterionState::Pass
+            && line
+                .commit
+                .as_deref()
+                .is_some_and(|commit| crate::mission_criteria::same_commit(commit, head))
+    })
 }
 
 /// The CI `project` reports for `node`'s pull request: a line where it has
