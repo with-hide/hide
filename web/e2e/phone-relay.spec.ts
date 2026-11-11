@@ -3,6 +3,7 @@ import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { screenshot } from "./wire";
 import { startPhoneRelay } from "./phone-relay-fixture";
+import { installBrowserPush } from "./phone-push-platform";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
   relay: async ({ page }, use, info) => {
@@ -381,12 +382,13 @@ test("the phone keeps receiving Off across reload and reconnect, and On register
 for (const cleanup of [true, false]) test(`turning receiving Off handles late subscription cleanup ${cleanup ? "success" : "failure"}`, async ({ page, relay }) => {
   await page.addInitScript((succeeds) => {
     Object.defineProperty(Notification, "permission", { configurable: true, get: () => "granted" });
-    PushManager.prototype.getSubscription = async () => null;
+    let subscription: PushSubscription | null = null;
+    PushManager.prototype.getSubscription = async () => subscription;
     PushManager.prototype.subscribe = () => new Promise((resolve) => {
-      Object.assign(window, { finishSubscription: () => resolve({
+      Object.assign(window, { finishSubscription: () => { subscription = {
         toJSON: () => ({ endpoint: "https://push.example/late", keys: { p256dh: "public", auth: "secret" } }),
-        unsubscribe: async () => { localStorage.setItem("fixture.late-unsubscribed", "true"); return succeeds; },
-      } as PushSubscription) });
+        unsubscribe: async () => { localStorage.setItem("fixture.late-unsubscribed", "true"); if (succeeds) subscription = null; return succeeds; },
+      } as PushSubscription; resolve(subscription); } });
     });
   }, cleanup);
   await pair(page, relay);
@@ -395,7 +397,7 @@ for (const cleanup of [true, false]) test(`turning receiving Off handles late su
   const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
   await expect(receive).toHaveAttribute("aria-checked", "true");
   await receive.click();
-  await expect(page.locator('[data-phone-notifications="off"]')).toBeVisible();
+  await expect(page.locator('[data-phone-notifications="stopping"]')).toBeVisible();
   await page.evaluate(() => (window as unknown as { finishSubscription: () => void }).finishSubscription());
   await expect.poll(() => page.evaluate(() => localStorage.getItem("fixture.late-unsubscribed"))).toBe("true");
   expect(relay.received.filter((frame) => frame.type === "push_subscription")).toHaveLength(0);
@@ -403,52 +405,126 @@ for (const cleanup of [true, false]) test(`turning receiving Off handles late su
   if (!cleanup) await expect(page.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
 });
 
-test("receiving Off cleans every paired computer and lets a failed cleanup be retried", async ({ page, relay }) => {
-  const second = await startPhoneRelay();
-  relay.relayEndpoints.set(second.pairing.room, second.wsUrl);
+test("a receiving choice that cannot be saved survives visibility and Settings remount", async ({ page, relay }) => {
+  await installBrowserPush(page);
+  await pair(page, relay);
+  await expect.poll(() => relay.state.notifications).toBe("on");
+  await page.evaluate(() => { localStorage.setItem("hide.phone.web-push", "on"); localStorage.setItem("fixture.storage-fail", "true"); });
+  await page.locator('[data-phone-tab="settings"]').click();
+  const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
+  await receive.click();
+  await expect(page.locator('[data-phone-notifications="off"]')).toContainText("Could not save on this phone");
+  const registrations = relay.received.filter((frame) => frame.type === "push_subscription").length;
+  await page.evaluate(() => { document.dispatchEvent(new Event("visibilitychange")); window.dispatchEvent(new StorageEvent("storage")); });
+  await page.locator('[data-phone-tab="agents"]').click();
+  await page.locator('[data-phone-tab="settings"]').click();
+  await expect(receive).toHaveAttribute("aria-checked", "false");
+  await expect.poll(() => relay.received.filter((frame) => frame.type === "push_permission" && frame.state === "denied").length).toBeGreaterThan(1);
+  expect(relay.received.filter((frame) => frame.type === "push_subscription")).toHaveLength(registrations);
+});
+
+test("receiving Off retries an inactive computer's failed cleanup after reload", async ({ page, relay }) => {
+  const second = await startPhoneRelay(); relay.relayEndpoints.set(second.pairing.room, second.wsUrl);
   try {
-    await page.addInitScript(() => {
-      Object.defineProperty(Notification, "permission", { configurable: true, get: () => "granted" });
-      const scopes = new WeakMap<PushManager, string>();
-      const descriptor = Object.getOwnPropertyDescriptor(ServiceWorkerRegistration.prototype, "pushManager")!;
-      Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", { configurable: true, get() {
-        const manager = descriptor.get!.call(this) as PushManager; scopes.set(manager, this.scope); return manager;
-      } });
-      const subscription = (manager: PushManager) => {
-        const key = `fixture.subscription:${scopes.get(manager)}`;
-        return {
-          toJSON: () => ({ endpoint: `https://push.example/${encodeURIComponent(key)}`, keys: { p256dh: "public", auth: "secret" } }),
-          unsubscribe: async () => {
-            localStorage.setItem("fixture.cleanup", String(Number(localStorage.getItem("fixture.cleanup") ?? 0) + 1));
-            if (!localStorage.getItem("fixture.failed")) { localStorage.setItem("fixture.failed", "true"); return false; }
-            localStorage.removeItem(key); return true;
-          },
-        } as PushSubscription;
-      };
-      PushManager.prototype.getSubscription = async function () { return localStorage.getItem(`fixture.subscription:${scopes.get(this)}`) ? subscription(this) : null; };
-      PushManager.prototype.subscribe = async function () {
-        localStorage.setItem(`fixture.subscription:${scopes.get(this)}`, "on"); return subscription(this);
-      };
-    });
+    await installBrowserPush(page);
     await pair(page, relay);
-    await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
-    await page.goto("about:blank");
-    await page.goto(relay.origin + "/" + new URL(second.qr).hash);
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
-    await expect.poll(() => second.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
-    // Both scopes have real worker registrations; the platform's unsubscribe answers differ.
+    await expect.poll(() => relay.state.notifications).toBe("on");
+    await pair(page, { ...second, origin: relay.origin });
+    await expect.poll(() => second.state.notifications).toBe("on");
+    const scope = `/push/${relay.pairing.room}/`;
+    await page.evaluate((scope) => localStorage.setItem("fixture.cleanup-refuse", scope), scope);
     await page.locator('[data-phone-tab="settings"]').click();
     const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
     await receive.click();
     await expect(page.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
-    await expect.poll(() => page.evaluate(() => localStorage.getItem("fixture.cleanup"))).toBe("2");
-    await expect(receive).toHaveAttribute("aria-checked", "true");
+    expect(await page.evaluate((room) => localStorage.getItem(`fixture.push:/push/${room}/`), second.pairing.room)).toBeNull();
+    await page.reload();
+    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+    await page.locator('[data-phone-tab="settings"]').click();
+    await expect.poll(() => page.evaluate((scope) => Number(localStorage.getItem(`fixture.cleanup:${scope}`)), scope)).toBeGreaterThan(1);
+    await expect(page.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+    await page.evaluate(() => localStorage.removeItem("fixture.cleanup-refuse"));
     await receive.click();
-    await expect(page.locator('[data-phone-notifications="off"]')).toBeVisible();
-    await expect.poll(() => page.evaluate(() => localStorage.getItem("fixture.cleanup"))).toBe("3");
     await expect(receive).toHaveAttribute("aria-checked", "false");
+    expect(await page.evaluate((scope) => localStorage.getItem(`fixture.push:${scope}`), scope)).toBeNull();
+    expect(relay.state.notifications).toBe("on"); // Inactive computer was never told Off; its endpoint had to be removed here.
+    expect(second.received.filter((frame) => frame.type === "push_permission" && frame.state === "denied").length).toBeGreaterThan(1);
   } finally { await page.goto("about:blank"); await second.stop(); }
+});
+
+test("receiving On restores the inactive computer even when its saved state is on", async ({ page, relay }) => {
+  const second = await startPhoneRelay(); relay.relayEndpoints.set(second.pairing.room, second.wsUrl);
+  try {
+    await installBrowserPush(page);
+    await pair(page, relay);
+    await expect.poll(() => relay.state.notifications).toBe("on");
+    await pair(page, { ...second, origin: relay.origin });
+    await expect.poll(() => second.state.notifications).toBe("on");
+    await page.locator('[data-phone-tab="settings"]').click();
+    const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
+    await receive.click();
+    await expect(receive).toHaveAttribute("aria-checked", "false");
+    await receive.click();
+    await expect.poll(() => second.state.notifications).toBe("on");
+    expect(relay.state.notifications).toBe("on");
+    expect(await page.evaluate((room) => localStorage.getItem(`fixture.push:/push/${room}/`), relay.pairing.room)).toBeNull();
+    await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?host=${relay.pairing.room}`);
+    await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(2);
+    expect(await page.evaluate((room) => localStorage.getItem(`fixture.push:/push/${room}/`), relay.pairing.room)).not.toBeNull();
+  } finally { await page.goto("about:blank"); await second.stop(); }
+});
+
+test("Off cleanup is shared across reconnects and finishes before a newer On", async ({ page, relay }) => {
+  await installBrowserPush(page);
+  await pair(page, relay);
+  await expect.poll(() => relay.state.notifications).toBe("on");
+  const scope = `/push/${relay.pairing.room}/`;
+  await page.evaluate((scope) => localStorage.setItem("fixture.cleanup-hold", scope), scope);
+  await page.locator('[data-phone-tab="settings"]').click();
+  const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
+  await receive.click();
+  await expect(page.locator('[data-phone-notifications="stopping"]')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => "finishCleanup" in window)).toBe(true);
+  relay.disconnect();
+  await expect.poll(() => relay.received.filter((frame) => frame.type === "push_permission" && frame.state === "denied").length).toBe(2);
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(receive).toBeDisabled();
+  expect(await page.evaluate((scope) => localStorage.getItem(`fixture.cleanup:${scope}`), scope)).toBe("1");
+  await page.evaluate(() => (window as unknown as { finishCleanup: (ok: boolean) => void }).finishCleanup(false));
+  await expect(page.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+  await page.evaluate(() => localStorage.removeItem("fixture.cleanup-hold"));
+  await receive.click();
+  await expect(receive).toHaveAttribute("aria-checked", "false");
+  await receive.click();
+  await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(2);
+  expect(await page.evaluate((scope) => localStorage.getItem(`fixture.push:${scope}`), scope)).not.toBeNull();
+});
+
+for (const reason of ["unchanged", "gone", "key_changed"]) test(`reconnecting reconciles a subscription after ${reason}`, async ({ page, relay }) => {
+  await installBrowserPush(page);
+  await pair(page, relay);
+  await expect.poll(() => relay.state.notifications).toBe("on");
+  const before = relay.received.find((frame) => frame.type === "push_subscription")!.subscription;
+  if (reason === "gone") relay.state.notifications = "unasked";
+  else if (reason === "key_changed") await page.evaluate((room) => {
+    const key = `fixture.push:/push/${room}/`;
+    const saved = JSON.parse(localStorage.getItem(key)!) as { key: number[] };
+    saved.key[1] ^= 1; localStorage.setItem(key, JSON.stringify(saved));
+  }, relay.pairing.room);
+  const connections = relay.received.filter((frame) => frame.client_kind === "phone").length;
+  relay.disconnect();
+  await expect.poll(() => relay.received.filter((frame) => frame.client_kind === "phone").length).toBeGreaterThan(connections);
+  if (reason === "unchanged") {
+    await page.locator('[data-phone-tab="settings"]').click();
+    await expect(page.getByRole("switch", { name: "Receive notifications", exact: true })).toHaveAttribute("aria-checked", "true");
+    expect(await page.evaluate((room) => localStorage.getItem(`fixture.cleanup:/push/${room}/`), relay.pairing.room)).toBeNull();
+    expect(relay.received.filter((frame) => frame.type === "push_subscription")).toHaveLength(1);
+    return;
+  }
+  await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(2);
+  const after = relay.received.filter((frame) => frame.type === "push_subscription").at(-1)!.subscription;
+  expect(after).not.toEqual(before);
+  expect(await page.evaluate((room) => localStorage.getItem(`fixture.cleanup:/push/${room}/`), relay.pairing.room)).toBe("1");
 });
 
 for (const permission of ["denied", "unsupported"]) {

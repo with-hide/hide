@@ -3170,7 +3170,9 @@ A registration failure shows `알림을 켜지 못했어요. 다시 시도해 �
 The browser keeps its receiving choice on this phone across reloads and reconnects; without a saved choice it preserves the existing OS-permission behavior.
 Turning it off tells the connected computer and removes subscriptions for every paired computer in this browser, while keeping the workers and their cached app usable.
 A late registration cannot turn receiving back on; a cleanup failure says that not every notification could be turned off and offers the switch for another attempt.
-An unsaved browser choice shows the existing storage-failure guidance.
+While Off, reopening or reconnecting checks every paired computer’s subscriptions again, so a failed cleanup remains retryable after reload.
+Returning to On restores each computer’s actual subscription when connected, even if that computer remembers receiving as On.
+An unsaved browser choice shows the existing storage-failure guidance and survives visibility changes and reopening Settings until this page closes.
 The iOS app removes this phone’s keys for every computer when turned off; removing a computer removes only that computer’s subscription or key.
 In the demo 연결된 컴퓨터 holds three rows, the sample host with its `샘플` mark, `내 컴퓨터 연결하기` and `체험 끝내기`, with the note that nothing goes to a computer under the card.
 In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.

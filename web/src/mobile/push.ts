@@ -90,19 +90,25 @@ function choose(enabled: boolean): void {
 }
 
 function enabled(): boolean {
+  if (!useBrowserPush.getState().kept) return useBrowserPush.getState().enabled;
   try { return localStorage.getItem(PREF_KEY) === "off" ? false : useBrowserPush.getState().enabled; }
   catch { return useBrowserPush.getState().enabled; }
 }
 
 /** Re-read browser permission and this browser's choice when Settings becomes visible. */
 export function refreshBrowserPush(): void {
-  const saved = readPreference();
-  setPush({ ...(saved.kept ? saved : { kept: false }), permission: permission() });
+  // A successful read cannot undo a choice whose write failed in this page.
+  if (useBrowserPush.getState().kept) {
+    const saved = readPreference();
+    setPush(saved.kept ? saved : { kept: false });
+  }
+  setPush({ permission: permission() });
 }
 
-// One subscription attempt and one coalesced follow-up for a replaced computer, never a queue per meta frame.
-let subscribing: { host: ReturnType<typeof currentHost>; key: string | null; result: Promise<boolean> } | null = null;
+// One subscription attempt and one coalesced follow-up, never a queue per meta frame.
+let subscribing: Promise<boolean> | null = null;
 let followUp = false;
+let stopping: Promise<void> | null = null;
 
 async function unsubscribe(subscription: PushSubscription | null | undefined): Promise<void> {
   if (subscription && !(await subscription.unsubscribe())) throw new Error("unsubscribe_failed");
@@ -112,18 +118,28 @@ async function subscribe(): Promise<boolean> {
   const host = currentHost();
   const key = usePhone.getState().vapidKey;
   if (subscribing) {
-    if (subscribing.host !== host || subscribing.key !== key) followUp = true;
-    return subscribing.result;
+    followUp = true;
+    return subscribing;
   }
   const current = () => enabled() && permission() === "granted" && usePhone.getState().connected && currentHost() === host && usePhone.getState().vapidKey === key;
   const result = (async () => {
     let owned: PushSubscription | null = null;
     try {
+      // An older Off must finish before a newer On can create a subscription.
+      if (stopping) await stopping;
       const worker = await registration(host);
       if (!key || !worker || !current()) return false;
-      await unsubscribe(await worker.pushManager.getSubscription());
+      const wantedKey = applicationServerKey(key);
+      const subscription = await worker.pushManager.getSubscription();
       if (!current()) return false;
-      owned = await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey(key) });
+      const previousKey = subscription?.options?.applicationServerKey;
+      const sameKey = previousKey && previousKey.byteLength === wantedKey.length && new Uint8Array(previousKey).every((byte, index) => byte === wantedKey[index]);
+      // A valid existing subscription belongs to its host, not this attempt.
+      if (subscription && usePhone.getState().notifications === "on" && sameKey) { void postWords(worker); return true; }
+      // unasked also covers 404/410: never register that expired endpoint again.
+      await unsubscribe(subscription);
+      if (!current()) return false;
+      owned = await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: wantedKey });
       // Off, revoke or a host switch can win while the browser makes the subscription.
       if (!current()) return false;
       const json = owned.toJSON();
@@ -142,7 +158,7 @@ async function subscribe(): Promise<boolean> {
       }
     }
   })();
-  subscribing = { host, key, result };
+  subscribing = result;
   try {
     const sent = await result;
     if (!sent && current()) setPush({ failure: "on" });
@@ -174,26 +190,43 @@ export async function enableNotifications(): Promise<void> {
 
 /** Off is kept across reconnects and removes subscriptions for every paired computer in this browser. */
 export async function disableNotifications(): Promise<void> {
-  if (useBrowserPush.getState().stopping) return;
   choose(false);
-  setPush({ stopping: true });
+  await stopSubscriptions();
+}
+
+/** Reconciliation retries every scope without rewriting a possibly unsaved choice. */
+async function stopSubscriptions(): Promise<void> {
+  // A new connection still needs this frame while another scope is being cleaned.
   send({ type: "push_permission", state: "denied" });
   patch({ notifications: "off" });
-  try {
-    const stop = async (worker: ServiceWorkerRegistration | null | undefined) => {
-      await unsubscribe(await worker?.pushManager?.getSubscription());
-    };
-    const outcomes = hostedPhone()
-      ? await Promise.allSettled((await hostStore().list()).map(async (host) => {
-        const worker = await navigator.serviceWorker.getRegistration(`/push/${host.room}/`);
-        if (worker && new URL(worker.scope).pathname === `/push/${host.room}/`) await stop(worker);
-      }))
-      : await Promise.allSettled([navigator.serviceWorker.getRegistration("/m/").then(async (worker) => {
-        if (worker && new URL(worker.scope).pathname === "/m/") await stop(worker);
-      })]);
-    if (outcomes.some((outcome) => outcome.status === "rejected")) setPush({ failure: "off" });
-  } catch { setPush({ failure: "off" }); }
-  finally { setPush({ stopping: false }); }
+  if (stopping) return stopping;
+  setPush({ stopping: true });
+  const pending = subscribing;
+  const wantsOff = () => !enabled() || permission() === "denied";
+  const result = (async () => {
+    let failed = false;
+    try {
+      // The attempt admitted before Off owns any late subscription until its cleanup ends.
+      if (pending) await pending;
+      const stop = async (worker: ServiceWorkerRegistration | null | undefined) => {
+        const subscription = await worker?.pushManager?.getSubscription();
+        if (wantsOff()) await unsubscribe(subscription);
+      };
+      const outcomes = hostedPhone()
+        ? await Promise.allSettled((await hostStore().list()).map(async (host) => {
+          const worker = await navigator.serviceWorker.getRegistration(`/push/${host.room}/`);
+          if (worker && new URL(worker.scope).pathname === `/push/${host.room}/`) await stop(worker);
+        }))
+        : await Promise.allSettled([navigator.serviceWorker.getRegistration("/m/").then(async (worker) => {
+          if (worker && new URL(worker.scope).pathname === "/m/") await stop(worker);
+        })]);
+      failed = outcomes.some((outcome) => outcome.status === "rejected");
+    } catch { failed = true; }
+    if (wantsOff()) setPush({ failure: failed ? "off" : null });
+  })();
+  stopping = result;
+  try { await result; }
+  finally { stopping = null; setPush({ stopping: false }); }
 }
 
 /** Registration refusal is actionable on the switch; a late success cannot undo Off. */
@@ -210,9 +243,8 @@ export async function syncPush(): Promise<void> {
   const current = permission();
   setPush({ permission: current });
   if (!enabled() || current === "denied") {
-    if (state.notifications !== "off") send({ type: "push_permission", state: "denied" });
-    patch({ notifications: "off" });
-  } else if (current === "granted" && state.notifications !== "on") {
+    await stopSubscriptions();
+  } else if (current === "granted") {
     await subscribe();
   }
 }

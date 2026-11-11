@@ -3632,9 +3632,12 @@ Settings > Notifications stores `app_closed` by default (the pause switch on) or
 `app_closed` sends only while no desktop renderer is connected, and `always` permits a push with one connected too; a phone viewing that agent’s detail is skipped in both.
 Receiving is a separate phone-owned choice: the browser’s `web/src/mobile/push.ts` keeps `hide.phone.web-push` on this browser, independent of the computer’s mode, including an older computer’s `off` meta value.
 Off is persisted before cleanup, sends the existing denied permission frame, and unsubscribes all paired-computer scopes (at most 16, the host-store cap), retaining their workers and the root offline worker.
+Every Off reconciliation checks all those scopes again, including after reload; one cleanup runs at a time, and a newer On waits for it before creating a subscription.
+On checks the actual browser subscription even when the computer remembers On; a missing subscription, changed VAPID key or endpoint the computer discarded is replaced.
 One subscription attempt and one coalesced follow-up bound reconciliation; host, key, connection, permission and receiving-choice checks prevent a late attempt from registering after Off, a revoke or a host switch, and a subscription that cannot be sent is removed.
 Browser Settings owns its visibility/storage listeners and removes them on unmount; no polling or additional resident worker is added.
 A subscribe or unsubscribe failure reaches the phone’s switch as a retryable outcome; inability to save the preference keeps the choice in memory with the existing storage guidance.
+Visibility changes, storage events and Settings remounts cannot replace that unsaved in-memory choice with the older saved value.
 A root that turned Seen rides the next notice's `clear` list, and the app closes those notifications when it opens, because iOS drops a subscription that receives a push it does not show.
 A 404 or 410 answer drops that subscription, and the phone registers again on its next connection.
 The iOS app has no Web Push: it registers an APNs device token and a per-computer push key inside its encrypted session (`apns_registration`), kept in its phone record instead of a Web Push subscription, and its notices are encrypted the same way and handed to the relay over the running device socket, which signs them for Apple and forwards them storing nothing (`docs/RELAY_PROTOCOL.md`, Push relay).
