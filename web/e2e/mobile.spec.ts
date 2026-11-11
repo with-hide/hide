@@ -102,24 +102,27 @@ async function phoneContext(browser: Browser, push?: { endpoint: string; p256dh:
       const record = { subscribed: 0, unsubscribed: 0, permission: "default" as NotificationPermission };
       (window as unknown as { __push: typeof record }).__push = record;
       let current: unknown = null;
-      const fake = {
+      const fake = (applicationServerKey: ArrayBuffer) => ({
         endpoint: subscription.endpoint,
+        options: { applicationServerKey, userVisibleOnly: true },
         toJSON: () => ({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }),
         unsubscribe: async () => {
           record.unsubscribed += 1;
           current = null;
           return true;
         },
-      };
+      });
       Object.defineProperty(Notification, "permission", { configurable: true, get: () => record.permission });
       Notification.requestPermission = async () => {
         record.permission = "granted";
         return "granted";
       };
-      PushManager.prototype.subscribe = async function () {
+      PushManager.prototype.subscribe = async function (options) {
+        const key = options!.applicationServerKey as BufferSource;
+        const bytes = ArrayBuffer.isView(key) ? new Uint8Array(key.buffer, key.byteOffset, key.byteLength) : new Uint8Array(key);
         record.subscribed += 1;
-        current = fake;
-        return fake as unknown as PushSubscription;
+        current = fake(bytes.slice().buffer);
+        return current as PushSubscription;
       };
       PushManager.prototype.getSubscription = async function () {
         return current as PushSubscription | null;

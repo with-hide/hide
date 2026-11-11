@@ -332,11 +332,16 @@ test("the phone keeps receiving Off across reload and reconnect, and On register
     Object.defineProperty(Notification, "permission", { configurable: true, get: () => localStorage.getItem("fixture.permission") ?? "default" });
     Notification.requestPermission = async () => { localStorage.setItem("fixture.permission", "granted"); return "granted"; };
     const subscription = () => ({
+      options: { applicationServerKey: new Uint8Array(JSON.parse(localStorage.getItem("fixture.subscription")!) as number[]).buffer, userVisibleOnly: true },
       toJSON: () => ({ endpoint: "https://push.example/subscription", keys: { p256dh: "public", auth: "secret" } }),
       unsubscribe: async () => { localStorage.removeItem("fixture.subscription"); return true; },
     }) as PushSubscription;
     PushManager.prototype.getSubscription = async () => localStorage.getItem("fixture.subscription") ? subscription() : null;
-    PushManager.prototype.subscribe = async () => { localStorage.setItem("fixture.subscription", "on"); return subscription(); };
+    PushManager.prototype.subscribe = async (options) => {
+      const key = options!.applicationServerKey as BufferSource;
+      const bytes = ArrayBuffer.isView(key) ? new Uint8Array(key.buffer, key.byteOffset, key.byteLength) : new Uint8Array(key);
+      localStorage.setItem("fixture.subscription", JSON.stringify([...bytes])); return subscription();
+    };
   });
   await pair(page, relay);
   await page.locator('[data-phone-tab="settings"]').click();
@@ -384,12 +389,18 @@ for (const cleanup of [true, false]) test(`turning receiving Off handles late su
     Object.defineProperty(Notification, "permission", { configurable: true, get: () => "granted" });
     let subscription: PushSubscription | null = null;
     PushManager.prototype.getSubscription = async () => subscription;
-    PushManager.prototype.subscribe = () => new Promise((resolve) => {
-      Object.assign(window, { finishSubscription: () => { subscription = {
-        toJSON: () => ({ endpoint: "https://push.example/late", keys: { p256dh: "public", auth: "secret" } }),
-        unsubscribe: async () => { localStorage.setItem("fixture.late-unsubscribed", "true"); if (succeeds) subscription = null; return succeeds; },
-      } as PushSubscription; resolve(subscription); } });
-    });
+    PushManager.prototype.subscribe = (options) => {
+      const key = options!.applicationServerKey as BufferSource;
+      const bytes = ArrayBuffer.isView(key) ? new Uint8Array(key.buffer, key.byteOffset, key.byteLength) : new Uint8Array(key);
+      const applicationServerKey = bytes.slice().buffer;
+      return new Promise((resolve) => {
+        Object.assign(window, { finishSubscription: () => { subscription = {
+          options: { applicationServerKey, userVisibleOnly: true },
+          toJSON: () => ({ endpoint: "https://push.example/late", keys: { p256dh: "public", auth: "secret" } }),
+          unsubscribe: async () => { localStorage.setItem("fixture.late-unsubscribed", "true"); if (succeeds) subscription = null; return succeeds; },
+        } as PushSubscription; resolve(subscription); } });
+      });
+    };
   }, cleanup);
   await pair(page, relay);
   await expect.poll(() => page.evaluate(() => "finishSubscription" in window)).toBe(true);
