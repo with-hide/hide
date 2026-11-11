@@ -27,7 +27,18 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": true,
-      "letter_menu": false,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": true,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": true,
+      "scene_hooks_review": false,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -39,6 +50,200 @@
     "letter": "bell",
     "busy_letter": [
       "bell"
+    ],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/resume"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/model"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "@"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": {
+          "kind": "turn",
+          "script": "shell"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "untrusted_folder"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
     ],
     "stop_observer": null,
     "account_vars": [
@@ -97,7 +302,18 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": true,
-      "letter_menu": true,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": true,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": true,
+      "scene_hooks_review": true,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -109,6 +325,205 @@
     "letter": "bell",
     "busy_letter": [
       "bell"
+    ],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/resume"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/model"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": true
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "@"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": {
+          "kind": "turn",
+          "script": "shell"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "untrusted_folder"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "unreviewed_hooks"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
     ],
     "stop_observer": null,
     "account_vars": [
@@ -166,7 +581,18 @@
       "guidance_memory": false,
       "letter": true,
       "letter_busy": true,
-      "letter_menu": false,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": true,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": true,
+      "scene_hooks_review": false,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -179,6 +605,200 @@
     "busy_letter": [
       "bell_hook",
       "turn_end"
+    ],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/resume"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/model"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": {
+          "kind": "turn",
+          "script": "shell"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "untrusted_folder"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
     ],
     "stop_observer": [
       ".grok",
@@ -235,7 +855,18 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": false,
-      "letter_menu": false,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": true,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": false,
+      "scene_hooks_review": false,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -246,6 +877,195 @@
     },
     "letter": "next_prompt",
     "busy_letter": [],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/sessions"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/models"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": {
+          "kind": "turn",
+          "script": "shell"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
+    ],
     "stop_observer": null,
     "account_vars": [
       "XDG_CONFIG_HOME",
@@ -303,7 +1123,18 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": false,
-      "letter_menu": false,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": false,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": true,
+      "scene_hooks_review": false,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -314,6 +1145,197 @@
     },
     "letter": "next_prompt",
     "busy_letter": [],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/resume"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/model"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "untrusted_folder"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
+    ],
     "stop_observer": null,
     "account_vars": [
       "PI_CODING_AGENT_DIR"
@@ -371,7 +1393,18 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": false,
-      "letter_menu": false,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": true,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": false,
+      "scene_hooks_review": false,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -382,6 +1415,195 @@
     },
     "letter": "next_prompt",
     "busy_letter": [],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/resume"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/model"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": {
+          "kind": "turn",
+          "script": "shell"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
+    ],
     "stop_observer": null,
     "account_vars": [
       "OMP_PROFILE"
@@ -439,7 +1661,18 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": false,
-      "letter_menu": false,
+      "scene_rest_draft": true,
+      "scene_interrupted": true,
+      "scene_session_picker": true,
+      "scene_model_picker": true,
+      "scene_popup": true,
+      "scene_tool_approval": true,
+      "scene_question": true,
+      "scene_plan_approval": true,
+      "scene_trust_dialog": true,
+      "scene_hooks_review": false,
+      "scene_first_run": true,
+      "scene_update_notice": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -450,6 +1683,200 @@
     },
     "letter": "next_prompt",
     "busy_letter": [],
+    "scenes": [
+      {
+        "scene": "rest",
+        "door": {
+          "kind": "cell",
+          "cell": "letter"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "rest_draft",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "hello"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "working",
+        "door": {
+          "kind": "cell",
+          "cell": "letter_busy"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "interrupted",
+        "door": {
+          "kind": "keys",
+          "from": "working",
+          "open": [
+            {
+              "key": "esc"
+            }
+          ],
+          "close": [
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "session_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/resume"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "model_picker",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/model"
+            },
+            {
+              "key": "enter"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "popup",
+        "door": {
+          "kind": "keys",
+          "from": "rest",
+          "open": [
+            {
+              "key": "text",
+              "text": "/"
+            }
+          ],
+          "close": [
+            {
+              "key": "esc"
+            },
+            {
+              "key": "clear_composer"
+            }
+          ]
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "tool_approval",
+        "door": {
+          "kind": "turn",
+          "script": "shell"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "question",
+        "door": {
+          "kind": "turn",
+          "script": "ask"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "plan_approval",
+        "door": {
+          "kind": "turn",
+          "script": "plan"
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "trust_dialog",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "untrusted_folder"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "hooks_review",
+        "door": null,
+        "finding": "none",
+        "release_check": false
+      },
+      {
+        "scene": "first_run",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "empty_account"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      },
+      {
+        "scene": "update_notice",
+        "door": {
+          "kind": "start",
+          "start": {
+            "kind": "update_check_on"
+          }
+        },
+        "finding": "unknown",
+        "release_check": false
+      }
+    ],
     "stop_observer": null,
     "account_vars": [],
     "input": [

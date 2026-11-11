@@ -32,6 +32,7 @@ from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, h
 from .controller import Controller
 from .contract import load_contract
 from .failure import FailureLogs, drop_on_pass
+from . import scene
 from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
 from .routes import allow_hook_records, allow_hook_route, operator_routing
@@ -81,6 +82,12 @@ def parser():
     value.add_argument("--controller-provider", type=Path,
                        help="The controller's spawn provider (web/e2e/shims/spawn-provider.c) already built; "
                             "by default the run builds it")
+    value.add_argument("--scenes", choices=scene.MODES, default=scene.CHECK,
+                       help="check (default): the scene cells the ordinary run proves, the rest not measured; "
+                            "survey: watch every scene the journey can open and record a finding candidate, "
+                            "judging nothing (docs/VERIFICATION.md#agent-scenes)")
+    value.add_argument("--scene-repetitions", type=int, metavar="N",
+                       help=f"repetitions of each scene a survey makes (default {scene.SURVEY_REPETITIONS})")
     value.add_argument("--fake-model", action="store_true",
                        help="The real CLIs answered by the journey's fake model (fake_model.py), with no key or login")
     return value
@@ -506,6 +513,15 @@ def hide_ai_requests(log):
     return found
 
 
+def request_budget(row, args):
+    """The model requests an agent's run may make: the contract's, and in a
+    survey the requests of the scenes it watches (scene.survey_requests)."""
+    budget = row.get("request_budget")
+    if budget is None or args.scenes != scene.SURVEY:
+        return budget
+    return budget + scene.survey_requests(row, args.scene_repetitions)
+
+
 def budget_failures(agents):
     """A fake model run's agents over their request budget, by name (PRD B29)."""
     return [f"request_budget_exceeded: {agent['id']} made {agent['requests']} model requests, "
@@ -613,7 +629,7 @@ def main(argv=None):
         fake_key = "journey-fake-key-" + os.urandom(24).hex() if local and fake else fake_lane.KEY
         if fake:
             for key in measured:
-                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl", rows[key]["request_budget"],
+                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl", request_budget(rows[key], args),
                                                 api_key=fake_key if local else None)[0]
         urls = {key: f"http://127.0.0.1:{server.server_address[1]}" for key, server in servers.items()}
         if local and fake:
@@ -698,7 +714,8 @@ def main(argv=None):
                                                                                  agent.get("fake_env"))}),
                                   composer_judge=composer_judge,
                                   model=rows[key]["model_flag"] and models.get(key), brief_start=not fixture_bin,
-                                  failure_logs=failure_logs)
+                                  failure_logs=failure_logs, scene_mode=args.scenes,
+                                  scene_repetitions=args.scene_repetitions)
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
                     if watch and agent.get("private_home", {}).get("enabled") and step == "start":
@@ -734,7 +751,7 @@ def main(argv=None):
                     agent["session_requests"] = agent["requests"]
                     agent["requests"] = fake_lane.requests(run / f"fake-model-{key}.jsonl")
                     agent["refused_past_budget"] = servers[key].refused
-                agent["request_budget"] = rows[key].get("request_budget")
+                agent["request_budget"] = request_budget(rows[key], args)
                 journey.close()
                 if key in services:
                     # Its panes are closed and no later agent uses it: ended now, so the

@@ -765,3 +765,263 @@ fn a_start_prompt_that_starts_with_a_dash_stays_one_word() {
     }
     assert!(!LaunchDialect::Antigravity.carries_prompt(&["--model".to_owned(), "x".to_owned()]));
 }
+
+/// The scenes (`docs/VERIFICATION.md#agent-scenes`): every registered agent
+/// declares each of the fourteen. A row that names fewer does not compile, so
+/// this test is the second line: it fails an agent whose declaration says
+/// nothing, however the row was written.
+#[test]
+fn every_agent_declares_every_scene_with_a_door_or_an_absence_that_says_why() {
+    use hide_agent_adapter::scene::{Door, Scene};
+    use hide_agent_adapter::usage::Support;
+    for row in ADAPTERS {
+        let cells = row.scenes.cells();
+        let names: Vec<Scene> = cells.iter().map(|(scene, _)| *scene).collect();
+        assert_eq!(
+            names,
+            Scene::ALL,
+            "{}: names the scenes it declares in the order of Scene::ALL",
+            row.id
+        );
+        for (scene, capability) in cells {
+            match capability {
+                Support::Supported(case) => {
+                    // A door the journey cannot open names what it needs.
+                    match case.door {
+                        Door::Cell { cell } => assert!(
+                            matches!(cell, "letter" | "letter_busy"),
+                            "{} {}: `{cell}` is no cell that proves a scene",
+                            row.id,
+                            scene.name()
+                        ),
+                        Door::Keys { open, close, .. } => {
+                            assert!(
+                                !open.is_empty(),
+                                "{} {}: keys that open nothing",
+                                row.id,
+                                scene.name()
+                            );
+                            assert!(
+                                !close.is_empty(),
+                                "{} {}: a scene opened by keys must close without choosing",
+                                row.id,
+                                scene.name()
+                            );
+                        }
+                        Door::Start { .. } | Door::Turn { .. } => {}
+                    }
+                }
+                Support::Unsupported(absent) => {
+                    // The reason, the guide that holds the proof and what
+                    // would change it, as every other capability's absence.
+                    absence(*absent);
+                }
+            }
+        }
+    }
+}
+
+/// `rest` and `working` are the journey's `letter` and `letter_busy` cells,
+/// so each agent proves them through those, and an agent that rings has a
+/// `rest` to ring into.
+#[test]
+fn rest_and_working_are_proven_by_the_letter_cells_and_a_bell_has_a_rest() {
+    use hide_agent_adapter::scene::Door;
+    use hide_agent_adapter::usage::Support;
+    for row in ADAPTERS {
+        let Support::Supported(rest) = row.scenes.rest else {
+            panic!(
+                "{}: an agent with no `rest` has nothing to ring into",
+                row.id
+            );
+        };
+        assert!(
+            matches!(rest.door, Door::Cell { cell: "letter" }),
+            "{}: `rest` is the `letter` cell",
+            row.id
+        );
+        if let Support::Supported(working) = row.scenes.working {
+            assert!(
+                matches!(
+                    working.door,
+                    Door::Cell {
+                        cell: "letter_busy"
+                    }
+                ),
+                "{}: `working` is the `letter_busy` cell",
+                row.id
+            );
+        }
+    }
+}
+
+/// A finding a survey wrote names the version and date it was seen on and a
+/// procedure that exists, and is never newer than today; an `Unknown` one says
+/// why and what closes it.
+#[test]
+fn a_finding_names_its_version_date_and_procedure_and_an_unknown_one_says_what_closes_it() {
+    use hide_agent_adapter::scene::Finding;
+    use hide_agent_adapter::usage::Support;
+    let today = today();
+    for row in ADAPTERS {
+        for (scene, capability) in row.scenes.cells() {
+            let Support::Supported(case) = capability else {
+                continue;
+            };
+            let at = format!("{} {}", row.id, scene.name());
+            match case.finding {
+                Finding::Safe(seen) | Finding::Unsafe { seen, .. } => {
+                    assert!(
+                        !seen.why.trim().is_empty(),
+                        "{at}: a finding says what the line did"
+                    );
+                    evidence(seen.procedure);
+                    assert!(
+                        seen.on.len() == 10
+                            && seen.on.bytes().enumerate().all(|(index, byte)| {
+                                if matches!(index, 4 | 7) {
+                                    byte == b'-'
+                                } else {
+                                    byte.is_ascii_digit()
+                                }
+                            }),
+                        "{at}: {:?} is not YYYY-MM-DD",
+                        seen.on
+                    );
+                    assert!(
+                        seen.on <= today.as_str(),
+                        "{at}: seen on {}, after today",
+                        seen.on
+                    );
+                    let minimum = row.minimum.expect("a supported agent declares one").version;
+                    assert!(
+                        version_parts(seen.version) >= version_parts(minimum),
+                        "{at}: seen on {}, below the declared minimum {minimum}",
+                        seen.version
+                    );
+                    if let Finding::Unsafe { closes_with, .. } = case.finding {
+                        assert!(
+                            !closes_with.trim().is_empty(),
+                            "{at}: unsafe, closes with nothing"
+                        );
+                    }
+                }
+                Finding::Unknown { why, closes_with } => {
+                    assert!(!why.trim().is_empty(), "{at}: unknown, with no reason");
+                    assert!(
+                        !closes_with.trim().is_empty(),
+                        "{at}: unknown, closes with nothing"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A `Safe` scene was seen on the version the pin names, so moving a pin
+/// sends the agent back to its survey rather than keeping a bell on a screen
+/// nobody has seen on the new build.
+#[test]
+fn a_safe_finding_was_seen_on_the_pinned_version() {
+    use hide_agent_adapter::scene::Finding;
+    use hide_agent_adapter::usage::Support;
+    let pins: Value = serde_json::from_slice(
+        &std::fs::read(root().join("contracts/agent-clis.json")).expect("pins"),
+    )
+    .unwrap();
+    for row in ADAPTERS {
+        for (scene, capability) in row.scenes.cells() {
+            if let Support::Supported(case) = capability
+                && let Finding::Safe(seen) = case.finding
+            {
+                let pinned = pins["clis"][row.engine_kind]["version"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{}: no pin", row.id));
+                assert_eq!(
+                    seen.version,
+                    pinned,
+                    "{} {}: seen on {}, pinned {pinned}; survey it again on the pin",
+                    row.id,
+                    scene.name(),
+                    seen.version
+                );
+            }
+        }
+    }
+}
+
+/// What a scene's door needs of the agent: keys need a composer to read and
+/// clear, a start needs a `start` Hide can make, a turn needs the agent to run.
+#[test]
+fn a_door_fits_the_agent_it_opens_a_scene_on() {
+    use hide_agent_adapter::scene::{Door, Key};
+    use hide_agent_adapter::usage::Support;
+    for row in ADAPTERS {
+        for (scene, capability) in row.scenes.cells() {
+            let Support::Supported(case) = capability else {
+                continue;
+            };
+            let at = format!("{} {}", row.id, scene.name());
+            match case.door {
+                Door::Cell { .. } => {}
+                Door::Keys { open, close, .. } => {
+                    assert!(
+                        row.composer.is_some(),
+                        "{at}: keys need a composer declaration to read the draft they leave"
+                    );
+                    assert!(
+                        row.start.is_some(),
+                        "{at}: the journey cannot start an agent Hide does not start"
+                    );
+                    assert!(
+                        open.iter().chain(close).all(|key| match key {
+                            Key::Text { text } => !text.is_empty(),
+                            _ => true,
+                        }),
+                        "{at}: a text key with no text"
+                    );
+                }
+                Door::Start { .. } | Door::Turn { .. } => assert!(
+                    row.start.is_some(),
+                    "{at}: the journey cannot start an agent Hide does not start"
+                ),
+            }
+            assert!(
+                !case.release_check || matches!(case.door, Door::Keys { .. }),
+                "{at}: only a scene opened by keys has a release to check"
+            );
+        }
+    }
+}
+
+fn version_parts(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| part.parse().expect("a version of numbers"))
+        .collect()
+}
+
+/// Today, `YYYY-MM-DD`, from the system clock.
+fn today() -> String {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 86_400;
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}

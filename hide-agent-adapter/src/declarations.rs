@@ -19,6 +19,27 @@ const RETIRED_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     would_change: "Restore active support with hooks Hide installs and measured context and title contracts.",
 };
 
+/// A retired agent is never rung, so it has no screen to declare.
+const RETIRED_SCENES: scene::SceneDeclaration = {
+    const GONE: Capability<scene::SceneCase> = Support::Unsupported(RETIRED_CONTEXT_ABSENCE);
+    scene::SceneDeclaration {
+        rest: GONE,
+        rest_draft: GONE,
+        working: GONE,
+        interrupted: GONE,
+        session_picker: GONE,
+        model_picker: GONE,
+        popup: GONE,
+        tool_approval: GONE,
+        question: GONE,
+        plan_approval: GONE,
+        trust_dialog: GONE,
+        hooks_review: GONE,
+        first_run: GONE,
+        update_notice: GONE,
+    }
+};
+
 use usage::{
     AbsenceKind, Attribution, AttributionFrom, CostBasis, LimitDeclaration, LimitSource, ModelFrom,
     Support, TokenSource, UsageDeclaration, absent, not_built,
@@ -261,6 +282,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         subagent_counts: Some(HookDialect::ClaudeCode),
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
         bell: true,
+        scenes: scene_declarations::CLAUDE_CODE,
         bell_names_inbox: false,
         turn_end_letters: None,
         tool_letters: None,
@@ -364,6 +386,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         subagent_counts: Some(HookDialect::Codex),
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
         bell: true,
+        scenes: scene_declarations::CODEX,
         bell_names_inbox: true,
         turn_end_letters: None,
         tool_letters: None,
@@ -459,6 +482,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         subagent_counts: Some(HookDialect::Grok),
         memory: Support::Unsupported(GROK_CONTEXT_ABSENCE),
         bell: true,
+        scenes: scene_declarations::GROK,
         bell_names_inbox: true,
         turn_end_letters: Some(HookDialect::Grok),
         tool_letters: Some(HookDialect::Grok),
@@ -579,6 +603,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // A bell's Enter in OpenCode's session picker opens another session
         // (measured 2026-10-07); letters reach it on its next prompt instead.
         bell: false,
+        scenes: scene_declarations::OPENCODE,
         bell_names_inbox: false,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::OpenCode),
@@ -697,6 +722,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // picks the highlighted item (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        scenes: scene_declarations::PI,
         bell_names_inbox: false,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Pi),
@@ -804,6 +830,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // resumes another session (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        scenes: scene_declarations::OMP,
         bell_names_inbox: false,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Omp),
@@ -918,6 +945,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // `PreInvocation` hook runs before and Hide answers with the letters
         // due as an injected system message (`tool_letters`).
         bell: false,
+        scenes: scene_declarations::ANTIGRAVITY,
         bell_names_inbox: false,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Antigravity),
@@ -1016,6 +1044,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     subagent_counts: None,
     memory: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     bell: false,
+    scenes: RETIRED_SCENES,
     bell_names_inbox: false,
     turn_end_letters: None,
     tool_letters: None,

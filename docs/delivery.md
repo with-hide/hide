@@ -147,7 +147,8 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 The engine's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
-Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request; the local measurement tool that once repeated that scene matrix is retired.
+Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request.
+Every screen a bell can meet is a scene each agent declares, with the door the journey opens it through and the finding a survey recorded ([VERIFICATION.md](VERIFICATION.md#agent-scenes)); every finding is unknown until a survey closes it, and `bell` is still declared by hand, so no declaration changes until a finding does.
 The adapter declaration is a reviewed product decision, never changed by a measurement.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).

@@ -11,8 +11,11 @@ spec.loader.exec_module(lane)
 
 
 def passing_table():
-    return {row["id"]: {name: {"status": "pass" if declared else "N/A", "reason": "adapter declaration"}
-                        for name, declared in row["cells"].items()}
+    """What an ordinary run of the fake lane must report: pass for every
+    declared cell, and for a scene cell what its release check or finding
+    proves (scene.lane_status)."""
+    return {row["id"]: {name: {"status": lane.lane_status(row, name), "reason": "adapter declaration"}
+                        for name in row["cells"]}
             for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1]))}
 
 
@@ -139,7 +142,9 @@ class FakeModel(unittest.TestCase):
             for name, declared in row["cells"].items():
                 if not declared:
                     continue
-                for status in ("not measured", "N/A", "pending", None):
+                for status in ("pass", "not measured", "N/A", "pending", None):
+                    if status == lane.lane_status(row, name):
+                        continue
                     with self.subTest(agent=key, cell=name, status=status):
                         value = report({}, [], fake_model=True)
                         if status is None:
@@ -147,6 +152,18 @@ class FakeModel(unittest.TestCase):
                         else:
                             value["table"][key][name] = {"status": status, "reason": "omitted"}
                         self.assertFalse(lane.judge(value, "fake")[0])
+    def test_a_scene_nobody_has_proven_cannot_be_reported_as_passing(self):
+        # A scene whose finding is unknown and which carries no release check
+        # reads `not measured` in the ordinary run; a pass there would claim
+        # a proof the run never made.
+        rows = {row["id"]: row for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1]))}
+        self.assertEqual(lane.lane_status(rows["claude-code"], "scene_popup"), "not measured")
+        value = report(self.table(), [], fake_model=True)
+        value["table"]["claude-code"]["scene_popup"] = {"status": "pass", "reason": "x"}
+        passed, notes = lane.judge(value, "fake")
+        self.assertFalse(passed)
+        self.assertTrue(any("scene_popup is pass" in note for note in notes))
+
     def test_a_new_registration_automatically_becomes_required(self):
         rows = lane.load_contract(SCRIPT.parents[1])
         added = {**rows[0], "id": "newly-registered-agent"}

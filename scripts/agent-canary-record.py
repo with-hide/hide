@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from agent_journey.cells import CELLS  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_journey.scene import lane_status  # noqa: E402
 
 # Where the record and every failure issue live.
 ISSUE_REPOSITORY = "with-hide/hide-private"
@@ -97,7 +98,7 @@ def misses(row, report, system):
     if not isinstance(cells, dict):
         return found + [("row", f"{system}: no row", "")]
     for name in CELLS:
-        expected = "pass" if row["cells"][name] else "N/A"
+        expected = lane_status(row, name)
         cell = cells.get(name) or {}
         if cell.get("status") != expected:
             found.append((name, f"{system}: {name} is {cell.get('status', 'absent')}",
