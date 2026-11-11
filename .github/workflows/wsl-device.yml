@@ -163,6 +163,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the server did not take the key on port $port" }
           "first_ssh_connection_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
           Add-Content -Encoding utf8 -Path $env:GITHUB_ENV -Value "HIDE_E2E_WINDOWS_SSH_DIR=$dir"
+      - name: Use a working resolver on the disposable runner
+        # Azure's default resolver returned SERVFAIL for both Ubuntu hosts
+        # in Windows too, not only through WSL's DNS tunnel (#2460).
+        # Check the replacement from this runner before selecting it. Keep
+        # WSL's normal generated resolver and DNS tunnel for the device tests.
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hosts = @('archive.ubuntu.com', 'security.ubuntu.com')
+          foreach ($name in $hosts) {
+            Resolve-DnsName $name -Type A -Server 1.1.1.1 -DnsOnly -QuickTimeout | Out-Host
+          }
+          $interfaces = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -ExpandProperty InterfaceIndex -Unique)
+          if ($interfaces.Count -eq 0) { throw 'the runner has no default IPv4 route' }
+          foreach ($index in $interfaces) {
+            Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses '1.1.1.1'
+          }
+          Clear-DnsClientCache
+          foreach ($name in $hosts) {
+            Resolve-DnsName $name -Type A -DnsOnly -QuickTimeout | Out-Host
+          }
       - name: A fresh WSL 2 distribution
         # Its first-run setup is left undone (RunOOBE 1, default user root),
         # which the test reads as a distribution Hide must refuse before it

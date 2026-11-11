@@ -665,6 +665,8 @@ Locally: `bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/tar
 `hided/tests/it/wsl_device.rs` connects a real WSL 2 distribution of GitHub's Windows runner as a device, through the product's own `wsl.exe` connector, with this build's Linux helper, command, hooks and holder.
 The runner runs WSL 2 itself, not WSL 1 (WSL 3.0.3, a 6.18 WSL 2 kernel, systemd as process 1, measured on `windows-latest` on 2026-10-28), so the lane proves the WSL 2 path and no WSL 1 path exists to prove.
 `wsl-device.yml` builds the Linux programs on a Linux runner, because the Windows runner cannot, and hands them to the Windows job as an artifact; `setup-wsl` makes a fresh `Ubuntu-24.04` with its first-run setup undone.
+Before WSL starts, the disposable Windows runner checks both Ubuntu package hosts against `1.1.1.1`, selects that DNS server on its default-route interfaces and checks the system resolver again; Azure's default resolver returned `SERVFAIL` in Windows as well as WSL (with-hide/hide-private#871).
+This leaves WSL's generated resolver and DNS tunnel intact rather than changing the distribution's network settings.
 A separate root step waits up to 120 seconds for both Ubuntu package hosts to resolve, then feeds `scripts/ci-apt-install.sh` into WSL to install `git`, `python3` and `openssh-server` within its existing 300-second network budget.
 The step prints the WSL version and resolver file, and on failure also prints the distribution's configuration, kernel and bounded hostname lookups; its ten-minute backstop bounds WSL startup and offline package installation too.
 It does not complete first-run setup or change the default user before the tests.
