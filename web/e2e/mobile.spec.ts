@@ -510,8 +510,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(page.locator("[data-mobile-phone-line]")).toHaveText("Just now · Receiving notifications");
 
     // B31, B33 (always): two finishes, then asks; a finish is never pushed (2026-11-11), so the one push is the question.
-    await finish(two);
-    await ask(fixture, daemon!, two, "배포할까요?");
+    await finish(two); await ask(fixture, daemon!, two, "배포할까요?");
     await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(1);
     const asked = push.received[0]!;
     expect(asked.payload.title).toBe("Agent two");
