@@ -167,8 +167,6 @@ export type PhonePrFeedback = Pick<PrFeedback, "request_id" | "pr_number" | "pha
 
 export type Notifications = "on" | "off" | "unasked";
 
-export type PushMode = "off" | "app_closed" | "always";
-
 export type RowsState = "ok" | "gone" | "device_unreachable" | "unavailable";
 
 /** Which half of a detail hided reads for the phone. */
@@ -266,7 +264,8 @@ export type StartCatalog = {
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
   | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications }
-  | { type: "meta"; push_mode: PushMode; other_phones: number }
+  // Older computers still send off; new phone settings do not use this global mode.
+  | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number }
   /**
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
@@ -669,29 +668,6 @@ export function staleTags(tags: readonly string[], groups: readonly AgentGroup[]
     if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
   }
   return tags.filter((tag) => !live.has(tag));
-}
-
-/** The notification row on the list (B30), or null when it has nothing to say. */
-export type NotificationRow = "enable" | "install_first" | "denied" | null;
-
-export function notificationRow({
-  pushMode,
-  notifications,
-  permission,
-  supported,
-}: {
-  pushMode: PushMode;
-  notifications: Notifications;
-  permission: NotificationPermission | "unsupported";
-  /** Whether this page can subscribe at all: a Safari tab on iOS cannot, a Home Screen app can. */
-  supported: boolean;
-}): NotificationRow {
-  if (pushMode === "off") return null;
-  if (permission === "denied" || (notifications === "off" && permission !== "granted")) return "denied";
-  if (notifications === "on" && permission === "granted") return null;
-  // iOS offers push only to a Home Screen app; a Safari tab has no PushManager.
-  if (!supported) return "install_first";
-  return "enable";
 }
 
 /** The unseen Views first and then the seen ones, each in hided's order (newest first): what the 볼 것 list draws (B12). */

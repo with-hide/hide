@@ -53,7 +53,7 @@ describe("the app's notification row in Settings", () => {
     await render();
     expect(row().getAttribute("data-phone-notifications")).toBe("off");
     expect(toggle().getAttribute("aria-checked")).toBe("false");
-    expect(row().textContent).toContain("Hear when an agent needs you");
+    expect(row().textContent).toContain("Hear when an agent needs your answer");
     expect(document.body.textContent).not.toContain("can't be turned on");
   });
 

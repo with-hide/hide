@@ -1,6 +1,7 @@
 import { expect, test as base } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
+import { screenshot } from "./wire";
 import { startPhoneRelay } from "./phone-relay-fixture";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
@@ -322,28 +323,132 @@ try { parent.document.title; document.getElementById("parent").textContent = "pa
   expect(relay.received.filter((frame) => frame.type === "look_seen")).toMatchObject([{ view_id: "v-html" }]);
 });
 
-test("hosted push registers and removes only the device scope while keeping the root worker", async ({ page, relay }) => {
-  relay.state.push = true;
+// Reload, worker scopes and encrypted reconnect cross boundaries a component test cannot observe.
+test("the phone keeps receiving Off across reload and reconnect, and On registers again", async ({ page, relay }) => {
+  // The older computer's global off must not own this phone's receiving choice.
+  relay.state.push = false;
   await page.addInitScript(() => {
-    let permission: NotificationPermission = "default";
-    Object.defineProperty(Notification, "permission", { configurable: true, get: () => permission });
-    Notification.requestPermission = async () => { permission = "granted"; return permission; };
-    PushManager.prototype.getSubscription = async () => null;
-    PushManager.prototype.subscribe = async () => ({ toJSON: () => ({ endpoint: "https://push.example/subscription", keys: { p256dh: "public", auth: "secret" } }) }) as PushSubscription;
+    Object.defineProperty(Notification, "permission", { configurable: true, get: () => localStorage.getItem("fixture.permission") ?? "default" });
+    Notification.requestPermission = async () => { localStorage.setItem("fixture.permission", "granted"); return "granted"; };
+    const subscription = () => ({
+      toJSON: () => ({ endpoint: "https://push.example/subscription", keys: { p256dh: "public", auth: "secret" } }),
+      unsubscribe: async () => { localStorage.removeItem("fixture.subscription"); return true; },
+    }) as PushSubscription;
+    PushManager.prototype.getSubscription = async () => localStorage.getItem("fixture.subscription") ? subscription() : null;
+    PushManager.prototype.subscribe = async () => { localStorage.setItem("fixture.subscription", "on"); return subscription(); };
   });
   await pair(page, relay);
-  // Notifications and the paired computers live in the Settings tab.
   await page.locator('[data-phone-tab="settings"]').click();
-  await page.getByRole("button", { name: "Turn on notifications", exact: true }).click();
-  await expect(page.locator('[data-phone-notifications="enable"]')).toHaveCount(0);
-  await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
+  const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
+  await receive.click();
+  await expect(receive).toHaveAttribute("aria-checked", "true");
+  await screenshot(page, "phone-receiving-on-en");
+  for (const [language, label] of [["ko", "알림 받기"], ["zh-CN", "接收通知"], ["ja", "通知を受け取る"], ["en", "Receive notifications"]]) {
+    await page.locator('[data-phone-setting="language"]').click();
+    await page.locator(`[data-phone-language-option="${language}"]`).click();
+    await expect(page.getByRole("switch", { name: label, exact: true })).toHaveAttribute("aria-checked", "true");
+    await screenshot(page, `phone-receiving-on-${language}`);
+  }
+  const subscriptions = () => relay.received.filter((frame) => frame.type === "push_subscription").length;
+  const off = () => relay.received.filter((frame) => frame.type === "push_permission" && frame.state === "denied").length;
+  await expect.poll(subscriptions).toBe(1);
   const scopes = () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((worker) => new URL(worker.scope).pathname).sort());
   await expect.poll(scopes).toEqual(["/", `/push/${relay.pairing.room}/`]);
+  await receive.click();
+  await expect(page.locator('[data-phone-notifications="off"]')).toBeVisible();
+  await screenshot(page, "phone-receiving-off-en");
+  await expect.poll(off).toBe(1);
+  expect(await page.evaluate(() => localStorage.getItem("fixture.subscription"))).toBeNull();
+  await page.reload();
+  await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+  await expect.poll(off).toBe(2);
+  expect(subscriptions()).toBe(1);
+  relay.disconnect();
+  await expect.poll(off).toBe(3);
+  expect(subscriptions()).toBe(1);
+  await page.locator('[data-phone-tab="settings"]').click();
+  await expect(receive).toHaveAttribute("aria-checked", "false");
+  await receive.click();
+  await expect.poll(subscriptions).toBe(2);
+  await expect(receive).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Remove device", exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).last().click();
   await expect(page).toHaveURL(relay.origin + "/");
   await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   await expect.poll(scopes).toEqual(["/"]);
+});
+
+for (const cleanup of [true, false]) test(`turning receiving Off handles late subscription cleanup ${cleanup ? "success" : "failure"}`, async ({ page, relay }) => {
+  await page.addInitScript((succeeds) => {
+    Object.defineProperty(Notification, "permission", { configurable: true, get: () => "granted" });
+    PushManager.prototype.getSubscription = async () => null;
+    PushManager.prototype.subscribe = () => new Promise((resolve) => {
+      Object.assign(window, { finishSubscription: () => resolve({
+        toJSON: () => ({ endpoint: "https://push.example/late", keys: { p256dh: "public", auth: "secret" } }),
+        unsubscribe: async () => { localStorage.setItem("fixture.late-unsubscribed", "true"); return succeeds; },
+      } as PushSubscription) });
+    });
+  }, cleanup);
+  await pair(page, relay);
+  await expect.poll(() => page.evaluate(() => "finishSubscription" in window)).toBe(true);
+  await page.locator('[data-phone-tab="settings"]').click();
+  const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
+  await expect(receive).toHaveAttribute("aria-checked", "true");
+  await receive.click();
+  await expect(page.locator('[data-phone-notifications="off"]')).toBeVisible();
+  await page.evaluate(() => (window as unknown as { finishSubscription: () => void }).finishSubscription());
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("fixture.late-unsubscribed"))).toBe("true");
+  expect(relay.received.filter((frame) => frame.type === "push_subscription")).toHaveLength(0);
+  await expect(receive).toHaveAttribute("aria-checked", String(!cleanup));
+  if (!cleanup) await expect(page.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+});
+
+test("receiving Off cleans every paired computer and lets a failed cleanup be retried", async ({ page, relay }) => {
+  const second = await startPhoneRelay();
+  relay.relayEndpoints.set(second.pairing.room, second.wsUrl);
+  try {
+    await page.addInitScript(() => {
+      Object.defineProperty(Notification, "permission", { configurable: true, get: () => "granted" });
+      const scopes = new WeakMap<PushManager, string>();
+      const descriptor = Object.getOwnPropertyDescriptor(ServiceWorkerRegistration.prototype, "pushManager")!;
+      Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", { configurable: true, get() {
+        const manager = descriptor.get!.call(this) as PushManager; scopes.set(manager, this.scope); return manager;
+      } });
+      const subscription = (manager: PushManager) => {
+        const key = `fixture.subscription:${scopes.get(manager)}`;
+        return {
+          toJSON: () => ({ endpoint: `https://push.example/${encodeURIComponent(key)}`, keys: { p256dh: "public", auth: "secret" } }),
+          unsubscribe: async () => {
+            localStorage.setItem("fixture.cleanup", String(Number(localStorage.getItem("fixture.cleanup") ?? 0) + 1));
+            if (!localStorage.getItem("fixture.failed")) { localStorage.setItem("fixture.failed", "true"); return false; }
+            localStorage.removeItem(key); return true;
+          },
+        } as PushSubscription;
+      };
+      PushManager.prototype.getSubscription = async function () { return localStorage.getItem(`fixture.subscription:${scopes.get(this)}`) ? subscription(this) : null; };
+      PushManager.prototype.subscribe = async function () {
+        localStorage.setItem(`fixture.subscription:${scopes.get(this)}`, "on"); return subscription(this);
+      };
+    });
+    await pair(page, relay);
+    await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
+    await page.goto("about:blank");
+    await page.goto(relay.origin + "/" + new URL(second.qr).hash);
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+    await expect.poll(() => second.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
+    // Both scopes have real worker registrations; the platform's unsubscribe answers differ.
+    await page.locator('[data-phone-tab="settings"]').click();
+    const receive = page.getByRole("switch", { name: "Receive notifications", exact: true });
+    await receive.click();
+    await expect(page.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("fixture.cleanup"))).toBe("2");
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await receive.click();
+    await expect(page.locator('[data-phone-notifications="off"]')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("fixture.cleanup"))).toBe("3");
+    await expect(receive).toHaveAttribute("aria-checked", "false");
+  } finally { await page.goto("about:blank"); await second.stop(); }
 });
 
 for (const permission of ["denied", "unsupported"]) {

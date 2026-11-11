@@ -1576,7 +1576,7 @@ impl Mobile {
                     .get("mode")
                     .and_then(Value::as_str)
                     .and_then(PushMode::parse)
-                    .ok_or("mobile_push_mode.mode must be off, app_closed or always")?;
+                    .ok_or("mobile_push_mode.mode must be app_closed or always")?;
                 {
                     let mut inner = self.lock();
                     inner.settings.push_mode = mode;

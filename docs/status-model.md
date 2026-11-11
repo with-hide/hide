@@ -1027,7 +1027,7 @@ Sentences keep their original language in every mode.
 The status prefix is the row's translated `status_code`, not a new classification: English uses Question, Approval, Blocked, Done and Stopped; Korean uses 질문, 승인 대기, 막힘, 완료 and 멈춤.
 An empty project omits its separator, and the desktop host's existing 400-character body cap still applies.
 Both transports copy the root's published `detail`, even when the phone's compact row hides that detail; neither recomputes a sentence or takes a descendant's text as its root's.
-Each desktop group has its own switch: Needs You enables demands and its icon count, Done enables completions and its unread icon count, and either enables the permission/test row; the phone keeps its independent push mode.
+Each desktop group has its own switch: Needs You enables demands and its icon count, Done enables completions and its unread icon count, and either enables the permission/test row; phone delivery keeps its independent desktop pause and phone receiving choices.
 Only a transition into an enabled group announces anything: a sentence changing by itself sends no second notification, and replacement tags, withdrawal, the desktop backlog of 16 and each channel's existing mode and focus rules are unchanged.
 
 This is the operator-approved reversal (2026-10-13) of mobile-companion's “never a sentence” rule: a phone lock-screen preview can now show the agent's or generated sentence, according to the phone's preview setting.

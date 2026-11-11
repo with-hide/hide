@@ -34,23 +34,30 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-it("picks the phone push mode in one dropdown that describes only the chosen mode, in a browser tab too (B6, mobile-companion B59)", async () => {
+it("pauses phone notifications by default and lets the phone own receiving", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
-  const container = document.createElement("div");
-  document.body.append(container);
+  const container = document.body.appendChild(document.createElement("div"));
   const root = createRoot(container);
   const saved = useShellStore.getState();
-  await act(async () => {
-    useShellStore.setState({ connection: "live", mobile: mobile("off") } as never);
-    root.render(<NotificationsTab actions={createActions(() => true)} />);
-  });
-  const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
-  // A browser tab has no desktop notifications (first-run-onboarding D-14): the phone group is the page.
-  expect(q('[data-settings-group="notifications"]')).toBeNull();
-  expect(q('[data-settings-group="phone"] [data-push-select]')).not.toBeNull();
-  expect(q("[data-push-detail]")?.getAttribute("data-push-detail")).toBe("off");
-  expect(container.textContent).not.toContain("Send to your phone only while desktop hide isn't connected");
-  await act(async () => root.unmount());
-  useShellStore.setState(saved, true);
+  const sent: unknown[] = [];
+  const actions = createActions((event) => { sent.push(event); return true; });
+  try {
+    await act(async () => {
+      useShellStore.setState({ connection: "live", mobile: mobile("app_closed") } as never);
+      root.render(<NotificationsTab actions={actions} />);
+    });
+    const toggle = container.querySelector<HTMLElement>('[role="switch"]')!;
+    expect(container.querySelector('[data-settings-group="notifications"]')).toBeNull();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).toContain("Choose whether to receive notifications in the phone app settings.");
+    await act(async () => toggle.click());
+    expect(sent).toEqual([{ schema_version: 2, kind: "mobile_push_mode", payload: { mode: "always" } }]);
+    await act(async () => useShellStore.setState({ mobile: mobile("always") }));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await act(async () => toggle.click());
+    expect(sent.at(-1)).toEqual({ schema_version: 2, kind: "mobile_push_mode", payload: { mode: "app_closed" } });
+  } finally {
+    await act(async () => root.unmount());
+    useShellStore.setState(saved, true);
+  }
 });

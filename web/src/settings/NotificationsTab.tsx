@@ -1,9 +1,9 @@
 import type { Actions } from "../actions";
 import { Group, Note, Row } from "../components/settings-rows";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Switch } from "../components/ui/switch";
 import { hostBridge } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
-import { PUSH_CHOICES, type PushMode } from "../mobileSettings";
+import { type PushMode } from "../mobileSettings";
 import { NotificationRows, useNotificationControl, usePermission } from "../NotificationControls";
 import { thisMachineKey } from "../screenMachine";
 import { useShellStore } from "../store";
@@ -41,29 +41,22 @@ function PhoneGroup({ actions }: { actions: Actions }) {
   const mobile = useShellStore((s) => s.mobile);
   return (
     <Group title={t("settings.notifications.phone")} data-settings-group="phone">
-      {mobile ? <PushModeSelect mode={mobile.push_mode} actions={actions} /> : <Note tone="pending">{t("mobileSetup.connecting")}</Note>}
+      {mobile ? <PhoneRestSwitch mode={mobile.push_mode} actions={actions} /> : <Note tone="pending">{t("mobileSetup.connecting")}</Note>}
     </Group>
   );
 }
 
-/** Push to the phone in one dropdown; only the chosen item's description shows (B59). */
-function PushModeSelect({ mode, actions }: { mode: PushMode; actions: Actions }) {
+/** The desktop controls when to pause; each phone controls whether to receive. */
+function PhoneRestSwitch({ mode, actions }: { mode: PushMode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const chosen = PUSH_CHOICES.find((choice) => choice.id === mode);
   return (
-    <Row label={t("mobileSetup.pushTo")} detail={chosen ? <Note data-push-detail={chosen.id}>{t(chosen.detail)}</Note> : null}>
-      <Select value={mode} onValueChange={(value) => actions.setPushMode(value as PushMode)}>
-        <SelectTrigger aria-label={t("mobileSetup.push")} data-push-select="true">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {PUSH_CHOICES.map((choice) => (
-            <SelectItem key={choice.id} value={choice.id} data-push-choice={choice.id}>
-              {t(choice.label)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <Row label={t("mobileSetup.restSwitch")} detail={<><Note>{t("mobileSetup.restHint")}</Note><Note>{t("mobileSetup.restPhoneHint")}</Note></>}>
+      <Switch
+        aria-label={t("mobileSetup.restSwitch")}
+        data-phone-push-rest="true"
+        checked={mode === "app_closed"}
+        onCheckedChange={(rest) => actions.setPushMode(rest ? "app_closed" : "always")}
+      />
     </Row>
   );
 }

@@ -2700,7 +2700,10 @@ An existing install whose old shared switch was on migrates to both on; an old o
 Each toggle sends one event and persists through the core's existing UI-state writer; a repeated choice publishes nothing and a stale generic UI save cannot replace either choice.
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
-The second, Phone, is the push to a paired phone, the dropdown Settings > Mobile below describes.
+The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
+Its two description lines are `데스크톱 Hide가 열려 있으면 폰으로 알림을 보내지 않아요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
+On pauses phone pushes while any desktop renderer is connected (`app_closed`); Off allows them with the desktop open too (`always`).
+A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 
 ### Usage
 
@@ -3021,8 +3024,8 @@ Tailscale runs on the core's machine, so its failing steps name that machine.
 The page rechecks Tailscale every three seconds while open; passed checks collapse to Tailscale is ready.
 A foreign HTTPS entry or Funnel is refused; a failed removal remains visible until cleanup finishes, including after switch-off.
 The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 연결 해제, which closes that phone at once.
-The push to the phone is on Settings > Notifications, not on this page (PRD settings-left-nav B7): one dropdown of 끔 (the default), 앱이 닫혀 있을 때만 and 항상, with the description of the chosen mode only under it, and the choice survives a restart (B59).
-Whatever the mode, a phone is told only when an agent waits on the operator's answer, a question, an approval or a block, never when it finishes, and each description says so (status-model.md, Phone notices).
+The phone pause switch is on Settings > Notifications, and its choice survives a restart.
+A phone is told only when an agent waits on the operator’s answer, a question, an approval or a block, never when it finishes (status-model.md, Phone notices).
 
 ### The phone app
 
@@ -3112,7 +3115,7 @@ Opening the detail does not wake it, and neither does a tap on its row: the desk
 Opening an agent's detail reads it as the desktop's focus on its pane does: an unread finish in 읽을 것 or an unread question goes to read on the phone and on the desktop at once, and a turn it finishes while the detail stays open is read too; once every phone has closed it, a new finish is unread again ([status-model.md](status-model.md#hide-owns-the-read-axis-at-pane-level)).
 Reading is not waking, so this holds for a sleeping agent too, which stays asleep.
 A closed pane shows "이 pane은 더 이상 열려 있지 않아요" and disables the reply bar; a disconnected SSH device shows that its device is not connected.
-With push on, the list offers 알림 켜기; a Safari tab without push is told to open hide from the Home Screen first, and a refused permission shows "알림이 꺼져 있어요 · 설정 > 알림에서 hide를 켜세요".
+The phone’s Settings offers `알림 받기`; a Safari tab without push is told to open Hide from the Home Screen first, and a refused browser permission shows "알림이 꺼져 있어요 · 설정 > 알림에서 hide를 켜세요".
 A notification's title is the root's row title and, with a sentence, its body is `<translated row status> · <exact sentence> · <project>`; without a sentence it is the row's status word with the project (`승인 · <project>` in Korean), and a payload with no status code says the section (내 차례 or 읽을 것) in the phone's language.
 The sentence is the core's chosen row detail, untranslated, and may appear in lock-screen previews according to the phone's setting (operator-approved update 2026-10-13); tapping the notice opens that agent's detail.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for native question and plain-text question behavior, and cached-worker compatibility.
@@ -3158,11 +3161,17 @@ The phone's bottom bar has four places, 에이전트, 미션, PR and 설정, and
 It replaces the gear and its sheet that the list's header carried, and it reads top to bottom as the computers this phone is connected to, 알림, 표시, 정보.
 Each is a group as the desktop's Settings draws one (`Group`, `web/src/components/settings-rows.tsx`): its heading, a card of rows split by hairlines, each row one thing to read or press and a touch target tall, and a group's note under the card; a row carries a line under its name only where the desktop's has one, which on the phone is the notification row's.
 연결된 컴퓨터 lists each paired computer with its state and counts; a press switches to it, `다른 기기 연결` opens the QR scan and paste page, and the trash on a row asks `컴퓨터 이름: 이 폰에서 연결을 지울까요? 다시 연결하려면 새 QR이 필요해요.` before it removes the computer from this phone.
-알림 shows only what works where the phone runs: in a browser it is `알림 켜기`, or the one line that says why it cannot be turned on (the Home Screen first, or the system setting that is off), and in the iOS app it is one row with a switch and a line under it that says what is true now.
-Off says `에이전트가 나를 기다리거나 일이 끝나면, Hide를 닫아 둬도 알려 줘요.`; turning it on asks iOS's own question only now, from the press, and while it waits the switch is held and the line says `iOS의 질문에 답하길 기다리고 있어요.`
-On says `내 차례가 되거나 일이 끝나면 알려 줘요.`, or `알림을 받으려면 컴퓨터의 Hide를 업데이트하세요.` when the computer is older than the app's notifications.
-When iOS refuses (the person answered `허용 안 함` or turned it off in iOS Settings) the switch is off and held, the line says `iOS에서 Hide 알림이 꺼져 있어요.`, and a button `iOS 설정 열기` opens this app's page there, because only iOS can turn it back on; when the registration could not be made the line says `알림을 켜지 못했어요. 다시 시도해 주세요.` and the switch can be pressed again.
-Turning it off tells the connected computer and removes this phone's keys for every computer; removing a computer on the phone removes that computer's key too.
+알림 has the same `알림 받기` switch in the PWA and iOS app, with one line below for the current state.
+Off says `에이전트가 내 답을 기다리면, Hide를 닫아 둬도 알려 줘요.` and On says `내 차례가 되면 알려 줘요.`
+Turning it on asks the platform’s notification permission only from that press; while it waits, the switch is held and the line names the browser’s or iOS’s question.
+A browser without push holds the switch off and keeps the Home Screen guidance; a refused browser permission holds it off with the system-settings guidance.
+When iOS refuses, the switch is off and held, the line says `iOS에서 Hide 알림이 꺼져 있어요.`, and `iOS 설정 열기` opens this app’s page there.
+A registration failure shows `알림을 켜지 못했어요. 다시 시도해 주세요.` and allows another press; an older computer in the iOS app asks for a computer update.
+The browser keeps its receiving choice on this phone across reloads and reconnects; without a saved choice it preserves the existing OS-permission behavior.
+Turning it off tells the connected computer and removes subscriptions for every paired computer in this browser, while keeping the workers and their cached app usable.
+A late registration cannot turn receiving back on; a cleanup failure says that not every notification could be turned off and offers the switch for another attempt.
+An unsaved browser choice shows the existing storage-failure guidance.
+The iOS app removes this phone’s keys for every computer when turned off; removing a computer removes only that computer’s subscription or key.
 In the demo 연결된 컴퓨터 holds three rows, the sample host with its `샘플` mark, `내 컴퓨터 연결하기` and `체험 끝내기`, with the note that nothing goes to a computer under the card.
 In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
 The first screen's 언어 value reads `폰 따라가기` (the phone's own language) while no computer is connected, and `Mac 따라가기` only inside a computer; the camera view says the camera is already open (`카메라가 이미 열려 있어요. 닫고 다시 시도해 주세요.`) when another screen holds it, and keeps the permission wording for a camera that cannot be used.

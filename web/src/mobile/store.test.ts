@@ -14,8 +14,9 @@ describe("a bundle against a newer Hide of its phone protocol", () => {
   });
 
   it("reads a frame it knows that carries a field it predates", () => {
+    // Older computers may still send off; receiving is this phone's choice.
     applyFrame({ type: "meta", push_mode: "off", other_phones: 0 });
     applyFrame({ type: "meta", push_mode: "always", other_phones: 2, later_field: { on: true } } as unknown as ServerFrame);
-    expect(usePhone.getState()).toMatchObject({ pushMode: "always", otherPhones: 2 });
+    expect(usePhone.getState()).toMatchObject({ otherPhones: 2 });
   });
 });

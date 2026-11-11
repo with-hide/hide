@@ -3,7 +3,7 @@
 // its four checklist states to a QR; an iPhone-sized touch page pairs with the
 // QR's code, lists the agents in four groups, opens a detail, and its reply
 // and quick keys reach the pane's PTY; a loopback push endpoint decrypts
-// what hided sends and proves the three modes, the viewing rule and the Seen
+// what hided sends and proves the pause switch, the viewing rule and the Seen
 // clear; revoke, the phone limit, the seven-day revoke, the unreachable line
 // and the empty list follow; the start sheet starts an agent in a checkout and
 // in Home and keeps its text while the phone is away; and no code, credential
@@ -185,21 +185,21 @@ async function showPairing(page: Page): Promise<void> {
   await page.locator('[data-mobile-show-code="true"]').click({ timeout: 20_000 });
 }
 
-/** Picks a push mode in the one dropdown on Settings > Notifications (PRD settings-left-nav B6), and returns to Mobile. */
-async function choosePush(page: Page, mode: "off" | "app_closed" | "always"): Promise<void> {
+/** Changes the phone pause switch on Settings > Notifications (PRD settings-left-nav B6), and returns to Mobile. */
+async function choosePush(page: Page, mode: "app_closed" | "always"): Promise<void> {
   await page.locator('[data-settings-tab="notifications"]').click();
-  await page.locator("[data-push-select]").click();
-  await page.locator(`[data-push-choice="${mode}"]`).click();
-  await expect(page.locator(`[data-push-detail="${mode}"]`)).toBeVisible();
+  const toggle = page.locator("[data-phone-push-rest]");
+  if ((await toggle.getAttribute("aria-checked")) !== String(mode === "app_closed")) await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", String(mode === "app_closed"));
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
   await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The push mode Settings > Notifications shows, read there before returning to Mobile. */
-async function expectPush(page: Page, label: string): Promise<void> {
+async function expectPush(page: Page, rest: boolean): Promise<void> {
   await page.locator('[data-settings-tab="notifications"]').click();
-  await expect(page.locator("[data-push-select]")).toHaveText(label);
+  await expect(page.locator("[data-phone-push-rest]")).toHaveAttribute("aria-checked", String(rest));
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
   await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
@@ -299,8 +299,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await openMobileSettings(page, daemon);
     const toggle = page.locator('[data-mobile-switch="true"]');
     await expect(toggle).toHaveAttribute("aria-checked", "false");
-    await expect(page.locator("[data-push-select]")).toHaveCount(0);
-    await expectPush(page, "Off");
+    await expect(page.locator("[data-phone-push-rest]")).toHaveCount(0);
+    await expectPush(page, true);
     expect(tailscale.calls()).toBe("");
 
     // B2: the CLI is missing, so the first step carries the download link and the rest wait.
@@ -500,13 +500,13 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     });
     await screenshot(phone, "mobile-phone-detail");
 
-    // B30: with push on, the list offers Turn on notifications; allowing it registers the subscription.
+    // The phone owns receiving: turning its switch on registers the subscription.
     await choosePush(page, "always");
     await phone.locator('[data-phone-back="true"]').tap(); await phone.locator('[data-phone-tab="settings"]').tap();
-    const enable = phone.locator('[data-phone-notifications="enable"]');
+    const enable = phone.getByRole("switch", { name: "Receive notifications", exact: true });
     await expect(enable).toBeVisible({ timeout: 20_000 });
     await enable.tap();
-    await expect(enable).toHaveCount(0, { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
+    await expect(enable).toHaveAttribute("aria-checked", "true", { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
     await expect(page.locator("[data-mobile-phone-line]")).toHaveText("Just now · Receiving notifications");
 
     // B31, B33 (always): two finishes, then asks; a finish is never pushed (2026-11-11), so the one push is the question.
@@ -531,13 +531,6 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect.poll(() => readOf(frames, one)).toBe(true);
     noPushBeyond(push.received, 1);
     await phone.locator('[data-phone-back="true"]').tap();
-
-    // B33 (off): nothing.
-    await choosePush(page, "off");
-    await work(daemon!, two);
-    await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await pushSkippedByMode(daemon!, push.received, 1, () => ask(fixture, daemon!, two, "끔에서는 조용히"));
-    await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
 
     // B33 (only while the app is closed): nothing while the desktop is connected. The
     // desktop then reads two, which clears its notification (B34).
@@ -601,6 +594,47 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     daemon?.stop();
     fixture.stop();
     tailscale.remove();
+  }
+});
+
+// The direct phone uses the real daemon and /m/ worker; components cannot observe worker lookup and cleanup.
+test("a directly connected phone retries failed notification cleanup and can receive again", async ({ browser, page }) => {
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale(); tailscale.install(); tailscale.ready();
+  const push = await pushService();
+  let daemon: Daemon | null = null;
+  let context: BrowserContext | null = null;
+  try {
+    daemon = await startHided(fixture, "mobile-receiving", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    await openMobileSettings(page, daemon);
+    await page.locator('[data-mobile-switch="true"]').click();
+    context = await phoneContext(browser, push);
+    const phone = await context.newPage();
+    await phone.goto(await shownPairingUrl(page, daemon));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
+    await phone.locator('[data-phone-tab="settings"]').tap();
+    const receive = phone.getByRole("switch", { name: "Receive notifications", exact: true });
+    await receive.tap();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await phone.evaluate(() => {
+      const get = navigator.serviceWorker.getRegistration.bind(navigator.serviceWorker);
+      let fail = true;
+      navigator.serviceWorker.getRegistration = async (scope) => {
+        if (fail) { fail = false; throw new Error("fixture_worker_lookup"); }
+        return get(scope);
+      };
+    });
+    await receive.tap();
+    await expect(phone.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+    await receive.tap();
+    await expect(phone.locator('[data-phone-notifications="off"]')).toBeVisible();
+    await expect.poll(() => phone.evaluate(() => (window as unknown as { __push: { unsubscribed: number } }).__push.unsubscribed)).toBe(1);
+    await receive.tap();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await expect.poll(() => phone.evaluate(() => (window as unknown as { __push: { subscribed: number } }).__push.subscribed)).toBe(2);
+  } finally {
+    await context?.close(); push.close(); daemon?.stop(); fixture.stop(); tailscale.remove();
   }
 });
 
@@ -750,7 +784,7 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
 
     // B29: the push mode survived the restart.
     await openMobileSettings(page, daemon);
-    await expectPush(page, "Only when the app is closed");
+    await expectPush(page, true);
 
     // B14: three more phones on record make four; a fifth is refused with the reason.
     const record = (id: string, lastSeen: number) => ({
