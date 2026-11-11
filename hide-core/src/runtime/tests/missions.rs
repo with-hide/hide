@@ -10852,7 +10852,7 @@ fn a_129th_mission_is_created_and_a_shelved_mission_is_found_shown_and_reopened(
             command(
                 &mut runtime,
                 "sender",
-                json!({"op": "close", "end": "done"}),
+                json!({"op": "close", "end": "done", "report": "The work is finished."}),
             )
             .unwrap();
         }
