@@ -100,7 +100,9 @@ exit 0`);
     stub('codesign', `args="$*"; while [ $# -gt 1 ]; do [ "$1" = --entitlements ] && [ -f "$2" ] && printf '%s: %s\\n' "$(basename "\${@: -1}")" "$(cat "$2")" >> "${home}/embedded"; shift; done
 case "$args" in *-dvv*) echo "Authority=\${STUB_AUTHORITY:-Apple Distribution: Hide (GH6F6ZA497)}" >&2;; esac; exit 0`);
     stub('unzip', 'dest=${@: -1}; mkdir -p "$dest/Payload/App.app"; : > "$dest/Payload/App.app/Info.plist"; : > "$dest/Payload/App.app/embedded.mobileprovision"');
-    stub('plutil', 'case "$1" in -convert) while [ $# -gt 0 ]; do [ "$1" = -o ] && echo "{}" > "$2"; shift; done;; esac; exit 0');
+    // A replace records the bundle whose Info.plist it wrote and the key and value it was given.
+    stub('plutil', `case "$1" in -convert) while [ $# -gt 0 ]; do [ "$1" = -o ] && echo "{}" > "$2"; shift; done;;
+  -replace) printf '%s: %s=%s\\n' "$(basename "$(dirname "\${@: -1}")")" "$2" "$4" >> "${home}/replaced";; esac; exit 0`);
     stub('security', 'echo "<plist/>"');
     stub('xcrun', `
 mkdir -p "$CFFIXED_USER_HOME/Library/Logs/ContentDelivery" && echo "${KEY_ID}" > "$CFFIXED_USER_HOME/Library/Logs/ContentDelivery/altool.txt"
@@ -252,6 +254,14 @@ exit 0`);
       expect(readFileSync(join(home, 'embedded'), 'utf8').trim().split('\n')).toEqual([
         'HideNotification.appex: shared=GH6F6ZA497.me.grab.hide.ios.push-keys',
         'App.app: aps=production own=GH6F6ZA497.me.grab.hide.ios shared=GH6F6ZA497.me.grab.hide.ios.push-keys',
+      ]);
+    });
+
+    it('writes the team prefix into the Info.plist of the extension and of the app before it signs them', () => {
+      expect(run({ HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
+      expect(readFileSync(join(home, 'replaced'), 'utf8').trim().split('\n')).toEqual([
+        'HideNotification.appex: AppIdentifierPrefix=GH6F6ZA497.',
+        'App.app: AppIdentifierPrefix=GH6F6ZA497.',
       ]);
     });
 
