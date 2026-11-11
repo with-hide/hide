@@ -33,7 +33,7 @@ use hide_agent_hooks::plan_record::{
 
 /// Whether the saved plans have been read into the core.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum Load {
+pub(super) enum Load {
     #[default]
     Idle,
     Loading,
@@ -43,7 +43,7 @@ enum Load {
 #[derive(Default)]
 pub(crate) struct PlanRuntime {
     pub(crate) book: BTreeMap<SessionIdentity, Plan>,
-    load: Load,
+    pub(super) load: Load,
     /// Moves on every change to the book, so the published view is made
     /// again only when it or the panes moved.
     pub(crate) edit: u64,
@@ -281,7 +281,7 @@ impl Runtime {
         }
     }
 
-    fn ingest_plans(&mut self, answer: Result<LedgerAnswer, String>) -> bool {
+    pub(super) fn ingest_plans(&mut self, answer: Result<LedgerAnswer, String>) -> bool {
         match answer {
             Ok(LedgerAnswer::Plans(saved)) => {
                 // A plan set before the read answered is newer than the

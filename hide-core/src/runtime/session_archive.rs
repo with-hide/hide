@@ -1170,14 +1170,36 @@ impl Runtime {
             .records
             .get(&id)
             .cloned();
+        // An unread book is not an empty protection list. Small admissions
+        // need no eviction, but automatic deletion must wait for both books.
+        let unavailable = if self.plans.load == super::plans::Load::Loading {
+            Some("plans_loading")
+        } else if self.plans.load != super::plans::Load::Ready {
+            Some("plans_not_ready")
+        } else if self.missions.unreadable.is_some() {
+            Some("missions_unreadable")
+        } else if self.missions.store.is_none() {
+            Some("missions_not_ready")
+        } else {
+            None
+        };
         let pinned = archive_pins(&self.missions.book, &self.plans.book, &self.delivery_ledger);
-        let evicted = self.snapshot.ui_state.session_archive.admit(
+        let admitted = self.snapshot.ui_state.session_archive.admit(
             id.clone(),
             record,
             &|held| self.archive_deletes_sent.contains(held),
-            &pinned,
-        )?;
+            &|record| unavailable.is_some() || pinned(record),
+        );
         drop(pinned);
+        if admitted == Err(AdmitRefusal::Full)
+            && let Some(reason) = unavailable
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "session_archive", "kind": "session_archive.eviction_unavailable",
+                "archive_id": id.as_str(), "reason": reason,
+            }));
+        }
+        let evicted = admitted?;
         if evicted.is_empty() {
             return Ok(());
         }
@@ -2086,6 +2108,229 @@ mod tests {
             ended: true,
             forked: false,
         }
+    }
+
+    fn full_archive() -> (Runtime, crate::links::worker::LinkClient, Vec<ArchiveId>) {
+        let mut runtime = super::super::tests::runtime();
+        super::super::tests::ready_archive_protections(&mut runtime);
+        let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+        runtime.links_work.client = Some(client.clone());
+        let ids = (0..crate::session_archive::MAX_ARCHIVED_SESSIONS)
+            .map(|n| {
+                let id = ArchiveId::new().unwrap();
+                runtime.snapshot.ui_state.session_archive.records.insert(
+                    id.clone(),
+                    fixture_record(vec![fixture_member(&format!("old-{n}"), None)], n as u64),
+                );
+                id
+            })
+            .collect();
+        (runtime, client, ids)
+    }
+
+    fn incoming(runtime: &mut Runtime, name: &str) -> Result<ArchiveId, AdmitRefusal> {
+        let id = ArchiveId::new().unwrap();
+        runtime.admit_archive_record(
+            id.clone(),
+            fixture_record(vec![fixture_member(name, None)], 1_000),
+        )?;
+        Ok(id)
+    }
+
+    /// Loading and failed restores must never be interpreted as an empty
+    /// protection list. Once restored, the oldest waiting plan is protected
+    /// and the next oldest root makes room instead (Conductor ruling).
+    #[test]
+    fn an_unrestored_or_failed_plan_book_blocks_eviction_until_its_protections_are_read() {
+        for failed in [false, true] {
+            let (mut runtime, client, ids) = full_archive();
+            runtime.plans.load = super::super::plans::Load::Loading;
+            if failed {
+                runtime.ingest_plans(Err("restore_failed".into()));
+            }
+            let (answer, diagnostics) =
+                crate::diagnostics::capture(|| incoming(&mut runtime, "new"));
+            assert_eq!(answer, Err(AdmitRefusal::Full));
+            assert!(client.deletes_for_test().is_empty());
+            assert_eq!(runtime.snapshot.ui_state.session_archive.records.len(), 256);
+            let reason = if failed {
+                "plans_not_ready"
+            } else {
+                "plans_loading"
+            };
+            assert!(
+                diagnostics.iter().any(|event| {
+                    event["kind"] == "session_archive.eviction_unavailable"
+                        && event["reason"] == reason
+                }),
+                "{diagnostics:?}"
+            );
+
+            runtime.ingest_plans(Ok(crate::links::ledger::LedgerAnswer::Plans(vec![plan(
+                "old-0", "working",
+            )])));
+            incoming(&mut runtime, "new").unwrap();
+            assert_eq!(client.deletes_for_test()[0].0, ids[1].as_str());
+            assert!(!runtime.archive_deletes_sent.contains(&ids[0]));
+            assert!(runtime.plans.book.contains_key(&identity("old-0")));
+        }
+    }
+
+    #[test]
+    fn an_unrestored_or_unreadable_mission_book_never_allows_eviction() {
+        for failed in [false, true] {
+            let (mut runtime, client, ids) = full_archive();
+            runtime.missions.store = None;
+            if failed {
+                runtime.install_mission_store(
+                    crate::missions::MissionStore::new(
+                        runtime.state_path.with_file_name("missions.json"),
+                    ),
+                    crate::missions::Restored::Unreadable("restore_failed".into()),
+                );
+            }
+            let (answer, diagnostics) =
+                crate::diagnostics::capture(|| incoming(&mut runtime, "new"));
+            assert_eq!(answer, Err(AdmitRefusal::Full));
+            assert!(client.deletes_for_test().is_empty());
+            assert_eq!(runtime.snapshot.ui_state.session_archive.records.len(), 256);
+            let reason = if failed {
+                "missions_unreadable"
+            } else {
+                "missions_not_ready"
+            };
+            assert!(
+                diagnostics.iter().any(|event| {
+                    event["kind"] == "session_archive.eviction_unavailable"
+                        && event["reason"] == reason
+                }),
+                "{diagnostics:?}"
+            );
+            if !failed {
+                let mut mission = crate::missions::tests::mission();
+                mission.status = MissionStatus::Running;
+                mission.conductor.session = Some(identity("old-0"));
+                runtime.install_mission_store(
+                    crate::missions::MissionStore::new(
+                        runtime.state_path.with_file_name("missions.json"),
+                    ),
+                    crate::missions::Restored::Read(MissionBook {
+                        missions: vec![mission],
+                        next: 2,
+                    }),
+                );
+                incoming(&mut runtime, "new").unwrap();
+                assert_eq!(client.deletes_for_test()[0].0, ids[1].as_str());
+                assert!(!runtime.archive_deletes_sent.contains(&ids[0]));
+            }
+        }
+    }
+
+    /// A delete can fail after enqueue, leaving one extra record. It
+    /// leaves every archive intact, and the next admission selects two
+    /// oldest roots to repair the excess as well as admit the next record.
+    fn recovers_after_failed_delete(writer_failure: bool) {
+        let (mut runtime, client, ids) = full_archive();
+        let first = incoming(&mut runtime, "first-new").unwrap();
+        let first_delete = client.deletes_for_test();
+        assert_eq!(first_delete.len(), 1);
+        assert_eq!(first_delete[0].0, ids[0].as_str());
+
+        let sessions = ids
+            .iter()
+            .map(|id| {
+                let member = runtime.snapshot.ui_state.session_archive.records[id].root();
+                identity(&member.native_session_id)
+            })
+            .collect::<Vec<_>>();
+        let store_path = runtime.state_path.with_file_name("delete-links.sqlite3");
+        let (mut store, _) = crate::links::store::LinkStore::open(&store_path).unwrap();
+        store
+            .apply_panes(
+                &sessions
+                    .iter()
+                    .map(|session| crate::links::PaneFact {
+                        device_id: session.device_id.clone(),
+                        agent: session.agent.clone(),
+                        session_id: session.session_id.clone(),
+                        cwd: "/repo".into(),
+                        branch: None,
+                    })
+                    .collect::<Vec<_>>(),
+                1,
+            )
+            .unwrap();
+        let good_path = runtime.state_path.clone();
+        if writer_failure {
+            // The worker has committed its real SQLite delete. A file
+            // blocks the writer's parent directory, so its receipt fails.
+            store.delete_sessions(&first_delete[0].1).unwrap();
+            let blocker = good_path.with_file_name("not-a-directory");
+            std::fs::write(&blocker, "").unwrap();
+            runtime.state_path = blocker.join("state.json");
+            assert!(runtime.ingest_archive_record_deleted(first_delete[0].0.clone(), Ok(())));
+            runtime.state_path = good_path;
+            assert_eq!(store.held(&sessions).unwrap().len(), 255);
+        } else {
+            assert!(runtime.ingest_archive_record_deleted(
+                first_delete[0].0.clone(),
+                Err("worker_failed".into())
+            ));
+            assert_eq!(store.held(&sessions).unwrap().len(), 256);
+        }
+        let archive = &runtime.snapshot.ui_state.session_archive;
+        assert_eq!(
+            archive.count(),
+            257,
+            "only the failed eviction remains over the cap"
+        );
+        assert!(
+            ids.iter().all(|id| archive.records.contains_key(id)),
+            "no original archive was lost"
+        );
+        assert!(archive.records.contains_key(&first));
+        assert!(!archive.records[&ids[0]].deleting);
+        assert!(
+            runtime
+                .snapshot
+                .status
+                .last_error
+                .as_ref()
+                .unwrap()
+                .kind
+                .ends_with("failed")
+        );
+
+        let second = incoming(&mut runtime, "second-new").unwrap();
+        let deletes = client.deletes_for_test();
+        assert_eq!(deletes.len(), 3);
+        assert_eq!(deletes[1].0, ids[0].as_str());
+        assert_eq!(deletes[2].0, ids[1].as_str());
+        assert_eq!(runtime.snapshot.ui_state.session_archive.count(), 258);
+        for (request, sessions) in &deletes[1..] {
+            store.delete_sessions(sessions).unwrap();
+            runtime.ingest_archive_record_deleted(request.clone(), Ok(()));
+        }
+        let archive = &runtime.snapshot.ui_state.session_archive;
+        assert_eq!(archive.count(), 256, "the next admission repairs the cap");
+        assert!(!archive.records.contains_key(&ids[0]));
+        assert!(!archive.records.contains_key(&ids[1]));
+        assert!(ids[2..].iter().all(|id| archive.records.contains_key(id)));
+        assert!(archive.records.contains_key(&first));
+        assert!(archive.records.contains_key(&second));
+        drop(store);
+        let (store, _) = crate::links::store::LinkStore::open(&store_path).unwrap();
+        assert_eq!(store.held(&sessions).unwrap().len(), 254);
+    }
+
+    #[test]
+    fn an_eviction_worker_error_preserves_records_and_the_next_admission_restores_the_cap() {
+        recovers_after_failed_delete(false);
+    }
+
+    #[test]
+    fn an_eviction_writer_failure_preserves_records_and_the_next_admission_restores_the_cap() {
+        recovers_after_failed_delete(true);
     }
 
     /// The parent's guard: an eviction is automatic, and the delete it

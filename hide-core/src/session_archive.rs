@@ -416,6 +416,9 @@ impl SessionArchive {
             .iter()
             .filter(|(held, kept)| **held != id && !kept.deleting && !leaving(held))
             .collect::<Vec<_>>();
+        // Count the whole excess, including earlier deletes that failed
+        // after enqueueing. The next admission repairs those as well as
+        // making room for this record; it never assumes count <= cap.
         let mut over = (staying
             .iter()
             .map(|(_, kept)| kept.held().count())

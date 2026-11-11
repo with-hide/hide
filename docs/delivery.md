@@ -1035,6 +1035,8 @@ The close is the engine's own (`hide-core/src/coordination/end.rs`), as a spawn 
 The conversation that ran there is kept as an archived session of its own under 보관됨, where 이어가기 resumes it as a new root ([ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
 The answer says `"conversation": "archived"`, or `"none"` when no agent showed in the pane, its checkout is not listed or Hide does not know its session (the `agent.end_pane` line says which).
 At 256 archived sessions, admission makes room from the oldest archived root at rest, taking its descendants with it through the existing delete path; only when no eligible roots can make enough room does the answer say `"archive_full"`, also logged as `agent.end_not_archived`.
+Until both the plan and mission books have been read successfully, an admission needing eviction also answers `"archive_full"`, with `session_archive.eviction_unavailable` naming the unavailable book.
+If an already queued delete fails, its record stays as on manual delete; the next admission removes enough eligible roots to recover the cap, including that retained excess.
 A record Hide could not form, or an eviction whose deletes could not be enqueued, answers `"none"` and is logged there as `archive_refused`.
 The pane closes all the same.
 The conversation is archived before the pane closes, so a close that ends the pane but not the command still leaves it under 보관됨, and its row stands there once the pane left its machine's listing; a close that failed with the pane still there takes the record back, since the conversation runs on in it.

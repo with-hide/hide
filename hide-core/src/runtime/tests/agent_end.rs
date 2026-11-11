@@ -322,6 +322,7 @@ fn registered(
             .unwrap()
             .context;
     }
+    ready_archive_protections(&mut runtime.lock().unwrap());
     Ending {
         pane,
         engine_pane,

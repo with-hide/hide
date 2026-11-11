@@ -34,6 +34,7 @@ fn ingest(runtime: &mut Runtime, present: &[&str], status: &[(&str, &str)]) {
 
 fn archive_runtime(status: &[(&str, &str)]) -> Runtime {
     let mut runtime = tree_runtime(status);
+    ready_archive_protections(&mut runtime);
     ingest(&mut runtime, &EVERY, status);
     runtime
 }
