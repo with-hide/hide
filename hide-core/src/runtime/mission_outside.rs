@@ -206,7 +206,9 @@ struct Bases {
 impl Bases {
     /// The branch `watch`'s branch is judged against: an outside branch
     /// against the default branch, a direct change against its mission's
-    /// destination, which is the default branch when it records none.
+    /// destination, which is the default branch when it records none. The
+    /// map draws the same branches: `Runtime::judged_destination` for the
+    /// mission and `NodeView::outside` for an outside branch.
     fn of<'a>(&'a self, watch: &'a Watch) -> Option<&'a str> {
         match watch {
             Watch::Landing {
@@ -455,7 +457,9 @@ impl Runtime {
 
     /// The branch `mission`'s results are judged against (PRD
     /// mission-destination D-06): the destination it records, else its
-    /// project's default branch; none only while neither can be read.
+    /// project's default branch; none only while neither can be read. It
+    /// names for the map the branch `Bases::of` judges a direct change
+    /// against.
     pub(super) fn judged_destination(&self, mission: &Mission) -> Option<String> {
         mission
             .destination

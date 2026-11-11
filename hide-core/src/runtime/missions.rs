@@ -252,6 +252,11 @@ pub struct NodeView {
     pub criteria_met: u32,
     pub criteria_skipped: u32,
     pub external: Option<External>,
+    /// Where an outside node's work goes, for its station line (PRD
+    /// mission-destination D-14); shown only, its done stays the merge or
+    /// landing it waits on (D-07). Absent for a node that is not outside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outside: Option<OutsideView>,
     /// An outside node Hide could not read: it stays waiting, and the
     /// reason is in the diagnostic log (B20 `확인 못 함`).
     pub unread: bool,
@@ -499,6 +504,20 @@ pub struct NodePrView {
     /// has not answered for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+}
+
+/// Where an outside node's work goes (`NodeView::outside`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OutsideView {
+    /// An outside pull request's base as GitHub last answered, or the
+    /// project's default branch an outside branch is judged against
+    /// (`Runtime::project_default_branch`); absent while neither is read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// An outside pull request's state as GitHub last answered; absent for
+    /// a branch and before GitHub answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<PrState>,
 }
 
 /// The mission's safety net as its card draws it (`MissionView::safety_net`).
@@ -774,10 +793,10 @@ struct ViewsMadeFrom {
     /// its card lists the ones still open and whether each was seen; zero
     /// with none linked.
     views_generation: u64,
-    /// Each mission's judged destination (`Runtime::judged_destination`),
-    /// which moves with the project catalog's default branch and not with
-    /// the book.
-    destinations: Vec<Option<String>>,
+    /// Per mission in book order: its project's default branch as the
+    /// catalog lists it, which a mission that records no destination and
+    /// an outside branch are drawn with, and which moves without the book.
+    defaults: Vec<Option<String>>,
     made: bool,
 }
 
@@ -4180,6 +4199,21 @@ impl Runtime {
                     criteria_met,
                     criteria_skipped,
                     external: node.external.clone(),
+                    outside: node.external.as_ref().map(|external| match external {
+                        External::Pr(number) => {
+                            let pull = pull_of(*number);
+                            OutsideView {
+                                base: pull.map(|pull| pull.base_branch.clone()),
+                                state: pull.map(|pull| {
+                                    PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
+                                }),
+                            }
+                        }
+                        External::Branch(_) => OutsideView {
+                            base: self.project_default_branch(&mission.device_id, &mission.project),
+                            state: None,
+                        },
+                    }),
                     unread: self.missions.outside.unread(&mission.id, &node.key),
                     reopened: node.reopened,
                     started_at_unix_ms: node.started_at_unix_ms,
@@ -4462,12 +4496,12 @@ impl Runtime {
         let laid = self.laid_panes();
         let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
         let views_generation = self.decision_views_generation();
-        let destinations: Vec<Option<String>> = self
+        let defaults: Vec<Option<String>> = self
             .missions
             .book
             .missions
             .iter()
-            .map(|mission| self.judged_destination(mission))
+            .map(|mission| self.project_default_branch(&mission.device_id, &mission.project))
             .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
@@ -4482,7 +4516,7 @@ impl Runtime {
             && before.stale == stale
             && before.sleeping == sleeping
             && before.laid == laid
-            && before.destinations == destinations;
+            && before.defaults == defaults;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -4511,8 +4545,7 @@ impl Runtime {
             .book
             .missions
             .iter()
-            .zip(&destinations)
-            .map(|(mission, destination)| {
+            .map(|mission| {
                 let kept = kept_closed(mission)
                     .then(|| {
                         self.snapshot
@@ -4525,7 +4558,7 @@ impl Runtime {
                 match kept {
                     Some(view) => view.clone(),
                     None => MissionView {
-                        destination: destination.clone(),
+                        destination: self.judged_destination(mission),
                         ..self.view_mission(mission, &agents, &sleeping, ledger.as_deref())
                     },
                 }
@@ -4573,7 +4606,7 @@ impl Runtime {
             laid,
             rows_and_holds,
             views_generation,
-            destinations,
+            defaults,
             made: true,
         };
     }

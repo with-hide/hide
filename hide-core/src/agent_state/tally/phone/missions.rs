@@ -226,6 +226,19 @@ pub struct PhoneNode {
     /// and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_pr: Option<u32>,
+    /// The branch an outside step watches (`External::Branch`), its first
+    /// station; absent otherwise and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_branch: Option<String>,
+    /// Where an outside step's work goes (`NodeView::outside`): its pull
+    /// request's base or the default branch its branch is judged against,
+    /// its last station; absent until read and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_base: Option<String>,
+    /// An outside step's pull request state as GitHub last answered;
+    /// absent for a branch, until GitHub answered and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_state: Option<String>,
     pub stage: Option<u8>,
     pub attention: Option<PhoneAttention>,
     /// Where the work is on its way to main.
@@ -409,6 +422,8 @@ struct NodeIn {
     #[serde(default)]
     external: Option<ExternalIn>,
     #[serde(default)]
+    outside: Option<OutsideIn>,
+    #[serde(default)]
     stage: Option<u8>,
     #[serde(default)]
     attention: Option<PhoneAttention>,
@@ -436,11 +451,22 @@ struct NodePrIn {
     base: Option<String>,
 }
 
-/// What an outside node watches: only a pull request's number is read.
+/// What an outside node watches: a pull request's number or a branch.
 #[derive(Deserialize)]
 struct ExternalIn {
     #[serde(default)]
     pr: Option<u32>,
+    #[serde(default)]
+    branch: Option<String>,
+}
+
+/// Where an outside node's work goes and how its pull request stands.
+#[derive(Deserialize)]
+struct OutsideIn {
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
 }
 
 /// The facts of one raw agent row the missions join on: whether the core
@@ -613,7 +639,10 @@ fn phone_mission(
                 base_pr: source.base_pr,
                 pr_more: source.prs.len().saturating_sub(1),
                 pr_base: source.prs.into_iter().next_back().and_then(|pr| pr.base),
-                external_pr: source.external.and_then(|external| external.pr),
+                external_pr: source.external.as_ref().and_then(|external| external.pr),
+                external_branch: source.external.and_then(|external| external.branch),
+                external_base: source.outside.as_ref().and_then(|outside| outside.base.clone()),
+                external_state: source.outside.and_then(|outside| outside.state),
                 stage: source.stage,
                 attention: source.attention,
                 landing: source.landing,
@@ -902,7 +931,8 @@ mod tests {
     /// desktop's station line and strip read reach the phone, so its line
     /// ends where the desktop's does: the branch a mission's results go to,
     /// its scope, the branch a step's current pull request merges into, how
-    /// many more it holds and an outside step's pull request; a core before
+    /// many more it holds, and an outside step's pull request or branch with
+    /// where it goes and how its pull request stands; a core before
     /// them sends none, and the phone gets no key for them.
     #[test]
     fn what_the_station_line_reads_reaches_the_phone() {
@@ -919,11 +949,11 @@ mod tests {
                 node("b", json!({})),
                 node(
                     "c",
-                    json!({"kind": "external", "delivery": null, "external": {"pr": 1232}}),
+                    json!({"kind": "external", "delivery": null, "external": {"pr": 1232}, "outside": {"base": "release/1.2", "state": "mergeable"}}),
                 ),
                 node(
                     "d",
-                    json!({"kind": "external", "delivery": null, "external": {"branch": "private-branch"}}),
+                    json!({"kind": "external", "delivery": null, "external": {"branch": "work/direct"}, "outside": {"base": "develop"}}),
                 ),
             ],
         );
@@ -949,13 +979,19 @@ mod tests {
             (&new["nodes"][0]["pr_more"], new["nodes"][1].get("pr_more")),
             (&json!(1), None)
         );
-        // An outside step's pull request is its station; one that watches a branch has none, and the branch stays on the Mac.
+        // An outside step's pull request or branch is its first station, and where it goes its last (D-14): its pull
+        // request's base with its state, or the default branch its branch is judged against with no state.
+        let outside = |at: usize| {
+            ["external_pr", "external_branch", "external_base", "external_state"]
+                .map(|key| new["nodes"][at].get(key).cloned())
+        };
         assert_eq!(
-            (
-                &new["nodes"][2]["external_pr"],
-                new["nodes"][3].get("external_pr")
-            ),
-            (&json!(1232), None)
+            [outside(2), outside(3), outside(0)],
+            [
+                [Some(json!(1232)), None, Some(json!("release/1.2")), Some(json!("mergeable"))],
+                [None, Some(json!("work/direct")), Some(json!("develop")), None],
+                [None, None, None, None],
+            ]
         );
         assert!(old.get("destination").is_none(), "{old}");
         assert!(!sent.to_string().contains("never-send"));
