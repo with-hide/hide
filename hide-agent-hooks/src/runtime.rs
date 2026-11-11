@@ -37,8 +37,9 @@ pub const HOOK_VERSION: u32 = 8;
 /// pane reporting protocol. Version 10 adds passive Post observation slots;
 /// version 11 adds the permission and interrupt events (PRD engine-bundle-1
 /// D-10); version 12's Windows guard tests for the helper without a cmdlet
-/// (with-hide/hide-private#318).
-pub const HOOK_ENTRY_VERSION: u32 = 12;
+/// (with-hide/hide-private#318); version 13 adds Claude Code's `StopFailure`
+/// and its usage-limit continuation notice (mission-56).
+pub const HOOK_ENTRY_VERSION: u32 = 13;
 
 /// The intent table at the front of `PURPOSE_CONTEXT`, as a literal so the
 /// `hide` skill (`hide_kit::agents::GUIDE_SKILL`) carries the very same text.
@@ -84,7 +85,8 @@ pub fn hook_stdout_with_context(
         | HookEvent::PostToolUseFailure
         | HookEvent::PermissionRequest
         | HookEvent::Notification
-        | HookEvent::Interrupt => return None,
+        | HookEvent::Interrupt
+        | HookEvent::StopFailure => return None,
     };
     let output = match runtime {
         AgentRuntime::ClaudeCode | AgentRuntime::Codex => serde_json::json!({
@@ -283,15 +285,15 @@ impl AgentRuntime {
     pub const ALL: [AgentRuntime; 2] = [Self::ClaudeCode, Self::Codex];
 
     /// The events each runtime declares: Codex reports nonzero outcomes in
-    /// PostToolUse and has no PostToolUseFailure or Notification, and only
-    /// Codex declares Interrupt, so neither is given an event it would not
-    /// send.
+    /// PostToolUse and has no PostToolUseFailure, Notification or
+    /// StopFailure, and only Codex declares Interrupt, so neither is given an
+    /// event it would not send.
     pub fn events(self) -> impl Iterator<Item = HookEvent> {
         HookEvent::ALL.into_iter().filter(move |event| match self {
             Self::ClaudeCode => *event != HookEvent::Interrupt,
             Self::Codex => !matches!(
                 event,
-                HookEvent::PostToolUseFailure | HookEvent::Notification
+                HookEvent::PostToolUseFailure | HookEvent::Notification | HookEvent::StopFailure
             ),
         })
     }
@@ -396,9 +398,10 @@ impl AgentRuntime {
 /// against the installed Claude Code binary and the Codex configuration on
 /// 2026-09-09 (PRD D-09), and `PreToolUse`, observed on Claude Code 2.1.292
 /// and codex-cli 0.160.0 on 2026-10-07 (PRD herdr-spawn-guard D-06). An event
-/// only one runtime has is not registered: a key a runtime does not know is a
-/// key its settings validator may reject, and the sweep at `Stop` already
-/// covers what `SessionEnd` would.
+/// only one runtime has is registered for that runtime alone
+/// ([`AgentRuntime::events`]): a key a runtime does not know is a key its
+/// settings validator may reject, and the sweep at `Stop` already covers
+/// what `SessionEnd` would.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HookEvent {
     /// A new session took over this pane: the pane's counts start again.
@@ -430,10 +433,17 @@ pub enum HookEvent {
     Notification,
     /// The operator interrupted the turn (Codex), which no `Stop` reports.
     Interrupt,
+    /// The provider refused the turn and it ended (Claude Code): an API
+    /// error or a usage limit, which no `Stop` reports. Claude Code 2.1.322
+    /// sends it with the refusal's kind (`error`) and the line it showed
+    /// (`last_assistant_message`), and on a subscription's usage limit then
+    /// waits on its screen for the reset, which the engine reads as working
+    /// (with-hide/hide mission-56).
+    StopFailure,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 11] = [
+    pub const ALL: [HookEvent; 12] = [
         Self::SessionStart,
         Self::UserPromptSubmit,
         Self::SubagentStart,
@@ -445,6 +455,7 @@ impl HookEvent {
         Self::PermissionRequest,
         Self::Notification,
         Self::Interrupt,
+        Self::StopFailure,
     ];
 
     pub fn name(self) -> &'static str {
@@ -460,6 +471,7 @@ impl HookEvent {
             Self::PermissionRequest => "PermissionRequest",
             Self::Notification => "Notification",
             Self::Interrupt => "Interrupt",
+            Self::StopFailure => "StopFailure",
         }
     }
 

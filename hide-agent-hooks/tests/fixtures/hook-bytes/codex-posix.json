@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@13; fi",
             "timeout": 8
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event SessionStart --memory-injection --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event SessionStart --memory-injection --source hide-subagents@13; fi",
             "timeout": 8
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event UserPromptSubmit --memory-injection --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event UserPromptSubmit --memory-injection --source hide-subagents@13; fi",
             "timeout": 8
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event SubagentStart --memory-injection --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event SubagentStart --memory-injection --source hide-subagents@13; fi",
             "timeout": 8
           }
         ]
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event SubagentStop --memory-injection --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event SubagentStop --memory-injection --source hide-subagents@13; fi",
             "timeout": 8
           }
         ]
@@ -71,7 +71,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event PreToolUse --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event PreToolUse --source hide-subagents@13; fi",
             "timeout": 8
           }
         ],
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event PostToolUse --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event PostToolUse --source hide-subagents@13; fi",
             "timeout": 8
           }
         ],
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event PermissionRequest --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event PermissionRequest --source hide-subagents@13; fi",
             "timeout": 8
           }
         ]
@@ -106,7 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event Interrupt --source hide-subagents@12; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event Interrupt --source hide-subagents@13; fi",
             "timeout": 3
           }
         ]

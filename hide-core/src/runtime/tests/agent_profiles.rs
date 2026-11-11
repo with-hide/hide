@@ -716,6 +716,7 @@ fn a_finished_wrapper_start_frees_the_profile_it_did_not_run_in() {
                     "CLAUDE_CONFIG_DIR".into(),
                     "/home/me/accounts/side".into(),
                 )]),
+                refused: None,
             },
         )
         .unwrap();

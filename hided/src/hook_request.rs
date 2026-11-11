@@ -158,13 +158,18 @@ pub(crate) fn answer(
 }
 
 /// A report names a known agent and, when it names one, a session id the
-/// delivery ledger would take.
+/// delivery ledger would take; a refusal it carries is one line the helper
+/// cut (`report::REFUSAL_LINE_LIMIT`).
 fn valid_status(report: &hide_node_link::panes::HookStatusReport) -> bool {
     hide_agent_adapter::adapter(&report.runtime).is_some_and(|adapter| adapter.id == report.runtime)
         && report
             .session
             .as_ref()
             .is_none_or(|session| hide_core::delivery::valid_session(session))
+        && report.refused.as_ref().is_none_or(|refused| {
+            refused.line.len() <= hide_agent_hooks::report::REFUSAL_LINE_LIMIT
+                && !refused.line.contains('\n')
+        })
 }
 
 /// Records the hook's report on the pane the proof named. Only a caller

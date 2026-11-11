@@ -23,7 +23,7 @@ use hide_agent_adapter::HookDialect;
 use hide_agent_hooks::counters::{self, Change, Reporter, Said, SubagentInput};
 use hide_agent_hooks::diagnosis::Diagnosis;
 use hide_agent_hooks::guidance::{self, GuidanceAgent};
-use hide_agent_hooks::report::{self, HookCounts, HookStatusReport, HookTurn};
+use hide_agent_hooks::report::{self, HookCounts, HookRefusal, HookStatusReport, HookTurn};
 use hide_agent_hooks::runtime::{AgentRuntime, HookEvent, hook_stdout};
 use hide_agent_hooks::{antigravity, basic};
 use hide_platform::process::{OwnedChild, OwnerWatch};
@@ -580,7 +580,8 @@ fn antigravity_event(event: HookEvent, started: Instant) {
             | HookEvent::SubagentStop
             | HookEvent::PermissionRequest
             | HookEvent::Notification
-            | HookEvent::Interrupt,
+            | HookEvent::Interrupt
+            | HookEvent::StopFailure,
             None,
         ) => {}
     }
@@ -760,7 +761,8 @@ fn report_basic(
             | HookEvent::PostToolUseFailure
             | HookEvent::PermissionRequest
             | HookEvent::Notification
-            | HookEvent::Interrupt,
+            | HookEvent::Interrupt
+            | HookEvent::StopFailure,
         ) => return,
     };
     // An agent whose adapter declares no count reports none, rather than a
@@ -1208,6 +1210,11 @@ fn run_hook(arguments: &[String], started: Instant) {
     let transcript = payload
         .as_ref()
         .and_then(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated).transcript);
+    // A refused turn's end says why, for the mission that waits on it.
+    let refused = (event == HookEvent::StopFailure && turn.is_some())
+        .then_some(payload.as_ref())
+        .flatten()
+        .and_then(|(bytes, truncated)| HookRefusal::read(bytes, *truncated));
     report_pane(
         &home,
         event,
@@ -1216,6 +1223,7 @@ fn run_hook(arguments: &[String], started: Instant) {
         Heard {
             said,
             transcript: transcript.as_deref(),
+            refused: refused.as_ref(),
         },
         counted,
         runtime.map_or(Instant::now() + report::REPORT_TIMEOUT, |runtime| {
@@ -1224,12 +1232,14 @@ fn run_hook(arguments: &[String], started: Instant) {
     );
 }
 
-/// What one event said of its session ([`counters::Said`]), and the session
-/// file its input names, which records a refusal no event reports.
+/// What one event said of its session ([`counters::Said`]), the session
+/// file its input names, which records a refusal no event reports, and why
+/// the provider refused the turn the event ended.
 #[derive(Clone, Copy)]
 struct Heard<'a> {
     said: Said<'a>,
     transcript: Option<&'a std::path::Path>,
+    refused: Option<&'a HookRefusal>,
 }
 
 impl<'a> Heard<'a> {
@@ -1237,6 +1247,7 @@ impl<'a> Heard<'a> {
         Self {
             said,
             transcript: None,
+            refused: None,
         }
     }
 }
@@ -1261,7 +1272,11 @@ fn report_pane(
     event: HookEvent,
     change: Change<'_>,
     who: Reporter<'_>,
-    Heard { said, transcript }: Heard<'_>,
+    Heard {
+        said,
+        transcript,
+        refused,
+    }: Heard<'_>,
     counted: bool,
     deadline: Instant,
 ) {
@@ -1331,6 +1346,7 @@ fn report_pane(
                     })
                 })
                 .flatten(),
+            refused: refused.cloned(),
         },
         deadline,
     );
@@ -1399,6 +1415,7 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
         Heard {
             said,
             transcript: call.transcript.as_deref(),
+            refused: None,
         },
         runtime.dialect().adapter().subagent_counts.is_some(),
         report::deadline(started, runtime, event),
@@ -1413,8 +1430,11 @@ fn turn_of(
 ) -> Option<HookTurn> {
     match event {
         HookEvent::UserPromptSubmit => Some(HookTurn::Working),
-        // A subagent's own turn end is not the session's.
-        HookEvent::Stop if input.subagent.is_none() => Some(HookTurn::Done),
+        // A subagent's own turn end is not the session's. A refused turn
+        // ended too, with no `Stop`.
+        HookEvent::Stop | HookEvent::StopFailure if input.subagent.is_none() => {
+            Some(HookTurn::Done)
+        }
         HookEvent::PermissionRequest => Some(HookTurn::Waiting),
         HookEvent::Interrupt => Some(HookTurn::Idle),
         HookEvent::Notification => {
@@ -1422,6 +1442,11 @@ fn turn_of(
             match notification_type(bytes, *truncated)?.as_str() {
                 "permission_prompt" | "elicitation_dialog" => Some(HookTurn::Waiting),
                 "idle_prompt" => Some(HookTurn::Idle),
+                // Claude Code 2.1.322 sends it as it continues a turn a usage
+                // limit refused (`StopFailure`) once the limit resets: the
+                // continuation is queued as a prompt, which may run no
+                // `UserPromptSubmit`.
+                "quota_auto_resume_fired" => Some(HookTurn::Working),
                 _ => None,
             }
         }

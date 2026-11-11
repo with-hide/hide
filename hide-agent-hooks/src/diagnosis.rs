@@ -612,7 +612,7 @@ mod tests {
             current_version: HOOK_ENTRY_VERSION,
             memory_compatibility: compatible(AgentRuntime::Codex),
         };
-        assert_eq!(row.headline(), "Update required (v2, current v12)");
+        assert_eq!(row.headline(), "Update required (v2, current v13)");
         assert!(row.offers_install());
     }
 
@@ -647,7 +647,7 @@ mod tests {
         // Version 8 is the already-published pane protocol, independently of
         // the version of the command the next kit pass installs.
         assert_eq!(HOOK_VERSION, 8);
-        assert_eq!(HOOK_ENTRY_VERSION, 12);
+        assert_eq!(HOOK_ENTRY_VERSION, 13);
         for status in [
             HookStatus::Outdated { version: 8 },
             HookStatus::Installed { version: 9 },
@@ -847,7 +847,7 @@ mod tests {
                 minimum_version: "2.1.278".to_owned(),
             },
         };
-        assert_eq!(supported.headline(), "Installed (v12)");
+        assert_eq!(supported.headline(), "Installed (v13)");
         assert_eq!(unsupported.headline(), "Update required");
         assert!(!unsupported.offers_install());
     }

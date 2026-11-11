@@ -6143,8 +6143,9 @@ mod tests {
                 session_start: false,
                 waiting: None,
                 account: None,
+                refused: None,
             };
-            facts.record(&pane, &report).unwrap();
+            facts.record(&pane, &report, 0).unwrap();
             engine.hook_session(&pane, "claude-code", "s-1").unwrap();
             let mut published = engine.session(WAIT).unwrap().project();
             let tokens = facts.lay(&mut published, str::to_owned, |_| true);

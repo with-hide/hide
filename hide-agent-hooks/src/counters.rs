@@ -212,7 +212,10 @@ impl<'a> Change<'a> {
             | HookEvent::PostToolUseFailure
             | HookEvent::PermissionRequest
             | HookEvent::Notification
-            | HookEvent::Interrupt => Self::None,
+            | HookEvent::Interrupt
+            // A refused turn lists no subagents; their counts stand until the
+            // session's next `Stop`.
+            | HookEvent::StopFailure => Self::None,
             HookEvent::SubagentStart => Self::Started(input.subagent.as_deref()),
             HookEvent::SubagentStop => Self::Stopped(input.subagent.as_deref()),
             // A subagent's own turn end is not the session's.

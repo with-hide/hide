@@ -85,10 +85,11 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
 
         let outcome = remove(runtime, home.path(), None).unwrap();
         // The active hook contract includes passive observations and the
-        // permission waits: Claude has Post, Failure and Notification, while
-        // Codex reports failures through Post and an interrupt of its own.
+        // permission waits: Claude has Post, Failure, Notification and the
+        // refused turn's StopFailure, while Codex reports failures through
+        // Post and an interrupt of its own.
         let expected = match runtime {
-            AgentRuntime::ClaudeCode => 10,
+            AgentRuntime::ClaudeCode => 11,
             AgentRuntime::Codex => 9,
         };
         assert_eq!(outcome.removed_entries, expected);
