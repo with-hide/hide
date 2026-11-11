@@ -680,7 +680,16 @@ impl Worker {
         let store_runtime = runtime.clone();
         let thread = thread::Builder::new()
             .name("hide-delivery-store".into())
-            .spawn(move || run(store_runtime, notifier, path, receiver, stopped))
+            .spawn(move || {
+                run(
+                    store_runtime,
+                    notifier,
+                    path,
+                    receiver,
+                    stopped,
+                    ledger::write,
+                )
+            })
             .map_err(|_| "delivery_unavailable".to_owned())?;
         let client = Client { requests, runtime };
         let worker = Self {
@@ -689,6 +698,42 @@ impl Worker {
             producers: Vec::new(),
         };
         Ok((worker, client))
+    }
+
+    /// A store whose first request is queued before it starts. The supplied
+    /// durable write lets a test bind a mission after settlement and before
+    /// publication, in a fixed order with no timed producers or sleeps.
+    #[cfg(test)]
+    pub(crate) fn store_queued(
+        runtime: Weak<Mutex<Runtime>>,
+        path: PathBuf,
+        effect: Effect,
+        write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError> + Send + 'static,
+    ) -> (Self, Receiver<Result<Value, String>>) {
+        let (requests, receiver) = mpsc::sync_channel(QUEUE_LIMIT);
+        let (reply, result) = mpsc::sync_channel(1);
+        requests.send(Request { effect, reply }).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let thread = thread::spawn(move || {
+            run(
+                runtime,
+                ChangeNotifier::noop(),
+                path,
+                receiver,
+                stopped,
+                write,
+            );
+            drop(requests);
+        });
+        (
+            Self {
+                stop,
+                thread: Some(thread),
+                producers: Vec::new(),
+            },
+            result,
+        )
     }
 
     /// How many timed producers run beside the store.
@@ -960,6 +1005,7 @@ fn run(
     path: PathBuf,
     requests: Receiver<Request>,
     stop: Arc<AtomicBool>,
+    write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError>,
 ) {
     let mut maintenance_at = 0;
     // The recipients asleep at the last saved pass, so the pass after one
@@ -1054,7 +1100,7 @@ fn run(
         let changed = bytes.is_some();
         let mut saved = match bytes {
             None => Ok(()),
-            Some(Ok(bytes)) => ledger::write(&path, &bytes),
+            Some(Ok(bytes)) => write(&path, &bytes),
             Some(Err(code)) => Err(ledger::SaveError::Validation(code)),
         };
         if let Err(error) = &saved {
@@ -1248,8 +1294,8 @@ impl crate::coordination::Holds for BookHolds<'_> {
             .get_or_init(|| {
                 self.runtime
                     .lock()
-                    .map(|guard| guard.delivery_held())
                     .map_err(|_| "delivery_unavailable".to_owned())
+                    .and_then(|guard| guard.delivery_held())
             })
             .as_ref()
             .map_err(Clone::clone)

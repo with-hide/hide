@@ -1963,7 +1963,7 @@ mod tests {
         assert!(runtime.missions.store.is_none());
         runtime.plans.load = Load::Ready;
         assert_eq!(
-            ids(&runtime.delivery_held()),
+            ids(&runtime.delivery_held().unwrap()),
             (
                 vec!["spawn-10".to_owned(), "spawn-50".to_owned()],
                 vec!["agent-11".to_owned(), "agent-51".to_owned()]
@@ -1971,11 +1971,52 @@ mod tests {
         );
         runtime.plans.load = Load::Idle;
         assert_eq!(
-            ids(&runtime.delivery_held()),
+            ids(&runtime.delivery_held().unwrap()),
             (
                 vec!["spawn-40".to_owned(), "spawn-50".to_owned()],
                 vec!["agent-41".to_owned(), "agent-51".to_owned()]
             )
         );
+    }
+
+    #[test]
+    fn a_reworked_reported_step_reads_missing_child_and_spawn_history_after_eviction() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let session = SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "main".into(),
+        };
+        let plan = Plan {
+            session: session.clone(),
+            steps: serde_json::from_value(json!([{
+                "key": "fix", "title": "Fix", "status": "done",
+                "delegation": { "attempt": 1, "spawn": "spawn-10", "name": "child",
+                    "agent": "codex", "agent_id": "agent-11", "state": "reported",
+                    "released": false },
+            }]))
+            .unwrap(),
+            review: Review::Approved,
+            ask: None,
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+            asked_at_unix_ms: None,
+        };
+        // A finished step no longer retains the delivery records. They
+        // are absent when its owner later returns the step to work.
+        runtime.delivery_ledger = Ok(std::sync::Arc::new(
+            crate::delivery::ledger::Ledger::default(),
+        ));
+        let next = plans::apply_node(&plan, "fix", Some(StepStatus::Working), None, None, 2)
+            .unwrap()
+            .unwrap();
+        runtime.plans.load = Load::Ready;
+        runtime.plans.book.insert(session.clone(), next);
+        assert!(!runtime.fold_delegations());
+        let shown = runtime.plan_view(&runtime.plans.book[&session], "main");
+        assert_eq!(shown.steps[0].status, StepStatus::Working);
+        let child = shown.steps[0].delegation.as_ref().unwrap();
+        assert_eq!(child.agent_id.as_deref(), Some("agent-11"));
+        assert_eq!((&child.pane_id, &child.session), (&None, &None));
     }
 }

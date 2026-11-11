@@ -43,6 +43,52 @@ use crate::delivery::ledger::Ledger;
 pub(crate) struct Held {
     pub(crate) agents: BTreeSet<String>,
     pub(crate) spawns: BTreeSet<String>,
+    published: Option<Finished>,
+}
+
+/// Only records already finished in the published ledger are eligible.
+/// A binding reads that ledger while the store writes its candidate, so
+/// ending a record in this batch cannot make it safe to drop in this batch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Finished {
+    agents: HashSet<String>,
+    spawns: HashSet<String>,
+}
+
+impl Held {
+    pub(crate) fn keep_published(&mut self, ledger: &Ledger) {
+        let ended = ended(ledger);
+        self.published = Some(Finished {
+            agents: ledger
+                .agents
+                .iter()
+                .filter(|record| record.ended)
+                .map(|record| record.id.clone())
+                .collect(),
+            spawns: ledger
+                .spawns
+                .iter()
+                .filter(|spawn| finished(spawn, &ended))
+                .map(|spawn| spawn.id.clone())
+                .collect(),
+        });
+    }
+}
+
+fn ended(ledger: &Ledger) -> HashMap<&str, bool> {
+    ledger
+        .agents
+        .iter()
+        .map(|agent| (agent.id.as_str(), agent.ended))
+        .collect()
+}
+
+fn finished(spawn: &SpawnRecord, ended: &HashMap<&str, bool>) -> bool {
+    // A missing endpoint is never taken for finished.
+    ended
+        .get(spawn.child.as_deref().unwrap_or(&spawn.parent))
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Where [`Held`] comes from: the core's books, read only once a full
@@ -121,16 +167,16 @@ struct Named<'a> {
 
 impl<'a> Named<'a> {
     fn of(ledger: &'a Ledger, held: &'a Held) -> Self {
-        let ended: HashMap<&str, bool> = ledger
-            .agents
-            .iter()
-            .map(|agent| (agent.id.as_str(), agent.ended))
-            .collect();
-        // A registration the ledger does not hold is never read as ended,
-        // so a record naming one is kept rather than taken for finished.
-        let has_ended = |id: &str| ended.get(id).copied().unwrap_or(false);
+        let ended = ended(ledger);
         let mut agents: HashSet<&str> = held.agents.iter().map(String::as_str).collect();
         for agent in &ledger.agents {
+            if held
+                .published
+                .as_ref()
+                .is_some_and(|published| !published.agents.contains(&agent.id))
+            {
+                agents.insert(&agent.id);
+            }
             agents.extend(agent.parent.as_deref());
             agents.extend(agent.origin.as_deref());
         }
@@ -148,11 +194,11 @@ impl<'a> Named<'a> {
         agents.extend(ledger.human_turns.keys().map(String::as_str));
         let mut spawns = HashSet::new();
         for spawn in &ledger.spawns {
-            let finished = match spawn.child.as_deref() {
-                Some(child) => has_ended(child),
-                None => has_ended(&spawn.parent),
-            };
-            let kept = !finished
+            let kept = !finished(spawn, &ended)
+                || held
+                    .published
+                    .as_ref()
+                    .is_some_and(|published| !published.spawns.contains(&spawn.id))
                 || waited.contains(spawn.id.as_str())
                 || spawn
                     .child
@@ -398,6 +444,26 @@ mod tests {
     }
 
     #[test]
+    fn records_not_yet_published_as_finished_wait_for_a_later_batch() {
+        let mut ledger = full_of_agents();
+        let mut held = Held::default();
+        held.keep_published(&ledger);
+        // A preceding request in this batch replaced the oldest record
+        // and then ended the new one; it was never published as ended.
+        ledger.agents[1] = agent(90_001, true);
+        register(&mut ledger, &held).unwrap();
+        assert!(holds_agent(&ledger, 90_001));
+        assert!(!holds_agent(&ledger, 3));
+
+        let mut ledger = full_of_spawns();
+        held.keep_published(&ledger);
+        ledger.spawns[0] = spawn(90_001, 2, None);
+        reserve(&mut ledger, &held).unwrap();
+        assert!(holds_spawn(&ledger, 90_001));
+        assert!(!holds_spawn(&ledger, 3001));
+    }
+
+    #[test]
     fn a_full_ledger_of_live_registrations_refuses_a_new_one_with_capacity() {
         let mut ledger = full_of_agents();
         for agent in &mut ledger.agents {
@@ -561,6 +627,7 @@ mod tests {
         // An open mission's worker agent-2 ended; a plan step still handed
         // follows agent-3.
         let held = Held {
+            published: None,
             agents: ["agent-2", "agent-3"].map(str::to_owned).into(),
             spawns: BTreeSet::new(),
         };
@@ -592,6 +659,7 @@ mod tests {
         ledger.spawns[2] = spawn(3002, 2, Some(4)); // its child is held
         // spawn-3003 is a plan step's, still handed.
         let held = Held {
+            published: None,
             agents: ["agent-4"].map(str::to_owned).into(),
             spawns: ["spawn-3003"].map(str::to_owned).into(),
         };

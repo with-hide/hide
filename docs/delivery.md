@@ -1043,6 +1043,8 @@ A registration ends when the engine no longer has its pane, so its name and the 
 At that limit a new registration drops the oldest ended registration nothing still names, together with the finished spawn records naming it; at the 4096-spawn limit a new spawn drops the oldest finished spawn record nothing still holds (`coordination::room`).
 Oldest means first registered or reserved, the order the ledger keeps; neither record stores an end time.
 A spawn has finished when its child ended, or, without a child, its parent ended.
+Eligibility comes from the published ledger: a record ended or finished only in the batch being saved waits for publication before a later batch may drop it.
+This keeps a live record visible to a concurrent mission binding until that binding can no longer be admitted; a batch with no previously finished eligible record still answers `capacity`.
 Registrations named by other registrations, unfinished or held spawns, identity waits, human turns, open letters or watches stay, and the loaded mission and plan books protect the records they still need; their contracts live in with-hide/hide-private `docs/missions.md` and `docs/plans.md`.
 A book not yet read or unreadable is handled conservatively: every registration stays until the mission book is known, and mission or plan spawns stay while their book is unknown.
 Sleeping, archived and reopenable sessions keep registrations that have not ended, so they are never eviction candidates.

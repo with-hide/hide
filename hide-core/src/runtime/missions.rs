@@ -2922,15 +2922,19 @@ impl Runtime {
     }
 
     /// The machine registration `id` runs on, when the ledger has it on
-    /// another machine than `mission`'s. A ledger Hide could not read is its
-    /// own refusal, since it cannot say where the agent runs.
+    /// another machine than `mission`'s. A new binding must name a live
+    /// registration; already bound identities skip this check on replay.
     fn registered_elsewhere(&self, mission: &Mission, id: &str) -> Result<Option<String>, String> {
-        Ok(self
-            .delivery_state()?
+        let ledger = self.delivery_state()?;
+        let record = ledger
             .agents
             .iter()
-            .find(|record| record.id == id && record.machine != mission.device_id)
-            .map(|record| record.machine.clone()))
+            .find(|record| record.id == id)
+            .ok_or("agent_unavailable")?;
+        if record.ended {
+            return Err("agent_ended".into());
+        }
+        Ok((record.machine != mission.device_id).then(|| record.machine.clone()))
     }
 
     /// The missions whose Conductor's session is one of `sessions`
