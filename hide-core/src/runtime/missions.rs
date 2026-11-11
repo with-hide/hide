@@ -2337,6 +2337,12 @@ impl Runtime {
                 if let Some(destination) = &mission.destination {
                     answer["destination"] = json!(destination);
                 }
+                // Why Hide could not read where the node's branch is, such
+                // as a destination that is gone; the snapshot says only
+                // that it is unread.
+                if let Some(reason) = self.missions.outside.unread_reason(&id, &key) {
+                    answer["unread_reason"] = json!(reason);
+                }
                 Ok((answer, false))
             }
             MissionCommand::List => {

@@ -426,6 +426,9 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(branch) = node["branch"].as_str() {
         let _ = writeln!(out, "브랜치 {branch}");
     }
+    if let Some(reason) = result["unread_reason"].as_str() {
+        let _ = writeln!(out, "읽지 못함 · {reason}");
+    }
     if let Some(push) = push_words(node, now) {
         let _ = writeln!(out, "{push}");
     }
@@ -851,6 +854,20 @@ mod tests {
         // A node that changes no code goes to no branch.
         let research = mission()["mission"]["nodes"][3].clone();
         assert!(!alone(&research, Some("feat/login")).contains("도착"));
+
+        // B11: a branch Hide could not read says why, which names a
+        // destination that is gone.
+        let mut answer = json!({"mission_id": "mission-33", "node": direct, "letters": [],
+            "destination": "feat/login",
+            "unread_reason": "Neither feat/login nor origin/feat/login could be read"});
+        answer["node"]["branch"] = json!("feat/fix");
+        let text = draw(&answer, NOW).unwrap();
+        assert!(
+            text.contains(
+                "브랜치 feat/fix\n읽지 못함 · Neither feat/login nor origin/feat/login could be read\n"
+            ),
+            "{text}"
+        );
     }
 
     /// A `waiting_on` this build does not read refuses the text, so the

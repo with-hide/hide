@@ -13056,6 +13056,14 @@ fn a_destination_hide_cannot_find_lands_nothing_and_holds_the_missions_own_close
             "{key}"
         );
     }
+    // `hide mission show <node>` says why, where the Conductor reads it.
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "show", "node": "a"}),
+    )
+    .unwrap();
+    assert_eq!(shown["unread_reason"], json!(reason));
     let now = crate::runtime::unix_milliseconds();
     runtime.drive_mission_health(now);
     assert_eq!(mission_status(&runtime), MissionStatus::Running);

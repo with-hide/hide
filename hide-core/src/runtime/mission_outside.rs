@@ -111,6 +111,13 @@ impl Outside {
         self.lost.contains(mission)
     }
 
+    /// Why the last read could not answer for `node` of `mission`.
+    pub(super) fn unread_reason(&self, mission: &str, node: &str) -> Option<&str> {
+        self.unread
+            .get(&(mission.to_owned(), node.to_owned()))
+            .map(String::as_str)
+    }
+
     pub(super) fn unread(&self, mission: &str, node: &str) -> bool {
         self.unread
             .contains_key(&(mission.to_owned(), node.to_owned()))
