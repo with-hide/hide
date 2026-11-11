@@ -470,7 +470,7 @@ const card = (map: { q: (selector: string) => HTMLElement | null }, key: string)
 it("draws each card as its mark, its title with its worker at the row's right, its station line and `!` with who looks, Hide's mark when Hide changed it, and nothing else the panel carries (PRD mission-node-simple B1-B3, D-07; PRD mission-destination D-13, D-46, B24, B28, B30)", async () => {
   const nodes = [
     node("core", { title: "제안 core: 기록·공책·점수·반영", status: "working", pr: 1704, prs: [{ number: 1703, state: "merged", url: null }, { number: 1704, state: "mergeable", url: null }], criteria: [line("c1", "own", { state: "pass" }), line("ci", "ci")], criteria_met: 1, criteria_skipped: 0, worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, line: "replay 19/31", reopened: 1, change: "split in two" }),
-    node("raised", { status: "working", pr: 1840, pr_state: "merged", attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "done"] } }),
+    node("raised", { status: "working", pr: 1840, pr_state: "merged", merge: { by: "conductor", state: "merged", prs: [] }, attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "done"] } }),
     node("asked", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
@@ -603,6 +603,21 @@ it("draws `👤 머지는 내가` as the card's second-line strip only where the
     const last = card(scoped, "pr").querySelector<HTMLElement>('[data-station="land"]')!;
     expect([last.dataset.stationState, last.dataset.stationPlace]).toEqual(["ahead", "destination"]);
   } finally { await scoped.unmount(); }
+});
+
+it("keeps the lines a card draws at the regular weight inside the shared card, a medium-weight button, the other base bold and the title semibold (PRD mission-destination B16)", async () => {
+  const nodes = [
+    node("core", { title: "Schema", status: "working", pr: 41, pr_state: "pending", prs: [{ number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", state: "ahead", prs: [41] } }),
+    node("cause", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
+  ];
+  const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
+  try {
+    const weight = (element: Element | null | undefined) => (element?.getAttribute("class")?.match(/\bfont-(?:normal|medium|semibold|bold)\b/g) ?? []).join(" ");
+    const core = card(map, "core");
+    expect(["[data-node-stations]", "[data-node-run]", "[data-node-row]", "[data-node-merge-strip]"].map((part) => weight(core.querySelector(part)))).toEqual(["font-normal", "font-normal", "font-normal", "font-normal"]);
+    expect(weight(card(map, "cause").querySelector("[data-node-row]"))).toBe("font-normal");
+    expect([weight([...core.querySelectorAll("[data-station-label]")].at(-1)), weight(core.querySelector("[data-node-title]"))]).toEqual(["font-bold", "font-semibold"]);
+  } finally { await map.unmount(); }
 });
 
 it("shows on a card's hover its title, its worker in full, where it is, where its result goes with who merges and its worktree branch, and the Conductor's last line, with nothing to press (PRD mission-destination D-19, D-20, B32, B33)", async () => {

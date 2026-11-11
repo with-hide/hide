@@ -357,7 +357,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         {hide ? <HideMark words={hide} /> : null}
         {/* Keep the worker whole on the title row while the title truncates (D-46). */}
         {worker?.agent || worker?.model || took ? (
-          <span className="flex max-w-[calc(var(--size-mission-node)/2)] shrink-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from ?? "none"}>
+          <span className="flex max-w-[calc(var(--size-mission-node)/2)] shrink-0 items-center gap-xxs text-caption font-normal text-muted-foreground" data-node-run={run?.from ?? "none"}>
             {worker?.agent ? <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={worker.agent} profile={run?.profile} /></span> : null}
             {worker?.model ? <span className="min-w-0 truncate" data-node-model={run?.from}>{worker.model}</span> : null}
             {run?.mark ? <span className="shrink-0" data-run-planned="true">{run.mark}</span> : null}
@@ -428,7 +428,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {/* What the operator will look at, and a merge its plan gives them, are a strip of the card itself, read without a hover (PRD mission-human-gate D-06; PRD mission-destination D-45). */}
       <HumanStrip gate={gate} merge={merging} node={node} />
       {stations || result || attention || warning || gate?.state === "open" ? (
-        <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
+        <span className="flex min-w-0 items-center gap-x-xs text-caption font-normal text-muted-foreground" data-node-row="true">
           {/* The stations take the row and their last name truncates; `⚠` and `!` keep their place at the right end (B30). */}
           {stations ? <StationLine stations={stations} className="flex-1" /> : <span className="flex min-w-0 flex-1 items-center">{result ? <ResultTail result={result} stale={mission.github_stale} /> : null}</span>}
           {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}

@@ -22,7 +22,9 @@ describe("nodeStations", () => {
     expect(line(node({ pr: 31, pr_state: "pending" }))).toBe("work:done pr:current approve:todo land:todo@main");
     // Ready and done: everything before the branch passed, so the last station is where the result is now.
     expect(line(node({ status: "done", pr: 31, pr_state: "mergeable" }))).toBe("work:done pr:done approve:done land:current@main");
-    expect(line(node({ status: "done", pr: 31, pr_state: "merged" }))).toBe("work:done pr:done approve:done land:landed@main");
+    expect(line(node({ status: "done", pr: 31, pr_state: "merged", merge: { by: "conductor", state: "merged", prs: [] } }))).toBe("work:done pr:done approve:done land:landed@main");
+    // A core before the merge field: the landing it judged.
+    expect(line(node({ status: "done", pr: 31, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }))).toBe("work:done pr:done approve:done land:landed@main");
   });
 
   it("sends the work back while the pull request's checks failed, it is a draft, or it was closed unmerged", () => {
@@ -40,6 +42,8 @@ describe("nodeStations", () => {
     ]);
     // Never `due` before the core says so, however ready the pull request looks.
     expect(line(node({ pr: 31, pr_state: "pending", merge: { by: "operator", state: "ahead", prs: [31] } }))).toBe("work:done pr:current approve:todo land:ahead@main+person");
+    // The newest pull request merged while an older one is still open is not in: the last station stays the operator's to merge, as the strip says.
+    expect(line(node({ status: "done", pr: 37, pr_more: 1, pr_state: "merged", merge: { by: "operator", state: "due", prs: [31] } }))).toBe("work:done pr:done approve:done land:due@main+person");
     // The Conductor's merge stays a plain station.
     expect(line(node({ status: "done", pr: 31, pr_state: "mergeable", merge: { by: "conductor", state: "ahead", prs: [31] } }))).toBe("work:done pr:done approve:done land:current@main");
   });

@@ -33,7 +33,7 @@ export function GateStrip({ gate, className }: { gate: Pick<MissionGate, "state"
 
 /** A strip's tint by where its human step stands: faint ahead, filled once it is the operator's turn, grey with a check after. */
 function stripTone(state: "ahead" | "open" | "passed"): string {
-  return state === "open" ? "bg-mission-hold/20 font-semibold text-foreground" : state === "ahead" ? "bg-mission-hold/10 text-foreground" : "text-muted-foreground";
+  return state === "open" ? "bg-mission-hold/20 font-semibold text-foreground" : state === "ahead" ? "bg-mission-hold/10 font-normal text-foreground" : "font-normal text-muted-foreground";
 }
 
 /**
