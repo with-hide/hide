@@ -127,6 +127,8 @@ type PhoneState = {
   colorTheme: string | null;
   notifications: Notifications;
   vapidKey: string | null;
+  /** Only a desktop whose hello offers page keys can receive them. */
+  pageKeys: boolean;
   /** Null until the first list arrives; kept across a lost connection. */
   groups: AgentGroup[] | null;
   /** The paired Mac and the devices it reaches, as the last list carried them. */
@@ -203,6 +205,7 @@ const initial: PhoneState = {
   colorTheme: null,
   notifications: "unasked",
   vapidKey: null,
+  pageKeys: false,
   groups: null,
   devices: [],
   agentsOmitted: 0,
@@ -258,6 +261,7 @@ export function applyFrame(frame: ServerFrame): void {
         refusal: null,
         macName: frame.mac_name ?? "",
         vapidKey: frame.vapid_public_key,
+        pageKeys: frame.page_keys === true,
         notifications: frame.notifications,
       });
       return;

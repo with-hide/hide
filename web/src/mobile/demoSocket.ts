@@ -79,7 +79,7 @@ export class DemoSocket implements PhoneSocket {
   /** The frames a Mac sends on connecting: who it is, then the three lists. */
   private hello(): void {
     this.later(0, () => {
-      this.emit({ type: "hello", mac_name: translate("mobile.demo.host"), phone_id: "demo", name: null, vapid_public_key: "", notifications: "off" });
+      this.emit({ type: "hello", mac_name: translate("mobile.demo.host"), phone_id: "demo", name: null, vapid_public_key: "", notifications: "off", page_keys: true });
       this.emit({ type: "meta", push_mode: "app_closed", other_phones: 0 });
       this.lists();
     });
@@ -94,7 +94,7 @@ export class DemoSocket implements PhoneSocket {
   /** The phone's language changed: the sample content is worded again, as a Mac that changed its language would. */
   private reword(): void {
     this.later(0, () => {
-      this.emit({ type: "hello", mac_name: translate("mobile.demo.host"), phone_id: "demo", name: null, vapid_public_key: "", notifications: "off" });
+      this.emit({ type: "hello", mac_name: translate("mobile.demo.host"), phone_id: "demo", name: null, vapid_public_key: "", notifications: "off", page_keys: true });
       this.lists();
     });
   }

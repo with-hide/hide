@@ -162,3 +162,23 @@ it("gives up a new socket that never says hello after 15 s and tries again", asy
   await vi.advanceTimersByTimeAsync(1_000);
   expect(FakeSocket.all).toHaveLength(2);
 });
+
+it("sends page keys only to a desktop that offers them, and keeps older desktops' existing keys", async () => {
+  const { socket, usePhone } = await connectedPhone();
+  const { sendKey } = await import("./connection");
+  usePhone.setState({ detail: { key: { device_id: "local", pane_id: "w1:p1" }, view: "terminal", tab: "terminal", rows: null, moreAskedAt: null, conversation: "none", olderAskedAt: null, looks: null, look: null } });
+  const inputs = () => socket.sent.filter((frame) => frame.type === "input");
+  sendKey("page_up");
+  expect(inputs()).toEqual([]);
+  socket.receive({ ...HELLO, page_keys: true });
+  sendKey("page_up");
+  expect(inputs()).toHaveLength(1);
+  expect(inputs()[0]).toMatchObject({ key: "page_up" });
+  socket.receive({ type: "input_result", request_id: usePhone.getState().pendingInput!.requestId, ok: true, reason: null });
+  socket.receive(HELLO);
+  sendKey("page_down");
+  expect(inputs()).toHaveLength(1);
+  sendKey("enter");
+  expect(inputs()).toHaveLength(2);
+  expect(inputs()[1]).toMatchObject({ key: "enter" });
+});

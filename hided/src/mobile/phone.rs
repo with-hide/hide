@@ -821,6 +821,7 @@ async fn run(
         "phone_id": phone_id,
         "name": record.as_ref().map(|phone| phone.name.clone()),
         "vapid_public_key": mobile.vapid_public_key(),
+        "page_keys": true,
         "notifications": match record.as_ref().map(|phone| (phone.notifications, phone.reachable())) {
             Some((_, true)) => "on",
             Some((Notifications::Off, false)) => "off",
