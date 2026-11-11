@@ -13220,6 +13220,22 @@ fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from()
             .unwrap()
             .unwrap();
         assert_eq!(admission.destination.as_deref(), expected);
+        // A spawn into another repository starts from that repository's own
+        // branch: the destination is a branch of the mission's project.
+        let elsewhere = runtime
+            .mission_spawn_admission(
+                &fixture.conductor,
+                &crate::runtime::missions::SpawnWorker {
+                    repo: "/checkouts/other",
+                    ..worker(None, "codex", &Default::default())
+                },
+                &mut None,
+                "plain",
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(elsewhere.destination, None);
     }
 }
 

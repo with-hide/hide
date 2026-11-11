@@ -653,10 +653,17 @@ impl Runtime {
             if let Watch::Landing { base: Some(_), .. } = &ask.watch {
                 // Only a destination the mission records holds its close:
                 // a mission from before it closes as it always did.
-                if matches!(found, Found::BaseUnread(_)) {
-                    self.missions.outside.lost.insert(ask.mission.clone());
-                } else {
-                    self.missions.outside.lost.remove(&ask.mission);
+                // Only an answer that resolved the destination finds it
+                // again: a node whose own branch could not be read says
+                // nothing of it.
+                match &found {
+                    Found::BaseUnread(_) => {
+                        self.missions.outside.lost.insert(ask.mission.clone());
+                    }
+                    Found::Unread(_) => {}
+                    _ => {
+                        self.missions.outside.lost.remove(&ask.mission);
+                    }
                 }
             }
             let flag_moved = match &found {

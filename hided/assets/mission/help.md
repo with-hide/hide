@@ -57,7 +57,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 - If the goal, the finish line or your permissions are unclear, ask before you plan.
 - Create the mission with `hide mission create --title <short title>` (add `--scope` or `--cap` only when the operator said so).
 - The mission records its destination, the branch its results go to: the branch your checkout is on when you create it, or the repository's default branch when that checkout is detached. `hide mission show` prints it (`도착 · <branch>`).
-  When it prints no `도착` line, Hide had not read your checkout's branch yet and the results go to the default branch: when your checkout is on another branch, name it in the plan.
+  After `hide mission create`, when `도착` is not the branch `git branch --show-current` prints in your checkout (Hide copies the branch it last read, which a switch just before may not have reached), name that branch in the plan.
   Every change starts from the destination's newest commit, a pull request takes it as its base, a `direct` change is merged into it, and Hide reads whether a change is in from it. "main" in this guide means the repository's default branch and nothing else.
   When the operator names another branch for the results, put it in the plan as `"destination": "<branch>"` and say it in the plan in one line (`결과는 release/1.3로 · 지금 폴더는 main`); a plan that leaves it out keeps the one the mission has.
   Once the mission started, another destination is a change of scope: ask the operator with `hide mission decide` before you plan it.
@@ -334,7 +334,7 @@ To hold on purpose: a node that waits on a pull request outside the mission depe
 
 - `hide mission show <node>` lists the node's finish lines (`criteria` in `--json`): each one's key, state (`open`, `pass`, `fail`, `skipped`), who recorded it and the evidence.
   Workers record their own lines and the `check` line, checkers record theirs; you record a line only for a node that never had a worker, and it shows as yours.
-  A `check` line passes only for the commit the checkout it was recorded from is at now, whoever works there: a new commit, a replan that changes the check command, or a checkout Hide no longer reads opens it again; once the node's pull request is merged, its merged head is that commit, and a check that passed on an earlier commit stands when the `ci` line passed on that merged head (a merge of main moved the head after the check; the commits after it were proved by CI).
+  A `check` line passes only for the commit the checkout it was recorded from is at now, whoever works there: a new commit, a replan that changes the check command, or a checkout Hide no longer reads opens it again; once the node's pull request is merged, its merged head is that commit, and a check that passed on an earlier commit stands when the `ci` line passed on that merged head (a merge of the destination moved the head after the check; the commits after it were proved by CI).
 - Hide refuses `--status done` while a line is open or failed (`mission_criteria_unmet`, which names the lines), judging the node as the command would leave it: a pull request named in the same command brings its CI, and another worker runs the check again.
   A close as done or merge_wait is refused while a node is unfinished (`mission_nodes_unfinished`) or a done node's line no longer holds (`mission_criteria_unmet`, `<node>: <lines>`), and a waiting mission closes itself only while every done node's lines hold.
   Then finish the check, or skip the line with its reason.

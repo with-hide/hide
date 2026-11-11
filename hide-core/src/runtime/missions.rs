@@ -3022,10 +3022,20 @@ impl Runtime {
                 &started,
             ));
         }
+        // The destination is a branch of the mission's project: a spawn
+        // into another repository of that machine starts from that
+        // repository's own branch, as it did. A worker on another machine
+        // was admitted above as the same GitHub repository.
+        let destination = mission.destination.clone().filter(|_| {
+            worker_machine != mission.device_id
+                || self
+                    .catalog_project_of(worker_machine, worker.repo)
+                    .is_some_and(|project| project.root_path == mission.project)
+        });
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
-            destination: mission.destination.clone(),
+            destination,
             closed: self.closed_registration_ids().into_iter().collect(),
         }))
     }

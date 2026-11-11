@@ -2924,6 +2924,7 @@ fn valid_destination(branch: &str) -> bool {
         && !branch.starts_with('-')
         && !branch.contains("..")
         && !branch.chars().any(char::is_whitespace)
+        && !branch.starts_with("origin/")
         && branch != "HEAD"
 }
 
