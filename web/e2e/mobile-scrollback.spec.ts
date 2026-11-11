@@ -11,7 +11,8 @@ import { chord } from "./chords";
 import { screenshot } from "./wire";
 import { animationsFinished } from "./wait";
 
-test("the phone reaches terminal history and explains an alternate screen", async ({ browser, page }) => {
+// @platform: quick keys cross the operating system's real PTY or ConPTY holder.
+test("the phone reaches terminal history and explains an alternate screen", { tag: "@platform" }, async ({ browser, page }) => {
   test.setTimeout(120_000); // wait-ok: pairing and two native agent starts precede four page reads.
   const fixture = await startFixture();
   const tailscale = new FakeTailscale();
