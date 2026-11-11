@@ -147,7 +147,8 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 The engine's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
-Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request; the local measurement tool that once repeated that scene matrix is retired.
+Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request.
+Every screen a bell can meet is a scene each agent declares, with the door the journey opens it through and the finding a survey recorded ([VERIFICATION.md](VERIFICATION.md#agent-scenes)); every finding is unknown until a survey closes it, and `bell` is still declared by hand, so no declaration changes until a finding does.
 The adapter declaration is a reviewed product decision, never changed by a measurement.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
@@ -367,6 +368,10 @@ The doorbell submits one line through the engine's prompt operation: `🦉 <writ
 🦉 label-end-fix report: label end fix opened PR #881
 🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
+
+A pane shows the line, and the rows the agent wraps it onto, as blue-grey words on a pale band ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#the-doorbells-lines-in-a-terminal)).
+How the agent echoes it is the adapter's declaration: the glyph its composer begins with (`composer.marker`) comes before the owl, and `BellEcho::chrome` names the marks its own output rows begin with, which end a wrapped line.
+Every agent whose `bell` types the line declares a `bell_echo` and no other does, which `hide-agent-adapter`'s contract test holds, so a new bell target that has not said how it echoes the line fails there rather than showing a bright letter; the web shell reads the projection in `contracts/agent-adapters.json`.
 
 The kind and the count are worded in the operator's interface language, the one Hide AI writes in (`Runtime::interface_language`: the language chosen in Settings, else this machine's primary language read once at launch, else English), which the doorbell reads with the recipient's connector under the runtime's lock from state the runtime holds, with no I/O.
 
@@ -1140,7 +1145,7 @@ The receipt lives on the existing warning letters and survives daemon restart an
 The second agent warning introduces no second human notification schedule.
 An overdue letter's notification key is its ID plus the cause and sends once.
 A phone that cannot be reached is not sent to, and a failed send records a diagnostic without retry.
-The phone is skipped before any send when its desktop pause choice is on while a desktop or web shell is connected (`app_open`), Mobile is off (`mobile_off`) or no paired phone has a Web Push subscription or an iOS app registration (`no_subscription`); the first that applies is the reason, and a send that fails (a Web Push phone while the push key is missing included) or finds every subscription gone is `send_failed` or `subscription_gone`.
+The phone is skipped before any send when its desktop pause choice is on while an attached desktop host reports system input within ten minutes, unlocked and awake, and an attached desktop window enables Needs You notifications (`computer_in_use`), Mobile is off (`mobile_off`) or no paired phone has a Web Push subscription or an iOS app registration (`no_subscription`); the first that applies is the reason, and a send that fails (a Web Push phone while the push key is missing included) or finds every subscription gone is `send_failed` or `subscription_gone`.
 The core's own engine shows no notification, so the phone is the one channel.
 When the phone was not reached, one `human.channels_failed` record in `Logs/core.jsonl` carries the notice (`letter_undelivered`, `observer_unconfirmed` or `mission_attention`), the letter id and `push` (the reason); it never carries a letter's text, a phone endpoint or a key.
 The claim stays consumed, so the same letter or warning is never announced again, and nothing is drawn on screen: an operator with phone push off learns of a held letter from that record only.

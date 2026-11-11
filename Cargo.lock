@@ -1337,13 +1337,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hide-relay-ios"
-version = "0.1.0"
-dependencies = [
- "hide-relay-protocol",
-]
-
-[[package]]
 name = "hide-relay-protocol"
 version = "0.1.0"
 dependencies = [

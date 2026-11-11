@@ -31,6 +31,10 @@ pub struct DesktopNotices {
     /// The desktop windows whose switch is on.
     demand: ObservationDemand,
     wanted: AtomicBool,
+    in_use: ObservationDemand,
+    active: AtomicBool,
+    waiting: ObservationDemand,
+    waiting_wanted: AtomicBool,
     transitions: Mutex<Transitions>,
     frames: broadcast::Sender<Arc<str>>,
 }
@@ -40,6 +44,10 @@ impl Default for DesktopNotices {
         Self {
             demand: ObservationDemand::default(),
             wanted: AtomicBool::new(false),
+            in_use: ObservationDemand::default(),
+            active: AtomicBool::new(false),
+            waiting: ObservationDemand::default(),
+            waiting_wanted: AtomicBool::new(false),
             transitions: Mutex::default(),
             frames: broadcast::channel(FRAME_BACKLOG).0,
         }
@@ -59,9 +67,30 @@ impl DesktopNotices {
         self.demand.set(connection, wanted, |on| self.turned(on)) == Some(true)
     }
 
+    /// A host says system use, once on connection and only on transitions.
+    /// Connection admission bounds this set; a disconnected host owns no entry.
+    pub fn activity(&self, connection: u64, in_use: bool) {
+        self.in_use.set(connection, in_use, |active| {
+            self.active.store(active, Ordering::SeqCst)
+        });
+    }
+
+    pub fn set_waiting(&self, connection: u64, wanted: bool) {
+        self.waiting.set(connection, wanted, |on| {
+            self.waiting_wanted.store(on, Ordering::SeqCst)
+        });
+    }
+
+    /// Resting must leave at least one desktop able to announce a person's turn.
+    pub fn rests_phone(&self) -> bool {
+        self.active.load(Ordering::SeqCst) && self.waiting_wanted.load(Ordering::SeqCst)
+    }
+
     /// A closed window takes its demand with it.
     pub fn release(&self, connection: u64) {
         self.demand.release(connection, |on| self.turned(on));
+        self.activity(connection, false);
+        self.set_waiting(connection, false);
     }
 
     fn turned(&self, on: bool) {
@@ -127,6 +156,30 @@ fn frame<'a>(notices: &[Notice], clear: impl Iterator<Item = &'a AgentKey>) -> V
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn any_active_host_with_a_waiting_notice_switch_rests_phones_until_it_leaves() {
+        let windows = super::DesktopNotices::default();
+        windows.activity(1, true);
+        assert!(
+            !windows.rests_phone(),
+            "an active host without notifications cannot replace the phone"
+        );
+        windows.set_waiting(1, true);
+        windows.activity(2, true);
+        windows.set_waiting(2, true);
+        assert!(windows.rests_phone());
+        windows.activity(1, false);
+        assert!(windows.rests_phone(), "the second host is still in use");
+        windows.release(2);
+        assert!(!windows.rests_phone(), "a disconnected host is gone");
+        windows.activity(1, true);
+        assert!(windows.rests_phone());
+        windows.release(1);
+        assert!(
+            !windows.rests_phone(),
+            "no attached window means phone pushes"
+        );
+    }
     use super::*;
     use hide_core::agent_state::phone::project;
 

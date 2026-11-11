@@ -479,7 +479,7 @@ export function workerAsleep(node: Pick<MissionNode, "status" | "agent_runtime">
   return node.status === "working" && node.agent_runtime === "asleep";
 }
 
-export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
+export function nodeLook<N extends Pick<MissionNode, "status" | "kind" | "blocked">>(mission: Pick<Mission, "status">, node: N): NodeLook {
   if (node.status === "dropped") return "dropped";
   if (node.status === "done") return "done";
   if (mission.status === "cancelled") return "cancelled";

@@ -79,7 +79,7 @@ export function AddScreen({ t, full, onBack, onPair }: { t: TFunction; full: boo
   return (
     <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col px-xl" data-phone-add-screen="true">
       <header className="-ml-sm flex items-center gap-xs pt-lg">
-        <Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("common.back")} data-phone-add-back="true" onClick={onBack}>
+        <Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("common.back")} data-phone-add-back="true" data-phone-back="add" onClick={onBack}>
           <ChevronLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
         </Button>
         <h1 className="text-headline font-semibold">hide</h1>
@@ -116,7 +116,7 @@ export function StartSettings({ t, onBack }: { t: TFunction; onBack: () => void 
   return (
     <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col" data-phone-settings="true">
       <header className="flex items-center gap-xs px-lg">
-        <Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("common.back")} data-phone-settings-back="true" onClick={onBack}>
+        <Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("common.back")} data-phone-settings-back="true" data-phone-back="settings" onClick={onBack}>
           <ChevronLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
         </Button>
         <h1 className="text-headline font-semibold">{t("mobile.settings.title")}</h1>

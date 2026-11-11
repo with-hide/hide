@@ -1,7 +1,7 @@
 import Foundation
 
 /// What hided sends the phone about one agent, as `push::payload` builds it (`hided/src/mobile/push.rs`), read for the
-/// parts a notification and its actions use. The rest of the JSON (the tags to close, the subject) is not kept.
+/// parts a notification uses. The rest of the JSON (the tags to close, the subject) is not kept.
 public struct Notice: Equatable {
     public let title: String
     public let state: String
@@ -12,11 +12,6 @@ public struct Notice: Equatable {
     public let deviceId: String
     public let paneId: String
     public let room: String
-    /// `question` or `approval`, and the agent's last change of state the notice was made at; the action sent later
-    /// carries `askTurn` and hided refuses it once the agent is no longer in that ask (`stale`).
-    public let askKind: String?
-    public let askTurn: String?
-
     /// The largest notice the app reads: hided's own plaintext bound is 2,897 bytes (`push::MAX_APNS_PLAINTEXT`).
     static let maxBytes = 4096
 
@@ -32,8 +27,6 @@ public struct Notice: Equatable {
         self.deviceId = "demo"
         self.paneId = "demo"
         self.room = ""
-        self.askKind = "question"
-        self.askTurn = "0"
     }
 
     public init?(json: Data) {
@@ -54,41 +47,24 @@ public struct Notice: Equatable {
         self.deviceId = deviceId
         self.paneId = paneId
         self.room = room
-        if let ask = object["ask"] as? [String: Any], let kind = ask["kind"] as? String, ["question", "approval"].contains(kind),
-           let turn = ask["turn"] as? String, !turn.isEmpty, turn.count <= 32, turn.allSatisfy(\.isNumber) {
-            askKind = kind
-            askTurn = turn
-        } else {
-            askKind = nil
-            askTurn = nil
-        }
     }
 }
 
-/// The notification categories the app registers and the extension names; an action exists only for a category.
+/// The notification category the app registers and the extension names.
 public enum NoticeCategory {
-    /// The agent waits on text: Reply.
-    public static let reply = "hide.reply"
-    /// Anything else: a tap opens the agent and there is no action.
+    /// A tap opens the conversation; all notices have no actions.
     public static let open = "hide.open"
-
-    public static func of(_ notice: Notice) -> String {
-        notice.askKind == "question" ? reply : open
-    }
 }
 
-/// The keys of the `userInfo` a decrypted notification carries: what a tap and an action need to find the agent,
+/// The keys of the `userInfo` a decrypted notification carries: what a tap needs to find the agent,
 /// and nothing the computer sent besides.
 public enum NoticeInfo {
     public static let room = "room"
     public static let deviceId = "device_id"
     public static let paneId = "pane_id"
-    public static let turn = "turn"
 
     public static func of(_ notice: Notice) -> [String: String] {
-        var info = [room: notice.room, deviceId: notice.deviceId, paneId: notice.paneId]
-        if let turn = notice.askTurn { info[Self.turn] = turn }
-        return info
+        [room: notice.room, deviceId: notice.deviceId, paneId: notice.paneId]
     }
 }
 

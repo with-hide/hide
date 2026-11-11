@@ -21,6 +21,8 @@ const BACKGROUND_ONLY = {
 };
 const SECONDARY_TEXT = ['--muted-foreground', '--subtle-foreground', '--status-seen'];
 const SURFACES = ['--background', '--sidebar', '--card'];
+/** Text and the band it is drawn on, both of the doorbell's letter rows (docs/UI_BEHAVIOR.md). */
+const LETTER = ['--terminal-letter-text', '--terminal-letter-band'];
 
 function channel(byte) {
   const value = byte / 255;
@@ -59,6 +61,7 @@ export function failures(tokens) {
         if (ratio < MINIMUM) found.push(`${palette} ${mode}: ${text} ${at(text)} on ${surface} ${at(surface)} is ${ratio.toFixed(2)}:1`);
       };
       for (const text of TERMINAL.filter(name => !BACKGROUND_ONLY[mode].includes(name))) check(text, '--background');
+      check(LETTER[0], LETTER[1]);
       for (const text of SECONDARY_TEXT) for (const surface of SURFACES) check(text, surface);
     }
   }

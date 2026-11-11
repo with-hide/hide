@@ -549,7 +549,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         host_name: host_name(),
         core: Arc::clone(&core),
         input_gate: core.input_gate()?,
-        renderers: Arc::clone(&renderers),
         start_demand: Arc::clone(&start_demand),
         open: move_gate.subscribe(),
         desktop: Arc::clone(&desktop_notices),

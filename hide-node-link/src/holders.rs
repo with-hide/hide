@@ -259,6 +259,10 @@ pub struct HolderProof {
 /// shows is followed as one that is shown.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PaneFacts {
+    /// The holder's last screen-mode fact, false for a holder or node
+    /// built before the negotiated alternate-screen extension.
+    #[serde(default)]
+    pub alternate_screen: bool,
     /// The folder the pane's shell last reported (OSC 7, or OSC 9;9 from
     /// Windows PowerShell's prompt), in the wire spelling; `None` until it
     /// reported one.

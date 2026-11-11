@@ -163,6 +163,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the server did not take the key on port $port" }
           "first_ssh_connection_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
           Add-Content -Encoding utf8 -Path $env:GITHUB_ENV -Value "HIDE_E2E_WINDOWS_SSH_DIR=$dir"
+      - name: Use a working resolver on the disposable runner
+        # Azure's default resolver returned SERVFAIL for Ubuntu package hosts
+        # in Windows too, not only through WSL's DNS tunnel (#2460).
+        # The shared check leaves healthy defaults alone and validates the
+        # replacement before selecting it. WSL keeps its normal DNS tunnel.
+        timeout-minutes: 2
+        run: bash scripts/ci-apt-dns.sh
       - name: A fresh WSL 2 distribution
         # Its first-run setup is left undone (RunOOBE 1, default user root),
         # which the test reads as a distribution Hide must refuse before it
@@ -172,7 +179,27 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
-          additional-packages: git python3 openssh-server
+      - name: Install the distribution's packages after DNS is ready
+        # setup-wsl's apt update can report DNS failures and still succeed,
+        # leaving its one install attempt to fail before any product test.
+        # Keep first-run setup undone; only root installs the prerequisites.
+        # DNS and downloads share the existing 300 s network budget.
+        # Ten minutes also bounds WSL startup and offline installation.
+        timeout-minutes: 10
+        run: |
+          diagnostics() {
+            wsl.exe --version || true
+            powershell.exe -NoProfile -Command 'Resolve-DnsName archive.ubuntu.com; Resolve-DnsName security.ubuntu.com; Get-DnsClientServerAddress -AddressFamily IPv4' || true
+            wsl.exe --distribution Ubuntu-24.04 --user root -- bash -c '
+              uname -a
+              cat /etc/wsl.conf
+              cat /etc/resolv.conf
+              timeout 15 getent ahostsv4 archive.ubuntu.com security.ubuntu.com
+            ' || true
+          }
+          trap diagnostics ERR
+          wsl.exe --version
+          wsl.exe --distribution Ubuntu-24.04 --user root --cd "$GITHUB_WORKSPACE" -- env APT_BUDGET_SECONDS=300 RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" bash scripts/ci-apt-install.sh git python3 openssh-server
       - uses: actions/download-artifact@v8
         timeout-minutes: 5
         with:

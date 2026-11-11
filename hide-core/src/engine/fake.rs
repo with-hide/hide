@@ -696,7 +696,7 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("read_screen", json!({"pane": pane}))
     }
 
-    fn read_rows(&self, _wait: Wait, pane: &str, lines: u32) -> Answer<PaneText> {
+    fn read_rows(&self, _wait: Wait, pane: &str, lines: u32) -> Answer<super::PaneRows> {
         self.ask("read_rows", json!({"pane": pane, "lines": lines}))
     }
 

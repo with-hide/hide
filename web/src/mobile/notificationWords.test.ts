@@ -6,8 +6,6 @@ import { clientI18n, translate } from "../i18n/translator";
 // The notification extension has no web view, so it words a decrypted notice from a table of its own
 // (`NoticeWords.swift`). This holds each entry of that table equal to the catalog entry the web app's service worker
 // words the same notice from, in every language, so a change of wording cannot reach one place and not the other.
-// The four sentences about a failed reply (`reply_*`) exist only in the table: the web app never sends a reply from a
-// notification.
 
 const source = readFileSync(new URL("../../../mobile/ios/App/HidePushCore/Sources/HidePushCore/NoticeWords.swift", import.meta.url), "utf8");
 
@@ -51,13 +49,8 @@ describe("the notification extension's words", () => {
       const wanted = catalog();
       const table = tables[code]!;
       for (const [key, word] of Object.entries(wanted)) expect(table[key], `${language} ${key}`).toBe(word);
-      // Nothing in the table but the catalog's words and the reply sentences.
-      expect(Object.keys(table).filter((key) => !(key in wanted) && !key.startsWith("reply_"))).toEqual([]);
-    });
-
-    it(`words each failed reply in ${language}`, () => {
-      const table = tables[code]!;
-      for (const key of ["reply_stale", "reply_not_sent", "reply_outdated", "reply_unconfirmed"]) expect(table[key]?.length ?? 0, `${language} ${key}`).toBeGreaterThan(8);
+      // Nothing in the table but the catalog's words.
+      expect(Object.keys(table).filter((key) => !(key in wanted))).toEqual([]);
     });
   }
 });

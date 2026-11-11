@@ -61,6 +61,22 @@ describe('the folder the app serves', () => {
     expect(await assemble({ dist: await build(), out: join(root, 'www'), pins: pins(), expected: 5, fetcher: site() })).toEqual([3, 5]);
   });
 
+  it('permits only the named loopback relay for a simulator assembly, keeping the release policy strict', async () => {
+    const dist = await build();
+    const options = { dist, out: join(root, 'www'), pins: pins(), fetcher: site() };
+    await expect(assemble({ ...options, simulatorRelayPort: 43179 })).rejects.toThrow(/fixture relay/);
+    const local = page('simulator', POLICY.replace('wss://relay.withhide.dev', 'ws://127.0.0.1:43179'));
+    await writeFile(join(dist, 'index.html'), local);
+    await writeFile(join(dist, 'p/5/index.html'), local);
+    await expect(assemble(options)).rejects.toThrow(/production relay/);
+    await expect(assemble({ ...options, simulatorRelayPort: 43180 })).rejects.toThrow(/fixture relay/);
+    await expect(assemble({ ...options, simulatorRelayPort: 43179 })).resolves.toEqual([3, 5]);
+    expect(await readFile(join(root, 'www/index.html'), 'utf8')).toContain('ws://127.0.0.1:43179');
+    await expect(assemble({ ...options, simulatorRelayPort: 1 })).rejects.toThrow(/Invalid simulator/);
+    await writeFile(join(dist, 'index.html'), local.replace("script-src 'self'", 'script-src *'));
+    await expect(assemble({ ...options, simulatorRelayPort: 43179 })).rejects.toThrow(/block external scripts/);
+  });
+
   it('stops when a pinned file differs, even when the site\'s own inventory agrees with the changed file', async () => {
     const changed = { ...OLD, 'p/3/assets/a-1.js': 'tampered!!!', 'p/5/index.html': page('five') };
     await expect(run(site({ files: changed }))).rejects.toThrow(/differs from its pin: p\/3\/assets\/a-1\.js/);

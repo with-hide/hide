@@ -908,6 +908,21 @@ A device's close leaves no entry, as before.
 Every entry to a pane or tab close uses this: ⌘W or ⌥W, ⌘⇧W or ⌥⇧W, the desktop menu's commands, a tab's ×, the tab menu's `Close tab…`, the pane header's ×, the pane menu's `Close pane`, and the agent row menu's `Close tab…`; closing a View, the phone app and the Overview are unchanged.
 Web owner: `web/src/close.ts` (which sheet, which panes and descendants, and their states), `web/src/Overlays.tsx` (both sheets), `web/src/components/subtree-list.tsx` (the list both the sheet and the removal dialogs draw); core owner: `hide-core/src/runtime/tree_close.rs`.
 
+### The doorbell's lines in a terminal
+
+Hide types `🦉 <writer> <kind>: …` into a Claude Code, Codex or Grok pane to wake it for a letter, and the agent echoes it as a prompt row (`❯ 🦉 …`, `› 🦉 …`).
+It is a letter between agents, not something the operator owes an answer to, so the pane draws that row, and the rows the agent wraps it onto, as blue-grey words (`--terminal-letter-text`) on a pale band (`--terminal-letter-band`), an opaque mix of the theme's background so the words keep 4.5:1 (`scripts/check-token-contrast.mjs`) and the band stays distinct from the Needs You amber; Needs You stays the place for what the operator has to do.
+The shell reads only the shape of a row: it begins with the agent's prompt glyph, an owl and a space, and the rows indented under it begin with text rather than the agent's own output marks.
+It does not know who typed the row, so these limits stand: a line a person types in the same shape (`❯ 🦉 hello`, also while it is still a draft in the composer) is marked too, and a Grok row that its keyboard focus frames (`│ ❯ 🦉 … │`) is not marked until focus moves.
+The selection limit below is the third.
+A line that does not match the shape, such as `❯ 🦉가 뭐야?` or one with no prompt glyph, is drawn as the agent drew it.
+Telling a typed line from a letter needs the core to mark the line it typed, which is not built.
+The text and the copy are unchanged: the shell lays two decorations over the agent's own cells and rewrites nothing; where the agent paints its own background on a row, the band replaces it for that row.
+The band is a bottom-layer decoration, so a drag selection (`term.select`) is painted over it and stays visible on a letter row, and the words are a top-layer foreground-only decoration, which the selection does not hide; `web/src/terminalBellLines.selection.test.ts` holds this against the WebGL addon's own cell color resolver.
+Third limit: that holds for the WebGL renderer only. When the terminal falls back to xterm's DOM renderer (WebGL failed to start or its context was lost), the band is drawn over the selection, so selecting a letter row does not show the selection background on it; the copied text is unchanged. It is an emergency path, and showing the selection in both renderers needs an overlay designed apart from decorations, which is out of this feature's scope; no test holds this behavior, since it follows the renderer.
+The prompt glyphs and the output marks that end a wrapped line are the agents' declarations (`BellEcho`, [delivery.md](delivery.md#the-bell-line)), not a list in the web shell.
+Web owner: `web/src/terminalBellLines.ts`, read after a frame by `web/src/terminals.ts`; cost contract: [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-doorbells-lines-in-a-terminal).
+
 ### Terminal links
 
 A terminal pane links what its program prints, whichever program it is: an http(s) URL, a path, and a link the program marked itself (OSC 8).
@@ -1070,7 +1085,7 @@ The picked node's panel has one card headed `볼 것` and when, with what to loo
 The screen compares the core's `long_wait_at_unix_ms` with its shared clock to show `오래 기다림` in grey, without sending an answer or notification; once passed the panel records where the answer came from and its words, including `창에서 답함`.
 A reached gate with no row to carry it uses the existing mission item in Needs You and adds what to look at to that item's reason.
 The phone reads the same named gate fields and uses the same strip, plan list, grey count and answer-source wording in all four interface languages (`web/src/components/mission-gate.tsx`, `web/src/mobile/MissionDetail.tsx`, `web/src/mobile/MissionsScreen.tsx`).
-After a mission starts, the phone keeps a later planned node with an ahead gate on the page's step rail as a step not begun, with its name and strip, counted in neither the rail's work and waiting counts nor any turn count.
+After a mission starts, the phone keeps a later planned node with an ahead gate on the shared mission graph as a step not begun, with its name and strip, adding no turn count.
 Every row starts with the mission's number, `M39` for the core's `mission-39`, in muted monospace, and the map's head and the Conductor pane's chip (`⚑ M39 · ●●●●● 1/6`, where the word 미션 stood: the number muted, a dot, then the progress in bold so the two never read as one number) use the same number, so a mission said aloud is found on any of them; it comes from the core's id only, an id without a number shows none, and the `M` keeps it apart from a pull request's `#` (`missionNumber`, `web/src/missions.ts`).
 A mission no Conductor holds carries `지휘 다시 열기` at the end of its row, which takes it over without opening it; a press anywhere else on the row opens the mission (B6).
 With no mission on the device the table says so above the start guide: a moving picture of a mission (the Conductor, three workers side by side, one decision, a check beside each part as it finishes, purple then green, two checking the demo, then main), `한 번 말하면, 여럿이 나눠서 끝까지`, three dots (나란히 일하고, 다른 모델이 검증, 판단만 나에게), the `/hide-mission` and `$hide-mission` calls, and `아무 에이전트 터미널에서 부르면 여기에 미션이 생겨요`; with missions left out by a chip it says none match and offers `모든 프로젝트` (B7).
@@ -2085,7 +2100,7 @@ The app icon sums root agents in every enabled notification group across every d
 Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
 macOS draws it on the Dock once it lets Hide notify, Linux where the desktop shows launcher counts, and Windows as a dot on the taskbar button whose description gives the count.
 With both switches off nothing is sent and the app icon has no count; with Done alone on, it counts unread Done.
-The phone's push follows its own settings whatever these switches say (B36, B38).
+The phone's own settings decide whether it receives pushes; computer-use resting applies only while an attached window enables Needs You notices (Notifications).
 
 Settings > Devices keeps its own description.
 The persisted `screen_intros_seen` field remains readable for older builds; this release has no Factory introduction.
@@ -2708,8 +2723,11 @@ Each toggle sends one event and persists through the core's existing UI-state wr
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
-Its two description lines are `데스크톱 Hide가 열려 있으면 폰으로 알림을 보내지 않아요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
-On pauses phone pushes while any desktop renderer is connected (`app_closed`); Off allows them with the desktop open too (`always`).
+Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
+On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, and at least one attached desktop window has Needs You notifications enabled (`app_closed`).
+Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
+A rested notice still waiting for the operator is sent once when resting ends; an answered or withdrawn notice is discarded.
+Off always permits pushes (`always`), subject to the phone’s own receiving choice and viewing suppression.
 A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 
 ### Usage
@@ -3036,6 +3054,12 @@ A phone is told only when an agent waits on the operator’s answer, a question,
 
 ### The phone app
 
+In the iOS app, a rightward swipe from the left edge uses the visible back control: a conversation, mission or pull request returns to its list, a View returns to its Views, and the start settings and add-computer pages return through their own back action.
+An open sheet prevents a swipe from pressing a back control behind it; swipes starting inside the page keep their horizontal scrolling or panning.
+A notification cold start keeps the launch background until its agent can open, without showing the computer or agent list on the way.
+An offline, refused or unavailable connection still shows its existing recovery actions.
+The browser phone app keeps its existing navigation.
+
 A reply or quick key sent while its pane is being forked waits for that fork under the same 64 KiB and 30-second holder bounds as desktop input.
 The phone reports success only after the engine confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
 A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.
@@ -3086,6 +3110,11 @@ Cursor uses its native graph units under the same page and text bounds; a record
 OpenCode uses its own messages from its database, paged by message with the same 30-message and text bounds; every page, idle poll and copied pager proves the root session and exact checkout again, and a session rewound under the phone is read anew.
 An unavailable or changed native source falls back through the existing feature-local refusal path; no transcript is borrowed from another session and no new banner is added.
 터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, in the monospace face at the caption text size (a step under the body text, so a row keeps more of its columns on a phone, as the desktop pane's smaller terminal text does), each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
+When the holder reports an alternate screen and there are no older rows to load, the top of the terminal says quietly, `전체 화면 프로그램이라 지난 줄은 여기 없어요. 지난 내용은 대화에서 보세요.`
+Korean words in this line wrap at spaces, with a long unbroken word allowed to wrap to fit the phone.
+The line opens Conversation when that tab exists, and is plain text otherwise; it scrolls with the output, so it appears only at the top.
+Primary-screen panes and computers that do not report the screen mode show no line, regardless of the agent kind.
+Pulling the phone's output never sends input to the program or moves the desktop's view.
 볼 것 is the third tab, `대화 | 터미널 | 볼 것` (`터미널 | 볼 것` for an agent with no conversation), and it is there only while the agent has a View open now; the number of Views not seen is on it.
 The list's eye row, the 볼 것 mark, opens the detail on this tab; a row that asks a question or needs an approval, and every other row, opens on the conversation as before, and 대화 goes straight to the agent's conversation.
 The tab lists the Views the agent opened, `안 본 것 N` above `본 것 N`, newest first: a tile with the kind's icon and a dot when the View is not seen, its name, its kind (변경 내용, 문서, 이미지, 웹 화면, 파일) and how long ago it was opened.
@@ -3139,13 +3168,20 @@ Under why it matters the page lists the Views the decision links, as the desktop
 Pressing a closed row asks the Mac to open it again first, as the View of the agent that had it open, and the row says `Mac에서 여는 중…` while it waits; once it is open again that agent's 볼 것 opens with it listed, and a View that will not open, a question that moved on or a Mac out of reach says so under the card, one press at a time; a closed row whose agent is closed is dimmed and presses nothing.
 With none linked, `자료 요청` is a dashed button of its own above the choices, with why to ask under it (`볼 자료가 없으면 요청해 보세요`), which asks the Conductor for one page to look at, once per question as on the desktop, and reads `자료 요청함` once the Mac says it went; it never holds the answer back, and a request that did not reach the Mac says so in its own words (`web/src/mobile/MissionDetail.tsx`).
 Under the decision stands the safety net as the desktop's 내 차례 draws it, its head, a line per held step with its reason and how long it stood, and `대화` to the Conductor while one holds the mission; the phone starts no Conductor, so with none the card only says so.
-`Conductor가 정한 것 N` is folded above the finished steps and lists each line the Conductor skipped on its own as the desktop's summary does.
+`Conductor가 정한 것 N` is folded below the graph and lists each line the Conductor skipped on its own as the desktop's summary does.
 The answer goes to the Conductor as the desktop's decision banner sends it, and the same words (`보냄 · 차례 기다림`, `Conductor가 읽는 중`, and `전달 확인 안 됨` with 다시 보내기, which types nothing a second time) say where the answer is.
 A question that changed while the phone was open, a mission with no Conductor, or a device that stopped answering shows its reason under the question in the desktop's own words and keeps what was written; pressing the same answer twice reaches the Conductor once, and a press that could not leave the phone says the Mac is out of reach.
 Away from the Mac the page keeps its last content dimmed under the unreachable line and nothing on it presses: no choice, no written answer.
-Under the decision 단계 draws every step still in the plan on one rail, top down in the order the steps wait on each other (the order of the cells above it and of the desktop's map), with how many are at work and how many wait on someone at its right; a line joins each step's mark to the next, and the steps of one depth, which run side by side, carry a bracket on their left under the word `동시에`, so which step waits on which is read from the rail rather than said.
-Each step has its mark, title, pull request number, what it waits on or follows (`#2091 다음`) and its worker; a step not begun says what it still waits for in the desktop card's words (`#2093, Windows 서명 단계 기다림`, a step by its pull request when it has one), or `시작 전` when nothing is left before it; a dropped step is not drawn.
-The finished steps fold into one row at the head of the rail, `끝남 N` with `펴기`, which shows them in place in quieter text, and `접기` folds them again; a step whose worker the list holds opens that agent's detail, and its back arrow returns to the page.
+Under the decision 단계 draws the desktop's mission graph, using its dependency layout, connection styles, node card frame and report sink (`MissionGraph`, `MissionGraphCard`, `MissionMapCanvas`).
+The graph fits the phone width in a bounded viewport and starts framed on working steps and steps waiting on someone; when none are active, including a finished mission, it fits the whole graph.
+A finger pans from a card or the background, two fingers pinch around their midpoint, and the desktop's direction, zoom and Fit controls remain available with phone touch targets.
+Panning or zooming keeps the chosen view while frames arrive; Fit shows the whole graph again.
+Every received node, finished and dropped ones included, stays in the graph as on the desktop; parallel steps stand side by side and connections show their dependencies.
+Tapping a node whose worker the phone's list holds opens that worker's conversation, whose back arrow returns to the mission; an unavailable worker opens nothing.
+The phone draws only the metadata its frame carries, including its current PR, worker kind, waiting reason and review gate; desktop-only plans, launch profiles, checker satellites and defect edges are absent, with no invented values.
+When a node leaves its ready merge to the operator, its card says `머지할 차례` and `내 차례`, names the newest still-open held PR with the additional count, and joins the initial framing even though its work is done.
+With no steps the section shows the planning or finished state in one line; when a closed mission's steps were omitted from its frame, the omission count replaces the graph.
+The header, progress cells, decision card and written answer retain their existing behavior.
 PR lists the open pull requests of every project this Mac holds (PRD mobile-companion-ui B37-B45), under the title and `열린 PR N`, with the project's name when there is more than one.
 They stand in four groups, 머지할 수 있음, CI 도는 중, 실패 and 리뷰 기다림, each with its count and an empty group not drawn: the core's reason for a row decides its group (ready to merge; CI, an agent's work or the merge queue; a failed check, a change request, a conflict or a branch behind its base; the rest waiting on a person, a draft included).
 A row has the PR mark in its state's colour, `#number`, the title and, under it, the line the desktop's PR list says for it with the approvals; a project on another device carries that device's chip.
@@ -3182,7 +3218,8 @@ Returning to On restores each computer’s actual subscription when connected, e
 An unsaved browser choice shows the existing storage-failure guidance and survives visibility changes and reopening Settings until this page closes.
 The iOS app removes this phone’s keys for every computer when turned off; removing a computer removes only that computer’s subscription or key.
 In the demo 연결된 컴퓨터 holds three rows, the sample host with its `샘플` mark, `내 컴퓨터 연결하기` and `체험 끝내기`, with the note that nothing goes to a computer under the card.
-In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
+In the demo the switch asks the same question and posts one sample notification on this phone, without actions: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
+In the iOS app a real notification tap opens its conversation, where the person can reply; long pressing a notification offers no Reply action, including the demo sample.
 The browser demo keeps its notification row as `샘플` without a receiving control; only the iOS app can post the demo’s local sample notification.
 The first screen's 언어 value reads `폰 따라가기` (the phone's own language) while no computer is connected, and `Mac 따라가기` only inside a computer; the camera view says the camera is already open (`카메라가 이미 열려 있어요. 닫고 다시 시도해 주세요.`) when another screen holds it, and keeps the permission wording for a camera that cannot be used.
 표시 has 언어 and 화면 as one-line values that open a bottom sheet to choose from, and under the card `이 폰에만 저장돼요`.

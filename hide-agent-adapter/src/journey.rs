@@ -3,6 +3,9 @@
 //! takes, projected from the declarations so the check never reads Rust
 //! source and never keeps a second support table.
 
+use crate::scene::{Door, Scene, SceneCase};
+use crate::usage::Support;
+
 #[derive(serde::Serialize)]
 pub struct JourneyAdapter {
     pub id: &'static str,
@@ -35,6 +38,12 @@ pub struct JourneyAdapter {
     /// Paths this no-tool busy probe can observe: a bell or a root Stop
     /// continuation. Tool-only paths need a tool-using probe of their own.
     pub busy_letter: Vec<&'static str>,
+    /// All fourteen screens a letter's bell can meet, each with the door the
+    /// journey opens it through and what a survey found
+    /// (`AgentAdapter::scenes`); the `scene_<name>` cells are these, so the
+    /// runner reads the keys, the start and the script from here and never
+    /// from Rust.
+    pub scenes: Vec<JourneyScene>,
     /// Private fixture Stop HTTP-hook file, with sessionId,
     /// lastAssistantMessage, stopHookActive and end_turn input semantics.
     pub stop_observer: Option<&'static [&'static str]>,
@@ -143,6 +152,57 @@ pub enum JourneyWake {
     SleepingSession,
 }
 
+/// One scene of the contract: what the journey does to open it and what a
+/// survey found there.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct JourneyScene {
+    pub scene: Scene,
+    /// Absent when the agent has no such screen.
+    pub door: Option<Door>,
+    /// `safe`, `unsafe`, `unknown`, or `none` for a screen the agent does not
+    /// have.
+    pub finding: &'static str,
+    /// The journey's ordinary run checks the release of a letter held in this
+    /// scene (`SceneCase::release_check`).
+    pub release_check: bool,
+}
+
+fn journey_scenes(row: &super::AgentAdapter) -> Vec<JourneyScene> {
+    row.scenes
+        .cells()
+        .into_iter()
+        .map(|(scene, capability)| match capability {
+            Support::Supported(SceneCase {
+                door,
+                finding,
+                release_check,
+            }) => JourneyScene {
+                scene,
+                door: Some(*door),
+                finding: finding.word(),
+                release_check: *release_check,
+            },
+            Support::Unsupported(_) => JourneyScene {
+                scene,
+                door: None,
+                finding: "none",
+                release_check: false,
+            },
+        })
+        .collect()
+}
+
+/// Whether the journey has a `scene_<name>` cell for this scene: the agent
+/// starts, has the scene, and the journey must open it itself (a door that
+/// another cell proves needs no cell of its own).
+fn scene_cell(row: &super::AgentAdapter, scene: Scene) -> bool {
+    row.start.is_some()
+        && matches!(
+            row.scenes.get(scene),
+            Support::Supported(SceneCase { door, .. }) if !matches!(door, Door::Cell { .. })
+        )
+}
+
 /// The native title source a `title` cell measures (with-hide/hide-private
 /// docs/task-identity.md: the automatic or source-less slot of each format).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -180,10 +240,24 @@ pub struct JourneyCells {
     /// that turn, which ends with its own answer: through a bell or a
     /// declared turn-end hook, without asking the model to use a tool.
     pub letter_busy: bool,
-    /// A letter sent while a picker of the agent's own is open reaches it
-    /// once the picker is closed, never as the picker's choice: for an
-    /// agent the doorbell rings through a way in of its own.
-    pub letter_menu: bool,
+    /// The scenes the journey opens itself, one cell each, in the order of
+    /// `Scene::ALL`: `rest` and `working` are the `letter` and `letter_busy`
+    /// cells, so they have none. A cell is declared when the agent has the
+    /// scene through a door that is not one of those cells; what it does
+    /// depends on the door and the run's `--scenes` mode
+    /// (`docs/VERIFICATION.md#agent-scenes`).
+    pub scene_rest_draft: bool,
+    pub scene_interrupted: bool,
+    pub scene_session_picker: bool,
+    pub scene_model_picker: bool,
+    pub scene_popup: bool,
+    pub scene_tool_approval: bool,
+    pub scene_question: bool,
+    pub scene_plan_approval: bool,
+    pub scene_trust_dialog: bool,
+    pub scene_hooks_review: bool,
+    pub scene_first_run: bool,
+    pub scene_update_notice: bool,
     /// Typed, erased, pasted and cleared text reads as the composer's own
     /// verdict on its screen. It starts no model turn.
     pub composer: bool,
@@ -230,6 +304,24 @@ fn busy_letter_paths(row: &super::AgentAdapter) -> Vec<&'static str> {
     paths
 }
 
+/// How many scenes the journey's ordinary run checks the release of: each
+/// answers one letter, so each is one turn of the request budget.
+fn release_checked_scenes(row: &super::AgentAdapter) -> u32 {
+    Scene::ALL
+        .into_iter()
+        .filter(|&scene| {
+            scene_cell(row, scene)
+                && matches!(
+                    row.scenes.get(scene),
+                    Support::Supported(SceneCase {
+                        release_check: true,
+                        ..
+                    })
+                )
+        })
+        .count() as u32
+}
+
 /// Whether a profile can run the agent in an account of its own: its
 /// definition moves the account by a folder or a name.
 fn moves_account(row: &super::AgentAdapter) -> bool {
@@ -250,9 +342,18 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             guidance_memory: context_cell(row),
             letter: start && (row.bell || row.tool_letters.is_some()),
             letter_busy: start && !busy_letter_paths(row).is_empty(),
-            // Keep the measured Codex picker journey when input becomes typed:
-            // a draft hold must survive the picker and release after Esc.
-            letter_menu: start && row.bell && row.key == super::AgentId::Codex,
+            scene_rest_draft: scene_cell(row, Scene::RestDraft),
+            scene_interrupted: scene_cell(row, Scene::Interrupted),
+            scene_session_picker: scene_cell(row, Scene::SessionPicker),
+            scene_model_picker: scene_cell(row, Scene::ModelPicker),
+            scene_popup: scene_cell(row, Scene::Popup),
+            scene_tool_approval: scene_cell(row, Scene::ToolApproval),
+            scene_question: scene_cell(row, Scene::Question),
+            scene_plan_approval: scene_cell(row, Scene::PlanApproval),
+            scene_trust_dialog: scene_cell(row, Scene::TrustDialog),
+            scene_hooks_review: scene_cell(row, Scene::HooksReview),
+            scene_first_run: scene_cell(row, Scene::FirstRun),
+            scene_update_notice: scene_cell(row, Scene::UpdateNotice),
             composer: start && row.composer.is_some(),
             sleep_wake: start && row.sleep.is_some(),
             resume: start && row.sleep.is_some() && row.resume.is_some(),
@@ -270,6 +371,8 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         // what Hide shows of those turns and start none; the composer cell
         // types text it never submits.
         // The busy letter starts two: the turn it waits behind and its own.
+        // Each scene whose release the ordinary run checks starts one: the
+        // letter held while it was open, answered once it is closed.
         // The launch brief starts one, in a start of its own. The profile's
         // start, letter and Wake start one each, in an account of their own.
         let turns = [
@@ -280,7 +383,6 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             cells.letter,
             cells.letter_busy,
             cells.letter_busy,
-            cells.letter_menu,
             cells.fork,
             cells.resume,
             cells.profile,
@@ -289,7 +391,8 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         ]
         .into_iter()
         .filter(|&turn| turn)
-        .count() as u32;
+        .count() as u32
+            + release_checked_scenes(row);
         let letter = cells.letter.then(|| {
             if row.bell {
                 JourneyLetter::Bell
@@ -318,6 +421,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
                 | super::SessionFormat::Antigravity => JourneyTitle::Automatic,
             });
         JourneyAdapter {
+            scenes: journey_scenes(row),
             id: row.id,
             fake_home: row.fake_home,
             engine_kind: row.engine_kind,
@@ -395,5 +499,83 @@ mod tests {
         let mut row = *AgentId::Codex.adapter();
         row.memory = Support::Unsupported(ABSENT);
         context_cell(&row);
+    }
+
+    #[test]
+    fn a_scene_cell_follows_the_declaration_never_an_agent_name() {
+        // The cell the Codex-only `letter_menu` was is now every agent's
+        // `scene_model_picker`: it exists wherever the agent declares the
+        // picker through keys, and goes when the declaration does.
+        for row in crate::ADAPTERS {
+            let cells = journey_contract()
+                .find(|adapter| adapter.id == row.id)
+                .unwrap()
+                .cells;
+            assert!(
+                cells.scene_model_picker,
+                "{}: declares the model picker through keys",
+                row.id
+            );
+        }
+        let mut row = *AgentId::Codex.adapter();
+        assert!(scene_cell(&row, Scene::ModelPicker));
+        row.scenes.model_picker = Support::Unsupported(ABSENT);
+        assert!(!scene_cell(&row, Scene::ModelPicker));
+        assert!(
+            scene_cell(&row, Scene::Popup),
+            "a scene the declaration keeps keeps its cell"
+        );
+        row.start = None;
+        assert!(
+            !scene_cell(&row, Scene::Popup),
+            "an agent Hide cannot start has no scene cell"
+        );
+    }
+
+    #[test]
+    fn a_door_another_cell_proves_has_no_cell_of_its_own() {
+        let mut row = *AgentId::Codex.adapter();
+        for scene in [Scene::Rest, Scene::Working] {
+            assert!(
+                !scene_cell(&row, scene),
+                "{}: proven by `letter` or `letter_busy`",
+                scene.name()
+            );
+        }
+        row.scenes.popup = row.scenes.rest;
+        assert!(
+            !scene_cell(&row, Scene::Popup),
+            "a door that is another cell is that cell's"
+        );
+    }
+
+    #[test]
+    fn the_contract_lists_all_fourteen_scenes_with_a_door_or_an_absence() {
+        for adapter in journey_contract() {
+            let names: Vec<_> = adapter.scenes.iter().map(|case| case.scene).collect();
+            assert_eq!(names, Scene::ALL, "{}", adapter.id);
+            for case in &adapter.scenes {
+                assert_eq!(
+                    case.door.is_none(),
+                    case.finding == "none",
+                    "{} {}: a door and an absence are exclusive",
+                    adapter.id,
+                    case.scene.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_scene_with_a_release_check_adds_a_turn_to_the_request_budget() {
+        let mut row = *AgentId::Codex.adapter();
+        assert_eq!(release_checked_scenes(&row), 1);
+        row.scenes.model_picker = row.scenes.popup;
+        assert_eq!(
+            release_checked_scenes(&row),
+            0,
+            "the same door without the check adds no turn"
+        );
+        assert_eq!(release_checked_scenes(AgentId::ClaudeCode.adapter()), 0);
     }
 }

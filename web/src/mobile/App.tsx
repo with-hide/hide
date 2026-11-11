@@ -55,10 +55,17 @@ function Screens() {
   const tab = usePhone((s) => s.tab);
   const missionOpen = usePhone((s) => s.missionOpen);
   const prOpen = usePhone((s) => s.prOpen);
+  const pendingOpen = usePhone((s) => s.pendingOpen);
+  const unreachable = usePhone((s) => s.unreachable);
+  const relayError = usePhone((s) => s.relayError);
+  if (screen === "starting") return <main className="min-h-full" />;
   if (screen === "version") return <VersionScreen t={t} name={name} protocol={deviceProtocol} app={String(PHONE_PROTOCOL)} />;
   if (screen === "pair") return <PairScreen />;
   if (screen === "refused") return <Guidance refused />;
   if (screen === "unpaired") return <Guidance refused={false} />;
+  // A notification opens the detail, not the list that happens to arrive before it. An offline or refused
+  // connection still exposes its normal recovery controls rather than leaving a steady surface forever.
+  if (appHost() && pendingOpen && !detail && !unreachable && !relayError) return <main className="min-h-full" />;
   // A worker or a Conductor opened from a mission step is the agent's own detail, on either tab (B36).
   if (detail) return <Detail onBack={closeDetail} />;
   if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;

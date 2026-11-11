@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from agent_journey import clis, latest  # noqa: E402
 from agent_journey.cells import CELLS  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_journey.scene import lane_status  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("agent_canary_record", ROOT / "scripts/agent-canary-record.py")
 record = importlib.util.module_from_spec(spec)
@@ -40,16 +41,37 @@ def sources(url):
 
 def report(failing=None, agents=AGENTS, cell="composer", reason="erase: not_empty"):
     """A fake lane report of `agents` in which every declared cell came out
-    as declared, but `failing` agent's `cell`."""
+    as the lane requires it (`scene.lane_status`: a scene cell no survey has
+    closed reads `not measured`), but `failing` agent's `cell`."""
     table = {}
     for row in active_rows(CONTRACT):
         if row["id"] in agents:
-            table[row["id"]] = {name: {"status": "pass" if row["cells"][name] else "N/A", "reason": ""}
-                                for name in CELLS}
+            table[row["id"]] = {name: {"status": lane_status(row, name), "reason": ""} for name in CELLS}
     if failing:
         table[failing][cell] = {"status": "fail", "reason": reason}
     return {"selected": list(agents), "table": table,
             "agents": [{"id": agent, "pin": {"version": "1", "matches": True}} for agent in agents]}
+
+
+class Verdict(unittest.TestCase):
+    def test_a_normal_report_has_no_miss_and_the_lane_and_the_canary_agree(self):
+        # Scene cells whose findings are unknown read `not measured` in a
+        # healthy run; the canary asks the same owner as the lane.
+        lane_spec = importlib.util.spec_from_file_location("lane_for_canary", ROOT / "scripts/agent-journey-lane.py")
+        lane = importlib.util.module_from_spec(lane_spec)
+        lane_spec.loader.exec_module(lane)
+        healthy = {**report(), "fake_model": True, "fixture": False, "cleanup": {"confirmed": True},
+                   "failures": []}
+        self.assertEqual(lane.judge(healthy, "fake"), (True, []))
+        for row in active_rows(CONTRACT):
+            self.assertEqual(record.misses(row, healthy, "linux"), [], row["id"])
+
+    def test_a_scene_cell_that_fails_or_passes_unproven_is_still_a_miss(self):
+        row = next(row for row in active_rows(CONTRACT) if row["id"] == "claude-code")
+        for status in ("fail", "pass"):
+            value = report()
+            value["table"]["claude-code"]["scene_popup"] = {"status": status, "reason": "x"}
+            self.assertEqual([name for name, _, _ in record.misses(row, value, "linux")], ["scene_popup"])
 
 
 class Latest(unittest.TestCase):

@@ -18,9 +18,13 @@ mod declarations;
 pub mod definition;
 pub use definition::AccountPath;
 mod journey;
+pub mod scene;
+mod scene_declarations;
 pub mod usage;
 pub use declarations::ADAPTERS;
-pub use journey::{JourneyAdapter, JourneyCells, JourneyLetter, JourneyWake, journey_contract};
+pub use journey::{
+    JourneyAdapter, JourneyCells, JourneyLetter, JourneyScene, JourneyWake, journey_contract,
+};
 mod web;
 pub use web::{HookKind, WebAdapter, web_contract};
 
@@ -786,6 +790,22 @@ pub struct AiProvider {
     pub requests: Capability<()>,
 }
 
+/// What an agent's transcript draws around the line the doorbell types.
+///
+/// The agent echoes the line as a prompt row: the glyph its composer begins
+/// with (`composer.marker`), the owl, then the words, wrapped onto rows
+/// indented as far as the glyph. What the shell cannot read off the echo
+/// itself is what ends it: the rows of the agent's own output that may follow
+/// at that indent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BellEcho {
+    /// What a row of the agent's own output begins with, after its
+    /// indentation: Claude Code's `⏺` and `⎿`, Codex's `•` and `└`, Grok's
+    /// `◆`. A row that begins with one is never the wrapped rest of a bell
+    /// line; the agent's prompt glyphs are chrome too and are not repeated here.
+    pub chrome: &'static [char],
+}
+
 /// A submission hook may observe a prompt even when its output is discarded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptHook {
@@ -954,7 +974,16 @@ pub struct AgentAdapter {
     /// Automatic model-context injection, not the Memory store or extraction.
     pub memory: Capability<ContextRoute>,
     pub bell: bool,
+    /// Every screen a letter's bell can meet, each with the door the journey
+    /// opens it through and what a survey found (`docs/VERIFICATION.md#agent-scenes`).
+    /// `bell` is still declared by hand: it follows the findings once the
+    /// surveys have closed them ([`scene::SceneDeclaration::bell_from_findings`]).
+    pub scenes: scene::SceneDeclaration,
     pub bell_names_inbox: bool,
+    /// How the agent shows the doorbell's line in its own transcript, so the
+    /// web shell can dim it (`docs/delivery.md`, The bell line); every agent
+    /// whose `bell` types the line declares one, and no other does.
+    pub bell_echo: Option<BellEcho>,
     pub turn_end_letters: Option<HookDialect>,
     /// The dialect whose hook, plugin or extension hands letters over at a
     /// tool event while the agent works (PRD letters-to-busy-agents D-02),

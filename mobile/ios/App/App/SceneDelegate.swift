@@ -1,6 +1,7 @@
 import UIKit
 import Capacitor
 import HideShell
+import UserNotifications
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -8,7 +9,15 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
+        // Keep the launch intent before the first page asks for it. The delegate may receive this response too;
+        // the inbox gives each notification request out only once.
+        if let response = connectionOptions.notificationResponse,
+           response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            PushOpenInbox.shared.offer(response.notification)
+        }
+
         window = UIWindow(windowScene: windowScene)
+        window?.backgroundColor = UIColor(named: "LaunchBackground")
         window?.rootViewController = ShellViewController()
         window?.makeKeyAndVisible()
 

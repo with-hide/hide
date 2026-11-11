@@ -31,4 +31,4 @@ platforms = [
 [final-excludes]
 # The relay protocol also builds for browsers; the native workspace feature
 # union includes OS-only crates which cannot enter that WASM module.
-workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol", "hide-relay-ios"]
+workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol"]
