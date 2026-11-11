@@ -3064,7 +3064,7 @@ export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | 
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
 
-export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null };
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null; delay_until_unix_ms?: number | null };
 /** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
 export type DeskJob = {
   id: string;
