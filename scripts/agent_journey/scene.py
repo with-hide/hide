@@ -27,7 +27,7 @@ import base64
 import json
 import time
 
-from agent_live_check.processes import Cancelled
+from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import private_directory, write_private
 
 from . import cells, composer
@@ -222,8 +222,11 @@ def open_scene(journey, case, record):
     return True
 
 
-def letter_into(journey, scene, value, record):
-    return journey.send_now(f"journey-letter-scene-{scene}-{journey.id}", value, record)
+def letter_into(journey, scene, value, record, repetition):
+    """The letter of one repetition of a scene. Each has an intent of its own:
+    the mailbox treats a send under an intent it already holds, with another
+    body, as a conflicting retry and refuses it (`intent_conflict`)."""
+    return journey.send_now(f"journey-letter-scene-{scene}-{journey.id}-{repetition}", value, record)
 
 
 def release(journey, scene, case, name):
@@ -250,7 +253,7 @@ def release(journey, scene, case, name):
         return
     record["opened"] = screen(journey)
     log = journey.log_mark()
-    letter = letter_into(journey, scene, value, record)
+    letter = letter_into(journey, scene, value, record, 1)
     if letter is None:
         journey.settle(name, (cells.FAIL, "hide request send refused: "
                               + ": ".join(filter(None, cells.refusal(record["sent"])))),
@@ -281,27 +284,32 @@ def watch_once(journey, scene, case, directory, repetition):
     """One repetition of the survey's probe (docs/VERIFICATION.md#agent-scenes):
     the scene opened, a letter sent with `--now`, `WATCH_SECONDS` of reads
     once a second, the scene closed, and `RELEASE_WATCH_SECONDS` for the
-    letter to arrive. Returns the repetition's record."""
-    from .journey import CONFIRM_SECONDS, LETTER_SECONDS, token
+    letter to arrive. Every way out closes the scene it opened, cancels a
+    letter still pending and keeps record.json. Returns the repetition's
+    record."""
+    from .journey import LETTER_SECONDS, token
     record = {"agent": journey.id, "scene": scene, "repetition": repetition, "version": journey.record.get("version"),
               "door": case["door"], "shown": [], "samples": []}
     private_directory(directory)
-    record["composer_check"] = journey.composer_checked()
-    value = record["token"] = token()
-    before = len(journey.conversation().get("events", []))
-    since = journey.daemon.mark(journey.pane)
-    if not open_scene(journey, case, record):
-        return {**record, "candidate": "unknown", "why": record["failed"]}
-    opened = screen(journey)
-    log = journey.log_mark()
-    letter = letter_into(journey, scene, value, record)
-    if letter is None:
-        return {**record, "candidate": "unknown",
-                "why": "hide request send refused: " + ": ".join(filter(None, cells.refusal(record["sent"])))}
-    start = time.monotonic()
-    shown = {}
-    middle = None
+    letter, shown, opened, closed = None, {}, False, False
     try:
+        record["composer_check"] = journey.composer_checked()
+        value = record["token"] = token()
+        before = len(journey.conversation().get("events", []))
+        since = journey.daemon.mark(journey.pane)
+        if not open_scene(journey, case, record):
+            record.update(candidate="unknown", why=record["failed"])
+            return record
+        opened = True
+        first = screen(journey)
+        log = journey.log_mark()
+        letter = letter_into(journey, scene, value, record, repetition)
+        if letter is None:
+            record.update(candidate="unknown", why="hide request send refused: "
+                          + ": ".join(filter(None, cells.refusal(record["sent"]))))
+            return record
+        start = time.monotonic()
+        middle = None
         while time.monotonic() - start < WATCH_SECONDS:
             shown = (journey.controller.hide(["request", "show", letter]).get("result") or {})
             record["samples"].append({
@@ -323,10 +331,10 @@ def watch_once(journey, scene, case, directory, repetition):
         # a bell was typed, or the letter went in.
         after_quiet = [reason for reason in reasons if reason != "quiet_period"]
         quiet_ended = bool(after_quiet) or attempts > 0 or shown.get("state") == "delivered"
-        guard = guard_of(reasons)
-        record.update(attempts=attempts, quiet_ended=quiet_ended, guard=guard,
+        record.update(attempts=attempts, quiet_ended=quiet_ended, guard=guard_of(reasons),
                       engine=[activity for activity, _ in journey.daemon.activities(journey.pane, since)])
         press(journey, case["door"]["close"])
+        closed = True
         after = screen(journey)
         shown_after = journey.shown(letter, record, lambda value: value.get("state") == "delivered",
                                     RELEASE_WATCH_SECONDS)
@@ -334,18 +342,27 @@ def watch_once(journey, scene, case, directory, repetition):
         verdict = cells.menu_letter_verdict(shown_after, read, journey.session, value, before)
         record["released"] = verdict[0] == cells.PASS and shown_after.get("bell_attempts") == attempts + 1
         record["release_verdict"] = list(verdict)
-        value_, why = candidate(record)
-        record.update(candidate=value_, why=why)
-        record_screens(directory, before=opened, during=during, after=after, **({"middle": middle} if middle else {}))
+        found, why = candidate(record)
+        record.update(candidate=found, why=why)
+        record_screens(directory, before=first, during=during, after=after, **({"middle": middle} if middle else {}))
+        return record
     finally:
         if record.get("candidate") is None:
-            record.update(candidate="unknown", why="the probe stopped before the scene was closed")
+            record.update(candidate="unknown", why="the probe stopped before it could judge the scene")
+        # A scene left open would take the next scene's keys.
+        if opened and not closed:
+            try:
+                press(journey, case["door"]["close"])
+            except (Cancelled, ProcessError) as error:
+                record["close_failed"] = str(error)
         # A letter still pending would ring into the next scene.
-        if shown.get("state") != "delivered":
-            record["cancelled"] = journey.controller.hide(["request", "cancel", letter])
+        if letter and shown.get("state") != "delivered":
+            try:
+                record["cancelled"] = journey.controller.hide(["request", "cancel", letter])
+            except (Cancelled, ProcessError) as error:
+                record["cancel_failed"] = str(error)
         write_private(directory / "record.json",
                       (json.dumps(record, indent=2, ensure_ascii=False, default=str) + "\n").encode())
-    return record
 
 
 def watch(journey, scene, case, name, mode):

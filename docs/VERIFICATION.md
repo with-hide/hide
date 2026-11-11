@@ -353,6 +353,7 @@ Every finding is `unknown` until a survey closes it, so the adapter's `bell` is 
 The ordinary run of the journey (`--scenes check`, the default) does what `letter_menu` did and no more: a scene whose declaration carries a release check is opened, a letter is sent with `--now`, the scene stays open 10 s and is closed, and the letter must arrive once and be answered.
 Only Codex's `/model` picker carries one, because it is the one the journey had measured; a `safe` finding is proven again by the survey's probe, and every other scene reads `not measured` with its reason.
 The lane that runs the ordinary mode (`scripts/agent-journey-lane.py`) requires each scene cell to read what `scene.lane_status` says of it: `pass` for a release check or a `safe` finding, `not measured` for the rest, so a cell that passed without a proof fails the lane too.
+The agent canary's record judges each report with the same function, so a healthy report is neither a lane failure nor a canary miss.
 
 A survey (`--scenes survey`, `--scene-repetitions N`, three by default) opens each scene the journey can open by keys, however its finding reads, and watches a letter sent with `--now` for 75 s, a read a second of the request, the engine and the core's `doorbell.held` reasons: the 30 s quiet period and 45 s of doorbell passes after it.
 It then closes the scene and gives the letter 60 s to arrive once.

@@ -151,6 +151,75 @@ class Survey(unittest.TestCase):
                          keys * scene.SURVEY_REPETITIONS * scene.SURVEY_REQUESTS_PER_SCENE)
 
 
+class Repetitions(unittest.TestCase):
+    """watch_once against a journey that answers as the mailbox does."""
+
+    class Journey:
+        id, record, session = "codex", {"version": "codex-cli 0.163.0"}, "s"
+
+        def __init__(self, folder, refuse=False):
+            self.run, self.refuse, self.intents, self.pressed = Path(folder), refuse, [], []
+            self.table = {}
+            self.daemon = self
+            self.controller = self
+
+        # The mailbox refuses a send under an intent it holds with another body.
+        def send_now(self, intent, value, record):
+            conflict = intent in self.intents
+            self.intents.append(intent)
+            record["sent"] = {"ok": False, "error": {"code": "intent_conflict"}} if conflict or self.refuse else {}
+            return None if conflict or self.refuse else "letter-" + str(len(self.intents))
+
+        def composer_checked(self): return {}
+        def conversation(self): return {"events": []}
+        def mark(self, pane): return 0
+        def activities(self, pane, since): return []
+        def take_keys(self, record): return True
+        def log_mark(self): return 0
+        def core_lines(self, mark): return [{"kind": "doorbell.held", "reason": "draft"}]
+        def read_pane(self, pane, visible=False): return "screen"
+        pane = "p1"
+
+        def hide(self, args):
+            return {"result": {"state": "pending", "bell_attempts": 0}}
+
+        def shown(self, letter, record, done, seconds): return {"state": "delivered", "bell_attempts": 1}
+        def wait_turn(self, since, value, after, seconds): return "turn", {"events": []}, []
+
+    def probe(self, **kwargs):
+        patched = {name: getattr(scene, name) for name in ("press", "wait", "WATCH_SECONDS")}
+        pressed = []
+        scene.press = lambda journey, keys: pressed.append([key["key"] for key in keys])
+        scene.wait = lambda journey, seconds: None
+        scene.WATCH_SECONDS = 0.01
+        original = cells.menu_letter_verdict
+        cells.menu_letter_verdict = lambda *args: (cells.PASS, "ok")
+        try:
+            folder = tempfile.mkdtemp()
+            journey = self.Journey(folder, **kwargs)
+            found = [scene.watch_once(journey, "model_picker", case("codex", "model_picker"),
+                                      Path(folder) / str(n), n) for n in (1, 2, 3)]
+        finally:
+            cells.menu_letter_verdict = original
+            for name, value in patched.items():
+                setattr(scene, name, value)
+        return journey, found, pressed, Path(folder)
+
+    def test_each_repetition_of_a_scene_sends_its_own_letter(self):
+        journey, found, _, _ = self.probe()
+        self.assertEqual(len(set(journey.intents)), 3, journey.intents)
+        self.assertEqual([record["candidate"] for record in found], ["safe"] * 3)
+
+    def test_a_refused_letter_still_closes_the_scene_and_keeps_its_record(self):
+        journey, found, pressed, folder = self.probe(refuse=True)
+        for n, record in enumerate(found, 1):
+            self.assertEqual(record["candidate"], "unknown")
+            self.assertIn("hide request send refused", record["why"])
+            self.assertTrue((folder / str(n) / "record.json").is_file())
+        # Each repetition opened the scene by its keys and closed it again.
+        self.assertEqual(pressed.count(["esc"]), 3)
+
+
 class Settling(unittest.TestCase):
     """measure() settles every declared scene cell without a probe for the ones the run does not open."""
 
