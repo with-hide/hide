@@ -14,7 +14,8 @@ import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
-import { HEAD_FILL, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
+import { HeldMark, useDelayPill } from "./components/mission-hold";
+import { HEAD_FILL, PILL_TONE, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -211,14 +212,22 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const language = requireInterfaceLanguage(i18n.language);
   const running = useElapsed(mission.status !== "done" && mission.status !== "cancelled" && !mission.stale ? mission.started_at_unix_ms : null);
   const { done, total } = missionCounts(mission);
+  const held = useDelayPill(mission);
   const took = mission.started_at_unix_ms != null && mission.closed_at_unix_ms != null ? formatElapsed(language, mission.closed_at_unix_ms - mission.started_at_unix_ms) : null;
   const time = took ? t("mission.elapsed.total", { elapsed: took }) : running ? t("mission.elapsed.running", { elapsed: running }) : null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs px-md py-sm text-body" data-mission-summary="true">
       <MissionNumber mission={mission} className="text-caption" />
-      <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
-        {t(STATE_PILL[mission.status])}
-      </WorkPill>
+      {held ? (
+        <WorkPill tone={PILL_TONE.quiet} data-mission-pill="held">
+          <HeldMark />
+          {held}
+        </WorkPill>
+      ) : (
+        <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
+          {t(STATE_PILL[mission.status])}
+        </WorkPill>
+      )}
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
       {mission.nodes.length > 0 ? (
         <>
