@@ -588,8 +588,19 @@ impl Runtime {
             let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
             let mission = &mut self.missions.book.missions[index];
             let asked = conductor_identity(&mission.conductor);
+            // A raise on a node the open decision is about waits on the
+            // operator's answer there, with the Conductor: the decision is
+            // already the operator's one card for it.
+            let decided: Vec<bool> = mission
+                .nodes
+                .iter()
+                .map(|node| mission.deciding_on(&node.key))
+                .collect();
             let mut events = Vec::new();
-            for node in &mut mission.nodes {
+            for (node, decided) in mission.nodes.iter_mut().zip(decided) {
+                if decided {
+                    continue;
+                }
                 // The raise's cause and round and the Conductor it was asked
                 // of name its reaching the operator: the same raise read
                 // again after a restart makes the same key, and one asked

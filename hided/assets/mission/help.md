@@ -20,7 +20,7 @@ hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
 hide mission gate <node> (--pass | --fix) --said <the operator's words>
 hide mission start
-hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)
+hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>]... [--show <view-id|path>]... | --clear)
 hide mission delay (--line <text> --for <30m|2h> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
@@ -238,6 +238,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - Ask at once, without attempts, when the goal, the finish line or the scope would change, or when only a person can act (a login that expired, an approval a branch rule needs, a permission refused).
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
 - When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered in conversation.
+  When one question covers several nodes (the same check line open on seven merged nodes), name each with `--node`, the one it stopped first: the card lists them, and their raises stay with you while it is open instead of reaching the operator as cards of their own.
   When the answer is one of a few choices, give each with `--option` (at most 5, one line each) saying what follows from it, what it gains and what it costs, mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
   When the operator has to look at something to answer (screens, a report), give it with `--show <path or View id>`: one page that starts with three lines (what changed, the 2-3 things to check, what good looks like); Hide opens a path as a View and lists it on the decision, with the Views you opened since your previous decision and the ones the node's worker opened in its current attempt, while they are still open.
   Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
