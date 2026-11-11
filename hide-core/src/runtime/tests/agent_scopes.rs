@@ -160,8 +160,9 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
 
 #[test]
 fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
-    // PRD revisit-group B6, B7, B13: a quiet ★ or read ask stands in
-    // 다시 볼 것, oldest first; a working ★ stays in 일하는 중.
+    // PRD revisit-group B6, B7, B13: a resting ★ stands in 다시 볼 것, oldest
+    // first; a ★ that works or waits on proven work stays in 일하는 중
+    // (operator decision 2026-11-11).
     use crate::agent_state::sessions::Revisit;
     let mut runtime = runtime();
     let mut base = rows().remove(1);
@@ -183,9 +184,11 @@ fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
         agent("newer", "seen", "stopped", Some(20)),
         agent("older", "seen", "stopped", Some(10)),
         agent("busy", "working", "working", Some(5)),
+        agent("waiting", "working", "stopped", Some(1)),
         agent("plain", "seen", "stopped", None),
     ];
-    let names = ["newer", "older", "busy", "plain"];
+    runtime.snapshot.navigator.agents[3].wait = Some(crate::model::AgentWait::Children);
+    let names = ["newer", "older", "busy", "waiting", "plain"];
     let checkouts: Vec<_> = names
         .iter()
         .map(|name| {
@@ -209,6 +212,7 @@ fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
             .collect::<Vec<_>>(),
         [
             ("busy", TaskState::Working),
+            ("waiting", TaskState::Waiting),
             ("older", TaskState::Revisit),
             ("newer", TaskState::Revisit),
             ("plain", TaskState::Resting),

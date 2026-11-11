@@ -972,15 +972,13 @@ pub mod phone {
             let starred = agent.pointer("/revisit/starred").and_then(Value::as_bool) == Some(true);
             let read_ask = !starred
                 && agent.pointer("/revisit/read_ask").and_then(Value::as_bool) == Some(true);
-            // A quiet row the operator starred stands in 다시 볼 것 (PRD
-            // revisit-group D-10); an ask read and left unanswered stays in
-            // 내 차례, read (needs-you-cleanup B11).
+            // A resting row the operator starred stands in 다시 볼 것 (PRD
+            // revisit-group D-10), one that works or waits keeps its group
+            // (operator decision 2026-11-11); an ask read and left unanswered
+            // stays in 내 차례, read (needs-you-cleanup B11).
             let listed = |group: &str| match group {
                 "seen" | "working" if read_ask => "needs_you".to_owned(),
                 "seen" if starred => "revisit".to_owned(),
-                "working" if str_of(agent, "activity") != "working" && starred => {
-                    "revisit".to_owned()
-                }
                 group => group.to_owned(),
             };
             out.push(PhoneAgent {
