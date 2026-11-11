@@ -1595,6 +1595,412 @@ fn a_done_nodes_merged_worktree_is_retired_only_on_githubs_answer_and_with_the_s
     assert!(targets(&mut runtime, github(merged(), false)).is_empty());
 }
 
+/// A mission whose node `fix` is a done direct change on branch `fix`,
+/// read in the destination at `HEAD` when `landed`.
+fn done_direct(runtime: &mut Runtime, landed: bool) {
+    command(runtime, "sender", json!({"op": "create", "title": "Fix"})).unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "direct"},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "branch": "fix"}}),
+    )
+    .unwrap();
+    if landed {
+        let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+        node.in_main = Some(crate::missions::Landed {
+            branch: "fix".into(),
+            commit: HEAD.into(),
+        });
+    }
+}
+
+/// The fixture mission's first node.
+fn first_node(runtime: &mut Runtime) -> &mut crate::missions::MissionNode {
+    &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0]
+}
+
+/// PRD mission-destination D-48, B51: with the switch on, a done direct
+/// change's worktree is retired once Hide read its branch in the
+/// destination, with no GitHub answer needed; not before, not for a branch
+/// it no longer names, not while it works again, and nothing while the
+/// switch is off.
+#[test]
+fn a_direct_changes_worktree_is_retired_once_its_branch_is_read_in_the_destination() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_direct(&mut runtime, false);
+    assert!(
+        runtime.github.projects.is_empty(),
+        "no GitHub answer at all"
+    );
+    assert!(
+        runtime.mission_cleanup_targets().is_empty(),
+        "not read in yet"
+    );
+
+    first_node(&mut runtime).in_main = Some(crate::missions::Landed {
+        branch: "fix".into(),
+        commit: HEAD.into(),
+    });
+    assert_eq!(runtime.mission_cleanup_targets(), [merged_fix()]);
+
+    // A branch the node no longer names was read for another.
+    first_node(&mut runtime).branch = Some("fix-2".into());
+    assert!(runtime.mission_cleanup_targets().is_empty());
+    first_node(&mut runtime).branch = Some("fix".into());
+
+    runtime.snapshot.ui_state.conductor_settings.clean_merged = false;
+    assert!(runtime.mission_cleanup_targets().is_empty(), "switched off");
+    runtime.snapshot.ui_state.conductor_settings.clean_merged = true;
+
+    first_node(&mut runtime).status = NodeStatus::Working;
+    assert!(runtime.mission_cleanup_targets().is_empty(), "back at work");
+}
+
+/// B51: a direct change's worktree that holds changes stays for the run;
+/// one an agent or a program is in stays and is tried again.
+#[test]
+fn a_direct_changes_worktree_in_use_is_tried_again_and_one_with_changes_is_kept() {
+    use crate::runtime::worktree_retire::{Kept, Outcome, Retirement};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_direct(&mut runtime, true);
+    for (outcome, again) in [
+        (Outcome::Kept(Kept::AgentInside), true),
+        (Outcome::Kept(Kept::ProgramRunning), true),
+        (Outcome::Kept(Kept::Uncommitted), false),
+    ] {
+        let retirement = Retirement {
+            path: Some(format!("{PROJECT}-fix")),
+            outcome: outcome.clone(),
+        };
+        runtime.note_mission_cleanup(vec![(merged_fix(), retirement)], false);
+        assert_eq!(
+            runtime.mission_cleanup_targets() == [merged_fix()],
+            again,
+            "{outcome:?}"
+        );
+    }
+}
+
+/// The project's node as a close's pull meets it: the fetch, the
+/// checkout's read and the catch-up answer as for a checkout two commits
+/// behind `origin/feat/login`; every one is recorded, and the first waits
+/// until the test lets it go.
+struct PullNode {
+    calls: Mutex<Vec<&'static str>>,
+    gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// How far the checkout reads behind its destination.
+    behind: Mutex<u32>,
+}
+
+impl PullNode {
+    fn held() -> (Arc<Self>, std::sync::mpsc::Sender<()>) {
+        let (release, gate) = std::sync::mpsc::channel();
+        let node = Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            gate: Mutex::new(Some(gate)),
+            behind: Mutex::new(2),
+        });
+        (node, release)
+    }
+
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl crate::node_access::NodeLink for PullNode {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        _timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        use hide_node_link::protocol::Call;
+        // The mission's other readers (its branches, read off the lock too)
+        // are not the pull's: they find no node.
+        if !matches!(
+            call,
+            Call::FetchRemote { .. } | Call::CheckoutGit { .. } | Call::BranchCatchUp { .. }
+        ) {
+            return Err(crate::node_access::LinkError::NotConnected(
+                "not the pull's call".into(),
+            ));
+        }
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.recv().unwrap();
+        }
+        let (name, answer) = match call {
+            Call::FetchRemote { .. } => ("fetch", json!({"outcome": "fetched"})),
+            Call::CheckoutGit { .. } => (
+                "read",
+                serde_json::to_value(hide_node_link::worktrees::CheckoutGit {
+                    head_sha: Some(HEAD.into()),
+                    branch: Some("feat/login".into()),
+                    upstream: Some("origin/feat/login".into()),
+                    upstream_state: "tracked".into(),
+                    ahead: Some(0),
+                    behind: Some(*self.behind.lock().unwrap()),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
+            Call::BranchCatchUp { .. } => (
+                "catch_up",
+                json!({"outcome": "updated", "commit": "b".repeat(40)}),
+            ),
+            other => panic!("the pull asked {other:?}"),
+        };
+        self.calls.lock().unwrap().push(name);
+        Ok(crate::node_access::LinkAnswer::Parsed(answer))
+    }
+}
+
+/// The fixture's project with its checkout on `feat/login`, the branch a
+/// mission made there sends its results to.
+fn on_feat_login(runtime: &mut Runtime) {
+    let project = &mut runtime.worktree_catalog.projects[0];
+    project.base_branch = Some("main".into());
+    project.worktrees = vec![crate::model::WorktreeSnapshot {
+        path: PROJECT.into(),
+        branch: Some("feat/login".into()),
+        ..Default::default()
+    }];
+}
+
+/// PRD mission-destination B34, B38, D-43: a mission waiting on its direct
+/// change closes as done once Hide reads the branch in the destination, and
+/// that close hands the pull of the operator's checkout to a worker: the
+/// close is made and the runtime is free while the pull waits on its node,
+/// the pull fetches, reads and catches up in that order, and its line ends
+/// the report. The earlier `merge_wait` close, with nothing in the
+/// destination yet, asked the node nothing (D-47).
+#[test]
+fn a_close_hands_the_pull_to_a_worker_off_the_lock_and_its_line_ends_the_report() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let (node, release) = PullNode::held();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.use_own_node(node.clone());
+    runtime.install_worker_context(Arc::downgrade(&fixture.runtime), ChangeNotifier::noop());
+    on_feat_login(&mut runtime);
+    done_direct(&mut runtime, false);
+    assert_eq!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .destination
+            .as_deref(),
+        Some("feat/login")
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait", "report": "Done."}),
+    )
+    .unwrap();
+    land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
+    let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
+    assert_eq!(status(&runtime), MissionStatus::Done);
+    drop(runtime);
+
+    // The pull's first call waits on the gate: the close was made without
+    // it, and the runtime can be taken while it waits.
+    wait_for("the pull's worker to reach the node", || {
+        node.gate.lock().unwrap().is_none()
+    });
+    let runtime = fixture.runtime.lock().unwrap();
+    assert_eq!(status(&runtime), MissionStatus::Done);
+    assert_eq!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .report
+            .as_deref(),
+        Some("Done.")
+    );
+    drop(runtime);
+
+    release.send(()).unwrap();
+    let report = || {
+        fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .report
+            .clone()
+    };
+    wait_for("the pull's line in the report", || {
+        report().is_some_and(|report| report != "Done.")
+    });
+    assert_eq!(
+        report().as_deref(),
+        Some("Done.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+    );
+    assert_eq!(node.calls(), ["fetch", "read", "catch_up"]);
+}
+
+/// A mission Hide closed as done, pulling the checkout forward, and that
+/// its Conductor then closes again with its final report: the second pull
+/// finds the checkout current and the report keeps the one line that says
+/// what the first took, after the Conductor's new words.
+#[test]
+fn a_second_close_that_finds_the_checkout_current_keeps_the_pulled_line() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let (node, release) = PullNode::held();
+    release.send(()).unwrap();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.use_own_node(node.clone());
+    runtime.install_worker_context(Arc::downgrade(&fixture.runtime), ChangeNotifier::noop());
+    on_feat_login(&mut runtime);
+    done_direct(&mut runtime, false);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait", "report": "Done."}),
+    )
+    .unwrap();
+    land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
+    drop(runtime);
+    let read = || {
+        let runtime = fixture.runtime.lock().unwrap();
+        let report = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .report
+            .clone();
+        (runtime.missions.pulls.idle(), report)
+    };
+    wait_for("the first pull", || node.calls().len() == 3 && read().0);
+    assert_eq!(
+        read().1.as_deref(),
+        Some("Done.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+    );
+
+    *node.behind.lock().unwrap() = 0;
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "Final."}),
+    )
+    .unwrap();
+    drop(runtime);
+    wait_for("the second pull", || node.calls().len() == 5 && read().0);
+    assert_eq!(node.calls(), ["fetch", "read", "catch_up", "fetch", "read"]);
+    assert_eq!(
+        read().1.as_deref(),
+        Some("Final.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+    );
+}
+
+/// PRD mission-destination B38, D-43, D-47, D-28: a cancel pulls nothing, a
+/// close with no change in the destination asks the node nothing, and
+/// neither does one whose project is on a connected device.
+#[test]
+fn a_cancel_a_close_with_nothing_landed_and_a_device_checkout_ask_the_node_nothing() {
+    let fixture = conducting();
+    let (node, _release) = PullNode::held();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.use_own_node(node.clone());
+    runtime.install_worker_context(Arc::downgrade(&fixture.runtime), ChangeNotifier::noop());
+    on_feat_login(&mut runtime);
+    done_direct(&mut runtime, true);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    let idle =
+        |runtime: &Runtime| runtime.missions.pulls.idle() && node.gate.lock().unwrap().is_some();
+    assert!(idle(&runtime), "a cancel owes no pull");
+
+    // A mission of research alone has nothing in its destination.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Look"}),
+    )
+    .unwrap();
+    let id = runtime
+        .missions
+        .book
+        .missions
+        .iter()
+        .find(|mission| mission.title == "Look")
+        .unwrap()
+        .id
+        .clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "look", "title": "Look", "kind": "research", "criteria": ["it is named"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "look", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "Found."}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.missions.book.get(&id).unwrap().status,
+        MissionStatus::Done
+    );
+    assert!(idle(&runtime), "nothing landed, nothing asked");
+    assert_eq!(
+        runtime.missions.book.get(&id).unwrap().report.as_deref(),
+        Some("Found.")
+    );
+
+    // A landed change of a mission on a connected device.
+    let mission = runtime.missions.book.get_mut(&id).unwrap();
+    mission.device_id = "device-elsewhere".into();
+    mission.nodes[0].kind = crate::missions::NodeKind::Change;
+    mission.nodes[0].delivery = Some(crate::missions::Delivery::Direct);
+    mission.nodes[0].branch = Some("fix".into());
+    mission.nodes[0].in_main = Some(crate::missions::Landed {
+        branch: "fix".into(),
+        commit: HEAD.into(),
+    });
+    runtime.owe_folder_pull(&id);
+    assert!(idle(&runtime), "a device's checkout is not pulled");
+    assert!(node.calls().is_empty());
+}
+
 /// A worktree kept for what the operator settles (changes) is not tried
 /// again this run; one kept for an agent or a program, or refused, is
 /// tried again on the next pass.

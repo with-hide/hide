@@ -20,6 +20,10 @@ pub struct CheckoutGit {
     #[serde(default)]
     pub recent_commits: Vec<CheckoutCommit>,
     pub head_sha: Option<String>,
+    /// The branch `HEAD` has out; none when it is detached. Absent from a
+    /// node from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub subject: Option<String>,
     pub commit_unix_seconds: Option<u64>,
     pub changed_files: u32,

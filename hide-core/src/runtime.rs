@@ -76,6 +76,7 @@ pub(crate) mod mission_gates;
 mod mission_health;
 pub(crate) mod mission_landing;
 mod mission_outside;
+mod mission_pull;
 pub(crate) mod mission_views;
 pub(crate) mod missions;
 mod op_timing;
