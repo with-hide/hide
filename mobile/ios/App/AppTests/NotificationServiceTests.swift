@@ -1,6 +1,7 @@
 import UserNotifications
 import XCTest
 import HidePushCore
+import HideShell
 
 /// The notification extension's own class (`HideNotification/NotificationService.swift`, compiled into this bundle too),
 /// run in the app on the simulator against the real Keychain group it reads: what it makes of a notice it can open, and
@@ -35,18 +36,39 @@ final class NotificationServiceTests: XCTestCase {
         return try XCTUnwrap(result)
     }
 
-    func testAQuestionForAHeldKeyBecomesTheNoticeWithAReplyAndANamedAgent() throws {
+    func testAQuestionForAHeldKeyOpensTheNamedConversationWithoutAnAction() throws {
         let key = try keychain.create(room: room)
         let hide = try NoticeSealer.seal(NoticeSealer.notice(room: room), to: key)
         let out = try deliver(userInfo: ["hide": hide])
         XCTAssertEqual(out.title, "Fix the build")
         XCTAssertTrue(out.body.contains("Should I update the lockfile too?"))
-        XCTAssertEqual(out.categoryIdentifier, NoticeCategory.reply)
+        XCTAssertEqual(out.categoryIdentifier, NoticeCategory.open)
         XCTAssertEqual(out.userInfo[NoticeInfo.room] as? String, room)
         XCTAssertEqual(out.userInfo[NoticeInfo.deviceId] as? String, "dev")
         XCTAssertEqual(out.userInfo[NoticeInfo.paneId] as? String, "w1:p2")
-        XCTAssertEqual(out.userInfo[NoticeInfo.turn] as? String, "1794300000000")
         XCTAssertNil(out.userInfo["hide"], "the ciphertext is not kept")
+    }
+
+    func testRetiringReplyStorageKeepsTheComputerPairing() throws {
+        let pairing = PairingKeychain(accessGroup: PairingKeychain.ownAccessGroup())
+        let retired = PairingKeychain(service: "me.grab.hide.ios.held-reply", accessGroup: PairingKeychain.ownAccessGroup())
+        let item = PairingItem(room: room, noiseKey: String(repeating: "A", count: 43), credential: "test-credential")
+        defer { try? pairing.remove(room: room); try? retired.removeAll() }
+        try pairing.save(item)
+        try retired.save(item)
+        UserDefaults.standard.set(["old-request": ["state": "sent"]], forKey: "me.grab.hide.ios.reply-ledger.v1")
+        HidePushPlugin().load()
+        XCTAssertTrue(try retired.list().isEmpty, "the removed feature must leave no held reply text")
+        XCTAssertNil(UserDefaults.standard.object(forKey: "me.grab.hide.ios.reply-ledger.v1"))
+        XCTAssertEqual(try pairing.read(room: room), item, "notification retirement must keep the computer paired")
+    }
+
+    func testTheInstalledCategoriesHaveNoReplyEvenForAnAlreadyDeliveredQuestion() async {
+        let center = UNUserNotificationCenter.current()
+        PushCenter.shared.install(center: center)
+        let categories = await center.notificationCategories()
+        XCTAssertEqual(Set(categories.map(\.identifier)), [NoticeCategory.open, "hide.reply"])
+        XCTAssertTrue(categories.allSatisfy { $0.actions.isEmpty })
     }
 
     func testAnApprovalOffersNoActionAndTheTapOpensTheAgent() throws {

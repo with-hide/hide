@@ -9,11 +9,13 @@ import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { askPermission, startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
+import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 import { finishNative } from "./native-teardown";
 
 test("the 태스크 list and raised-child pane bands preserve native terminal geometry in both themes", async () => {
+  test.setTimeout(150_000); // wait-ok: the 60 s blocked-child grace, then the existing 90 s native workflow budget.
   // The child is the parent's delegated child, spawned by the parent agent itself (family).
   const stack = await startStack("session-workflow", { family: true });
   const { fixture, run, daemon } = stack;
@@ -32,12 +34,13 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     // lays on the parent's raised ask once the label proves the child's session. The page draws
     // only what the snapshot carries, so wait for the snapshot, not for the page's own timeout:
     // a row drawn before the label reached the ask reads the verb's fallback, "Stopped at a
-    // permission request" (with-hide/hide-private#515).
+    // permission request" (with-hide/hide-private#515). PR #2443 also gives the parent
+    // 60 s to handle the block before it raises: retain 30 s for the labelled snapshot after that.
     await dumpOnFailure("the parent's and the child's agent rows",
       () => withControl(daemon, (control) => control.until((rest) => ({ parent: agentIn(rest, parent), child: agentIn(rest, child) }), "the two agent rows", 2_000)),
       () => withControl(daemon, (control) => control.until(
         (rest) => agentIn(rest, parent)?.raised?.find((ask) => ask.raised_pane_id === child)?.what === childAsk || undefined,
-        `${parent}'s raised ask from ${child} carrying the child's label line`, 30_000)));
+        `${parent}'s raised ask from ${child} carrying the child's label line`, 90_000))); // wait-ok: the child's labelled raised ask after the blocked-child grace.
     // Drawing the child's prompt types into its pane. Inspect the parent's
     // header with the parent's tab selected, as the scenario requires.
     await withControl(daemon, (control) => showTabOf(control, parent));
@@ -72,6 +75,8 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       await page.locator(`[data-theme-option="${theme}"]`).click();
       await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${theme}\\b`));
       await page.keyboard.press("Escape");
+      await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
+      await animationsFinished(page); await compositorPresents(page);
       await captureNativeWindow(app, `session-header-${theme}`, { ...facts, terminal });
       await treeButton.click();
       await expect(page.locator(`[data-agent-child="${child}"]`)).toBeVisible();

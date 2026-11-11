@@ -11,7 +11,7 @@ import { App } from "./App";
 import { currentHost, openNoticed, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { openKey } from "./protocol";
-import { markAppHost, serviceWorkerAllowed } from "./appHost";
+import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { followNativeLinks } from "./nativeLink";
 import { followPushOpens, pushOpenAddress } from "./pushOpen";
 import { hostedPhone } from "./relayRuntime";
@@ -29,7 +29,7 @@ followNativeLinks((_pair, link) => window.location.assign(`/${new URL(link).hash
 // A tapped notification of the app names a computer and an agent: this computer opens it here, another through the start page.
 followPushOpens((target) => {
   const key = openKey(target.tag);
-  if (key && currentHost()?.room === target.room) openNoticed(key);
+  if (key && (currentHost()?.room ?? new URLSearchParams(location.search).get("host")) === target.room) openNoticed(key);
   else window.location.assign(pushOpenAddress(target));
 });
 
@@ -51,6 +51,8 @@ if (serviceWorkerAllowed()) {
   });
 }
 
+// The app's Keychain read is asynchronous. Until it resolves there is no unpaired state to show.
+if (appHost() && hostedPhone()) patch({ screen: "starting" });
 start();
 
 const container = document.getElementById("root");

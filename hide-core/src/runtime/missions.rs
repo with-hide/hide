@@ -57,6 +57,11 @@ pub struct MissionView {
     pub device_id: String,
     pub status: MissionStatus,
     pub scope: MissionScope,
+    /// The branch the mission's results go to (`Mission::destination`);
+    /// absent for a mission that records none, whose destination is the
+    /// project's default branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub cap: u8,
     /// Made before node criteria: its nodes show their sentence only and
     /// nothing is gated (PRD mission-map-git-criteria B23).
@@ -286,6 +291,12 @@ pub struct NodeView {
     /// stands (PRD mission-human-gate D-09); absent for a node without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<super::mission_gates::GateView>,
+    /// Who merges its pull request and where that merge stands (PRD
+    /// mission-destination D-10, D-35, D-45): the `👤` station, the
+    /// second-line strip and the operator's turn read it. Absent for a node
+    /// that is no change delivered by pull request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<super::mission_landing::NodeMerge>,
 }
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
@@ -478,6 +489,12 @@ pub struct NodePrView {
     pub number: u32,
     pub state: Option<PrState>,
     pub url: Option<String>,
+    /// The branch it merges into, as GitHub last answered (PRD
+    /// mission-destination D-14): the destination, the lower pull
+    /// request's branch of a stack, or another base. Absent while GitHub
+    /// has not answered for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// The mission's safety net as its card draws it (`MissionView::safety_net`).
@@ -600,6 +617,11 @@ pub(crate) struct SpawnWorker<'a> {
 pub struct MissionAdmission {
     pub mission: String,
     pub cap: u8,
+    /// The mission's destination, where a new worktree of its starts (PRD
+    /// mission-destination D-04); none for a mission that records none,
+    /// which starts from the branch the repository's own folder has out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     /// The registrations closed now, which Reopen closed holds and which
     /// hold no place under the cap (`closed_registrations.rs`).
     #[serde(default)]
@@ -1858,6 +1880,8 @@ impl Runtime {
                 if !(1..=crate::missions::CAP_LIMIT).contains(&cap) {
                     return Err("mission_cap_out_of_range".into());
                 }
+                let destination =
+                    self.checkout_destination(device, &project, &context.checkout_path);
                 let id = self.missions.book.allocate();
                 let mission = Mission {
                     id: id.clone(),
@@ -1869,6 +1893,7 @@ impl Runtime {
                     conductor: self.conductor_of(device, &pane, actor),
                     status: MissionStatus::Planning,
                     scope: scope.unwrap_or(settings.default_scope),
+                    destination,
                     cap,
                     candidates: settings.candidates.clone(),
                     strength: Some(settings.default_strength),
@@ -2366,17 +2391,27 @@ impl Runtime {
                 let mut shown = json!(view);
                 self.name_worker_items(mission, &view, &mut shown);
                 let node = mission.node(&key).ok_or("mission_node_unknown")?;
-                Ok((
-                    json!({
-                        "mission_id": id,
-                        "node": shown,
-                        "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
-                        "checker_letters": ledger
-                            .as_deref()
-                            .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
-                    }),
-                    false,
-                ))
+                let mut answer = json!({
+                    "mission_id": id,
+                    "node": shown,
+                    "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
+                    "checker_letters": ledger
+                        .as_deref()
+                        .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
+                });
+                // Where the node's change goes, which its worker reads here
+                // for its pull request's base; a mission that records none
+                // answers as it did.
+                if let Some(destination) = &mission.destination {
+                    answer["destination"] = json!(destination);
+                }
+                // Why Hide could not read where the node's branch is, such
+                // as a destination that is gone; the snapshot says only
+                // that it is unread.
+                if let Some(reason) = self.missions.outside.unread_reason(&id, &key) {
+                    answer["unread_reason"] = json!(reason);
+                }
+                Ok((answer, false))
             }
             MissionCommand::List => {
                 let mut lines: Vec<_> = self
@@ -2944,6 +2979,22 @@ impl Runtime {
             .is_some_and(|node| node.hold.is_some())
     }
 
+    /// The branch a mission made in `checkout` of `project` sends its
+    /// results to (PRD mission-destination D-02, D-42): the branch that
+    /// checkout has out, as the worktree catalog last read it; for a
+    /// detached checkout, or one the catalog does not list, the project's
+    /// default branch; none while even that is not read, which stands for
+    /// the default branch whenever it is asked.
+    fn checkout_destination(&self, device: &str, project: &str, checkout: &str) -> Option<String> {
+        let listed = self.project_worktrees_on(device, project)?;
+        listed
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.path == checkout)
+            .and_then(|worktree| worktree.branch.clone())
+            .or_else(|| listed.base_branch.clone())
+    }
+
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
@@ -2983,9 +3034,24 @@ impl Runtime {
                 &started,
             ));
         }
+        // The destination is a branch of the mission's project: a spawn
+        // into another repository of that machine starts from that
+        // repository's own branch, as it did. A worker on another machine
+        // was admitted above as the same GitHub repository. A repository
+        // the catalog does not list yet (no window since the restart) is
+        // compared as it was named, as a project's profile is
+        // (`project_agent_profile`).
+        let destination = mission.destination.clone().filter(|_| {
+            worker_machine != mission.device_id
+                || self
+                    .catalog_project_of(worker_machine, worker.repo)
+                    .map_or(worker.repo, |project| project.root_path.as_str())
+                    == mission.project
+        });
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
+            destination,
             closed: self.closed_registration_ids().into_iter().collect(),
         }))
     }
@@ -4049,6 +4115,7 @@ impl Runtime {
                                 PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                             }),
                             url: pull.map(|pull| pull.url.clone()),
+                            base: pull.map(|pull| pull.base_branch.clone()),
                         }
                     })
                     .collect();
@@ -4158,6 +4225,11 @@ impl Runtime {
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),
+                    merge: super::mission_landing::node_merge(
+                        mission,
+                        node,
+                        github.is_some_and(|pulls| crate::mission_health::merge_ready(node, pulls)),
+                    ),
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
@@ -4197,6 +4269,7 @@ impl Runtime {
             device_id: mission.device_id.clone(),
             status: mission.status,
             scope: mission.scope,
+            destination: mission.destination.clone(),
             cap: mission.cap,
             exempt: mission.exempt,
             strength: mission.strength,
@@ -4488,10 +4561,13 @@ impl Runtime {
 impl Runtime {
     /// Lays each device's missions that are their own Needs You item on that
     /// device's scope, oldest first, so its Needs You number counts them: a
-    /// mission whose safety net holds, and one with a raise only the
-    /// operator settles that no Conductor or worker row carries (B14). One
-    /// per mission, however many nodes it holds. Run after the mission
-    /// views, which decide `on_row` and the safety net.
+    /// mission whose safety net holds, one with a raise only the operator
+    /// settles that no Conductor or worker row carries (B14), and one with a
+    /// ready pull request its plan left to the operator to merge (PRD
+    /// mission-destination D-11, D-22; `MergeStep::Due`, never a scope `pr`
+    /// mission's), waited on since its node was done. One per mission,
+    /// however many nodes it holds. Run after the mission views, which
+    /// decide `on_row`, the safety net and the merge.
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
@@ -4502,6 +4578,7 @@ impl Runtime {
                 .filter_map(|node| node.attention.as_ref())
                 .filter(|attention| attention.item)
                 .map(|attention| attention.since_unix_ms)
+                .chain(mission.nodes.iter().filter_map(merge_due_since))
                 .chain(mission.safety_net.as_ref().map(|net| net.since_unix_ms))
                 .min();
             if let Some(since) = oldest {
@@ -4520,6 +4597,16 @@ impl Runtime {
             .collect();
         self.agent_scope_cache.note_mission_asks(asks) && self.refresh_agent_scopes()
     }
+}
+
+/// Since when `node`'s merge has been the operator's turn: from its finish,
+/// which a ready pull request the operator merges makes (`MergeStep::Due`);
+/// none for a node whose merge is not due.
+fn merge_due_since(node: &NodeView) -> Option<u64> {
+    node.merge
+        .as_ref()
+        .filter(|merge| merge.state == super::mission_landing::MergeStep::Due)
+        .map(|_| node.finished_at_unix_ms.unwrap_or_default())
 }
 
 /// Whether a node of a closed `mission` may wait on the operator: any raise

@@ -312,6 +312,7 @@ impl Watches {
                 Capability::ProgramPackage,
                 Capability::LineEditing,
                 Capability::ForegroundUnread,
+                Capability::AlternateScreen,
             ],
             Instant::now() + OPEN_LIMIT,
         );
@@ -524,6 +525,7 @@ fn pane_facts(pane: &str, facts: Facts) -> PaneFacts {
             LineEditing::Unknown => None,
         }),
         foreground_unread: facts.foreground_unread == Some(true),
+        alternate_screen: facts.alternate_screen.unwrap_or(false),
         foreground: facts.foreground.map(|program| ForegroundProgram {
             pid: program.pid,
             name: program.name,

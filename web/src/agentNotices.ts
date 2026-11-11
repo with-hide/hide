@@ -71,14 +71,18 @@ export function useAgentNotifications(actions: Actions) {
   // Null until the page is live: the first count is also the host's sign that a click can be opened here.
   const badge = useShellStore((s) => (s.connection !== "live" ? null : notificationBadgeCount(s.rest)));
   useEffect(() => {
+    if (!live) return;
+    return bridge?.onComputerUse?.((inUse) => actions.reportComputerUse(inUse));
+  }, [bridge, live, actions]);
+  useEffect(() => {
     if (bridge && badge !== null) bridge.reportBadge(badge);
   }, [bridge, badge]);
   // A reconnect is a new connection whose demand starts empty, so it is said again each time the page is live.
   useEffect(() => {
     if (!wanted) return;
-    actions.wantAgentNotices(true);
+    actions.wantAgentNotices(true, needsYouEnabled);
     return () => actions.wantAgentNotices(false);
-  }, [actions, wanted]);
+  }, [actions, wanted, needsYouEnabled]);
   useEffect(() => {
     if (!bridge || !wanted) return;
     const listener: Listener = ({ notices, clear }) => {

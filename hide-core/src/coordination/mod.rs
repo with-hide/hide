@@ -3215,6 +3215,7 @@ mod tests {
                 *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 1,
+                    destination: None,
                     closed: Vec::new(),
                 }));
             }
@@ -3406,6 +3407,7 @@ mod tests {
                 *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 2,
+                    destination: None,
                     closed: Vec::new(),
                 }));
             }
@@ -3593,6 +3595,7 @@ mod tests {
                 *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: mission.into(),
                     cap: 2,
+                    destination: None,
                     closed: Vec::new(),
                 }));
             }

@@ -509,3 +509,25 @@ it("keeps empty, completed and long missions readable without a rail fold", asyn
     expect(container.querySelector("[data-mission-canvas]")).toBeNull();
   } finally { await unmount(); }
 });
+
+// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn.
+it("names only open PRs in the phone merge turn, newest first with the additional count", async () => {
+  const db = (prs: number[]) => node("db", "done", { pr: 37, pr_state: "merged", merge: { by: "operator", state: "due", why: "DB review", prs }, landing: { state: "left", action: "merge" } });
+  const items = [[31, 33], [31]].map((prs, index) => mission(`merge-${index}`, { nodes: [db(prs)], landing_order: ["db"] }));
+  const { container, click, unmount } = await connect(items);
+  try {
+    await click('[data-phone-tab="missions"]');
+    expect(container.querySelector('[data-phone-mission="merge-0"] [data-phone-mission-line]')?.textContent).toBe("Merge order #33 +1");
+    expect(container.querySelector('[data-phone-mission="merge-1"] [data-phone-mission-line]')?.textContent).toBe("Merge order #31");
+    for (const [index, pr] of [[0, "#33"], [1, "#31"]] as const) {
+      await click(`[data-phone-mission="merge-${index}"]`);
+      const card = container.querySelector('[data-mission-node="db"]')!;
+      expect(card.textContent).toContain(pr);
+      expect(card.textContent).not.toContain("#37");
+      expect(card.textContent?.includes("+1")).toBe(index === 0);
+      expect(card.textContent).toContain("Yours to merge");
+      expect(card.textContent).toContain("Needs you");
+      await click('[data-phone-back="missions"]');
+    }
+  } finally { await unmount(); }
+});

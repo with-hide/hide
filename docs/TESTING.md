@@ -76,6 +76,8 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   The check does not see a wait spelled another way (a hand-written `setTimeout` promise, `Atomics.wait`), which is the same mistake and is not allowed either.
 - Wait for the readiness the next step actually depends on.
   A healthy HTTP answer is not a subscribed socket, a delivered first snapshot, or a terminal that accepts input.
+  The native `session-workflow.spec.ts` waits for the parent's raised ask carrying the child's label after the blocked-child grace introduced by #2443.
+  Its snapshot guard allows that 60-second policy interval plus the existing 30-second label budget, and its test guard adds the same interval to the existing 90-second native workflow budget; neither is a fixed delay or a grace-boundary assertion.
 - A row the snapshot shows is not a state the core has acted on.
   A pane is drawn before the engine confirms its split or close, so `splitPane` and `closePane` return once the tab's geometry line is empty (`tabGeometrySettled`), or an operation sent next starts beside it and is never answered (with-hide/hide-private#537).
   An agent's row names its session before a session pass has laid the delivery observation that lets the pane call `hide agent spawn`, so the family fixture polls the read-only `hide agent show here`, which resolves its caller the same way, before the parent spawns its child (#130).
@@ -502,6 +504,8 @@ It copies each folder private to the account, as a core writes its files, becaus
 
 A change that stores a device or machine id, or changes how an agent's launch, sleep or archive record, the project settings or the kit's record are read, adds a step to the scenario that makes a release write it, and the release that ships the change adds the first folder that carries it; when released builds already write the field, the change regenerates their folders with the new step.
 A scenario step a release itself refuses is recorded as not done in `<tag>.json` beside the folder, with the release's answer.
+A change to how a stored mission is read is held to what the release itself showed: the scenario has the release store missions in each state it keeps (closed done, waiting for a branch, running with nodes at work, stacked, gated, waiting on an outside branch, verified) and keeps each as the release published it in `<tag>.json` (`missions`), cut to what the record alone decides, and `runtime::tests::missions::a_released_builds_missions_read_as_that_build_published_them` compares this build's reading of the same records with it and runs one evaluation, which may move nothing.
+A folder made before the scenario kept that view (v1.2.6 and earlier) names none, and its missions are only read and evaluated.
 The step `a Home started on the core and the device` makes each release write the old Home registration (flagged `home`) on both machines, and the upgrade test holds that this build loads it as the registration it was, with one pending retirement per device that follows the device's renaming (PRD retire-hide-home).
 
 ### Agent screen rules

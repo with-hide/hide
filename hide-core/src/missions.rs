@@ -1155,7 +1155,18 @@ pub struct MissionNode {
     /// itself (`Runtime::stall_missions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold: Option<NodeHold>,
+    /// The plan has the operator merge this node's pull request, against a
+    /// mission whose scope has the Conductor merge (PRD mission-destination
+    /// D-10): why, in one line. The node is done once its pull request is
+    /// ready, and the merge is left to the operator (`Mission::operator_merges`).
+    /// None for every node of a mission written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_merge: Option<String>,
 }
+
+/// The longest reason a plan gives for the operator merging a node
+/// (`MissionNode::operator_merge`): one line, as long as a gate's.
+pub const OPERATOR_MERGE_CHARS: usize = 80;
 
 /// Why and until when a node is held (`MissionNode::hold`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1438,6 +1449,13 @@ pub struct Mission {
     pub conductor: Conductor,
     pub status: MissionStatus,
     pub scope: MissionScope,
+    /// The branch the mission's results go to (PRD mission-destination
+    /// D-02): its changes start from it, a `direct` change is merged into
+    /// it, and whether a change is in is asked of it. None for a mission
+    /// written before it, or made while the project's branches were not
+    /// read yet, which stands for the project's default branch (D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub cap: u8,
     /// Settings › Mission's worker candidates when the mission was
     /// created (D-34, B48); a book written before them has none, which
@@ -1607,6 +1625,16 @@ impl Mission {
 
     pub(crate) fn node(&self, key: &str) -> Option<&MissionNode> {
         self.nodes.iter().find(|node| node.key == key)
+    }
+
+    /// Whether the operator, not the Conductor, merges `node`'s pull
+    /// request (PRD mission-destination D-10, D-35): every one of a mission
+    /// whose scope ends at ready pull requests, and one the plan gave the
+    /// operator in a mission that goes through the merge. Such a node is
+    /// done once its pull request is ready, and its merge is left. The one
+    /// rule the done check, the map and `hide mission show` read.
+    pub(crate) fn operator_merges(&self, node: &MissionNode) -> bool {
+        self.scope == MissionScope::Pr || node.operator_merge.is_some()
     }
 
     /// Whether the open decision is about node `key` (`Question::names`):
@@ -2380,6 +2408,10 @@ pub struct PlanInput {
     pub title: Option<String>,
     #[serde(default)]
     pub scope: Option<MissionScope>,
+    /// The branch the results go to (`Mission::destination`); left out, the
+    /// mission keeps the one it has.
+    #[serde(default)]
+    pub destination: Option<String>,
     #[serde(default)]
     pub cap: Option<u8>,
     #[serde(default)]
@@ -2443,6 +2475,16 @@ pub struct NodeInput {
         skip_serializing_if = "Option::is_none"
     )]
     pub gate: Option<Vec<String>>,
+    /// The operator merges this node's pull request, and why in one line
+    /// of at most `OPERATOR_MERGE_CHARS` characters (PRD mission-destination
+    /// D-10). Left out, a replan keeps what the node has; `null` gives the
+    /// merge back to the mission's scope.
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub operator_merge: Option<Option<String>>,
 }
 
 /// A change to one node. An absent field is kept, `null` clears it, so a
@@ -2667,6 +2709,13 @@ pub(crate) fn apply_plan(
     {
         return Err("mission_text_invalid".into());
     }
+    if input
+        .destination
+        .as_deref()
+        .is_some_and(|branch| !valid_destination(branch))
+    {
+        return Err("mission_destination_invalid".into());
+    }
     if input.cap.is_some_and(|cap| !(1..=CAP_LIMIT).contains(&cap)) {
         return Err("mission_cap_out_of_range".into());
     }
@@ -2708,6 +2757,7 @@ pub(crate) fn apply_plan(
             ));
         }
         check_gate(mission, node)?;
+        check_operator_merge(mission, input, node)?;
         check_checkers(node)?;
         if node.kind == NodeKind::Change && node.delivery.is_none() {
             return Err("mission_delivery_required".into());
@@ -2810,6 +2860,7 @@ pub(crate) fn apply_plan(
                 worked_at_unix_ms: None,
                 warnings: Vec::new(),
                 hold: None,
+                operator_merge: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -2846,6 +2897,9 @@ pub(crate) fn apply_plan(
             }
             if let Some(steps) = &input.steps {
                 node.steps = steps.iter().map(|step| step.trim().to_owned()).collect();
+            }
+            if let Some(merge) = &input.operator_merge {
+                node.operator_merge = merge.as_deref().map(|why| why.trim().to_owned());
             }
             node.external.clone_from(&input.external);
             node.issues.clone_from(&input.issues);
@@ -2885,8 +2939,29 @@ pub(crate) fn apply_plan(
     if input.github.is_some() {
         next.github.clone_from(&input.github);
     }
+    if input.destination.is_some() && input.destination != next.destination {
+        next.destination.clone_from(&input.destination);
+        // What Hide read of each branch was read against the destination
+        // before; the next read answers for this one.
+        for node in &mut next.nodes {
+            node.in_main = None;
+        }
+    }
     next.updated_at_unix_ms = now;
     Ok(next)
+}
+
+/// Whether `branch` can name a destination: one line that Git takes as a
+/// branch and never as an option, a range or a remote's copy, since Hide
+/// reads `<branch>` and `origin/<branch>` itself.
+fn valid_destination(branch: &str) -> bool {
+    valid_text(branch, TITLE_LIMIT)
+        && branch == branch.trim()
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && !branch.chars().any(char::is_whitespace)
+        && !branch.starts_with("origin/")
+        && branch != "HEAD"
 }
 
 /// A node's steps: at most `STEP_LIMIT`, each one line of text.
@@ -2934,6 +3009,41 @@ fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
         .is_some_and(|before| before.status == NodeStatus::Done);
     if done && now != text {
         return refused("mission_gate_node_done");
+    }
+    Ok(())
+}
+
+/// Who merges a node as the plan leaves it (PRD mission-destination D-10):
+/// the operator only for a change delivered by pull request, in a mission
+/// whose scope has the Conductor merge (with scope `pr` every such node is
+/// the operator's already), with why in one line. What a replan leaves out
+/// is what the node has, so it is judged too.
+fn check_operator_merge(
+    mission: &Mission,
+    input: &PlanInput,
+    node: &NodeInput,
+) -> Result<(), String> {
+    let why = match &node.operator_merge {
+        Some(merge) => merge.as_deref(),
+        None => mission
+            .node(&node.key)
+            .and_then(|before| before.operator_merge.as_deref()),
+    };
+    let Some(why) = why.map(str::trim) else {
+        return Ok(());
+    };
+    let scope = input.scope.unwrap_or(mission.scope);
+    if why.is_empty()
+        || why.chars().any(char::is_control)
+        || why.chars().count() > OPERATOR_MERGE_CHARS
+        || node.kind != NodeKind::Change
+        || node.delivery != Some(Delivery::Pr)
+        || scope != MissionScope::Merge
+    {
+        return Err(crate::coordination::refusal(
+            "mission_operator_merge_invalid",
+            &node.key,
+        ));
     }
     Ok(())
 }
@@ -3363,6 +3473,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_checks_invalid" => {
             "Give --checks as <passed>/<total> with total above 0 and passed at most total"
         }
+        "mission_destination_invalid" => {
+            "Name the plan's destination as one branch name, such as feat/login, with no remote before it"
+        }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
         }
@@ -3438,6 +3551,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_gate_too_long" | "mission_gate_invalid" => {
             "Write the gate as one line of at most 80 characters naming what the operator looks at, such as the map screen"
+        }
+        "mission_operator_merge_invalid" => {
+            "Give \"operator_merge\" only to a change delivered by pull request in a mission whose scope is merge, as one line of at most 80 characters saying why the operator merges it; with scope pr every pull request is the operator's already, and null gives the node back to the scope"
         }
         "mission_gate_exempt" => {
             "A mission made before node criteria takes no gate: ask the operator with hide mission decide instead"
@@ -3822,6 +3938,7 @@ pub(crate) mod tests {
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
+            destination: None,
             cap: 4,
             candidates: Vec::new(),
             strength: None,
@@ -3913,6 +4030,7 @@ pub(crate) mod tests {
             paths: Vec::new(),
             change: None,
             gate: None,
+            operator_merge: None,
         }
     }
 
@@ -3920,6 +4038,7 @@ pub(crate) mod tests {
         PlanInput {
             title: None,
             scope: None,
+            destination: None,
             cap: None,
             github: None,
             check: None,
@@ -4701,6 +4820,35 @@ pub(crate) mod tests {
         let planned = apply_plan(&read, &input, 2).unwrap();
         assert_eq!(planned.strength, Some(Strength::Thorough));
         assert_eq!(planned.checkers, Some(recorded));
+    }
+
+    /// PRD mission-destination B15, D-10: a node recorded before the
+    /// operator's merge has no such field, reads with none and is written
+    /// back as it was, so its scope alone says who merges; only a node the
+    /// plan gave the operator carries the field, which a build before it
+    /// skips as a field it does not know.
+    #[test]
+    fn a_node_from_before_the_operators_merge_reads_and_writes_as_it_was() {
+        let mut planned = mission();
+        planned.scope = MissionScope::Merge;
+        let planned =
+            apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let stored = serde_json::to_value(&planned).unwrap();
+        assert!(
+            stored["nodes"][0].get("operator_merge").is_none(),
+            "{stored}"
+        );
+        let read: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(read.nodes[0].operator_merge, None);
+        assert!(!read.operator_merges(&read.nodes[0]));
+        assert_eq!(serde_json::to_value(&read).unwrap(), stored);
+
+        let mut input = node("a", NodeKind::Change, &[]);
+        input.operator_merge = Some(Some("직접 보고 머지".into()));
+        let mine = apply_plan(&read, &plan(vec![input]), 3).unwrap();
+        assert!(mine.operator_merges(&mine.nodes[0]));
+        let written = serde_json::to_value(&mine).unwrap();
+        assert_eq!(written["nodes"][0]["operator_merge"], "직접 보고 머지");
     }
 
     /// A question's View link recorded before links kept their View, or

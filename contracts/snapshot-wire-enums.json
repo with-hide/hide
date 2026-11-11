@@ -19,6 +19,8 @@
   "mission_criterion_kind": ["own", "check", "ci", "review", "verify", "defect", "human"],
   "mission_gate_via": ["card", "phone", "pane"],
   "mission_gate_state": ["ahead", "open", "passed"],
+  "mission_merge_by": ["operator", "conductor"],
+  "mission_merge_step": ["ahead", "due", "merged"],
   "mission_criterion_state": ["open", "pass", "fail", "skipped"],
   "mission_check_rule": ["all", "majority"],
   "mission_recorded_role": ["worker", "checker", "conductor", "hide", "operator"],

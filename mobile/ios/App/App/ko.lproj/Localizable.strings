@@ -1,7 +1,3 @@
 /* The only text Apple and the phone's lock screen carry for a notification this phone cannot open: it names nothing. */
 "hide-notification" = "Hide에 새 소식이 있어요";
-"push.action.reply" = "답장";
-"push.action.send" = "보내기";
-"push.action.placeholder" = "답장 내용";
 "push.notice.title" = "Hide";
-"push.demo.sent" = "샘플 답장을 보냈어요. 진짜 답장은 컴퓨터로 가요.";

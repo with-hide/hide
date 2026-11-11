@@ -472,6 +472,36 @@ pub(super) fn closing_report(mission: &Mission) -> String {
             },
         ));
     }
+    // What is left for the operator to merge, so the report says it even
+    // when the map is not open (PRD mission-destination D-11, D-35).
+    let left: Vec<String> = mission
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                super::mission_landing::node_landing(mission, node, false),
+                Some(super::mission_landing::NodeLanding::Left {
+                    action: super::mission_landing::LandingAction::Merge
+                })
+            )
+        })
+        .map(|node| {
+            let prs = super::mission_landing::open_pulls(node)
+                .map(|pr| format!("#{pr}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let pr = format!(" · PR {prs}");
+            let why = node
+                .operator_merge
+                .as_deref()
+                .map_or_else(String::new, |why| format!(" · {why}"));
+            format!("- {} ({}){pr}{why}", node.title, node.key)
+        })
+        .collect();
+    if !left.is_empty() {
+        lines.push(format!("Left for the operator to merge ({}):", left.len()));
+        lines.extend(left);
+    }
     // What the Conductor settled on its own is read with the close
     // (hide-private docs/missions.md, the principle of 2026-11-11).
     let alone = super::missions::skipped_alone(mission);
@@ -1290,6 +1320,12 @@ impl Runtime {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
+        // A destination the last read could not find is a scope question
+        // for the operator (PRD mission-destination D-33): nothing is
+        // closed against it until a read finds it or the plan names another.
+        if self.missions.outside.destination_lost(id) {
+            return false;
+        }
         let report = mission.report.is_none().then(|| closing_report(mission));
         let key = close_key(mission);
         let wake_key = key.clone();

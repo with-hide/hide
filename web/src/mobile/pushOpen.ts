@@ -9,8 +9,8 @@ import { onPushOpen, push } from "./appBridge";
 export interface PushOpenTarget { room: string; tag: string }
 
 /** Takes the waiting target now and again whenever the app says one arrived. Returns the way to stop. */
-export function followPushOpens(open: (target: PushOpenTarget) => void): () => void {
-  if (!appHost()) return () => undefined;
+export function followPushOpens(open: (target: PushOpenTarget) => void, ready: () => void = () => undefined): () => void {
+  if (!appHost()) { ready(); return () => undefined; }
   let stopped = false;
   const take = async () => {
     try {
@@ -20,7 +20,7 @@ export function followPushOpens(open: (target: PushOpenTarget) => void): () => v
       // A bridge that is not there (an older bundle) or a call the app refused: there is nothing to open.
     }
   };
-  void take();
+  void take().finally(ready);
   let stop: () => void;
   try { stop = onPushOpen(() => void take()); } catch { return () => { stopped = true; }; }
   return () => { stopped = true; stop(); };

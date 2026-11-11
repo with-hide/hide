@@ -280,7 +280,8 @@ export type ServerFrame =
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
   /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */
   | { type: "pr_result"; request_id?: string; action: "read_pr" | "merge_pr" | "read_pr_feedback"; pr?: string | null; ok: boolean; reason: string | null }
-  | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
+  /** The holder watch's last screen mode; absent on older computers means false. */
+  | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean; alternate_screen?: boolean }
   | {
       type: "conversation";
       device_id: string;

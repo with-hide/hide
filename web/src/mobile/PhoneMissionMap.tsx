@@ -9,7 +9,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
-import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, nodeLook, openAttention, stageWord } from "../missions";
+import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, mergePull, nodeLook, openAttention, stageWord } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { workerOf } from "./missionModel";
@@ -26,7 +26,7 @@ export function PhoneMissionMap({ mission }: { mission: PhoneMission }) {
   const [flow, setFlow] = useState<MissionMapFlow>("down");
   const nodes = useMemo(() => mission.nodes.map(graphNode), [mission.nodes]);
   const graph = useMemo(() => ({ status: mission.status, nodes }), [mission.status, nodes]);
-  const focus = nodes.filter((node) => node.status === "working" || holdReason(mission, node, workerOf) !== null).map((node) => node.key);
+  const focus = nodes.filter((node) => node.status === "working" || node.merge?.state === "due" || holdReason(mission, node, workerOf) !== null).map((node) => node.key);
   const note = t(mission.status === "done" ? "mission.report.done" : mission.status === "cancelled" ? "mission.cancelled" : "mission.report.waiting");
   const omitted = mission.nodes_omitted ?? 0;
   return (
@@ -59,14 +59,17 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   const gate = node.gate;
   const long = gateWaitedLong(gate, useMinuteClock());
   const agent = usePhone((s) => node.agent && agentOf(s.groups, node.agent) ? node.agent : null);
-  const yours = gate?.state === "open" || attention?.to === "operator" || reason?.kind === "decision" || reason?.kind === "worker";
+  const due = node.merge?.state === "due";
+  const pr = node.landing?.state === "left" && node.landing.action === "merge" ? mergePull(node) : { number: node.pr, state: node.pr_state, more: 0 };
+  const yours = due || gate?.state === "open" || attention?.to === "operator" || reason?.kind === "decision" || reason?.kind === "worker";
   const word = t(`mission.look.${look}`);
   const detail = reason?.kind === "attention"
     ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
     : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
       : reason?.kind === "decision" ? t("mobile.mission.waitsDecision")
-        : node.status === "planned" ? t("mission.steps.notStarted")
-          : node.status === "working" ? t(stageWord(node)) : null;
+        : due ? t("mission.turn.mergeDue")
+          : node.status === "planned" ? t("mission.steps.notStarted")
+            : node.status === "working" ? t(stageWord(node)) : null;
   return (
     <div data-dependency-node={node.key} className="flex">
       <MissionGraphCard
@@ -79,9 +82,10 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
         {node.worker_agent ? <span className="flex items-center gap-xxs text-caption text-muted-foreground"><AgentMark kind={node.worker_agent} />{agentProductName(node.worker_agent)}</span> : null}
         {gate ? <GateStrip gate={gate} /> : null}
         {gate?.state === "passed" && gate.via ? <span className="text-caption text-muted-foreground" data-phone-node-gate-via={gate.via}>{t(`mission.gate.via.${gate.via}`)}{gate.said ? ` · “${gate.said}”` : ""}</span> : null}
-        {node.pr !== null || yours || long ? (
+        {pr.number !== null || yours || long ? (
           <span className="flex items-center gap-xs text-caption text-muted-foreground">
-            {node.pr !== null ? <MissionPrMark number={node.pr} state={node.pr_state} stale={mission.stale} /> : null}
+            {pr.number !== null ? <MissionPrMark number={pr.number} state={pr.state} stale={mission.stale} /> : null}
+            {pr.more > 0 ? <span>+{pr.more}</span> : null}
             {yours ? <span className="font-semibold text-mission-hold" data-node-gate-tag={gate?.state}>{t("agents.mark.turn")}</span> : null}
             {long ? <span data-node-gate-long="true">· {t("mission.gate.long")}</span> : null}
           </span>

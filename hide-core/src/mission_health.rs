@@ -14,8 +14,8 @@
 //! answer (B29).
 
 use crate::missions::{
-    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionScope,
-    MissionStatus, NodeKind, NodeStatus, StopCause, WarningKind, cause_key,
+    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionStatus, NodeKind,
+    NodeStatus, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
     CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
@@ -216,19 +216,11 @@ fn node_acts(
     if node.status != NodeStatus::Working {
         return;
     }
-    let held: Vec<&PullRequestSnapshot> = node
-        .prs
-        .iter()
-        .filter_map(|number| find(pulls, *number))
-        .collect();
     // A pull request the list does not hold is not known; nothing rests on
     // a guess about it.
-    if held.len() != node.prs.len() {
+    let Some(live) = live_pulls(node, pulls) else {
         return;
-    }
-    let closed = |pull: &&PullRequestSnapshot| pull.badge == PullRequestBadge::Closed;
-    let live: Vec<&PullRequestSnapshot> =
-        held.iter().copied().filter(|pull| !closed(pull)).collect();
+    };
     if live.is_empty() {
         // Closed without its merge, and no other is open (B12).
         raise(
@@ -264,9 +256,12 @@ fn node_acts(
     let merged = live
         .iter()
         .all(|pull| pull.badge == PullRequestBadge::Merged);
-    let ready = match mission.scope {
-        MissionScope::Merge => merged,
-        MissionScope::Pr => live.iter().all(|pull| pr_ready(pull)),
+    // A node the operator merges is finished with its pull request ready;
+    // the merge is theirs (PRD mission-destination D-10, D-35).
+    let ready = if mission.operator_merges(node) {
+        live.iter().all(|pull| pr_ready(pull))
+    } else {
+        merged
     };
     if !ready {
         return;
@@ -522,6 +517,31 @@ fn find(pulls: &GithubProjectSnapshot, number: u32) -> Option<&PullRequestSnapsh
         .find(|pull| pull.number == number)
 }
 
+/// The pull requests `node` holds that are not closed, as `pulls` last
+/// answered; none while the list lacks one of them, which is not known.
+fn live_pulls<'a>(
+    node: &MissionNode,
+    pulls: &'a GithubProjectSnapshot,
+) -> Option<Vec<&'a PullRequestSnapshot>> {
+    let held: Vec<&PullRequestSnapshot> = node
+        .prs
+        .iter()
+        .filter_map(|number| find(pulls, *number))
+        .collect();
+    (held.len() == node.prs.len()).then(|| {
+        held.into_iter()
+            .filter(|pull| pull.badge != PullRequestBadge::Closed)
+            .collect()
+    })
+}
+
+/// Whether `node`'s pull requests are ready for the operator's merge (PRD
+/// mission-destination D-11): every one not closed is `pr_ready`, at least
+/// one is, and the list holds them all.
+pub(crate) fn merge_ready(node: &MissionNode, pulls: &GithubProjectSnapshot) -> bool {
+    live_pulls(node, pulls).is_some_and(|live| !live.is_empty() && live.into_iter().all(pr_ready))
+}
+
 /// What an open pull request needs from its worker (D-13): a CI failure
 /// only once its CI ended (`PullRequestSnapshot::ci_end`), the rule its ci
 /// line and its Conductor's letter read.
@@ -542,8 +562,9 @@ fn needs(pull: &PullRequestSnapshot) -> Vec<FixReason> {
     out
 }
 
-/// A pull request a PR-scope mission is finished with (D-11): merged, or
-/// open, out of draft, its checks green or none, and approved.
+/// A pull request a node the operator merges is finished with (D-11;
+/// `Mission::operator_merges`): merged, or open, out of draft, its checks
+/// green or none, and approved.
 fn pr_ready(pull: &PullRequestSnapshot) -> bool {
     pull.badge == PullRequestBadge::Merged
         || (!pull.badge.is_settled()
@@ -1020,7 +1041,7 @@ mod tests {
             .collect();
         let mut out = apply_plan(&mission(), &plan(inputs), 2).unwrap();
         out.status = MissionStatus::Running;
-        out.scope = MissionScope::Merge;
+        out.scope = crate::missions::MissionScope::Merge;
         for node in &mut out.nodes {
             node.status = NodeStatus::Working;
             node.branch = Some(format!("feat/{}", node.key));
@@ -1425,7 +1446,7 @@ mod tests {
     #[test]
     fn a_pr_scope_node_finishes_on_an_approved_green_pull_request() {
         let mut m = running(&["a"]);
-        m.scope = MissionScope::Pr;
+        m.scope = crate::missions::MissionScope::Pr;
         m.nodes[0].prs = vec![7];
         let mut open = pull(7, "feat/a", PullRequestBadge::Open);
         let pulls = listed(vec![open.clone()]);
