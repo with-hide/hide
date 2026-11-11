@@ -310,6 +310,8 @@ fn simple_statuses(value: &mut serde_json::Value) {
 #[derive(Default)]
 struct Work {
     removed: bool,
+    /// A legacy log must be copied before the migration's index is saved.
+    rewrite: bool,
     /// Its mission was shelved: the thread lets go of its copy of the log
     /// and leaves the file.
     released: bool,
@@ -419,15 +421,40 @@ impl MissionEventStore {
                 })),
             }
         }
+        self.seed(out, false)
+    }
+
+    /// The first migration reads the legacy histories once. Every log is
+    /// written into the folder book before its index, and a failure keeps
+    /// that book pending. The legacy files are never changed or swept.
+    pub(crate) fn restore_legacy<'a>(
+        &self,
+        legacy: &Path,
+        missions: impl Iterator<Item = &'a str>,
+    ) -> Result<HashMap<String, History>, String> {
+        let mut logs = HashMap::new();
+        for id in missions {
+            if let Some(log) = read_log(legacy, id)
+                .map_err(|reason| format!("history of {id} could not be migrated: {reason}"))?
+            {
+                logs.insert(id.to_owned(), log);
+            }
+        }
+        Ok(self.seed(logs, true))
+    }
+
+    fn seed(&self, out: HashMap<String, EventLog>, copy: bool) -> HashMap<String, History> {
         let held = out
             .iter()
             .map(|(id, log)| (id.clone(), History::from(log.clone())))
             .collect();
-        self.shared
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .restored = out;
+        let mut pending = self.shared.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if copy {
+            for id in out.keys() {
+                pending.work.entry(id.clone()).or_default().rewrite = true;
+            }
+        }
+        pending.restored = out;
         held
     }
 
@@ -650,7 +677,7 @@ fn run(
                     log.push(Arc::unwrap_or_clone(event));
                     added = true;
                 }
-                if added || failing.contains(&mission) {
+                if added || work.rewrite || failing.contains(&mission) {
                     result = write(dir, &path, log);
                 }
             }
@@ -744,6 +771,165 @@ mod tests {
 
     fn event(at: u64) -> MissionEvent {
         MissionEvent::new(at, EventKind::Node).node("a")
+    }
+
+    /// The two books own different histories, even when a downgraded
+    /// build reuses an id. Exercise both stores' actual load/sweep paths.
+    #[test]
+    fn a_downgrade_sweep_and_reused_id_leave_the_folder_book_and_its_history_alone() {
+        use crate::mission_store::{MissionFiles, MissionStore, Restored};
+        use crate::missions::{MissionBook, SCHEMA_VERSION};
+        let root = tempfile::tempdir().unwrap();
+        let legacy = hide_kit::layout::mission_events(root.path());
+        let histories = hide_kit::layout::mission_histories(root.path());
+        let dir = hide_kit::layout::missions_dir(root.path());
+        let mut book = MissionBook::default();
+        book.next = 1;
+        book.missions.push(crate::missions::tests::mission());
+        let save_old = |book: &MissionBook| {
+            std::fs::write(
+                hide_kit::layout::missions(root.path()),
+                serde_json::to_vec(&json!({
+                    "schema_version":SCHEMA_VERSION,"next":book.next,"missions":book.missions
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        save_old(&book);
+        {
+            let old = MissionEventStore::new(legacy.clone());
+            old.append("mission-1", &[Arc::new(event(1))]);
+        }
+        let original = std::fs::read(file(&legacy, "mission-1")).unwrap();
+        {
+            let Restored::Moving(moving) = MissionStore::new(root.path()).restore() else {
+                panic!("first migration")
+            };
+            let store = MissionEventStore::with_book(
+                histories.clone(),
+                MissionFiles::new(dir.clone(), None),
+            );
+            store
+                .restore_legacy(&legacy, moving.missions.iter().map(|m| m.id.as_str()))
+                .unwrap();
+            store.save_book(Arc::new(moving), Vec::new());
+            store.read_barrier().wait().unwrap();
+            let mut added = book.missions[0].clone();
+            added.id = "mission-2".into();
+            added.title = "Made by the folder build".into();
+            book.next = 2;
+            book.missions.push(added);
+            store.append("mission-2", &[Arc::new(event(2))]);
+            store.save_book(Arc::new(book.clone()), Vec::new());
+            store.read_barrier().wait().unwrap();
+        }
+        assert_eq!(std::fs::read(file(&legacy, "mission-1")).unwrap(), original);
+        // The older build still has next=1 and allocates mission-2 again,
+        // then mission-3. Its sweep must not reach the folder histories.
+        let mut downgraded = crate::missions::decode(
+            &std::fs::read(hide_kit::layout::missions(root.path())).unwrap(),
+        )
+        .unwrap()
+        .book;
+        assert_eq!(downgraded.next, 1);
+        let mut collision = downgraded.missions[0].clone();
+        collision.id = downgraded.allocate();
+        assert_eq!(collision.id, "mission-2");
+        collision.title = "Made by the downgraded build".into();
+        let mut old_only = collision.clone();
+        old_only.id = downgraded.allocate();
+        downgraded.missions.extend([collision, old_only]);
+        save_old(&downgraded);
+        {
+            let old = MissionEventStore::new(legacy.clone());
+            old.sweep(downgraded.missions.iter().map(|m| m.id.as_str()));
+            old.restore(downgraded.missions.iter().map(|m| m.id.as_str()));
+            old.append("mission-2", &[Arc::new(event(20))]);
+            old.append("mission-3", &[Arc::new(event(30))]);
+        }
+        let store = MissionStore::new(root.path());
+        let Restored::Read(restored) = store.restore() else {
+            panic!("folder remains authoritative")
+        };
+        store.sweep(&restored);
+        let events = MissionEventStore::with_book(
+            histories.clone(),
+            MissionFiles::new(dir, Some(&restored)),
+        );
+        events.sweep(restored.missions.iter().map(|m| m.id.as_str()));
+        let logs = events.restore(restored.missions.iter().map(|m| m.id.as_str()));
+        assert_eq!(
+            restored.get("mission-2").unwrap().title,
+            "Made by the folder build"
+        );
+        assert!(restored.get("mission-3").is_none());
+        assert_eq!(logs["mission-2"].events[0].at_unix_ms, 2);
+        assert_eq!(
+            read_log(&legacy, "mission-2").unwrap().unwrap().events[0].at_unix_ms,
+            20
+        );
+        assert_eq!(
+            read_log(&legacy, "mission-3").unwrap().unwrap().events[0].at_unix_ms,
+            30
+        );
+    }
+
+    #[test]
+    fn a_failed_history_copy_keeps_no_index_and_restarts_from_the_legacy_log() {
+        use crate::mission_store::{MissionFiles, MissionStore, Restored};
+        let root = tempfile::tempdir().unwrap();
+        let legacy = hide_kit::layout::mission_events(root.path());
+        {
+            let old = MissionEventStore::new(legacy.clone());
+            old.append("mission-1", &[Arc::new(event(1))]);
+        }
+        let book = crate::missions::MissionBook {
+            next: 1,
+            missions: vec![crate::missions::tests::mission()],
+            ..Default::default()
+        };
+        std::fs::write(
+            hide_kit::layout::missions(root.path()),
+            serde_json::to_vec(&json!({"schema_version":4,"next":1,"missions":book.missions}))
+                .unwrap(),
+        )
+        .unwrap();
+        let histories = hide_kit::layout::mission_histories(root.path());
+        std::fs::create_dir_all(&histories).unwrap();
+        let blocker = file(&histories, "mission-1");
+        std::fs::create_dir(&blocker).unwrap();
+        std::fs::write(blocker.join("block"), b"").unwrap();
+        let dir = hide_kit::layout::missions_dir(root.path());
+        {
+            let events = MissionEventStore::with_book(
+                histories.clone(),
+                MissionFiles::new(dir.clone(), None),
+            );
+            events
+                .restore_legacy(&legacy, ["mission-1"].into_iter())
+                .unwrap();
+            events.save_book(Arc::new(book.clone()), Vec::new());
+            assert!(events.read_barrier().wait().is_err());
+        }
+        assert!(!hide_kit::layout::mission_index(&dir).exists());
+        assert!(matches!(
+            MissionStore::new(root.path()).restore(),
+            Restored::Moving(_)
+        ));
+        std::fs::remove_dir_all(blocker).unwrap();
+        let events =
+            MissionEventStore::with_book(histories.clone(), MissionFiles::new(dir.clone(), None));
+        events
+            .restore_legacy(&legacy, ["mission-1"].into_iter())
+            .unwrap();
+        events.save_book(Arc::new(book), Vec::new());
+        events.read_barrier().wait().unwrap();
+        assert!(hide_kit::layout::mission_index(&dir).is_file());
+        assert_eq!(
+            read_log(&histories, "mission-1").unwrap(),
+            read_log(&legacy, "mission-1").unwrap()
+        );
     }
 
     #[test]

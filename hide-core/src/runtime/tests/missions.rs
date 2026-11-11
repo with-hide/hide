@@ -10824,7 +10824,7 @@ fn a_129th_mission_is_created_and_a_shelved_mission_is_found_shown_and_reopened(
         let mut runtime = fixture.runtime.lock().unwrap();
         runtime.install_mission_store(store, Restored::Fresh);
         runtime.install_mission_events(
-            MissionEventStore::with_book(state.join("mission-events"), files),
+            MissionEventStore::with_book(hide_kit::layout::mission_histories(&state), files),
             Default::default(),
         );
         for n in 1..=129 {
@@ -11407,7 +11407,7 @@ fn a_mission_saved_with_raises_at_the_operator_restores_them_at_the_conductor() 
         let path = hide_kit::layout::mission_file(&dir, "mission-1");
         let mut runtime = fixture.runtime.lock().unwrap();
         let store = crate::mission_events::MissionEventStore::with_book(
-            fixture._root.path().join("mission-events"),
+            hide_kit::layout::mission_histories(fixture._root.path()),
             MissionFiles::new(dir, None),
         );
         runtime.install_mission_events(store, Default::default());

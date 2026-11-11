@@ -478,6 +478,9 @@ Everything Hide owns on a machine is under `~/.hide`:
 | `~/.hide/shell-integration` | The zsh and bash startup files a tab Hide makes for an agent starts its shell with, which read your own startup files and then mark the first prompt; one folder per build, another build's removed once unused for an hour |
 
 Missions are kept in `~/.hide/state/missions/<id>.json`, one schema-4 mission per file, beside `missions/index.json` with the next id and the metadata the list needs (`hide_kit::layout`).
+Their histories belong to the same book, in `missions/events/<id>.json`.
+The first migration copies legacy `mission-events/` histories before installing the index, preserving the old directory for a downgrade.
+After the index exists, the new build never reads or sweeps the legacy histories; later downgraded-build writes stay isolated there.
 On the first launch without an index, the current `missions.json` is read, all mission files are written, then the index is installed last; a partial failure leaves the old file read as before on the next launch.
 The old file stays byte-for-byte as it was and is never written again by the new store.
 A downgrade reads that migration snapshot and sees none of the later missions; on upgrading again the index remains authoritative, so missions created or changed by the downgraded build in `missions.json` are not imported.

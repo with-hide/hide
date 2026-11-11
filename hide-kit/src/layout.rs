@@ -208,12 +208,18 @@ pub fn missions_before_gates(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.v3.json")
 }
 
-/// The folder of each mission's event history, one file per mission, deleted
-/// with its mission; its owner is the core's mission event store.
+/// The legacy book's histories, retained unchanged for a downgrade after
+/// migration. Only the first migration reads these files.
 pub const MISSION_EVENTS: &str = "mission-events";
 
 pub fn mission_events(state_dir: &Path) -> PathBuf {
     state_dir.join(MISSION_EVENTS)
+}
+
+/// Histories owned by the folder book, isolated from a downgraded build's
+/// sweep and reused mission ids; the mission event store owns them.
+pub fn mission_histories(state_dir: &Path) -> PathBuf {
+    missions_dir(state_dir).join("events")
 }
 
 /// The last GitHub answer per project, restored when the daemon starts; its

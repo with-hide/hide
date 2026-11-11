@@ -496,7 +496,7 @@ impl Core {
             lock_recover(&runtime).install_composer_checks(checks, restored);
             use crate::mission_store::{MissionFiles, MissionStore, Restored};
             let missions = MissionStore::new(directory);
-            let restored = missions.restore();
+            let mut restored = missions.restore();
             let files = MissionFiles::new(
                 missions.dir().to_path_buf(),
                 match &restored {
@@ -505,7 +505,7 @@ impl Core {
                 },
             );
             let events = crate::mission_events::MissionEventStore::with_book(
-                hide_kit::layout::mission_events(directory),
+                hide_kit::layout::mission_histories(directory),
                 files,
             );
             let logs = match &restored {
@@ -521,10 +521,19 @@ impl Core {
                             .map(|mission| mission.id.as_str())
                             .chain(book.shelved.iter().map(|line| line.id.as_str())),
                     );
-                    events.restore(book.missions.iter().map(|mission| mission.id.as_str()))
+                    let ids = book.missions.iter().map(|mission| mission.id.as_str());
+                    if matches!(&restored, Restored::Moving(_)) {
+                        events.restore_legacy(&hide_kit::layout::mission_events(directory), ids)
+                    } else {
+                        Ok(events.restore(ids))
+                    }
                 }
-                _ => std::collections::HashMap::new(),
+                _ => Ok(std::collections::HashMap::new()),
             };
+            let logs = logs.unwrap_or_else(|reason| {
+                restored = Restored::Unreadable(reason);
+                std::collections::HashMap::new()
+            });
             let moving = matches!(restored, Restored::Moving(_));
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
