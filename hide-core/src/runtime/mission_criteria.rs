@@ -32,8 +32,8 @@ pub(super) enum Part {
 type Records<'a> = std::collections::HashMap<&'a str, &'a crate::coordination::AgentRecord>;
 
 /// The agent a mission command came from, with what the command reads of
-/// the ledger's agents, read in one pass for the whole command, since the
-/// ledger keeps every agent there ever was: the caller's own registrations,
+/// the ledger's retained agents, read in one pass for the whole command:
+/// the caller's own registrations,
 /// ended ones too, and those of every worker and checker the book names,
 /// which the command's answer draws (`Runtime::mission_view_for`).
 pub(super) struct Caller<'a> {

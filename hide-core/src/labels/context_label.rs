@@ -13,8 +13,8 @@ use super::analysis::{
     RequestLine, normalize_goal, normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{
-    ARTIFACT_CHARS, ARTIFACTS_PER_TURN, MISSED_CHARS, NEW_MISSED_LIMIT, SUMMARY_BATCH,
-    SUMMARY_CHARS,
+    ARTIFACT_CHARS, ARTIFACTS_PER_TURN, MISSED_CHARS, SUMMARY_BATCH, SUMMARY_CHARS,
+    TURN_MISSED_LIMIT,
 };
 use crate::suggestions::ledger::ImprovementKind;
 use crate::suggestions::policy::{IMPROVEMENT_CHARS, IMPROVEMENTS_PER_TURN};
@@ -29,7 +29,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v25";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v26";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -177,11 +177,11 @@ fn end_prompt(limits: LabelLimits) -> String {
         "5 done: assigned work is reported finished and no result remains pending. ",
         "With goal=null still judge the actual turn: an answered greeting/name question without a required action has line='' and end=done, never unfinished or 'waiting for instructions'. Do not infer states Herdr already knows, such as an approval prompt. ",
         "work uses the schema's missed, resolved and artifacts. ",
-        "missed: at most 3 items, each {kind:problem|follow_up|ask,text:<max 80 characters>}. ask is a question or decision this turn's answer put to the operator that still waits for their answer, one per distinct question (an interview's next question, an approval, a choice between options); when end=question its question is an ask too. When a reply to the agent came this turn (the operator's request, or a letter from the session's parent), every earlier open ask closes as this turn is recorded: list again only an ask that still waits on the operator after this turn, worded as before. With goal_update replace, moving on answered the previous flow's asks: list none of them again. ",
+        "missed: at most 3 items whose same_as is null, and besides them any ask with a same_as, each {kind:problem|follow_up|ask,text:<max 80 characters>,same_as:<an open-missed id>|null}. same_as is the id of the <open-missed> ask this item repeats, rewords or refines, the same question still waiting; null for a problem, a follow_up and a question <open-missed> does not hold. ask is a question or decision this turn's answer put to the operator that still waits for their answer, one per distinct question (an interview's next question, an approval, a choice between options); when end=question its question is an ask too. When a reply to the agent came this turn (the operator's request, or a letter from the session's parent), every earlier open ask closes as this turn is recorded: list again only an ask that still waits on the operator after this turn, worded as before. With goal_update replace, moving on answered the previous flow's asks: list none of them again. ",
         "problem is unrelated breakage found and follow_up a separate proposed deliverable nobody took, both OUTSIDE the assignment and abandoned on session close. Exclude optional offers, work already in an issue/PR by number/link, remaining assigned work, rechecking its result (real app/other environment/pre-release), and merge/install/deploy/app replacement, even if called a follow-up or limitation: the PR and CI already own these. ",
         "resolved: only real <open-missed> IDs actually handled this turn, an ask the operator answered in this turn's requests included, with issue_number null or a number; do not re-list open problem or follow_up items in missed. ",
         "artifacts: at most 3 names of what this turn created or published besides a pull request: a design board, a document such as a PRD, report or interview log, an HTML mockup, a GitHub issue, a release. Name each as the operator would recognize it; never code files, tests, commits, branches or pull requests. Only what this turn newly made or changed; one already in recorded-artifacts keeps that exact name. An empty list when there are none. ",
-        "Use open-missed only for its IDs, never to decide end. ",
+        "Use open-missed only for its IDs, in resolved and same_as, never to decide end. ",
         &improvements_rule(),
         DATA,
     ]
@@ -237,7 +237,7 @@ fn end_schema(limits: LabelLimits) -> Value {
             "work":{
                 "type":"object","additionalProperties":false,"required":["missed","resolved","artifacts"],
                 "properties":{
-                    "missed":{"type":"array","maxItems":NEW_MISSED_LIMIT,"items":{"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"type":"string","enum":["problem","follow_up","ask"]},"text":{"type":"string","minLength":1,"maxLength":MISSED_CHARS}}}},
+                    "missed":{"type":"array","maxItems":TURN_MISSED_LIMIT,"items":{"type":"object","additionalProperties":false,"required":["kind","text","same_as"],"properties":{"kind":{"type":"string","enum":["problem","follow_up","ask"]},"text":{"type":"string","minLength":1,"maxLength":MISSED_CHARS},"same_as":{"type":["string","null"]}}}},
                     "resolved":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["id","issue_number"],"properties":{"id":{"type":"string"},"issue_number":{"type":["integer","null"],"minimum":1}}}},
                     "artifacts":{"type":"array","maxItems":ARTIFACTS_PER_TURN,"items":{"type":"string","minLength":1,"maxLength":ARTIFACT_CHARS}}
                 }

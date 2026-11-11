@@ -9582,12 +9582,6 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     without_gate(&mut runtime);
     command(&mut runtime, "sender", plan()).unwrap();
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
-    )
-    .unwrap();
     // The node's worker started a helper in the `recipient` pane.
     let helper = crate::runtime::delivery::tests::observed(&runtime, "recipient").actor;
     let record = |id: &str, actor: Actor, parent: Option<&str>| crate::coordination::AgentRecord {
@@ -9615,6 +9609,12 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         session: None,
     };
     register(&mut runtime, record("agent-2", worker, Some("agent-1")));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
     register(&mut runtime, record("agent-9", helper, Some("agent-2")));
     let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
     let close = |runtime: &mut Runtime, view: &str| {
@@ -11983,4 +11983,467 @@ fn the_conductor_skips_a_line_alone_unless_its_ci_failed() {
         crate::coordination::split_refusal(&refused).0,
         "mission_gate_operator_only"
     );
+}
+
+/// A full delivery ledger keeps an open mission's ended worker and may drop
+/// it once the mission is closed (`coordination::room`): the closed
+/// mission's map still draws, the node keeping its worker's id with no
+/// registration behind it, as a node never bound reads.
+#[test]
+fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let mut actor = runtime.delivery_observations["sender"].actor.clone();
+    actor.pane_id = "worker".into();
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-2".into(),
+        name: Some("worker".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: "worker-session".into(),
+        instance: "worker".into(),
+        pane: "worker".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor,
+        ended: true,
+        terminal_id: None,
+        forked: false,
+    });
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    // Until the book is read, even a registration with no mission spawn
+    // can be its Conductor or a directly bound worker.
+    assert!(runtime.missions.store.is_none());
+    assert!(runtime.delivery_held().unwrap().agents.contains("agent-2"));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .agent_id = Some("agent-2".into());
+    // Read from the book itself once it is installed, as a core reads it
+    // at launch.
+    runtime.missions.store = Some(crate::mission_store::MissionStore::new(
+        fixture._root.path(),
+    ));
+    assert!(runtime.delivery_held().unwrap().agents.contains("agent-2"));
+    runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Done;
+    assert!(!runtime.delivery_held().unwrap().agents.contains("agent-2"));
+    runtime.missions.unreadable = Some("read_failed".into());
+    assert!(runtime.delivery_held().unwrap().agents.contains("agent-2"));
+    runtime.missions.unreadable = None;
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    let view = runtime
+        .mission_view_of("mission-1")
+        .expect("the closed mission's map draws");
+    let fix = view.nodes.iter().find(|node| node.key == "fix").unwrap();
+    assert_eq!(
+        (
+            fix.agent_id.as_deref(),
+            fix.agent_runtime,
+            fix.pane_id.as_deref()
+        ),
+        (Some("agent-2"), None, None)
+    );
+}
+
+#[test]
+fn an_open_mission_holds_its_conductor_worker_reviewer_and_verifier() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.missions.store = Some(crate::mission_store::MissionStore::new(
+        fixture._root.path(),
+    ));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.conductor.agent_id = Some("agent-conductor".into());
+    let node = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
+    node.agent_id = Some("agent-worker".into());
+    for (kind, agent) in [("review", "agent-reviewer"), ("verify", "agent-verifier")] {
+        node.criteria.push(
+            serde_json::from_value(json!({
+                "key": kind, "kind": kind, "text": kind,
+                "checkers": [{"worker": {"agent": "codex"}, "agent_id": agent}],
+            }))
+            .unwrap(),
+        );
+    }
+    assert_eq!(
+        runtime.delivery_held().unwrap().agents,
+        [
+            "agent-conductor",
+            "agent-worker",
+            "agent-reviewer",
+            "agent-verifier"
+        ]
+        .map(str::to_owned)
+        .into(),
+    );
+    runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Done;
+    assert!(runtime.delivery_held().unwrap().agents.is_empty());
+}
+
+/// A candidate can end a registration before the runtime publishes it.
+/// A binding admitted from the published live registration during the
+/// durable write must retain both its registration and spawn receipt.
+fn binding_during_a_full_ledger_save(register: bool) {
+    use crate::coordination::{AGENT_LIMIT, Mutation, SPAWN_LIMIT};
+    use crate::delivery::{ledger, worker::Effect};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let fixture = conducting();
+    drop(fixture._worker);
+    let path = fixture._root.path().join("full-ledger.json");
+    let effect = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        with_worker_and_reviewer(&mut runtime);
+        runtime.missions.store = Some(crate::mission_store::MissionStore::new(
+            fixture._root.path(),
+        ));
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        for record in &mut ledger.agents {
+            record.actor.session = crate::engine::tokens::session_digest(&record.session);
+        }
+        let conductor = ledger.agents[0].actor.clone();
+        runtime
+            .delivery_observations
+            .get_mut("sender")
+            .unwrap()
+            .actor = conductor.clone();
+        let mut record = ledger.agents[2].clone();
+        ledger.agents[2].ended = true;
+        for n in 4..=AGENT_LIMIT {
+            record.id = format!("agent-{n}");
+            record.name = Some(format!("old-{n}"));
+            record.session = format!("session-{n}");
+            record.instance = format!("pane-{n}");
+            record.pane.clone_from(&record.instance);
+            record.actor.pane_id.clone_from(&record.pane);
+            record.actor.name = format!("old-{n}");
+            record.actor.session = crate::engine::tokens::session_digest(&record.session);
+            record.parent = None;
+            record.ended = true;
+            ledger.agents.push(record.clone());
+        }
+        ledger.spawns = (0..SPAWN_LIMIT)
+            .map(|n| {
+                serde_json::from_value(json!({
+                    "id": format!("spawn-{}", n + 3000),
+                    "parent": if n == 0 { "agent-1" } else { "agent-3" },
+                    "intent": format!("old-{n}"), "name": "worker", "kind": "codex",
+                    "repo": PROJECT, "branch": "old", "requested_path": null, "args": [],
+                    "path": null, "pane": if n == 0 { Some("recipient") } else { None },
+                    "child": if n == 0 { Some("agent-2") } else { None },
+                }))
+                .unwrap()
+            })
+            .collect();
+        ledger.next_id = 100_000;
+        ledger.check().unwrap();
+        runtime.delivery_ledger = Ok(Arc::new(ledger));
+        running(&mut runtime);
+        // The owner has observed the pane gone; the store has not yet
+        // published the corresponding ended registration.
+        runtime
+            .registrations_gone
+            .insert("agent-2".into(), crate::coordination::PaneGone::Absent);
+        let mutation = if register {
+            record.id.clear();
+            record.name = Some("new-child".into());
+            record.session = "new-child-session".into();
+            record.instance = "new-child".into();
+            record.pane = "new-child".into();
+            record.actor.pane_id = "new-child".into();
+            record.actor.name = "new-child".into();
+            record.actor.session = crate::engine::tokens::session_digest(&record.session);
+            record.ended = false;
+            record.parent = Some("agent-1".into());
+            Mutation::Register {
+                record,
+                check: false,
+            }
+        } else {
+            let crate::delivery::Command::Agents { command } = spawn(None, "new-full-spawn", None)
+            else {
+                unreachable!()
+            };
+            Mutation::Reserve {
+                parent: "agent-1".into(),
+                command,
+            }
+        };
+        Effect::Agents {
+            authority: authority(&conductor),
+            actor: conductor,
+            mutation: Box::new(mutation),
+        }
+    };
+    let (saving, at_save) = mpsc::sync_channel(1);
+    let (resume, resumed) = mpsc::sync_channel(1);
+    let first = std::sync::atomic::AtomicBool::new(true);
+    let (_worker, answer) = Worker::store_queued(
+        Arc::downgrade(&fixture.runtime),
+        path.clone(),
+        effect,
+        move |path, bytes| {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                saving.send(()).unwrap();
+                // Only a test failure can leave the store paused; keep its
+                // owner bounded on that path too.
+                resumed.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            ledger::write(path, bytes)
+        },
+    );
+    at_save.recv_timeout(Duration::from_secs(5)).unwrap();
+    let bound = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        assert!(!runtime.delivery_state().unwrap().agents[1].ended);
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2"}}),
+        )
+    };
+    resume.send(()).unwrap();
+    let result = answer.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(bound.is_ok(), "{bound:?}");
+    assert!(result.is_ok(), "{result:?}");
+    let saved = ledger::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+    let child = saved
+        .agents
+        .iter()
+        .find(|record| record.id == "agent-2")
+        .expect("the live binding retains its registration");
+    assert!(child.ended);
+    assert!(
+        saved.spawns.iter().any(|spawn| spawn.id == "spawn-3000"),
+        "the live binding retains its spawn receipt"
+    );
+    assert!(
+        saved
+            .agents
+            .iter()
+            .any(|record| record.id == "agent-1" && !record.ended)
+    );
+    if register {
+        assert_eq!(saved.agents.len(), AGENT_LIMIT);
+        assert!(!saved.agents.iter().any(|record| record.id == "agent-3"));
+    } else {
+        assert_eq!(saved.spawns.len(), SPAWN_LIMIT);
+        assert!(!saved.spawns.iter().any(|spawn| spawn.id == "spawn-3001"));
+    }
+    let published = fixture.runtime.lock().unwrap().delivery_state().unwrap();
+    published.check().unwrap();
+    assert_eq!(published.agents.len(), saved.agents.len());
+    assert_eq!(published.spawns.len(), saved.spawns.len());
+    assert!(
+        published
+            .agents
+            .iter()
+            .any(|record| record.id == "agent-2" && record.ended)
+    );
+    assert!(
+        published
+            .spawns
+            .iter()
+            .any(|spawn| spawn.id == "spawn-3000")
+    );
+}
+
+#[test]
+fn a_live_binding_during_registration_save_keeps_the_newly_ended_registration_and_spawn() {
+    binding_during_a_full_ledger_save(true);
+}
+
+#[test]
+fn a_live_binding_during_spawn_save_keeps_the_newly_finished_spawn_and_registration() {
+    binding_during_a_full_ledger_save(false);
+}
+
+#[test]
+fn ended_registrations_cannot_be_new_workers_reviewers_or_verifiers_but_bound_ids_retry() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][0]["checks"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "as": "verify", "by": [{"agent": "codex", "model": "gpt-6-astra"}]
+        }));
+    command(&mut runtime, "sender", plan).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[2].ended = true;
+    runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
+    for role in ["agent_id", "reviewer", "verifier"] {
+        let patch = json!({role: "agent-3"});
+        assert_eq!(
+            command(
+                &mut runtime,
+                "sender",
+                json!({"op": "node", "node": "fix", "patch": patch})
+            )
+            .unwrap_err(),
+            "agent_ended",
+            "{role}"
+        );
+    }
+    for role in ["agent_id", "reviewer", "verifier"] {
+        ledger.agents[2].ended = false;
+        runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
+        // Each role gets a fresh node binding, then the same identity is
+        // replayed after ending, as an idempotent caller may do.
+        let node = runtime
+            .missions
+            .book
+            .get_mut("mission-1")
+            .unwrap()
+            .nodes
+            .iter_mut()
+            .find(|node| node.key == "fix")
+            .unwrap();
+        node.agent_id = None;
+        for line in &mut node.criteria {
+            for checker in &mut line.checkers {
+                checker.agent_id = None;
+            }
+        }
+        let bind = json!({"op": "node", "node": "fix", "patch": {role: "agent-3"}});
+        command(&mut runtime, "sender", bind.clone()).unwrap();
+        ledger.agents[2].ended = true;
+        runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
+        command(&mut runtime, "sender", bind).unwrap();
+    }
+}
+
+#[test]
+fn a_reopened_mission_reads_missing_worker_and_checker_history_after_eviction() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(&mut runtime, "sender", json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "reviewer": "agent-3"}})).unwrap();
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents.retain(|record| record.id == "agent-1");
+    ledger.next_id = 4;
+    ledger.spawns.clear();
+    ledger.agents[0].actor.session =
+        crate::engine::tokens::session_digest(&ledger.agents[0].session);
+    let actor = ledger.agents[0].actor.clone();
+    runtime
+        .delivery_observations
+        .get_mut("sender")
+        .unwrap()
+        .actor = actor.clone();
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .conductor
+        .actor = actor;
+    ledger.check().unwrap();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "reopen", "mission": "mission-1"}),
+    )
+    .unwrap();
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "show", "mission": "mission-1", "node": "fix"}),
+    )
+    .unwrap();
+    assert_eq!(shown["node"]["agent_id"], "agent-2");
+    assert!(shown["node"]["agent_runtime"].is_null());
+    assert!(shown["node"]["pane_id"].is_null());
+    assert_eq!(shown["checker_letters"], json!([]));
+    assert!(runtime.mission_view_of("mission-1").is_some());
+}
+
+/// A replan carries existing bindings forward; only a new binding requires
+/// a live registration. Finished or evicted history cannot block unrelated
+/// plan edits or retries (the accepted reopened-history policy).
+#[test]
+fn replanning_keeps_existing_ended_or_missing_workers_and_checkers() {
+    for (worker_ended, checker_ended, missing) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        let mut planned = criteria_plan();
+        planned["plan"]["nodes"][0]["delivery"] = json!("direct");
+        command(&mut runtime, "sender", planned.clone()).unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        with_worker_and_reviewer(&mut runtime);
+        command(&mut runtime, "sender", json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "reviewer": "agent-3"}})).unwrap();
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        ledger.agents[1].ended = worker_ended;
+        ledger.agents[2].ended = checker_ended;
+        if missing {
+            ledger.agents.retain(|record| record.id == "agent-1");
+        }
+        runtime.delivery_ledger = Ok(Arc::new(ledger));
+        // Both the identical retry and an unrelated node edit succeed.
+        command(&mut runtime, "sender", planned.clone()).unwrap();
+        planned["plan"]["nodes"][1]["title"] = json!("Update the guide");
+        planned["plan"]["nodes"][1]["change"] = json!("Clarify the documentation task");
+        command(&mut runtime, "sender", planned.clone()).unwrap();
+        command(&mut runtime, "sender", planned).unwrap();
+        let (shown, _) = command(
+            &mut runtime,
+            "sender",
+            json!({"op": "show", "mission": "mission-1", "node": "fix"}),
+        )
+        .unwrap();
+        assert_eq!(shown["node"]["agent_id"], "agent-2");
+        let fix = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .node("fix")
+            .unwrap();
+        assert!(
+            fix.criteria
+                .iter()
+                .flat_map(|line| &line.checkers)
+                .any(|checker| checker.agent_id.as_deref() == Some("agent-3"))
+        );
+    }
 }

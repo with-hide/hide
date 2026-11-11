@@ -238,7 +238,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - Ask at once, without attempts, when the goal, the finish line or the scope would change, or when only a person can act (a login that expired, an approval a branch rule needs, a permission refused).
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
 - When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered in conversation.
-  When one question covers several nodes (the same check line open on seven merged nodes), name each with `--node`, the one it stopped first: the card lists them, and while it is open the operator's one card for them is that question.
+  When one question covers several nodes (the same failed `ci` line on seven nodes), name each with `--node`, the one it stopped first: the card lists them, and while it is open the operator's one card for them is that question.
   When the answer is one of a few choices, give each with `--option` (at most 5, one line each) saying what follows from it, what it gains and what it costs, mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
   When the operator has to look at something to answer (screens, a report), give it with `--show <path or View id>`: one page that starts with three lines (what changed, the 2-3 things to check, what good looks like); Hide opens a path as a View and lists it on the decision, with the Views you opened since your previous decision and the ones the node's worker opened in its current attempt, while they are still open.
   Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
@@ -329,7 +329,8 @@ To hold on purpose: a node that waits on a pull request outside the mission depe
   The `human` line of a gate is never skipped, recorded or answered by you (`mission_gate_operator_only`): only the operator's answer, on the map, on the phone or relayed with `hide mission gate`, passes it.
 - A failed `ci` or `check` line is rerun once, by the worker, on the same commit and only for what failed (`gh run rerun <run-id> --failed` for CI, the failed part of the check command with `--rerun`).
   A pass then reads `✓ 재실행 1회`; a failure after the rerun, however many runs follow, sends the node back to working, Hide reads no more runs on that commit, and a new commit gives one rerun again.
-  When the worker shows the failure is not its change (the same failure on main), raise a decision naming the node; if the operator says to skip, skip it with `--decision`.
+  When the worker shows a failed `check` is not its change (the same failure on main), skip it yourself with that reason.
+  For a failed `ci` line that is not the change's, ask with `hide mission decide --line <question> --node <key>`; if the operator says to skip, skip it with `--decision <key>`.
 - When a later node finds a defect in an earlier one, `hide mission defect <earlier> --found-by <later> --line <the defect>` opens the earlier node again (↻) with the defect as a line of its own; brief its worker, or a new one, to fix it.
 
 ## 5. Instructions

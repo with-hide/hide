@@ -15,8 +15,18 @@ open class ShellViewController: CAPBridgeViewController {
         [HideKeychainPlugin(), HideScannerPlugin(), HideAppPlugin(), HidePushPlugin()]
     }
 
-    /// The height the keyboard covers, which the web view gives up so the page's last line stays above it.
-    private var keyboardOverlap: CGFloat = 0
+    /// Where the keyboard ends up, in the window's coordinates; nil while it is hidden.
+    private var keyboardEnd: CGRect?
+
+    /// The web view's frame in its window: all of it, less what the keyboard covers at the bottom, so the page's last
+    /// line stays above the keyboard. It is measured from the window and never from the web view's own bounds: Capacitor
+    /// makes the web view the controller's view, so a frame taken from those bounds would shrink a view that had already
+    /// shrunk, on every layout pass, and would not come back when the keyboard hides.
+    public static func webFrame(in window: CGRect, keyboard: CGRect?) -> CGRect {
+        guard let keyboard else { return window }
+        let covered = max(0, min(window.height, window.maxY - keyboard.minY))
+        return CGRect(x: window.minX, y: window.minY, width: window.width, height: window.height - covered)
+    }
 
     /// The phone site is several pages (the loader and one bundle per protocol), not one page.
     public override func router() -> Router {
@@ -51,25 +61,33 @@ open class ShellViewController: CAPBridgeViewController {
         scroll.minimumZoomScale = 1
         scroll.maximumZoomScale = 1
         scroll.pinchGestureRecognizer?.isEnabled = false
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)),
-                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)),
-                                               name: UIResponder.keyboardWillHideNotification, object: nil)
+        // The web view's own answer to the keyboard (an inset and a scroll of the page) would be made a second time on
+        // top of the frame below, as Capacitor's keyboard plugin found: the frame alone makes room.
+        let center = NotificationCenter.default
+        for name in [UIResponder.keyboardWillHideNotification, UIResponder.keyboardWillShowNotification,
+                     UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification] {
+            center.removeObserver(webView, name: name, object: nil)
+        }
+        center.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        center.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
     }
+
+    /// The window the web view fills; the screen before it has one.
+    private var windowBounds: CGRect { view.window?.bounds ?? UIScreen.main.bounds }
 
     @objc private func keyboardWillChange(_ note: Notification) {
         guard let webView, let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-        let hiding = note.name == UIResponder.keyboardWillHideNotification
-        keyboardOverlap = hiding ? 0 : max(0, view.bounds.maxY - view.convert(end, from: nil).minY)
+        // The end frame is the screen's; an iPhone app's window is the screen.
+        keyboardEnd = note.name == UIResponder.keyboardWillHideNotification ? nil : end
         let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
         UIView.animate(withDuration: duration) {
-            webView.frame = CGRect(x: 0, y: 0, width: self.view.bounds.width, height: self.view.bounds.height - self.keyboardOverlap)
+            webView.frame = Self.webFrame(in: self.windowBounds, keyboard: self.keyboardEnd)
         }
     }
 
     open override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        webView?.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: view.bounds.height - keyboardOverlap)
+        webView?.frame = Self.webFrame(in: windowBounds, keyboard: keyboardEnd)
     }
 
     open override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }

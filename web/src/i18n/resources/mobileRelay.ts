@@ -13,7 +13,6 @@ export const mobileRelayEnglish = {
   "mobile.relay.counts": "Needs you {{needs}} · Working {{working}}",
   "mobile.relay.lastSeen": "Last seen {{time}}",
   "mobile.relay.neverSeen": "Not connected yet",
-  "mobile.relay.scanHint": "Scan the QR in Settings > Mobile",
   "mobile.relay.scan": "Scan QR code",
   "mobile.relay.paste": "Paste QR link",
   "mobile.relay.connect": "Connect",
@@ -46,6 +45,7 @@ export const mobileRelayEnglish = {
   "mobile.scanner.whereBody": "Hide on your computer > Settings > Mobile",
   "mobile.scanner.deniedTitle": "The camera isn't available",
   "mobile.scanner.deniedBody": "Hide needs the camera to read the QR.\nTurn on the camera for Hide in iPhone Settings.",
+  "mobile.scanner.browserDeniedBody": "Allow the camera for this page in your browser, or paste the QR link instead.",
   "mobile.scanner.openSettings": "Open Settings"
 } as const;
 export const mobileRelayCatalogs = {
@@ -64,7 +64,6 @@ export const mobileRelayCatalogs = {
     "mobile.relay.counts": "내 차례 {{needs}} · 작업 중 {{working}}",
     "mobile.relay.lastSeen": "마지막 접속 {{time}}",
     "mobile.relay.neverSeen": "아직 연결한 적 없어요",
-    "mobile.relay.scanHint": "설정 > 모바일의 QR을 스캔하세요",
     "mobile.relay.scan": "QR 스캔",
     "mobile.relay.paste": "QR 링크 붙여넣기",
     "mobile.relay.connect": "연결",
@@ -97,6 +96,7 @@ export const mobileRelayCatalogs = {
     "mobile.scanner.whereBody": "컴퓨터의 Hide > 설정 > 모바일",
     "mobile.scanner.deniedTitle": "카메라를 쓸 수 없어요",
     "mobile.scanner.deniedBody": "QR을 읽으려면 카메라 권한이 필요해요.\niPhone 설정에서 Hide의 카메라를 켜 주세요.",
+    "mobile.scanner.browserDeniedBody": "브라우저에서 이 페이지의 카메라를 허용하거나, QR 링크를 붙여넣으세요.",
     "mobile.scanner.openSettings": "설정 열기"
   },
   "ja": {
@@ -113,7 +113,6 @@ export const mobileRelayCatalogs = {
     "mobile.relay.counts": "確認待ち {{needs}} · 作業中 {{working}}",
     "mobile.relay.lastSeen": "最終接続 {{time}}",
     "mobile.relay.neverSeen": "まだ接続していません",
-    "mobile.relay.scanHint": "設定 > モバイルのQRをスキャン",
     "mobile.relay.scan": "QRをスキャン",
     "mobile.relay.paste": "QRリンクを貼り付け",
     "mobile.relay.connect": "接続",
@@ -146,6 +145,7 @@ export const mobileRelayCatalogs = {
     "mobile.scanner.whereBody": "パソコンのHide > 設定 > モバイル",
     "mobile.scanner.deniedTitle": "カメラを使えません",
     "mobile.scanner.deniedBody": "QRを読み取るにはカメラの許可が必要です。\niPhoneの設定でHideのカメラをオンにしてください。",
+    "mobile.scanner.browserDeniedBody": "ブラウザでこのページのカメラを許可するか、QRリンクを貼り付けてください。",
     "mobile.scanner.openSettings": "設定を開く"
   },
   "zh-CN": {
@@ -162,7 +162,6 @@ export const mobileRelayCatalogs = {
     "mobile.relay.counts": "待处理 {{needs}} · 工作中 {{working}}",
     "mobile.relay.lastSeen": "上次连接 {{time}}",
     "mobile.relay.neverSeen": "尚未连接",
-    "mobile.relay.scanHint": "扫描“设置 > 移动端”中的二维码",
     "mobile.relay.scan": "扫描二维码",
     "mobile.relay.paste": "粘贴二维码链接",
     "mobile.relay.connect": "连接",
@@ -195,6 +194,7 @@ export const mobileRelayCatalogs = {
     "mobile.scanner.whereBody": "电脑上的 Hide > 设置 > 手机",
     "mobile.scanner.deniedTitle": "无法使用相机",
     "mobile.scanner.deniedBody": "读取二维码需要相机权限。\n请在 iPhone 设置中为 Hide 打开相机。",
+    "mobile.scanner.browserDeniedBody": "请在浏览器中允许此页面使用相机，或粘贴二维码链接。",
     "mobile.scanner.openSettings": "打开设置"
   }
 } satisfies Catalogs<typeof mobileRelayEnglish>;
