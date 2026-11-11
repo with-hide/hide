@@ -1,4 +1,5 @@
-import { CheckIcon, ChevronRightIcon, PauseIcon, SettingsIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
+import { HeldMark, useDelayPill } from "./components/mission-hold";
 import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -37,7 +38,7 @@ import {
   type MissionGroup,
   type MissionProject,
 } from "./missionList";
-import { gatesAhead, heldNodes, missionCells, missionCounts, missionDelay, type TurnItem } from "./missions";
+import { gatesAhead, heldNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
@@ -372,21 +373,17 @@ function Steps({ mission, onOpen }: { mission: Mission; onOpen: () => void }) {
 }
 
 /**
- * What holds the mission back, a quiet grey pause mark at the row's end: the
- * mission's delay, named by its reason, and how many nodes its Conductor
- * holds back as a number (`보류한 노드 N개`); never in 내 차례's colour or
- * count. None when nothing is held.
+ * How many nodes its Conductor holds back, in quiet words at the row's end
+ * (`보류 1`, named `보류한 노드 1개`); never in 내 차례's colour or count.
+ * A mission's delay is its pill's to say. None when no node is held.
  */
 function HoldCount({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
   const held = heldNodes(mission);
-  const delay = missionDelay(mission);
-  if (held === 0 && !delay) return null;
-  const name = [delay ? t("mission.delay", { line: delay }) : null, held > 0 ? t("mission.holdCount", { count: held }) : null].filter(Boolean).join(" · ");
+  if (held === 0) return null;
   return (
-    <span className="flex shrink-0 items-center gap-xxs" role="img" aria-label={name} title={name} data-mission-row-held={held} data-mission-row-delay={delay ? "true" : undefined}>
-      <PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-      {held > 0 ? <span className="font-mono tabular-nums">{held}</span> : null}
+    <span className="shrink-0 whitespace-nowrap" title={t("mission.holdCount", { count: held })} data-mission-row-held={held}>
+      {t("mission.holdShort", { count: held })}
     </span>
   );
 }
@@ -411,9 +408,19 @@ function ClosedMark({ mission }: { mission: Mission }) {
 /** The state pill: what the operator does on their turn, in the decision colour, else the map head's own pill; a takeover row draws none, since its 이어받기 button is the action. */
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
+  const held = useDelayPill(mission);
   if (turn?.kind === "takeover") return null;
   if (turn) {
     return <span className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}>{t(missionPillKey(mission, turn))}</span>;
+  }
+  // A delay holds every new start: the pill says so, with how long, in place of 진행 중.
+  if (held) {
+    return (
+      <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", PILL_TONE.quiet)} data-mission-row-pill="held">
+        <HeldMark />
+        {held}
+      </span>
+    );
   }
   return (
     <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", STATE_PILL_TONE[mission.status])} data-mission-row-pill={mission.status}>

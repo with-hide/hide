@@ -11,7 +11,8 @@ import { cn } from "./lib/utils";
 import { markdownPlainText } from "./markdownPlain";
 import { MissionNumber, useWorkerRow, ResultTail } from "./missionParts";
 import { allAgents } from "./paneAgents";
-import { liveNodes, missionCells, missionDelay, missionNumber, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, TURN_WORDS, type PaneChipState } from "./missions";
+import { heldBy, useDelayWords } from "./components/mission-hold";
+import { liveNodes, missionCells, missionNumber, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, TURN_WORDS, type PaneChipState } from "./missions";
 import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";
 import { machineName } from "./screenMachine";
 import type { Mission, MissionNode } from "./snapshot";
@@ -58,8 +59,9 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
   const words = paneChipWords(mission);
   const number = missionNumber(mission.id);
   const [first] = liveNodes(mission);
-  const delay = missionDelay(mission);
-  const state = [words.turn ? t(TURN_WORDS[words.turn]) : null, t(words.key), words.counts, delay ? t("mission.delay", { line: delay }) : null, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
+  const delay = heldBy(mission);
+  const held = useDelayWords(delay);
+  const state = [words.turn ? t(TURN_WORDS[words.turn]) : null, t(words.key), words.counts, held, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
   const label = t("mission.pane.label", { title: mission.title, state });
   const Mark = words.state === "done" ? CheckIcon : WaypointsIcon;
   return (
@@ -83,7 +85,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
         >
           <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
           {words.turn ? <span aria-hidden="true" className="font-semibold" data-mission-chip-turn={words.turn}>!</span> : null}
-          {/* A mission delay holds every new start: a grey pause, said by the chip's name with its reason. */}
+          {/* A mission delay holds every new start: a grey pause, said by the chip's name with its reason and how long it still holds. */}
           {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-mission-chip-delay="true" /> : null}
           {/* A narrow pane keeps the mark and the count; the word and the cells come back as it widens, and the chip's name always says them. */}
           {/* The mission's number stands where the word "mission" stood (`⚑ M39 · ●●●●● 1/6`): quiet, as a name, then a dot, then the progress in bold, so the two never read as one number. A state word (계획 중, 머지 대기) follows the dot; the chip's name keeps the title. */}

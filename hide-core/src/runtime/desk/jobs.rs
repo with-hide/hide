@@ -1192,6 +1192,7 @@ pub(crate) fn desk_job_mission(
         total: counted.count(),
         turn,
         delay: mission.delay.clone().filter(|_| open),
+        delay_until_unix_ms: mission.delay_until_unix_ms.filter(|_| open),
     }
 }
 
