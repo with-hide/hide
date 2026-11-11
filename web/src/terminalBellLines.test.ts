@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Terminal } from "@xterm/xterm";
 import { AGENT_ADAPTERS } from "./agentAdapters";
-import { MAX_BAR_ROWS, bellRows, bellScan, dimBellLines, forgetBellLines, queueBellLines, styleBar, type ScreenRow } from "./terminalBellLines";
+import { bellRows, bellScan, dimBellLines, forgetBellLines, queueBellLines, type ScreenRow } from "./terminalBellLines";
 
 /** A row as the scan reads it: wide glyphs and the owl take two cells. */
 function row(text: string): ScreenRow {
@@ -11,6 +11,8 @@ function row(text: string): ScreenRow {
 }
 
 const screen = (lines: string[]) => lines.map(row);
+
+const colors = (foreground: string, background = "#1a252a") => ({ foreground, background });
 
 describe("bellRows", () => {
   it("finds the echo Claude Code and Codex draw for a bell line", () => {
@@ -126,7 +128,7 @@ describe("the echo each agent declares", () => {
 
 /** A terminal that counts what the shell asks of it: reads of its rows, markers and decorations. */
 function fakeTerminal(text: string[]) {
-  const counts = { reads: 0, markers: 0, decorations: 0, disposed: 0, renderers: [] as Array<(element: HTMLElement) => void> };
+  const counts = { reads: 0, markers: 0, decorations: 0, disposed: 0 };
   const term = {
     rows: text.length,
     cols: 100,
@@ -151,14 +153,7 @@ function fakeTerminal(text: string[]) {
     },
     registerDecoration: () => {
       counts.decorations += 1;
-      return {
-        isDisposed: false,
-        onRender: (listener: (element: HTMLElement) => void) => {
-          counts.renderers.push(listener);
-          return { dispose: () => {} };
-        },
-        dispose: () => (counts.disposed += 1),
-      };
+      return { isDisposed: false, dispose: () => (counts.disposed += 1) };
     },
   };
   return { term: term as unknown as Terminal, counts, text };
@@ -172,27 +167,27 @@ describe("reading the screen", () => {
     vi.stubGlobal("requestAnimationFrame", (run: () => void) => frames.push(run));
     vi.stubGlobal("cancelAnimationFrame", () => {});
     const { term, counts } = fakeTerminal(["❯ 🦉 a 진행: 끝", "", "⏺ ok"]);
-    for (let write = 0; write < 40; write += 1) queueBellLines(term, () => "#666");
+    for (let write = 0; write < 40; write += 1) queueBellLines(term, () => colors("#666"));
     expect(frames).toHaveLength(1);
     frames[0]!();
     expect(counts.reads).toBe(3);
-    queueBellLines(term, () => "#666");
+    queueBellLines(term, () => colors("#666"));
     expect(frames).toHaveLength(2);
     forgetBellLines(term);
   });
 
   it("makes no marker or decoration for a screen without the owl", () => {
     const { term, counts } = fakeTerminal(["$ ls", "⏺ output", "❯ fix the bell"]);
-    dimBellLines(term, "#666");
+    dimBellLines(term, colors("#666"));
     expect(counts).toMatchObject({ markers: 0, decorations: 0 });
   });
 
   it("draws the rows once and leaves them alone while they do not move", () => {
     const { term, counts } = fakeTerminal(["❯ 🦉 a 진행: 끝", "⏺ ok"]);
-    dimBellLines(term, "#666");
-    dimBellLines(term, "#666");
+    dimBellLines(term, colors("#666"));
+    dimBellLines(term, colors("#666"));
     expect(counts).toMatchObject({ markers: 1, decorations: 1, disposed: 0 });
-    dimBellLines(term, "#777");
+    dimBellLines(term, colors("#777"));
     expect(counts).toMatchObject({ decorations: 2, disposed: 1 });
     forgetBellLines(term);
     expect(counts.disposed).toBe(2);
@@ -242,22 +237,42 @@ describe("what is drawn on a real terminal", () => {
   it("holds one marker for the row however often its color changes, and none once forgotten", async () => {
     const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
     await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
-    for (let i = 0; i < 100; i += 1) dimBellLines(term, i % 2 === 0 ? "#666666" : "#777777");
+    for (let i = 0; i < 100; i += 1) dimBellLines(term, i % 2 === 0 ? colors("#666666") : colors("#777777"));
     expect(markersHeld(term)).toBe(1);
     forgetBellLines(term);
     expect(markersHeld(term)).toBe(0);
     term.dispose();
   });
 
+  it("draws each letter row with the words and the band together, and again when only the band changes", async () => {
+    const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
+    const registered: Array<{ foregroundColor?: string; backgroundColor?: string; width?: number }> = [];
+    const register = term.registerDecoration.bind(term);
+    term.registerDecoration = ((options: Parameters<Terminal["registerDecoration"]>[0]) => {
+      registered.push(options);
+      return register(options);
+    }) as Terminal["registerDecoration"];
+    await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
+    dimBellLines(term, colors("#8fb4c8", "#1a252a"));
+    expect(registered).toEqual([expect.objectContaining({ foregroundColor: "#8fb4c8", backgroundColor: "#1a252a", width: 80 })]);
+    dimBellLines(term, colors("#8fb4c8", "#1a252a"));
+    expect(registered).toHaveLength(1);
+    dimBellLines(term, colors("#8fb4c8", "#e3edf1"));
+    expect(registered).toHaveLength(2);
+    expect(registered[1]!.backgroundColor).toBe("#e3edf1");
+    forgetBellLines(term);
+    term.dispose();
+  });
+
   it("draws again after a resize and the holder's redraw leave the same row", async () => {
     const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
     await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
-    dimBellLines(term, "#666666");
+    dimBellLines(term, colors("#666666"));
     expect(markersHeld(term)).toBe(1);
     term.resize(80, 5);
     expect(markersHeld(term)).toBe(0);
     await written(term, "\x1bc\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[5;1H");
-    dimBellLines(term, "#666666");
+    dimBellLines(term, colors("#666666"));
     expect(markersHeld(term)).toBe(1);
     forgetBellLines(term);
     term.dispose();
@@ -266,39 +281,13 @@ describe("what is drawn on a real terminal", () => {
   it("draws again when its marker was disposed under it and the row is the same", async () => {
     const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
     await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
-    dimBellLines(term, "#666666");
+    dimBellLines(term, colors("#666666"));
     const [marker] = (term as unknown as { _core: { buffer: { markers: Array<{ dispose(): void }> } } })._core.buffer.markers;
     marker!.dispose();
     expect(markersHeld(term)).toBe(0);
-    dimBellLines(term, "#666666");
+    dimBellLines(term, colors("#666666"));
     expect(markersHeld(term)).toBe(1);
     forgetBellLines(term);
-    term.dispose();
-  });
-});
-
-describe("the bar on a letter's rows", () => {
-  it("is drawn on each row's own element inside its box, over nothing, in the token's color", () => {
-    const { term, counts } = fakeTerminal(["❯ 🦉 a 보고: 끝에서 끝까지", "  꺾인 둘째 줄", "⏺ ok"].map((line, i) => (i === 0 ? line.padEnd(95, "가") : line)));
-    dimBellLines(term, "#666");
-    expect(counts.renderers.length).toBe(counts.decorations);
-    const style: Record<string, string> = {};
-    for (const render of counts.renderers) render({ style } as unknown as HTMLElement);
-    expect(style).toMatchObject({ boxSizing: "border-box", pointerEvents: "none", borderLeft: "3px solid var(--terminal-letter-bar)" });
-    const element = { style: {} as Record<string, string> };
-    styleBar(element as unknown as HTMLElement);
-    expect(element.style.borderLeft).toBe("3px solid var(--terminal-letter-bar)");
-  });
-
-  it("is drawn on at most the cap of rows, the newest", async () => {
-    const term = new Terminal({ rows: 200, cols: 40, scrollback: 0, allowProposedApi: true });
-    let data = "";
-    for (let y = 1; y <= 200; y += 1) data += `\x1b[${y};1H❯ 🦉 a 보고: ${y}`;
-    await written(term, data + "\x1b[200;1H");
-    dimBellLines(term, "#666666");
-    expect(markersHeld(term)).toBe(MAX_BAR_ROWS);
-    forgetBellLines(term);
-    expect(markersHeld(term)).toBe(0);
     term.dispose();
   });
 });

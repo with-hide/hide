@@ -1,18 +1,13 @@
-// The doorbell's lines on a pane's screen, drawn dim.
+// The doorbell's lines on a pane's screen, drawn as a pale band of blue-grey words.
 //
 // Hide types `🦉 <sender> <kind>: <summary>` into a Claude Code or Codex pane
 // to wake it for a letter (`docs/delivery.md`, The bell line). The agent echoes
 // it as a prompt row, `❯ 🦉 …` in Claude Code and `› 🦉 …` in Codex, and it is
 // a letter between agents, not something the operator has to act on; what the
-// operator owes an answer to is Needs You. The row is dimmed, never hidden or
+// operator owes an answer to is Needs You. The row is quieted, never hidden or
 // rewritten: the agent's own TUI draws it, so the shell only lays a foreground
-// color over its cells, and the text, the selection and the copy stay as drawn.
-//
-// Each such row also carries a bar at its left edge, `--terminal-letter-bar`, so
-// the letter reads as a letter at a glance while its words stay quiet. The bar
-// is the decoration's own element, a DOM overlay in the WebGL renderer too, one
-// per row so a wrapped line keeps it on every row, with pointer events off and
-// a border inside the element's box so no text moves under it.
+// and a background color over its cells, and the text, the selection and the
+// copy stay as drawn.
 //
 // The pane keeps no scrollback and the holder redraws its screen rows in place,
 // so a marker on a row says nothing about what the row shows next. After a
@@ -20,7 +15,7 @@
 // rows that carry a bell line moved or a decoration or marker was disposed.
 //
 // Only the shape of the row is read, never who typed it, so a line a person
-// typed that begins with the prompt glyph and an owl is dimmed too, and a Grok
+// typed that begins with the prompt glyph and an owl is marked too, and a Grok
 // row its keyboard focus frames (`│ ❯ 🦉 … │`) is not. Telling them apart needs
 // the core to mark the line it typed; that is a follow-up, not this file.
 
@@ -50,19 +45,6 @@ export function bellScan(echoes: readonly BellEchoShape[]): { bellRow: RegExp; c
 
 const declared = AGENT_ADAPTERS.flatMap((row) => (row.bell_echo ? [row.bell_echo] : []));
 const declaredScan = bellScan(declared);
-
-/** The most rows one terminal draws a bar on; past it the rows nearest the cursor, the newest, keep theirs. */
-export const MAX_BAR_ROWS = 120;
-
-/** The bar's width, the left border of the decoration's element. */
-const BAR_WIDTH_PX = 3;
-
-/** Draws the bar on the element xterm made for one row's decoration; the element is xterm's to remove with it. */
-export function styleBar(element: HTMLElement) {
-  element.style.boxSizing = "border-box";
-  element.style.borderLeft = `${BAR_WIDTH_PX}px solid var(--terminal-letter-bar)`;
-  element.style.pointerEvents = "none";
-}
 
 /** A wrapped row leaves this many cells unused at most when the next word fits no better. */
 const WRAP_SLACK = 16;
@@ -101,10 +83,13 @@ export function bellRows(rows: readonly ScreenRow[], cols: number, scan = declar
   return found;
 }
 
+/** The words and the band behind a letter's rows; the band is opaque, as xterm's background color has no alpha. */
+export type BellColors = { foreground: string; background: string };
+
 /** A decoration and the marker it hangs on: disposing a decoration leaves its marker registered in the buffer. */
 type Item = { y: number; marker: IMarker; decoration: IDecoration };
 
-type Drawn = { rows: number[]; color: string; cols: number; height: number; items: Item[] };
+type Drawn = { rows: number[]; colors: BellColors; cols: number; height: number; items: Item[] };
 
 const drawn = new WeakMap<Terminal, Drawn>();
 const waiting = new WeakMap<Terminal, number>();
@@ -150,18 +135,18 @@ function dispose(term: Terminal) {
  * made for. A resize, a reset the holder redraws after, or a trim disposes a
  * marker, and the rows read afterwards can be the same ones.
  */
-function holds(term: Terminal, was: Drawn, rows: readonly number[], color: string): boolean {
-  if (was.color !== color || was.cols !== term.cols || was.height !== term.rows) return false;
+function holds(term: Terminal, was: Drawn, rows: readonly number[], colors: BellColors): boolean {
+  if (was.colors.foreground !== colors.foreground || was.colors.background !== colors.background || was.cols !== term.cols || was.height !== term.rows) return false;
   if (was.rows.length !== rows.length || !was.rows.every((row, i) => row === rows[i])) return false;
   const top = term.buffer.active.viewportY;
   return was.items.every(({ y, marker, decoration }) => !decoration.isDisposed && !marker.isDisposed && marker.line === top + y);
 }
 
-/** Reads the screen now and draws the bell rows in `color`; nothing changes while what is drawn holds. */
-export function dimBellLines(term: Terminal, color: string) {
-  const rows = bellRows(readRows(term), term.cols).slice(-MAX_BAR_ROWS);
+/** Reads the screen now and draws the bell rows in `colors`; nothing changes while what is drawn holds. */
+export function dimBellLines(term: Terminal, colors: BellColors) {
+  const rows = bellRows(readRows(term), term.cols);
   const was = drawn.get(term);
-  if (was && holds(term, was, rows, color)) return;
+  if (was && holds(term, was, rows, colors)) return;
   dispose(term);
   if (rows.length === 0) return;
   const buffer = term.buffer.active;
@@ -169,22 +154,19 @@ export function dimBellLines(term: Terminal, color: string) {
   for (const y of rows) {
     const marker = term.registerMarker(buffer.viewportY + y - (buffer.baseY + buffer.cursorY));
     if (!marker) continue;
-    const decoration = term.registerDecoration({ marker, x: 0, width: term.cols, foregroundColor: color, layer: "top" });
-    if (decoration) {
-      decoration.onRender(styleBar);
-      items.push({ y, marker, decoration });
-    }
+    const decoration = term.registerDecoration({ marker, x: 0, width: term.cols, foregroundColor: colors.foreground, backgroundColor: colors.background, layer: "top" });
+    if (decoration) items.push({ y, marker, decoration });
     else marker.dispose();
   }
-  drawn.set(term, { rows, color, cols: term.cols, height: term.rows, items });
+  drawn.set(term, { rows, colors, cols: term.cols, height: term.rows, items });
 }
 
 /** Asks for the screen to be read once at the next animation frame, however many frames came before it. */
-export function queueBellLines(term: Terminal, color: () => string) {
+export function queueBellLines(term: Terminal, colors: () => BellColors) {
   if (waiting.has(term)) return;
   waiting.set(term, requestAnimationFrame(() => {
     waiting.delete(term);
-    dimBellLines(term, color());
+    dimBellLines(term, colors());
   }));
 }
 
