@@ -258,6 +258,40 @@ pub(crate) fn summary_of(plan: &Plan) -> PlanSummary {
 }
 
 impl Runtime {
+    /// What the plans still need from the delivery ledger: the spawn and
+    /// the child of each step still handed, which the fold of its letters
+    /// and end reads (`fold_delegations`). Before the saved plans are read,
+    /// every spawn a step started is held with its child instead.
+    pub(super) fn plan_holds(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        held: &mut crate::coordination::Held,
+    ) {
+        if self.plans.load != Load::Ready {
+            for spawn in ledger
+                .into_iter()
+                .flat_map(|ledger| &ledger.spawns)
+                .filter(|spawn| spawn.plan.is_some())
+            {
+                held.spawns.insert(spawn.id.clone());
+                held.agents.extend(spawn.child.clone());
+            }
+            return;
+        }
+        for delegation in self
+            .plans
+            .book
+            .values()
+            .flat_map(|plan| &plan.steps)
+            .filter(|step| !step.status.finished())
+            .filter_map(|step| step.delegation.as_ref())
+            .filter(|delegation| delegation.active())
+        {
+            held.spawns.insert(delegation.spawn.clone());
+            held.agents.extend(delegation.agent_id.clone());
+        }
+    }
+
     /// Reads the saved plans into the core, once the link worker is there,
     /// and again after a read that failed when a command needs them.
     pub(super) fn restore_plans(&mut self) {
@@ -1853,5 +1887,136 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 2);
+    }
+
+    /// What a full delivery ledger keeps for the plans
+    /// (`coordination::room`): the spawn and child of a step still handed,
+    /// and none of a finished step's or a taken-back one's; before the saved
+    /// plans are read, every spawn a step started, with its child. A mission
+    /// book not installed yet holds every spawn a mission started the same
+    /// way.
+    #[test]
+    fn a_full_ledger_keeps_the_spawn_and_child_of_a_step_still_handed() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let session = SessionIdentity {
+            device_id: "mac".into(),
+            agent: "claude".into(),
+            session_id: "main".into(),
+        };
+        let step = |key: &str, status: &str, n: u64, released: bool| {
+            serde_json::json!({
+                "key": key, "title": key, "status": status,
+                "delegation": {
+                    "attempt": 1, "spawn": format!("spawn-{n}"), "name": "child",
+                    "agent": "codex", "agent_id": format!("agent-{}", n + 1),
+                    "state": "working", "released": released,
+                },
+            })
+        };
+        let plan = Plan {
+            session: session.clone(),
+            steps: serde_json::from_value(serde_json::json!([
+                step("handed", "working", 10, false),
+                step("finished", "done", 20, false),
+                step("taken", "working", 30, true),
+            ]))
+            .unwrap(),
+            review: Review::Approved,
+            ask: None,
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+            asked_at_unix_ms: None,
+        };
+        runtime.plans.book.insert(session.clone(), plan);
+        let spawn = |n: u64, link: serde_json::Value| -> crate::coordination::SpawnRecord {
+            let mut value = serde_json::json!({
+                "id": format!("spawn-{n}"), "parent": "agent-1", "intent": format!("i{n}"),
+                "name": "child", "kind": "codex", "repo": "/repo", "branch": "b",
+                "requested_path": null, "args": [], "path": null, "pane": null,
+                "child": format!("agent-{}", n + 1),
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(link.as_object().unwrap().clone());
+            serde_json::from_value(value).unwrap()
+        };
+        let ledger = crate::delivery::ledger::Ledger {
+            spawns: vec![
+                spawn(
+                    40,
+                    serde_json::json!({"plan": {"plan": "1", "step": "s", "attempt": 1,
+                    "parent_session": session}}),
+                ),
+                spawn(50, serde_json::json!({"mission": "mission-1"})),
+                spawn(60, serde_json::json!({})),
+            ],
+            ..Default::default()
+        };
+        runtime.delivery_ledger = Ok(std::sync::Arc::new(ledger));
+        let ids = |held: &crate::coordination::Held| {
+            (
+                held.spawns.iter().cloned().collect::<Vec<_>>(),
+                held.agents.iter().cloned().collect::<Vec<_>>(),
+            )
+        };
+        assert!(runtime.missions.store.is_none());
+        runtime.plans.load = Load::Ready;
+        assert_eq!(
+            ids(&runtime.delivery_held().unwrap()),
+            (
+                vec!["spawn-10".to_owned(), "spawn-50".to_owned()],
+                vec!["agent-11".to_owned(), "agent-51".to_owned()]
+            )
+        );
+        runtime.plans.load = Load::Idle;
+        assert_eq!(
+            ids(&runtime.delivery_held().unwrap()),
+            (
+                vec!["spawn-40".to_owned(), "spawn-50".to_owned()],
+                vec!["agent-41".to_owned(), "agent-51".to_owned()]
+            )
+        );
+    }
+
+    #[test]
+    fn a_reworked_reported_step_reads_missing_child_and_spawn_history_after_eviction() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let session = SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "main".into(),
+        };
+        let plan = Plan {
+            session: session.clone(),
+            steps: serde_json::from_value(json!([{
+                "key": "fix", "title": "Fix", "status": "done",
+                "delegation": { "attempt": 1, "spawn": "spawn-10", "name": "child",
+                    "agent": "codex", "agent_id": "agent-11", "state": "reported",
+                    "released": false },
+            }]))
+            .unwrap(),
+            review: Review::Approved,
+            ask: None,
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+            asked_at_unix_ms: None,
+        };
+        // A finished step no longer retains the delivery records. They
+        // are absent when its owner later returns the step to work.
+        runtime.delivery_ledger = Ok(std::sync::Arc::new(
+            crate::delivery::ledger::Ledger::default(),
+        ));
+        let next = plans::apply_node(&plan, "fix", Some(StepStatus::Working), None, None, 2)
+            .unwrap()
+            .unwrap();
+        runtime.plans.load = Load::Ready;
+        runtime.plans.book.insert(session.clone(), next);
+        assert!(!runtime.fold_delegations());
+        let shown = runtime.plan_view(&runtime.plans.book[&session], "main");
+        assert_eq!(shown.steps[0].status, StepStatus::Working);
+        let child = shown.steps[0].delegation.as_ref().unwrap();
+        assert_eq!(child.agent_id.as_deref(), Some("agent-11"));
+        assert_eq!((&child.pane_id, &child.session), (&None, &None));
     }
 }

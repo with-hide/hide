@@ -1735,15 +1735,25 @@ impl Runtime {
                     patch.verifier.as_deref(),
                     patch.agent_id.as_ref().and_then(Option::as_deref),
                 ];
-                // An agent from another machine is bound only where a spawn
-                // for this node would start it; one it holds already stays.
+                // A new binding requires a live registration. Existing
+                // bindings, including a replan's history, remain valid.
+                // Another machine is admitted only where a spawn for this
+                // node would start it.
                 let held = &current.nodes[index];
                 for id in named.into_iter().flatten() {
-                    if held.agent_id.as_deref() != Some(id)
-                        && !Self::checks_node(held, id)
-                        && let Some(machine) = self.registered_elsewhere(current, id)?
-                    {
-                        self.admit_elsewhere(current, &machine, Some(held))?;
+                    if held.agent_id.as_deref() != Some(id) && !Self::checks_node(held, id) {
+                        let ledger = self.delivery_state()?;
+                        let record = ledger
+                            .agents
+                            .iter()
+                            .find(|record| record.id == id)
+                            .ok_or("agent_unavailable")?;
+                        if record.ended {
+                            return Err("agent_ended".into());
+                        }
+                        if record.machine != current.device_id {
+                            self.admit_elsewhere(current, &record.machine, Some(held))?;
+                        }
                     }
                 }
                 let mut bound = current.nodes[index].clone();
@@ -2922,8 +2932,8 @@ impl Runtime {
     }
 
     /// The machine registration `id` runs on, when the ledger has it on
-    /// another machine than `mission`'s. A ledger Hide could not read is its
-    /// own refusal, since it cannot say where the agent runs.
+    /// another machine than `mission`'s. A replan retains existing ended
+    /// or missing history; only new bindings require a live registration.
     fn registered_elsewhere(&self, mission: &Mission, id: &str) -> Result<Option<String>, String> {
         Ok(self
             .delivery_state()?
@@ -4081,6 +4091,49 @@ pub(super) fn worker_life(
     match crate::coordination::life(record, sleeping) {
         Life::Closed => Life::Ended,
         life => life,
+    }
+}
+
+impl Runtime {
+    /// What the open missions still need from the delivery ledger: their
+    /// Conductors, and their nodes' workers and bound checkers, whose
+    /// health and letters are read from their registrations. Before the
+    /// book is read, or while it cannot be, every registration is held:
+    /// a Conductor or a directly bound worker need not have a mission spawn.
+    pub(super) fn mission_holds(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        held: &mut crate::coordination::Held,
+    ) {
+        if self.missions.store.is_none() || self.missions.unreadable.is_some() {
+            held.agents.extend(
+                ledger
+                    .into_iter()
+                    .flat_map(|ledger| &ledger.agents)
+                    .map(|agent| agent.id.clone()),
+            );
+            for spawn in ledger
+                .into_iter()
+                .flat_map(|ledger| &ledger.spawns)
+                .filter(|spawn| spawn.mission.is_some())
+            {
+                held.spawns.insert(spawn.id.clone());
+                held.agents.extend(spawn.child.clone());
+            }
+            return;
+        }
+        let open = || {
+            self.missions
+                .book
+                .missions
+                .iter()
+                .filter(|mission| mission.status.open())
+        };
+        held.agents.extend(
+            open()
+                .filter_map(|mission| mission.conductor.agent_id.clone())
+                .chain(named_agents(open()).into_iter().map(str::to_owned)),
+        );
     }
 }
 

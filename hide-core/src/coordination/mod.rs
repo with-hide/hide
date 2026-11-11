@@ -7,7 +7,10 @@ pub mod human_turn;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
+mod room;
 pub(crate) mod started;
+
+pub(crate) use room::{Held, Holds, dropped};
 
 use crate::delivery::answer::{AgentView, Connection, RegisterCheck, Runtime};
 use crate::delivery::{Actor, ledger::Ledger, watch};
@@ -1611,11 +1614,26 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
     Ok(())
 }
 
+/// [`apply_with`] for a ledger whose records no book outside it holds.
+#[cfg(test)]
 pub(crate) fn apply(
     ledger: &mut Ledger,
     caller: &Actor,
     mutation: &Mutation,
     now: u64,
+) -> Result<Value, String> {
+    apply_with(ledger, caller, mutation, now, &Held::default())
+}
+
+/// Applies `mutation` for `caller`. A registration or spawn that finds the
+/// ledger full makes room by dropping what has finished and nothing names,
+/// reading what the core's books hold from `holds` only then (`room`).
+pub(crate) fn apply_with(
+    ledger: &mut Ledger,
+    caller: &Actor,
+    mutation: &Mutation,
+    now: u64,
+    holds: &dyn Holds,
 ) -> Result<Value, String> {
     match mutation {
         Mutation::AskHuman { turn } => human_turn::declare(ledger, caller, turn.as_ref(), now),
@@ -1654,7 +1672,7 @@ pub(crate) fn apply(
             {
                 registration.origin = existing.origin.clone();
             }
-            insert_record(ledger, &registration, *check)
+            insert_record(ledger, &registration, *check, holds)
         }
         Mutation::End { id, actor } => {
             let record = ledger
@@ -1816,9 +1834,7 @@ pub(crate) fn apply(
             // its main's, waits; the same intent asked again above still
             // answers the spawn it made.
             spawn_cap(ledger, mission.as_deref(), plan.as_deref(), now)?;
-            if ledger.spawns.len() >= SPAWN_LIMIT {
-                return Err("capacity".into());
-            }
+            room::for_spawn(ledger, holds)?;
             let record = SpawnRecord {
                 seed_tab: None,
                 names: Some(naming::Names::default()),
@@ -2215,7 +2231,7 @@ pub(crate) fn apply(
                 }
                 existing.id.clone()
             } else {
-                insert_record(ledger, record, false)?["id"]
+                insert_record(ledger, record, false, holds)?["id"]
                     .as_str()
                     .ok_or("child_unavailable")?
                     .to_owned()
@@ -2480,7 +2496,12 @@ fn validate_registration_name(caller: &Actor, record: &AgentRecord) -> Result<()
     Ok(())
 }
 
-fn insert_record(ledger: &mut Ledger, record: &AgentRecord, check: bool) -> Result<Value, String> {
+fn insert_record(
+    ledger: &mut Ledger,
+    record: &AgentRecord,
+    check: bool,
+    holds: &dyn Holds,
+) -> Result<Value, String> {
     if let Some(existing) = ledger
         .agents
         .iter()
@@ -2511,9 +2532,7 @@ fn insert_record(ledger: &mut Ledger, record: &AgentRecord, check: bool) -> Resu
             pane: record.pane.clone(),
         }));
     }
-    if ledger.agents.len() >= AGENT_LIMIT {
-        return Err("capacity".into());
-    }
+    room::for_agent(ledger, holds)?;
     let mut record = record.clone();
     record.id = allocate(ledger, "agent")?;
     ledger.agents.push(record.clone());
@@ -2900,7 +2919,7 @@ mod tests {
         }
     }
 
-    fn command(intent: &str) -> Command {
+    pub(super) fn command(intent: &str) -> Command {
         Command::Spawn {
             pick: None,
             mission: None,
