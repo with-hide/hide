@@ -110,10 +110,12 @@ pub use hide_agent_hooks::hook_request::workspace_bridges;
 /// none past a letter's deadline; named beside the hooks that keep them,
 /// which the kit's crates sit above (`docs/delivery.md`, A confirmation that
 /// missed its hook). `owed_confirmations` is the folder a hook writes, for
-/// its own installation, and `owed_confirmations_of` the one a node reads,
-/// for the installation it runs.
+/// its own pane, and `owed_confirmations_in` the one a node reads, under the
+/// records folder it already resolved from the state folder and installation
+/// it serves, so the route decides that folder once and this only names what
+/// sits below it.
 pub use hide_agent_hooks::owed::{
-    folder as owed_confirmations, folder_of as owed_confirmations_of,
+    folder as owed_confirmations, folder_in as owed_confirmations_in,
 };
 
 /// The daemon's lifetime lock, shared with the account kit's route ownership check.

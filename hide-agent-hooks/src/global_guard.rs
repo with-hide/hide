@@ -89,7 +89,7 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>) {
         "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
+    crate::hook_log::append(home, &line);
 }
 
 /// Whether a word or a redirection of `command`, read in `syntax`, or of a

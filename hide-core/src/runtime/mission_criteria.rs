@@ -672,15 +672,22 @@ impl Runtime {
                 .iter()
                 .any(|decided| decided.key == key && decided.node == node)
         };
-        if line.protected() && !decision.is_some_and(answered) {
+        // A failed CI is judged as the line shows now: a new head opens it,
+        // and the Conductor may then skip it with its reason alone.
+        let protected = self
+            .shown_criteria(mission, &mission.nodes[index])
+            .iter()
+            .any(|shown| shown.key == key && shown.protected());
+        if protected && !decision.is_some_and(answered) {
             return Err(crate::coordination::refusal(
                 "mission_criteria_protected",
                 &format!("{node}: {key}"),
             ));
         }
         // A decision is kept only where it was needed, so the line says
-        // `operator 결정` only when it was one.
-        let decision = decision.filter(|_| line.protected());
+        // `operator 결정` only when it was one, and the lines skipped without
+        // one are the Conductor's own (`Conductor가 정한 것`).
+        let decision = decision.filter(|_| protected);
         let by = Recorded {
             role: Role::Conductor,
             name: actor.name.clone(),

@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { agentPane } from "./agent-pane";
-import { startHided, type Daemon } from "./hided-fixture";
+import { hookRecords, startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
 // The kit writes POSIX hook commands; Windows' `cmd /c` form is the Rust Windows lane's.
@@ -171,7 +171,7 @@ test("the installed agy tool command refuses a result handed to the system opene
     const answer = JSON.parse(refused.out) as { decision: string; reason: string };
     expect(answer.decision).toBe("deny");
     expect(answer.reason).toContain("browser open report.html");
-    expect(refusals(home)).toEqual(["antigravity"]);
+    expect(refusals(stack.daemon)).toEqual(["antigravity"]);
 
     // Every other path leaves the call to agy's own permission question: ask, never allow.
     for (const payload of [call("run_command", { CommandLine: "cargo test", Cwd: checkout }), call("view_file", { AbsolutePath: path.join(checkout, "README.md") })]) {
@@ -179,7 +179,7 @@ test("the installed agy tool command refuses a result handed to the system opene
       expect(run.status).toBe(0);
       expect(JSON.parse(run.out)).toEqual({ decision: "ask" });
     }
-    expect(refusals(home)).toEqual(["antigravity"]);
+    expect(refusals(stack.daemon)).toEqual(["antigravity"]);
   } finally {
     stop(stack);
   }
@@ -191,8 +191,8 @@ function runHook(asAgent: Awaited<ReturnType<typeof agentPane>>, home: string, c
 }
 
 /** The runtimes of the opener guard's refusals so far, in order: the hooks' log, one `opener.refused` line each. */
-const refusals = (home: string): string[] =>
-  read(path.join(home, ".hide", "agent-hooks", "spawn-guard.log"))
+const refusals = (daemon: Daemon): string[] =>
+  read(path.join(hookRecords(daemon), "spawn-guard.log"))
     .split("\n")
     .filter((line) => line.includes('"opener.refused"'))
     .map((line) => (JSON.parse(line) as { runtime: string }).runtime);

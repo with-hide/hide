@@ -12,7 +12,7 @@ import path from "node:path";
 import { bundledExecutable } from "./bundled-app";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { sendKeys, withControl } from "./daemon-actions";
-import { startHided, type Daemon } from "./hided-fixture";
+import { hookRecords, startHided, type Daemon } from "./hided-fixture";
 import { installPiOmpHosts, piOmpHost, type Host } from "./pi-omp-host";
 import { snapshotCounts } from "./subagent-counts";
 import { enterWorkspace } from "./wire";
@@ -132,7 +132,7 @@ test("a shell call that hands a result to the system opener is refused with the 
       expect(await host.send({ op: "tool", tool: "bash", input: { command: "ls -la" } })).toEqual({ ran: true });
       expect(await host.send({ op: "tool", tool: "read", input: { path: "/etc/hosts" } })).toEqual({ ran: true });
     }
-    const log = fs.readFileSync(path.join(stack.home, ".hide", "agent-hooks", "spawn-guard.log"), "utf8");
+    const log = fs.readFileSync(path.join(hookRecords(stack.daemon), "spawn-guard.log"), "utf8");
     expect(log).toContain('"kind":"opener.refused"');
     expect(log).toContain('"runtime":"pi"');
     expect(log).toContain('"runtime":"omp"');

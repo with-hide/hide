@@ -3095,6 +3095,18 @@ impl Runtime {
         if self.hook_diagnosis.as_ref() == Some(&diagnosis) {
             return false;
         }
+        // A records folder the diagnosis could not resolve is kept as its
+        // own reason rather than read as "no failure on record": the operator
+        // can act on it only if the diagnostic log says so (engineering
+        // rules 4 and 10).
+        if let Some(error) = &diagnosis.records_error {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_hooks",
+                "kind": "records.unreadable",
+                "node": self.node.as_str(),
+                "cause": error,
+            }));
+        }
         self.hook_diagnosis = Some(diagnosis);
         self.sync_pane_lineage();
         self.enable_memory_after_hook_update();

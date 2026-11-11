@@ -11,7 +11,7 @@ import path from "node:path";
 import { bundledExecutable } from "./bundled-app";
 import { sendKeys, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { hookRecords, startHided, type Daemon } from "./hided-fixture";
 import { installOpenCodeHost, openCodeHost, type Host } from "./opencode-host";
 import { snapshotCounts } from "./subagent-counts";
 import { enterWorkspace } from "./wire";
@@ -110,7 +110,7 @@ test("a shell call that hands a result to the system opener is refused with the 
     // B7: the model reads the reason as the tool's error.
     const refused = await stack.recipient.send({ op: "tool", tool: "bash", args: { command: "open report.html" } });
     expect(String(refused.refused)).toContain("browser open report.html");
-    const log = fs.readFileSync(path.join(stack.home, ".hide", "agent-hooks", "spawn-guard.log"), "utf8");
+    const log = fs.readFileSync(path.join(hookRecords(stack.daemon), "spawn-guard.log"), "utf8");
     expect(log).toContain('"kind":"opener.refused"');
     expect(log).toContain('"runtime":"opencode"');
 

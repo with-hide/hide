@@ -93,10 +93,8 @@ impl Runtime {
         let changed =
             self.expire_dormant_confirmation(now_unix_ms) | self.fail_unstarted_wakes(now_unix_ms);
         let changed = self.decide_agent_sleep(None, now_unix_ms) | changed | woke;
-        // A raise that waited ten minutes on its Conductor reaches the
-        // operator (D-05), and a node at work long enough with no push
-        // warns its Conductor (with-hide/hide-private#552).
-        let changed = self.raise_to_operator(now_unix_ms) | changed;
+        // A node at work long enough with no push warns its Conductor
+        // (with-hide/hide-private#552).
         let changed = self.warn_missions(now_unix_ms) | changed;
         // A delay that ran out ends, and a node whose move did not come is
         // raised as stalled.

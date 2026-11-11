@@ -9,6 +9,7 @@ This is the only part of the tree Hide cannot read from the session snapshot, an
 ## What is written, and where
 
 `hide-agent-hooks/` is the only code path in the product that writes a file the operator owns outside the app's own state.
+Its own records are the exception: they stay in the state folder of the daemon that reads them ([Where the hooks keep their records](#where-the-hooks-keep-their-records)), so a candidate Hide started with a state folder of its own writes there rather than into the operator's `~/.hide`.
 
 | Runtime | File |
 | --- | --- |
@@ -67,7 +68,7 @@ The account kit records which daemon state folder owns those commands; a differe
 File identity treats aliases or case changes of the same state folder as the same owner.
 After that daemon ends, the next pass may take ownership and refresh the entries.
 Development and QA candidates use a private HOME as well as a private state folder, because changing only the state folder still shares the account's hook files.
-Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
+Before that pass, an unavailable old folder leaves mail pending and refuses the call with the cause it names (`unavailable`; an invalid captured argument is `record`), and the refusal is printed on the helper's standard error with that cause and the folder's own sentence: the account's records folder belongs to another daemon, so nothing is written there on the moved entry's behalf, and the next kit pass rewrites the entry.
 
 The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: showing the operator a file, diff or web page (`hide file|diff|browser open …`, which opens as a tab of the active View area and waits in their Needs You as To look at until they look at it), checking a page for yourself with your own browser tool such as `aside` and not `hide browser open`, collecting what a delegated child opened (`hide view list`, a read with `hide view status` or `hide browser snapshot`, and an open again from your own pane to show it), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`), complex work (planning or review first, multiple PRs or parallel work, another agent reviewing, or work likely to fill the conversation: first propose a mission in one line and follow the operator’s answer; an explicit mission request or `/hide-mission` goes straight to `hide mission help`, and work without these signals proceeds directly without asking) a bug in Hide itself (a crash, a command that fails or answers wrongly for no reason of the agent's, a pane or screen that breaks: `hide issue help`), and independent work (no `--parent`), with a line that forbids starting an agent with `hide pane open` or by typing its program into a pane.
 The table is one literal (`hide_agent_hooks::intent_table!`) at the front of `PURPOSE_CONTEXT`, so every runtime's SessionStart, `hide guide` and the `hide` skill (version 10) carry the same text, and an older version is replaced at the next kit pass.
@@ -207,7 +208,7 @@ What the core keeps besides the turn (runtime, version, session and counts) is s
 A restart of the engine loses none of this, because the core keeps it itself (D-8).
 A core that starts with no `hook-facts.json` takes the pane records below as its facts once and saves them, so an agent that last reported before the update stays connected.
 
-Each pane's records live in `~/.hide/agent-hooks/panes/`, one file per pane id, `$HIDE_PANE_ID`; every reader of a pane's id reads it through `hide_agent_hooks::pane`.
+Each pane's records live in the hooks' records folder's `panes/` ([Where the hooks keep their records](#where-the-hooks-keep-their-records)), one file per pane id, `$HIDE_PANE_ID`; every reader of a pane's id reads it through `hide_agent_hooks::pane`.
 The file holds a record per session, at most eight, the session heard from last at the end: the counts, the hook version and adapter id of the helper that wrote it, the session id the hook's input named, and the turn its last report said, so a tool event reports only a turn it moves.
 A file an earlier helper wrote, with one record, is read as that record, and an event that changed no record leaves the file unwritten.
 A pane the engine has stopped listing has its file swept on the next session bootstrap.
@@ -328,9 +329,44 @@ Like the guardrails it is a guard, not a security boundary: a script that spells
 The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
 A move of the core carries the text the core reads through such a link as a regular file, since the link would point nowhere on the receiving machine, and leaves a link whose file the core reads as too large or unreadable behind with a `global_instruction.link_left` diagnostic and its reason.
 
+### Where the hooks keep their records
+
+The hooks' records are the pane counts and turns (`panes/`), the pane's plan (`plans/`), the failed reports (`last-report-failure.json`, `spawn-guard.log`) and what a hook could not deliver (`delivery-diagnostics.json`).
+They live in the folder of the daemon whose state folder the hook asks, so a daemon reads what its own hooks wrote and no other Hide's:
+
+| The daemon's state folder | Records folder |
+| --- | --- |
+| The account's own, `~/.hide/state` | `~/.hide/agent-hooks`, where every build so far wrote them |
+| Any other, chosen by `HIDE_STATE_DIR` or `XDG_STATE_HOME`, as a test or a QA candidate's is | `<state folder>/agent-hooks` |
+
+The choice is made by the folder and not by which variable named it: a daemon `hide connect` starts is handed its state folder through `HIDE_STATE_DIR`, and one naming the account's own moves nothing.
+A folder `XDG_STATE_HOME` chose counts as a move, and is judged from the resolved state folder, so a hook that lost Hide's environment and one that kept it agree.
+Hook, node, core and `doctor` all resolve it the same way, and the folder a daemon uses is the one its `hook-facts.json` first-run seed, its pane sweep and its diagnosis read (`route::records_in`).
+
+One rule composes that folder with an installation (`route::records_of_state`, `route::pane_records_at`): the desktop app's panes, and the panes that name none, keep them in the folder itself as every build so far did, and a pane another installation started keeps them under `installs/<mark>` inside it, a short sha256 of the installation's name (`app` for the desktop package, `root:<helper root>` for a device helper's or a build Hide placed there).
+Every record under that composition is the installation's, the failure record and the log too: a helper's refused pane record and its `spawn-guard.log` line sit beside the counts that helper wrote under its mark, so an installation's failure never overwrites another's current state, and the pane a start waits on is the pane `doctor`, its node and the journey find.
+A helper an earlier build installed wrote every installation's records under `installs/<mark>/panes`; this build composes the same folder, so an upgrade reads them and nothing is lost.
+A hook reads the installation from its pane (`HIDE_INSTALL`), a node from the installation whose panes it starts, and a core, the engine and the node's diagnosis are handed it by the process that owns the machine, never read from the environment they run in: a core, a node or `doctor` is told its daemon's state folder and its installation, so it reads the folder that daemon's panes' hooks wrote even where its own environment names another.
+That composition is `records_of_state(home, state, install)`, and it is the one place that decides where a record lives: a hook calls it through `pane_records`, a node, the core and `doctor` call it with the state folder and installation they own, and a function that is already handed a records folder (`owed::folder_in`) only decides the name below it, never applying the installation a second time.
+
+A record whose folder is not the one a reader resolves is read by no one, and a reader names the folder it read rather than the record it did not find.
+`doctor` and the node's diagnosis are the readers that name a failure: they read the folder of the daemon whose state folder and installation they serve, so a helper's record under another mark is not theirs to read, and the operator's `doctor` on the account's own state folder is the one that reads the app's.
+A helper whose installation the reader cannot know - a pane that named none but whose records an earlier build kept under a mark - is read by the pane's own hook and by no node: the pane record it writes next lands in the folder the reader resolves, and what the earlier helper wrote stays where it is, unread rather than guessed at.
+Falling back to the account's own folder when the records folder does not read is never done: a refusal is the reader's answer, since a record read past a refusal would be attributed to a daemon that never wrote it.
+
+A state folder that cannot be read is an answer of its own and never the account's folder: a folder that is missing, one this process may not read and one that is not a folder each keep their kind and a sentence that names the folder (`route::records_folder_of`), so every reader answers `io::Result` and none falls back to `~/.hide/agent-hooks`.
+The route asks for the one records folder it names and never for a listing of the state folder: a hook may run where the state folder is searchable and its records folder is granted while the state folder's own contents are not readable, which is how the agent journey's write sandbox hands a pane's hook exactly the folder its records live in.
+Listing the state folder refused every hook in such a run, so a state folder that denies its contents is met at `<state folder>/agent-hooks`, which that mode cannot stat either, and a records folder nothing has made yet is absence rather than a failure.
+A hook whose route does not read writes nothing at all there - no pane record, no failure record, no log line and no delivery diagnostic - and creates no folder of another daemon's; the failure reaches the agent on standard error, and `doctor` and the journey name the same folder through `Diagnosis.records_error`.
+An older build wrote a moved daemon's records under the account's `~/.hide/agent-hooks`, since it had no other place; they stay there and nothing deletes them.
+The daemon reads none of them after the update and writes its own from its panes' next events, so what they held is read once more by no one: a pane's counts still come back from the state folder's `hook-facts.json`, its plan record is written again by its next letter pull or `hide task`, and a confirmation it owed ends at its deadline unsent as it would have anyway.
+The one reading that is lost is the turn the older build last recorded, so a restore after the update may not name a cut-off turn once.
+
+The guardrails policy (`guardrails.json`) and the folder-trust records are not among them: they hold what the operator chose for a machine, and stay at `~/.hide/agent-hooks/guardrails.json` (`guardrails::policy_path`) and each agent's own `-trust.json`.
+
 ### What a hook records when it fails
 
-A hook that cannot get its answer goes on without it and records why in `~/.hide/agent-hooks/delivery-diagnostics.json`, private to the account, at most once per cause every ten minutes, with one JSON line on its standard error when it records.
+A hook that cannot get its answer goes on without it and records why in the hooks' `delivery-diagnostics.json`, private to the account, at most once per cause every ten minutes, with one JSON line on its standard error when it records.
 The causes are a fixed list (`CAUSES` in `hide-agent-hooks/src/delivery.rs`), so the file stays small and holds no path or text.
 A hook's request to its daemon (the letter pull, Memory) answers a reason for the step it stopped at, and each step has a cause of its own:
 
@@ -359,8 +395,15 @@ A producer that never closes stdin is released after the 500 ms payload wait.
 A hook that fails must never be what breaks the operator's agent.
 
 Exiting zero is not the same as saying nothing.
-The outcome of every report is recorded in `~/.hide/agent-hooks/last-report-failure.json`: a failure writes the pane, the agent, the event and the cause `hide` answered (the causes of [What a hook records when it fails](#what-a-hook-records-when-it-fails)), and the next success removes the file, so it describes the hook's current state rather than its history.
-Every failure is also a `report.failed` line in the hooks' bounded log, `~/.hide/agent-hooks/spawn-guard.log`, with the pane, the agent, the event and the cause, so a report that did not arrive stays on record after a later one clears the file (engineering rule 10).
+The outcome of every report is recorded in the hooks' `last-report-failure.json`, in the records folder of the pane's daemon and installation ([Where the hooks keep their records](#where-the-hooks-keep-their-records)), so a helper's failure and the app's are two files in two folders rather than one overwriting the other: a failure writes the pane, the agent, the event and the cause `hide` answered (the causes of [What a hook records when it fails](#what-a-hook-records-when-it-fails)), and the next success removes the file, so it describes the hook's current state rather than its history.
+A report whose pane record could not be written is that same failure: the report still goes to the core with the session it names, and the refused write is the pane's recorded cause, so a start waiting for the session's identity is not left without both the identity and the reason.
+One event's two steps are kept apart in that record: `kind` names which failed (`record`, `report`, or `record_and_report`), and `record_error` and `report_error` hold each step's own sentence, so a reader names the cause from `kind` and never from the words.
+A record an earlier build wrote has no `kind`; it is an unknown kind with its original sentence kept, since the old plugin's turn path wrote refused records there too and guessing from the words would read one as a report.
+Every failure is also a `report.failed` line in the hooks' bounded log, `spawn-guard.log`, with the pane, the agent, the event, the cause and the same `failure` kind, so a report that did not arrive stays on record after a later one clears the file (engineering rule 10).
+A failure record and the log line it writes are both written, and one that cannot be is printed on the hook's standard error rather than dropped, since a failure record that is lost is the one `doctor` and Settings exist to show; when the record itself cannot be kept, both sentences are printed, the step that failed and the record that could not hold it.
+The agent journey reads `kind` for its `hook_records` cause (`hook_record_refused`, `hook_report_failed`, `hook_record_and_report_failed`, and `hook_failure_unknown_kind` for a record with none), so a refused pane record inside a journey run is a named cause in the run's report rather than an exit zero with no identity.
+It reads that record from the candidate's own installation folder by the route's rule and answers absence when nothing is there, never another installation's record: a pane id is reused across installations, so a name match under some other mark says nothing about the run's panes (`records_route::another_installations_failure_record_is_not_this_daemons` proves the same answer at the Rust reader).
+When the hooks' records folder itself does not read, `Diagnosis.records_error` keeps that failure instead of an empty `last_report_failure`, `doctor` draws it as `Hook records unreadable: <cause>`, and the core logs it once as `agent_hooks` `records.unreadable` with the node and the cause, so a read that could not happen is never a clean bill.
 A report the core refuses is also written to hided's diagnostic log as `agent_hooks` `status.refused` with the pane, the device, the agent and the reason.
 `Diagnosis` reads it back as `last_report_failure`, `doctor` prints it as a `Last report failed:` line, and the Settings group shows it as an error note above the restart advice, because with a refused report on record a restart is not the fix.
 The Settings screen learns of it through the existing kit worker, with the next diagnosis due one second after the previous read finishes while a window observes Settings (`settings_observed`, the same flag the Hide AI tab sets).
@@ -405,7 +448,7 @@ Outside a pane Hide manages (no `HIDE_PANE_ID`) the call runs without asking any
 Inside a Grok session Claude Code's hook says nothing at all and Grok's own hook guards in its own answer shape ([Grok's own hooks](#groks-own-hooks)); inside OpenCode it ends silently as well and OpenCode gets the same guard from Hide's own plugin.
 Claude Code and Codex share one deny envelope, `hookSpecificOutput.permissionDecision = "deny"` with `permissionDecisionReason`; every other path prints nothing and exits 0, and the whole entry runs inside `catch_unwind`, so a defect allows the call rather than refusing an ordinary one; a failed owner handshake in the environment ends the outer hook with 0 as well, since exit 2 from a pre-tool hook would refuse the call.
 
-Each refusal appends one `opener.refused` line to the hooks' log, `~/.hide/agent-hooks/spawn-guard.log` (private, capped at 256 KiB with one rotation, and named for the guard that first wrote it), and echoes it on standard error, with the pane, the runtime, the openers and the kinds of their targets (`html`, `image`, `url` and so on); neither the command nor a path is written, since either can hold a name the operator keeps private.
+Each refusal appends one `opener.refused` line to the hooks' log, `spawn-guard.log` in the records folder of its daemon ([Where the hooks keep their records](#where-the-hooks-keep-their-records); private, capped at 256 KiB with one rotation, and named for the guard that first wrote it), and echoes it on standard error, with the pane, the runtime, the openers and the kinds of their targets (`html`, `image`, `url` and so on); neither the command nor a path is written, since either can hold a name the operator keeps private.
 The per-call cost is what an ordinary shell call pays: the payload is read within 0.5 seconds, and a call is parsed only when it holds both a word of an opener (`open`, `start`, `saps`, `invoke-item`, `explorer`, `browser`, `wslview`, or `ii` as a word) and a viewable mark (a URL scheme, or a `.` followed by one of the extensions above and no further letter or digit), so any other call costs one process start and the [project guardrails](#project-guardrails)' policy read.
 OpenCode's plugin and Pi's and omp's extension apply the same test in JavaScript before they start the helper.
 `hide-agent-hooks/tests/it/opener_guard.rs` runs the helper for Claude Code, Codex and Grok beside a stand-in `hide`, `tests/it/agy_hooks.rs` for agy and `tests/it/opencode_helper.rs` for the OpenCode, Pi and omp helper, the plugins' host tests check that the call reaches the helper, and `src/opener_guard.rs` holds the reading's table tests.
@@ -526,7 +569,7 @@ A word holding a variable (`$PWD\.env`, `$env:USERPROFILE\.ssh`) is not read in 
 In Git Bash, the shell Claude Code runs on Windows, a backslash path is read as that shell runs it: quoted (`git -C 'C:\repo'`) it is the path, unquoted its backslashes are escapes, there and in the hook alike; a drive mount (`/c/work/...`, `/cygdrive/c/...`) is the drive's path (`hide_platform::path::shell_drive_path`).
 
 The refusal reaches the agent in English, in its runtime's deny shape, and names the protection, what the call did and what to do instead: `Not run: the "Guard files" protection is on for this project in Hide. This call reads or changes a path on the project's protected list. Ask the operator ...`.
-Each refusal appends one `guard.refused` line (rule, whether a fact was unread, runtime, pane; never the command, its paths or a file's contents) to `~/.hide/agent-hooks/spawn-guard.log`, and the operator's screen shows nothing for it.
+Each refusal appends one `guard.refused` line (rule, whether a fact was unread, runtime, pane; never the command, its paths or a file's contents) to `spawn-guard.log` in the hooks' records folder, and the operator's screen shows nothing for it.
 
 How it fails (D-27):
 
@@ -556,7 +599,7 @@ A command hook pays one policy read per call and parses the payload only when so
 
 ## The pane's plan record
 
-The prompt hook and the pre-tool hook know a pane's plan and mission work from one small file, `~/.hide/agent-hooks/plans/<pane>.json` (`hide_agent_hooks::plan_record`), written whole and private to the account: `{"version":1,"session":<native session>,"context":<plan_context>}`, under 16 KiB (PRD hide-plan D-14, D-15, D-30).
+The prompt hook and the pre-tool hook know a pane's plan and mission work from one small file, `plans/<pane>.json` in the hooks' records folder (`hide_agent_hooks::plan_record`), written whole and private to the account: `{"version":1,"session":<native session>,"context":<plan_context>}`, under 16 KiB (PRD hide-plan D-14, D-15, D-30).
 `plan_context` is the summary the core sends ([delivery.md: Plans](delivery.md#plans)), fixed in `contracts/delivery-envelope.json`; the prompt hook writes it from its letter pull's answer, which already asks the core, and every `hide task` command writes it from its own answer, so an approval lets the next write through in the same turn.
 A pane with no record, and a record of another session than the call's, gives neither a line nor a refusal, so a new session in a reused pane starts clean.
 A record written before node criteria still reads: a mission's missing `role` is a worker's, and missing `line`, `criteria` and `unmet` are empty, so it gives the lines it gave before.
@@ -877,7 +920,7 @@ Its recorded layout stays only so retirement can remove Hide-owned entries witho
 Grok fails open on everything but a refusal, so its hook prints nothing on those paths, as Claude Code's does.
 A failure goes to the guard's log, never to the agent (B5).
 
-The count is the same per-pane record and the same report to the core as Claude Code's (above), changed under an exclusive lock on `~/.hide/agent-hooks/panes.lock` (private to the account), so subagents started in parallel are all counted, and a lock not taken within one second is written down as the pane's last report failure.
+The count is the same per-pane record and the same report to the core as Claude Code's (above), changed under an exclusive lock on `panes.lock` in the hooks' records folder (private to the account), so subagents started in parallel are all counted, and a lock not taken within one second is written down as the pane's last report failure.
 A subagent start adds one working, a subagent stop moves one from working to done.
 Grok's `Stop` from inside a subagent leaves the count alone, and the main session's `Stop` sets working to the number of `subagent` entries in `backgroundTasks`, so a background subagent stays counted past the turn and its own `SubagentStop` ends it (D-06); a payload that is cut off or unreadable leaves the count alone.
 The core judges a Grok pane instrumented by that agent's hook piece in the kit (`hide_core::agent_hooks::kit_hook_status` for the agent's `HookDialect`, as for OpenCode's plugin), not by a Claude Code or Codex component.
@@ -1249,7 +1292,7 @@ The kit record keeps the app's parts, command and hook route where earlier build
 A record without `installs` is an earlier build's, which was the account's, and another installation starts from it once.
 A record that cannot be read, damaged or written by a newer build, stays as it is when an installation goes, since it may hold the other's part and the account's choices; removing that installation reports the record as kept.
 The operator's agent choices and the retirements stay the account's.
-A pane of an installation other than the app keeps its subagent counts and plan record under `~/.hide/agent-hooks/installs/<mark>/`, so the app's core neither reads nor sweeps them and equal pane ids never meet.
+A pane of an installation other than the app keeps its subagent counts and plan record under `installs/<mark>/` in its own records folder, so the app's core neither reads nor sweeps them and equal pane ids never meet.
 
 The two coexist once both installations run a build with this rule.
 An installation still on an earlier build treats every Hide entry, plugin file, the `hide` link and the whole record as its own, and can take the other's away until it updates.
@@ -1301,3 +1344,13 @@ Both Node tests start the same stand-in helper (`tests/it/host_helper.rs`), POSI
 `tests/it/opencode_helper.rs` checks through the built helper, beside a stand-in `hide`, which session Memory is asked for (Pi's and omp's host id, never the session file; OpenCode's own id), which Memory context a prompt asks for (the index with the first prompt, cards after), its prompt on stdin, and that the letters ride whatever Memory answers.
 Which session a receipt is signed for and what the core answers are `hide-memory`'s tests (`src/hook.rs`) and the core's (`hide-core/src/memory_hook.rs`, `hided/tests/it/remote_core.rs`).
 `web/e2e/pi-omp-extension.spec.ts` lets the kit write both files into a private `HOME`, runs a Pi stand-in and an omp stand-in (`web/e2e/pi-omp-host.ts`) in the two panes of an isolated engine, and checks a letter in each direction on the next prompt and its confirmation once written, the opener guard's refusal in both, and omp's subagent counts with a subagent prompt that takes no letter.
+
+`tests/it/records_refused.rs` refuses the pane records' own folder while the rest of the records folder stays writable, which is the narrow form of a records write that fails, and checks that the session still reaches the core and that the refused write is the pane's last report failure, once through the command hook and once through the OpenCode helper.
+One of its cases runs the real hook binary with `HIDE_STATE_DIR` and `HIDE_INSTALL` naming another installation's pane and checks that the refusal is kept under that installation's mark, that the diagnosis for that installation reads it and the app's does not, so the hook's own environment-resolving writer (`report::record_outcome`) is what is proven rather than a folder a test named.
+It also runs the helper against a state folder nothing made and checks that the account's records folder stays untouched, with both the record's own cause and the unkept failure record on standard error.
+`tests/it/records_route.rs` holds the records-path rule itself: the state folder a caller passes is the one it reads even where this process's environment names another, two installations keep their own record of one pane id with each session and count, and a record an earlier helper kept under `installs/<mark>/panes` is read after the upgrade.
+`hide-agent-hooks/src/route.rs` and `hide-agent-hooks/src/diagnosis.rs` hold the folder checks: a missing folder, a folder this process may not read and a file that is not a folder each keep their own kind, and a records folder that did not read is `Diagnosis.records_error` drawn as `Hook records unreadable:` rather than an absent failure record.
+The journey reads those records where the candidate keeps them (`scripts/agent_journey/hook_records.py`), so a start refused on a missing identity names the hook outcome that explains it, and `scripts/tests/test_agent_journey_hook_records.py` checks that reading with no agent running, including that a record under another installation's mark is answered as absence rather than read as the run's cause.
+Its write sandbox denies the candidate's whole state folder to the agent, so it opens that records folder and nothing beside it (`allow_hook_records` in `scripts/agent_journey/routes.py`, checked by `scripts/tests/test_agent_journey_trust.py`): without that, a sandboxed hook still reported its session but kept no counts or turn, which is a row that never reads idle after its answer rather than the product's own behavior.
+A turn that never read idle names that pane's recorded outcome too (`hook_records.pane_cause` at `Journey.wait_turn`), so a refused record write reaches the cell as `hook_record_refused` with the hook's own sentence rather than as an idle row Hide never showed, and a record of another pane explains no turn.
+The run also writes that outcome into its own report, as a `Hook records` section and `hook_records` in `report.json`, so a refused write inside a journey is readable where the run is read rather than only in the copied `hook-last-report-failure.json` beside it.

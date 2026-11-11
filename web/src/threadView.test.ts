@@ -59,7 +59,7 @@ describe("a thread's screen", () => {
   const row = (pane_id: string, identity_label: string, mark: AgentRow["mark"]) => ({ pane_id, identity_label, mark, agent_kind: "codex" }) as AgentRow;
   const call = (toolCallId: string, title: string) => ({ sessionUpdate: "tool_call", toolCallId, kind: "execute", title, status: "completed" });
   const plan = { pane_id: "w1:p9" } as PlanView;
-  const mission = { id: "mission-3", title: "Desk 1차", status: "running", decision: null, nodes: [{ status: "done" }, { status: "working" }, { status: "dropped" }] } as unknown as Mission;
+  const mission = { id: "mission-3", title: "Desk 1차", status: "running", decision: null, conductor: { present: true }, nodes: [{ key: "done", depends_on: [], status: "done", attention: null }, { key: "working", depends_on: [], status: "working", attention: null }, { key: "dropped", depends_on: [], status: "dropped", attention: null }] } as unknown as Mission;
   const tail: ThreadPage = {
     updates: [
       { sessionUpdate: "user_message_chunk", content: { type: "text", text: "다음 단계\n둘째 줄" }, _meta: { hide: { origin: "letter", from: "lead" } } },

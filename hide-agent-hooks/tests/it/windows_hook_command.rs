@@ -188,7 +188,12 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
     // variable outside a literal.
     let helper = home.join("it's [1] $x here").join(HELPER_BINARY_NAME);
     for runtime in AgentRuntime::ALL {
-        hide_agent_hooks::install(runtime, &home, crate::hook_target(&helper)).unwrap();
+        hide_agent_hooks::install(
+            runtime,
+            &home,
+            crate::hook_target_at(&helper, &crate::state_of(&home)),
+        )
+        .unwrap();
         assert_eq!(
             hide_agent_hooks::installed_helper_path(runtime, &home, None).as_deref(),
             helper.to_str(),
@@ -323,17 +328,15 @@ fn grok_runs_the_helper_through_the_powershell_it_starts_only_while_it_is_there(
         let home = root.path().join(format!("home-{homes}"));
         let agent = GuidanceAgent::Grok;
         std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
-        guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
+        let state = crate::state_of(&home);
+        let target = crate::hook_target_at(&helper, &state);
+        guidance::install(agent, &home, target).unwrap();
         assert_eq!(
             guidance::installed_helper_path(agent, &home, None).as_deref(),
             helper.to_str(),
             "the path is read back from the PowerShell guard"
         );
-        assert!(guidance::matches_install(
-            agent,
-            &home,
-            crate::hook_target(&helper)
-        ));
+        assert!(guidance::matches_install(agent, &home, target));
         home
     };
     let grok_command = |home: &Path| -> String {
@@ -540,7 +543,12 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     // A copied program's first start is paid before the deadline, as
     // `programs::hook` does for the build's own.
     crate::stand_ins::ready(&helper);
-    guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
+    guidance::install(
+        agent,
+        &home,
+        crate::hook_target_at(&helper, &crate::state_of(&home)),
+    )
+    .unwrap();
     assert_eq!(
         guidance::installed_helper_path(agent, &home, None).as_deref(),
         helper.to_str()

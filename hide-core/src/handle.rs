@@ -361,6 +361,14 @@ impl Core {
             .and_then(|engine| engine.own_scope())
             .map(crate::herdr_import::held)
             .unwrap_or_default();
+        // The installation whose panes this machine's engine starts, which the
+        // core composes the hooks' records folder with: its embedder read it,
+        // so the core keeps it rather than reaching for this process itself
+        // (PRD core-host-node D-21).
+        let own_install = own_engine
+            .as_ref()
+            .and_then(|engine| engine.own_install())
+            .map(str::to_owned);
         let runtime = Arc::new(Mutex::new(Runtime::new(
             options.clone(),
             environment,
@@ -446,10 +454,32 @@ impl Core {
                 hide_kit::layout::hook_facts(directory),
                 || {
                     environment_home.as_deref().map_or_else(Vec::new, |home| {
-                        hide_agent_hooks::counters::every_pane(
+                        // The records the daemon's own hooks wrote, in the
+                        // folder this daemon's state folder keeps them in,
+                        // composed with the installation whose panes it starts
+                        // by the one rule the hooks and the node share.
+                        // A route that does not resolve seeds nothing, and
+                        // the diagnosis says why it could not (engineering
+                        // rule 4).
+                        let records = hide_agent_hooks::route::records_of_state(
                             home,
-                            crate::agent_hooks::facts::PANE_LIMIT,
-                        )
+                            Some(directory),
+                            own_install.as_deref(),
+                        );
+                        match records {
+                            Ok(records) => hide_agent_hooks::counters::every_pane_in(
+                                &records,
+                                crate::agent_hooks::facts::PANE_LIMIT,
+                            ),
+                            Err(error) => {
+                                crate::diagnostic!(serde_json::json!({
+                                    "component": "agent_hooks",
+                                    "kind": "records.unreadable",
+                                    "cause": format!("the hooks' records folder could not be read: {error}"),
+                                }));
+                                Vec::new()
+                            }
+                        }
                     })
                 },
             );
