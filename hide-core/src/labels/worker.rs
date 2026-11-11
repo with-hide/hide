@@ -438,6 +438,10 @@ struct PaneState {
     /// working again, the switch going off or the generator role changing
     /// hands starts it over.
     context_wait: Option<(u64, Instant)>,
+    /// The stop whose turn's answer its session file did not hold yet when
+    /// it was read, as the stop's `state_change_seq` and the reads spent on
+    /// it against `READ_RETRY_BACKOFF`; see [`LabelWorker::await_answer`].
+    answer_unwritten: Option<(u64, u8)>,
     /// The skip reasons already logged, so a cap that holds on every read
     /// (more subagent files than one read takes) is logged once.
     skip_reasons_logged: std::collections::BTreeSet<String>,
@@ -749,6 +753,7 @@ impl LabelWorker {
                             claimed_submit: None,
                             end_retried: None,
                             context_wait: None,
+                            answer_unwritten: None,
                             skip_reasons_logged: Default::default(),
                             tools: None,
                             waits_sent: None,
@@ -2092,6 +2097,7 @@ impl LabelWorker {
                 pane.follow_up_at = Some(now + FOLLOW_UP_READ);
             }
         }
+        self.await_answer(pane_id, now);
         // One serialized, budgeted read per native-file pane, no sooner than
         // three seconds after its last result. The existing worker owns the
         // I/O; unchanged facts neither publish nor rewrite the saved store.
@@ -2101,6 +2107,52 @@ impl LabelWorker {
             pane.follow_up_at = Some(now + FOLLOW_UP_READ);
         }
         changed
+    }
+
+    /// The engine reads a stop from the agent's screen, and the agent writes
+    /// its records after: a read under the stop can find the operator's
+    /// message still last, the turn's answer not yet in the file, and with
+    /// nothing else moving no read would come again, so the turn's end would
+    /// never be judged. Such a stop reads its session again on
+    /// `READ_RETRY_BACKOFF`, until a read finds the answer, the agent works
+    /// again or another stop comes; past the backoff it waits for the
+    /// agent's next state change and says so once. An agent whose session is
+    /// read on a cadence of its own (`requires_native_file_proof`) needs none.
+    fn await_answer(&mut self, pane_id: &str, now: Instant) {
+        let (Some(pane), Some(record)) = (self.panes.get_mut(pane_id), self.records.get(pane_id))
+        else {
+            return;
+        };
+        // The newest event being the operator's message is a turn whose end
+        // `decide` has not judged: only an answer or an interruption ends it.
+        let unwritten = self.summaries
+            && !pane.agent.requires_native_file_proof()
+            && matches!(pane.status.as_str(), "idle" | "done")
+            && newest_user_is_last(pane.events.make_contiguous());
+        if !unwritten {
+            pane.answer_unwritten = None;
+            return;
+        }
+        let seq = record.state_change_seq;
+        let spent = match pane.answer_unwritten {
+            Some((stop, spent)) if stop == seq => spent,
+            _ => 0,
+        };
+        if let Some(wait) = READ_RETRY_BACKOFF.get(usize::from(spent)) {
+            let due = now + *wait;
+            pane.follow_up_at = Some(pane.follow_up_at.map_or(due, |at| at.min(due)));
+        } else if usize::from(spent) == READ_RETRY_BACKOFF.len() {
+            crate::diagnostic!(json!({
+                "component": "labels",
+                "kind": "turn_end.unwritten",
+                "target": self.target,
+                "pane_id": pane_id,
+                "session_id": record.native_session_id,
+                "state_change_seq": seq,
+                "message": "A stopped turn's answer never reached its session file; its end waits for the agent's next state change",
+            }));
+        }
+        pane.answer_unwritten = Some((seq, spent.saturating_add(1)));
     }
 
     /// A failed reread cannot certify the previous native wait for this state.
