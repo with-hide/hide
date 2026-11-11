@@ -1,5 +1,11 @@
-See and answer your computer's coding agents from your phone.
-Hide for iPhone works together with Hide on your Mac, Windows or Linux computer, a free desktop program from withhide.dev.
+The mobile companion to Hide, the desktop app for running coding agents.
+Install Hide on your computer (free at withhide.dev), connect this app to it, and see and answer your computer's coding agents from your phone.
+
+GETTING STARTED
+1. Install Hide on your computer (Mac, Windows or Linux).
+2. In Hide on your computer, open Settings > Mobile.
+3. Scan its QR code with this app.
+No Hide on a computer yet? Tap "Try the demo" on the first screen to look around with sample data first.
 
 Your coding agents keep working on your own computer. Hide on your phone shows which one needs you, lets you read the conversation and reply, and tells you the moment a question comes in.
 
@@ -12,8 +18,8 @@ WHAT YOU CAN DO
 - Open the pages and images your agent made, right in the app.
 - Start a new agent on your computer.
 
-HOW IT CONNECTS
-In Hide on your computer, open Settings > Mobile and scan its QR code with this app. The connection goes through a relay and is end-to-end encrypted, so the relay cannot read it. There is no account to make, and the app has no ads. Your agents, code and files stay on your computer, and commands run there, not on your phone. The phone shows agents, conversations and results in its own screens.
+CONNECTION AND PRIVACY
+The connection goes through a relay and is end-to-end encrypted, so the relay cannot read it. There is no account to make, and the app has no ads. Your agents, code and files stay on your computer, and commands run there, not on your phone. The phone shows agents, conversations and results in its own screens.
 
 NO COMPUTER NEARBY?
 Tap "Try the demo" on the first screen to look around every screen with sample data. Nothing goes to a computer and nothing from the demo is kept.
