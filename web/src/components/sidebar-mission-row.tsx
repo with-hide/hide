@@ -68,12 +68,15 @@ export function useMissionPlace(ask: MissionAsk): string | null {
 /**
  * The line a carried ask reads: for the mission's oldest waiting node
  * `확인 필요 · <node> · <why>`, `외 N건`, a reached gate naming what to look at
- * after the node (PRD mission-human-gate D-23); for its safety net the held
+ * after the node (PRD mission-human-gate D-23), a merge left to the operator
+ * `<node> · 머지할 차례 PR #n` (PRD mission-destination D-11); for its safety net the held
  * count and what is missing (`걸린 일 N건 · Conductor가 아직 풀지 못했어요`).
  */
 export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?: string }) {
   const { t } = useInterfaceTranslation();
   if (ask.kind === "net") return <AskLine ask={{ verb: "answer", what: safetyNetLine(ask.net, t), more: ask.more }} className={className} />;
+  // A ready pull request the plan left to the operator: the node and its merge (PRD mission-destination D-11).
+  if (ask.kind === "merge") return <AskLine ask={{ verb: "answer", what: `${ask.node.title} · ${t("mission.merge.due", { pr: ask.node.pr ?? "" })}`, more: ask.more }} className={className} />;
   const look = ask.attention.reason === "human_gate" ? ask.node.gate?.look : undefined;
   const node = look ? `${ask.node.title} · ${look}` : ask.node.title;
   const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node, reason: ask.attention.reason, unmet: ask.attention.unmet_nodes } };
@@ -133,7 +136,7 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
   const device = useMissionDevice(ask);
   const name = [ask.mission.title, device, t("mission.attention"), missionAskWhat(ask, t), place].filter(Boolean).join(", ");
   return (
-    <li data-mission-ask={ask.mission.id} data-mission-ask-node={ask.kind === "node" ? ask.node.key : undefined} data-mission-ask-net={ask.kind === "net" || undefined} className={cn("group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent")} style={{ paddingLeft: inset }}>
+    <li data-mission-ask={ask.mission.id} data-mission-ask-node={ask.kind === "net" ? undefined : ask.node.key} data-mission-ask-net={ask.kind === "net" || undefined} className={cn("group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent")} style={{ paddingLeft: inset }}>
       <Hint label={name} reveals>
         <Button
           variant="text"

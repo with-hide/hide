@@ -19,7 +19,9 @@ import type { Mission, MissionHeldNode, MissionNode, MissionSafetyNet } from "./
 // Conductor's decision, answered here as it always was, the one safety net
 // card for the raises the Conductor has not settled, a raise only the
 // operator settles with the choices its reason takes, a worker the core raised
-// past its Conductor, and the order to merge or join what waits for main. A
+// past its Conductor, the order to merge or join what waits for main, and,
+// while the mission runs, a ready pull request the plan left to the operator
+// (PRD mission-destination D-11). A
 // node raised to the Conductor is not here, nor is work an agent carries, and
 // with nothing to do the section is gone.
 
@@ -88,7 +90,7 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
     case "landing":
       return (
         <Row data-mission-turn-item={item.git ? "join" : "merge"}>
-          <span className="shrink-0 text-body font-semibold">{t(item.git ? "mission.turn.join" : "mission.turn.merge")}</span>
+          <span className="shrink-0 text-body font-semibold">{t(item.git ? "mission.turn.join" : item.due ? "mission.turn.mergeDue" : "mission.turn.merge")}</span>
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-xxs" data-mission-landing-order={item.nodes.map((node) => node.key).join(" ")}>
             {item.nodes.map((node, index) => (
               <span key={node.key} className="flex min-w-0 items-center gap-xxs">

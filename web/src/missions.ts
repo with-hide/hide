@@ -671,9 +671,12 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
  * the operator settles (the Conductor's failure, or a gate reached with no
  * Conductor that no decision asks yet), clear a worker the core raised past its
  * parent (one of the escalation causes, a person's turn aside: its step says
- * it and the Conductor's row carries it), and merge or join what waits for
- * main. A node raised to the Conductor is never here, and a finished or
- * cancelled mission has nothing here.
+ * it and the Conductor's row carries it), merge or join what a waiting
+ * mission left, and, while the mission runs, merge a ready pull request its
+ * plan gave the operator (`due`, PRD mission-destination D-11; a scope `pr`
+ * mission's ready pull request is never one, D-35). A node raised to the
+ * Conductor is never here, and a finished or cancelled mission has nothing
+ * here.
  */
 export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
@@ -682,7 +685,7 @@ export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
-  | { kind: "landing"; nodes: N[]; git: boolean };
+  | { kind: "landing"; nodes: N[]; git: boolean; due: boolean };
 
 /** A worker row the core raised past its parent: the cause, the line its blocked turn left, and for a person's turn what and where (PRD ask-human B25). */
 export type WorkerEscalation = { cause: EscalationCause; line: string | null; human?: { kind: HumanKind; place: string } | null };
@@ -745,7 +748,11 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);
-    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null), due: false });
+  } else if (mission.nodes.some((node) => node.merge?.state === "due")) {
+    // A node whose own plan gives the operator its merge is theirs once its pull request is ready, while the rest still runs; a scope `pr` mission's ready pull request is never due (PRD mission-destination D-11, D-35).
+    const nodes = landingOrder(mission).filter((node) => node.merge?.state === "due");
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: false, due: true });
   }
   return items;
 }
@@ -966,7 +973,16 @@ export function openAttention<A extends Omit<MissionAttention, "choices">>(missi
  * else its safety net (`net`), one item however many nodes it holds.
  * `since_unix_ms` is how long it has waited.
  */
-export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number } & ({ kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "net"; net: MissionSafetyNet });
+export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number } & ({ kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } | { kind: "net"; net: MissionSafetyNet });
+
+/**
+ * Since when a node's merge has been the operator's turn (`merge.state` `due`,
+ * PRD mission-destination D-11): from its finish, as the core counts it in
+ * `mission_asks`; null for a node whose merge is not due.
+ */
+export function mergeDueSince(node: Pick<MissionNode, "merge" | "finished_at_unix_ms">): number | null {
+  return node.merge?.state === "due" ? (node.finished_at_unix_ms ?? 0) : null;
+}
 
 /**
  * The missions a device's scope names as its own Needs You items
@@ -980,21 +996,27 @@ export function missionAsks(missions: readonly Mission[], ids: readonly string[]
   return ids.flatMap((id): MissionAsk[] => {
     const mission = byId.get(id);
     if (!mission) return [];
-    // The core decides which raises the mission itself carries (`item`), the
-    // same rule its count reads.
-    const waiting = mission.nodes
-      .flatMap((node) => (node.attention?.item ? [{ node, attention: node.attention }] : []))
-      .sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
+    // The core decides which raises the mission itself carries (`item`) and
+    // which merges are the operator's now (`due`), the same rule its count reads.
+    type Waiting = { since: number; ask: { kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } };
+    const waiting: Waiting[] = mission.nodes.flatMap((node): Waiting[] => {
+      const out: Waiting[] = [];
+      if (node.attention?.item) out.push({ since: node.attention.since_unix_ms, ask: { kind: "node", node, attention: node.attention } });
+      const due = mergeDueSince(node);
+      if (due !== null) out.push({ since: due, ask: { kind: "merge", node } });
+      return out;
+    });
+    waiting.sort((a, b) => a.since - b.since);
     const net = mission.safety_net ?? null;
     const first = waiting[0];
-    if (first) return [{ kind: "node", mission, node: first.node, attention: first.attention, since_unix_ms: first.attention.since_unix_ms, more: waiting.length - 1 + (net ? 1 : 0) }];
+    if (first) return [{ ...first.ask, mission, since_unix_ms: first.since, more: waiting.length - 1 + (net ? 1 : 0) }];
     return net ? [{ kind: "net", mission, net, since_unix_ms: net.since_unix_ms, more: 0 }] : [];
   });
 }
 
 /** What a mission's Needs You item is about in a few words, for its accessible name: the node, or the safety net's line. */
 export function missionAskWhat(ask: MissionAsk, t: TFunction<"translation">): string {
-  return ask.kind === "node" ? ask.node.title : safetyNetLine(ask.net, t);
+  return ask.kind === "net" ? safetyNetLine(ask.net, t) : ask.node.title;
 }
 
 /** The asks of the missions of project `projectId` (a workspace id), or every ask when no project is chosen. */

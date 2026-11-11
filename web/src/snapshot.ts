@@ -1415,8 +1415,15 @@ export type MissionFixReason = "ci_failed" | "conflict" | "changes_requested";
 export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: MissionFixReason; at_unix_ms: number };
 /** What the operator chose for a node that waits on them (`mission_operator_action`, B15, B16). */
 export type MissionOperatorAction = "done" | "drop" | "attach" | "leave" | "resume";
-/** One of a node's pull requests (`NodePrView`), the current one last. */
-export type MissionNodePr = { number: number; state: PrState | null; url: string | null };
+/** One of a node's pull requests (`NodePrView`), the current one last: `base` is the branch it merges into as GitHub last answered, absent until it answered and from a core before it. */
+export type MissionNodePr = { number: number; state: PrState | null; url: string | null; base?: string };
+
+/** Who merges a node's pull request (`mission_merge_by`, PRD mission-destination D-10, D-35). */
+export type MissionMergeBy = "operator" | "conductor";
+/** Where that merge stands, decided by the core (`mission_merge_step`): `due` is the operator's turn, only for a node whose own plan gives them its merge. */
+export type MissionMergeStep = "ahead" | "due" | "merged";
+/** Who merges a change delivered by pull request and where it stands (`NodeMerge`, D-45): `why` is the plan's reason when the node's own value gives the operator its merge, absent when the scope decides. */
+export type MissionNodeMerge = { by: MissionMergeBy; why?: string; state: MissionMergeStep };
 
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";
@@ -1657,6 +1664,8 @@ export type MissionNode = {
   work?: MissionNodeWork | null;
   /** The node's gate (PRD mission-human-gate); absent for a node without one. */
   gate?: MissionGate;
+  /** Who merges its pull request and where that stands (`NodeMerge`); absent for a node that is no change by pull request, and from a core before it. */
+  merge?: MissionNodeMerge;
   /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
   hold?: MissionNodeHold | null;
 };
@@ -1762,7 +1771,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate"> & { attention: Omit<MissionAttention, "choices"> | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;

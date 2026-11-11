@@ -38,6 +38,12 @@ describe("the wire values", () => {
     for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
     for (const kind of contract.mission_warning_kind) expect(english).toHaveProperty(`mission.warning.${kind}.short`);
+    // Who merges and where that stands (PRD mission-destination D-45): only `due` is the operator's turn.
+    for (const by of contract.mission_merge_by) expect(["operator", "conductor"]).toContain(by);
+    for (const state of contract.mission_merge_step) {
+      const n = node("n", { status: "done", pr: 1, landing: { state: "left", action: "merge" }, merge: { by: "operator", why: "w", state } });
+      expect(turnItems(mission("m", { nodes: [n], landing_order: ["n"] }), () => null).length).toBe(state === "due" ? 1 : 0);
+    }
     for (const action of contract.mission_landing_action) {
       expect(english).toHaveProperty(`mission.landing.${action}`);
       expect(landingLeft(node("n", { status: "done", landing: { state: "left", action } }))).toBe(action);
@@ -605,6 +611,45 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     const failed = node("f", { status: "working", attention: { ...raised("operator", "conductor_failed"), since_unix_ms: 300, item: true } });
     const [first] = missionAsks([mission("m", { nodes: [...nodes, failed], safety_net: net })], ["m"]);
     expect(first && first.kind === "node" ? [first.node.key, first.more] : null).toEqual(["f", 1]);
+  });
+
+  it("raises a ready pull request the plan left to the operator as one turn and one Needs You item while the mission runs, and never one of a scope pr mission (PRD mission-destination B20, B21, D-35)", () => {
+    const none = () => null;
+    const left = { state: "left", action: "merge" } as const;
+    const mine = (state: "ahead" | "due" | "merged") => ({ by: "operator" as const, why: "DB는 직접", state });
+    const ko = initializeInterfaceI18n("ko").getFixedT(null, "translation");
+    const db = (state: "ahead" | "due" | "merged", extra: Partial<MissionNode> = {}) => node("db", { status: "done", pr: 33, landing: left, finished_at_unix_ms: 50, merge: mine(state), ...extra });
+    const api = node("api", { status: "working", pr: 31 });
+    // Ahead of its turn: nothing asks, on any surface the one rule feeds.
+    const ahead = mission("m", { scope: "merge", nodes: [db("ahead", { status: "working", landing: null }), api], landing_order: [] });
+    expect(turnItems(ahead, none)).toEqual([]);
+    expect(missionTurn(ahead)).toBeNull();
+    expect(missionEntry(ahead, none).group).toBe("running");
+    expect(missionAsks([ahead], ["m"])).toEqual([]);
+    // Due: 내 차례 says 머지할 차례 with the node, the list stands it in 내 차례 with 머지하기, and the mission is its Needs You item.
+    const due = mission("m", { scope: "merge", nodes: [db("due"), api], landing_order: ["db"] });
+    const [item] = turnItems(due, none);
+    expect(item).toMatchObject({ kind: "landing", git: false, due: true });
+    expect(item!.kind === "landing" && item!.nodes.map((n) => n.key)).toEqual(["db"]);
+    expect(missionEntry(due, none).group).toBe("turn");
+    const [ask] = missionAsks([due], ["m"]);
+    expect(ask && ask.kind === "merge" ? [ask.node.key, ask.since_unix_ms, ask.more] : ask).toEqual(["db", 50, 0]);
+    expect(ko("mission.merge.due", { pr: 33 })).toBe("머지할 차례 PR #33");
+    // Merged on GitHub: it asks nothing more.
+    const merged = mission("m", { scope: "merge", nodes: [db("merged", { landing: { state: "landed", proof: { by: "merged" } } }), api], landing_order: [] });
+    expect(turnItems(merged, none)).toEqual([]);
+    expect(missionAsks([merged], ["m"])).toEqual([]);
+    // A scope pr mission's ready pull request is the operator's, never due: no turn while it runs.
+    const scopePr = mission("m", { scope: "pr", nodes: [db("ahead", { merge: { by: "operator", state: "ahead" } }), api], landing_order: ["db"] });
+    expect(turnItems(scopePr, none)).toEqual([]);
+    expect(missionAsks([scopePr], ["m"])).toEqual([]);
+    // Once it waits on the merges, the landing turn is as before, for both.
+    for (const nodes of [[db("due")], [db("ahead", { merge: { by: "operator", state: "ahead" } })]]) {
+      expect(turnItems(mission("m", { status: "merge_wait", nodes, landing_order: ["db"] }), none)[0]).toMatchObject({ kind: "landing", git: false, due: false });
+    }
+    // The phone reads the same rule from the merge its core sends.
+    const phone = { ...due, nodes: due.nodes.map((n) => ({ ...n, worker_agent: null, agent: null, escalation: null })) } as unknown as PhoneMission;
+    expect(missionEntries([phone])[0]!.group).toBe("turn");
   });
 
   it("names the pull request a raise is about, with the state the project's list reads", () => {
