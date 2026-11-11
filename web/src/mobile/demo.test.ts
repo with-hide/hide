@@ -189,7 +189,7 @@ describe("the sample host", () => {
     await settle();
     expect(state().macName).toBe("Demo Mac");
     connection.leaveDemo();
-    expect(assign).toHaveBeenCalledWith("/");
+    expect(assign).toHaveBeenCalledWith("/?list=1");
     expect(localStorage.getItem(HOSTS_KEY)).toBe(hosts);
     expect(localStorage.length).toBe(1);
     expect(network.calls).toEqual([]);

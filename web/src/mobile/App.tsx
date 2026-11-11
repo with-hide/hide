@@ -31,6 +31,7 @@ import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
+import { HOST_LIST_LINK } from "./hosts";
 import { DemoBar } from "./Demo";
 
 export function App() {
@@ -102,7 +103,7 @@ function Guidance({ refused }: { refused: boolean }) {
         {relayError ? t(`mobile.relay.${relayError}`) : text}
       </p>
       {refused && refusal !== "phone_limit" && refusal !== "no_credential" ? <p className="text-subhead text-muted-foreground">{noticeText(t, REFUSAL_NOTICE.no_credential)}</p> : null}
-      {hostedPhone() ? <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => location.assign("/")}>{t("mobile.relay.choose")}</Button> : null}
+      {hostedPhone() ? <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => location.assign(HOST_LIST_LINK)}>{t("mobile.relay.choose")}</Button> : null}
     </Landing>
   );
 }

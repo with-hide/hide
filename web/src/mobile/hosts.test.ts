@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { APP_HOSTS_KEY, appStore, browserStore, bundlePath, HOSTS_KEY, MAX_HOSTS, readHosts, type PairedHost } from "./hosts";
+import { APP_HOSTS_KEY, appStore, browserStore, bundlePath, HOSTS_KEY, hostToOpen, MAX_HOSTS, readHosts, type PairedHost } from "./hosts";
 
 // The Keychain the app's plugin keeps, as a map: what a call returns is what the native side would.
 const held = vi.hoisted(() => new Map<string, { noiseKey: string; credential: string | null }>());
@@ -118,4 +118,18 @@ it("keeps answering in order after an operation was refused", async () => {
   const listing = hosts.list();
   await expect(refused).rejects.toThrow("host_limit");
   expect(await listing).toHaveLength(MAX_HOSTS);
+});
+
+// docs/UI_BEHAVIOR.md, Mobile companion: one saved computer opens at launch; two, a refused one, or a way back to the list stay on the list.
+it("opens the computer the address names, or the only one kept unless it refused this phone or the list was asked for", () => {
+  const other = { ...host, room: "c".repeat(43) };
+  const open = (search: string, hosts: PairedHost[]) => hostToOpen(new URLSearchParams(search), hosts)?.room ?? null;
+  expect(open("", [])).toBeNull();
+  expect(open("", [host])).toBe(host.room);
+  expect(open("", [host, other])).toBeNull();
+  expect(open("", [{ ...host, credential: null }])).toBeNull();
+  expect(open("?list=1", [host])).toBeNull();
+  expect(open("?add=1", [host])).toBeNull();
+  expect(open(`?host=${other.room}`, [host, other])).toBe(other.room);
+  expect(open(`?host=${other.room}`, [host])).toBeNull();
 });

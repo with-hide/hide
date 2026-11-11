@@ -44,7 +44,7 @@ import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { hostStore, type PairedHost } from "./hosts";
+import { HOST_LIST_LINK, hostStore, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
@@ -1066,10 +1066,10 @@ function startDemo(): void {
   connect();
 }
 
-/** The sample host's way out: the first screen, or its real QR scan and paste flow. */
+/** The sample host's way out: the first screen or the list of computers, never one of them, or its real QR scan and paste flow. */
 export function leaveDemo(connectReal = false): void {
   stop();
-  window.location.assign(connectReal ? "/?add=1" : "/");
+  window.location.assign(connectReal ? "/?add=1" : HOST_LIST_LINK);
 }
 
 async function startRelay(): Promise<void> {
