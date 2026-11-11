@@ -108,6 +108,7 @@ It adds no status, mark, colour or group.
 - Every row of the session carries the list as `open_asks` `{session, items}`, oldest first, whether a question is laid or not: the row's line ends with `?N` while none is its ask, the pane head draws `?N` after its title, and the turn card lists them.
 - What the operator sends the agent after a question takes it off the row at once (`open_ask_stands`, read from the row's `operator_request`); Hide AI reads the turn that follows and keeps or resolves it.
 - Only a row the operator owns carries the list: a delegated child's questions are its parent's to answer.
+  A row that arrives is laid before the lineage says whether it is owned, so the lineage the read axis compares lifts the list again from the rows it found delegated (`Runtime::settle_delegated_asks`, in `lineage_across_machines`); without it the child's question came and went with the pass that laid it, and its parent turned unread and read again on each.
 - With Hide AI's summaries off nothing keeps the list, so none is laid, as a plain-text question asks nothing then (below).
 
 The question is named by its record id (`ask:<session>#<id>`), so a read one stays read while the agent works and rests under it, and a new one is news.

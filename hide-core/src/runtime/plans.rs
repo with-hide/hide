@@ -1012,6 +1012,43 @@ impl Runtime {
         true
     }
 
+    /// Lifts the question of the record from the delegated rows that carry it.
+    ///
+    /// A question of the record stands only on a row the operator owns, and
+    /// only the lineage says whether a row is owned, so a row that arrives is
+    /// laid before the lineage knows. Once the lineage has said, this is the
+    /// same lift and lay a later `refresh_plan_reviews` makes, over the rows
+    /// concerned alone, so a pass that reads the rows (the read axis) never
+    /// sees a delegated child asking what its parent is to answer, and the
+    /// parent never turns unread for a question that comes and goes with the
+    /// pass that laid it. Whether any row moved; the caller derives the
+    /// lineage again, since what the rows ask is an input of it.
+    pub(super) fn settle_delegated_asks(
+        &mut self,
+        device: &str,
+        agents: &mut [SidebarAgentSnapshot],
+    ) -> bool {
+        let carrying: Vec<usize> = agents
+            .iter()
+            .enumerate()
+            .filter(|(_, agent)| agent.delegated && agent.open_asks.is_some())
+            .map(|(index, _)| index)
+            .collect();
+        if carrying.is_empty() {
+            return false;
+        }
+        let asks = self.core_asks();
+        let mut rows: Vec<SidebarAgentSnapshot> = carrying
+            .iter()
+            .map(|&index| agents[index].clone())
+            .collect();
+        let moved = self.relay_reviews(device, &mut rows, &asks);
+        for (&index, row) in carrying.iter().zip(rows) {
+            agents[index] = row;
+        }
+        moved
+    }
+
     /// Lifts what was laid on `agents` while it is still there, then lays
     /// the reviews again. Whether any row changed.
     fn relay_reviews(

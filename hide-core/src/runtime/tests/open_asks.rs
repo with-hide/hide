@@ -220,3 +220,37 @@ fn the_rows_shown_take_and_drop_a_question_as_the_record_lists_it() {
     );
     assert_ne!(shown.demand, "question");
 }
+
+/// The session an arriving child runs is the one the record holds the
+/// question for, so the arrival is the first time the core can lay it.
+#[test]
+fn a_session_arriving_lays_no_question_of_the_record_on_a_delegated_child() {
+    let mut runtime = asking(vec![ask("m1", "메일 초안이 필요한지", ASKED)]);
+    let mut payload = super::lineage::split_lineage_json();
+    for agent in payload["agents"].as_array_mut().unwrap() {
+        agent["agent_status"] = json!("idle");
+        let session = if agent["pane_id"] == "w1:p2" {
+            "lead-session"
+        } else {
+            "parent-session"
+        };
+        agent["agent_session"] = json!({"kind": "id", "value": session});
+    }
+    runtime.ingest_session(Ok(
+        crate::sidebar::owned_label_fixture(payload).expect("session payload")
+    ));
+
+    let child = super::lineage::agent_row(&runtime, "w1:p2");
+    assert!(child.delegated, "the fixture's child is the parent's");
+    assert_eq!(
+        (child.ask_subject.clone(), child.open_asks.clone()),
+        (None, None),
+        "a delegated row's questions are its parent's to answer"
+    );
+    assert_eq!(child.demand, "none");
+    let parent = super::lineage::agent_row(&runtime, "w1:p1");
+    assert_eq!(
+        parent.descendant_counts.question, 0,
+        "the parent is not told of a question its child never asked"
+    );
+}
