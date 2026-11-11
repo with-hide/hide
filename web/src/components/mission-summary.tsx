@@ -4,10 +4,10 @@ import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { planNowLine } from "../plans";
 import type { TFunction } from "i18next";
-import { attentionReasonText, cardLine, escalationWhy, holdReason, missionOpen, missionPulls, missionResultCounts, stageWord, summaryGroups, type HoldReason } from "../missions";
+import { attentionReasonText, cardLine, escalationWhy, holdReason, missionOpen, missionPulls, missionResultCounts, skipWords, stageWord, summaryGroups, type HoldReason } from "../missions";
 import { useWorkerEscalation } from "../missionWorkers";
-import type { Mission, MissionAttentionTo, MissionNode } from "../snapshot";
-import { formatElapsed } from "./elapsed";
+import type { Mission, MissionAttentionTo, MissionNode, MissionSkip } from "../snapshot";
+import { formatElapsed, useElapsed } from "./elapsed";
 import { MissionPrMark } from "./mission-pr";
 import { Button } from "./ui/button";
 
@@ -16,7 +16,8 @@ import { Button } from "./ui/button";
 // (each with its line, a node waiting on the Conductor saying so first) and
 // done, each counted, leaving what waits on the operator to 내 차례 alone; its pull requests and the workers at
 // work of the most allowed; a closed one's time and date, its result pull
-// requests, and the workers and checkers it took. Every value is the
+// requests, and the workers and checkers it took; open or closed, the lines
+// its Conductor skipped on its own (`Conductor가 정한 것`). Every value is the
 // record's; a row with nothing in it is not drawn. A node named here picks it
 // on the map.
 
@@ -25,8 +26,42 @@ export function MissionSummary({ mission, onSelect }: { mission: Mission; onSele
   const rows = missionOpen(mission) ? <OpenRows mission={mission} onSelect={onSelect} /> : <ClosedRows mission={mission} />;
   return (
     <section aria-label={t("mission.summary")} className="flex min-w-0 flex-col px-md py-sm" data-mission-side="summary">
-      <dl className="flex min-w-0 flex-col gap-md text-body">{rows}</dl>
+      <dl className="flex min-w-0 flex-col gap-md text-body">
+        {rows}
+        <DecidedRow mission={mission} onSelect={onSelect} />
+      </dl>
     </section>
+  );
+}
+
+/**
+ * `Conductor가 정한 것 N`: the lines the Conductor skipped on its own, with
+ * no decision of the operator's, oldest first (the principle of 2026-11-11,
+ * hide-private docs/missions.md), each the node, `<line> 넘김`, why, who and
+ * how long ago. For reading after the fact: nothing here asks anything.
+ */
+function DecidedRow({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const skips = mission.skipped_alone ?? [];
+  if (skips.length === 0) return null;
+  return (
+    <SummaryRow name={t("mission.decided", { count: skips.length })} field="decided">
+      {skips.map((skip) => <SkipLine key={`${skip.node}:${skip.line}`} mission={mission} skip={skip} onSelect={onSelect} />)}
+    </SummaryRow>
+  );
+}
+
+function SkipLine({ mission, skip, onSelect }: { mission: Mission; skip: MissionSkip; onSelect: (key: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const ago = useElapsed(skip.at_unix_ms);
+  const node = mission.nodes.find((one) => one.key === skip.node) ?? null;
+  const what = `${skipWords(skip, t)} · ${skip.reason}`;
+  return (
+    <span className="flex min-w-0 flex-col" data-mission-skip={`${skip.node}:${skip.line}`}>
+      {node ? <NodeName node={node} onSelect={onSelect} /> : <span className="truncate">{skip.title}</span>}
+      <span className="truncate text-caption text-muted-foreground" title={what}>{what}</span>
+      <span className="truncate text-caption text-subtle-foreground">{[skip.by, ago].filter(Boolean).join(" · ")}</span>
+    </span>
   );
 }
 

@@ -6,7 +6,7 @@ import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import { forgetCatalogs } from "./agentPicker";
-import type { AgentRow, BackgroundAi, Device, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
+import { MISSION_ATTENTION_REASONS, type AgentRow, type BackgroundAi, type Device, type Mission, type MissionAttention, type MissionAttentionReason, type MissionCriterion, type MissionEvent, type MissionLanding, type MissionNode, type PullRequest, type SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -487,6 +487,33 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     expect(turnItems(mission("m", { conductor: gone }), none).map((item) => item.kind)).toEqual(["takeover"]);
     expect(turnItems(mission("m", { status: "done", conductor: gone, decision: "old" }), none)).toEqual([]);
   });
+
+  it("gives at most one turn item for one cause on five nodes, whatever the raise's reason, with or without a Conductor (hide-private docs/missions.md, the principle of 2026-11-11)", () => {
+    const gone = { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: false };
+    // The reasons only the operator settles stay theirs per node: a gate reached with no Conductor, and a Conductor's failure from before.
+    const operatorFirst: Record<MissionAttentionReason, boolean> = { merged_unproven: false, worker_ended: false, pr_closed: false, unplanned_pr: false, conductor_failed: true, wake_refused: false, close_refused: false, human_gate: true, not_started: false, warning_stood: false, wait_stood: false };
+    const wrong: string[] = [];
+    for (const reason of MISSION_ATTENTION_REASONS) {
+      const keys = ["a", "b", "c", "d", "e"];
+      const to = operatorFirst[reason] ? "operator" : "conductor";
+      const nodes = keys.map((key, index) => node(key, { status: "working", attention: { ...raised(to, reason), since_unix_ms: 100 + index } }));
+      const held = operatorFirst[reason] ? [] : keys.map((key, index) => ({ key, title: key, reason, pr: null, since_unix_ms: 100 + index }));
+      const net = (present: boolean) => (held.length > 0 ? { conductor_present: present, since_unix_ms: 100, nodes: held } : null);
+      const cases = [
+        ["conductor, before 20 minutes", mission("m", { nodes })],
+        ["conductor, 20 minutes", mission("m", { nodes, safety_net: net(true) })],
+        ["no conductor", mission("m", { nodes, conductor: gone, safety_net: net(false) })],
+      ] as const;
+      for (const [name, one] of cases) {
+        const kinds = turnItems(one, none).map((item) => item.kind);
+        const expected = operatorFirst[reason]
+          ? [...(one.conductor.present ? [] : ["takeover"]), ...keys.map(() => "attention")]
+          : name === "conductor, before 20 minutes" ? [] : [one.conductor.present ? "safety_net" : "takeover"];
+        if (JSON.stringify(kinds) !== JSON.stringify(expected)) wrong.push(`${reason} / ${name}: ${kinds.join(" ")}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
 });
 
 describe("a finished mission's results and the map's summary (PRD mission-tool B12, B19-B21)", () => {
@@ -561,8 +588,20 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     const other = mission("b", { nodes: [node("n", { status: "working", attention: waiting(40, false) })] });
     const unnamed = mission("c", { nodes: [node("n", { status: "working", attention: waiting(1, false) })] });
     const asks = missionAsks([orphan, other, unnamed], ["b", "a"]);
-    expect(asks.map((ask) => [ask.mission.id, ask.node.key, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
+    expect(asks.map((ask) => [ask.mission.id, ask.kind === "node" ? ask.node.key : ask.kind, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
     expect(missionAsks([orphan], [])).toEqual([]);
+  });
+
+  it("draws a mission whose raises its Conductor has not settled as one Needs You item for its safety net, however many nodes it holds", () => {
+    const held = ["a", "b", "c", "d", "e"].map((key, index) => ({ key, title: key, reason: "worker_ended" as const, pr: null, since_unix_ms: 100 + index }));
+    const nodes = held.map((one) => node(one.key, { status: "working", attention: { ...raised("conductor", "worker_ended"), since_unix_ms: one.since_unix_ms } }));
+    const net = { conductor_present: true, since_unix_ms: 100, nodes: held };
+    const asks = missionAsks([mission("m", { nodes, safety_net: net })], ["m"]);
+    expect(asks).toEqual([{ kind: "net", mission: expect.objectContaining({ id: "m" }), net, since_unix_ms: 100, more: 0 }]);
+    // A raise only the operator settles leads, and the safety net is one more thing the mission waits on.
+    const failed = node("f", { status: "working", attention: { ...raised("operator", "conductor_failed"), since_unix_ms: 300, item: true } });
+    const [first] = missionAsks([mission("m", { nodes: [...nodes, failed], safety_net: net })], ["m"]);
+    expect(first && first.kind === "node" ? [first.node.key, first.more] : null).toEqual(["f", 1]);
   });
 
   it("names the pull request a raise is about, with the state the project's list reads", () => {

@@ -123,6 +123,8 @@ pub struct PhoneSkip {
     pub title: String,
     pub line: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
     pub reason: String,
     pub by: String,
     pub at_unix_ms: u64,
@@ -591,6 +593,7 @@ fn phone_mission(
             .into_iter()
             .map(|skip| PhoneSkip {
                 title: cut(&skip.title),
+                text: skip.text.as_deref().map(cut),
                 reason: cut(&skip.reason),
                 by: cut(&skip.by),
                 ..skip

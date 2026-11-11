@@ -492,6 +492,10 @@ pub struct SkippedAloneView {
     pub title: String,
     pub line: String,
     pub kind: CriterionKind,
+    /// The line's own words, for a line the plan wrote (`own`, `defect`);
+    /// a check, a CI, a review or a verification is named by its kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
     pub reason: String,
     pub by: String,
     pub at_unix_ms: u64,
@@ -515,6 +519,7 @@ pub(crate) fn skipped_alone(mission: &Mission) -> Vec<SkippedAloneView> {
                     title: node.title.clone(),
                     line: line.key.clone(),
                     kind: line.kind,
+                    text: line.text.clone(),
                     reason: skip.reason.clone(),
                     by: by.name.clone(),
                     at_unix_ms: by.at_unix_ms,
