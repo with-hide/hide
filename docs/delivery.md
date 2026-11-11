@@ -737,6 +737,31 @@ In the run before the fresh session read (41195283433), Antigravity on Windows t
 With the fresh read before the verdict, the same lane recorded it after one typing on all three systems.
 The Codex 0.163.0 start with another program's entries at the front of `hooks.json` reproduced the incident in the local setup: without this change the brief went to the hooks review and nothing followed; with it the parent was told, and after its screen was answered through `hide pane send` the brief was typed again and the prompt hook confirmed it.
 
+### A blocked child
+
+A delegated child held at a blocked prompt is its parent's to handle first, and the operator's only once the parent had a minute (`hide-core/src/runtime/blocked_children.rs`).
+The prompt is whatever made its row `blocked`: its hook's wait for a permission or an answer, a question or plan approval its session read holds, or the engine's prompt ([status-model.md](status-model.md#where-each-axis-comes-from)).
+
+1. The parent hears at once.
+   The session projection pass that first reads the child blocked records the block's start, and the next coordinator tick (250 ms) sends the parent one `progress` letter with `--now` from the code-owned identity `hide:blocked`, under the intent `child-blocked:<pane>:<start>`, so a working parent reads it at its next tool call and a repeated send converges on the first.
+   Its first line is `<child> is blocked at a prompt: read it with hide pane read <pane>.`; the rest says to answer it with `hide pane send <pane> --key <name>` or text and `--enter`, or to send the child a safer instruction, that its runtime may time the prompt out on its own (Claude Code's built-in `rm` check gives up after two minutes, 2026-10-16), when the operator is asked, and the same words on answering another agent's screen as the [unconfirmed-input notice](#input-an-agent-did-not-take).
+   The note goes to the parent observed in its pane, running the session the child's lineage names, or to that pane's agent asleep, whose mailbox keeps it for its next wake; a `progress` letter wakes no one.
+   A parent Hide cannot address, and a note that cannot be sent, are logged (`child_blocked.note_unaddressed`, `child_blocked.note_unsent`) and not tried again: the grace runs, and the operator gets the child when it ends.
+   A parent that is itself blocked keeps the note pending like any letter, and the note raises nothing, since only a child's own letters do.
+   A child that declared a person's turn gets no note: it skips its parent and rises at once ([A person's turn](#a-persons-turn)).
+2. The root is raised after the grace.
+   The child's lineage root enters Needs You with the child's ask (`child_blocked`) once the same block has lasted `CHILD_BLOCKED_GRACE_MS`, 60 seconds from its start (`agent_state/escalation.rs`); the session projection's one deadline, checked on the existing coordinator tick, wakes at that moment, and the ask's time is the block's start.
+   A minute leaves the parent time to act and the operator time to answer before a runtime that times its prompt out at two minutes does; a two-minute grace would lose that prompt.
+   During the grace the child draws `waiting` and its root only turns unread through the descendant signal ([status-model.md](status-model.md#the-mark)), and every other escalation cause keeps its own clock.
+3. A block ends when the core reads the child settled and not blocked (a numbered state it knows, `agent_state::settled`), when another known session runs in its pane, or when the pane goes; the next block is a new start, a new note and a new grace.
+   A pane still being restored (sequence 0, `unknown`, no session named yet, its lineage not given back yet) and a disconnected device's last row keep the block, so a device whose link comes back keeps the same start, deadline and note.
+   A block that ends and returns between two reads of the agent list, about a second apart, reads as one block.
+
+Known limit, accepted as a rare edge that clears itself: the block's start is the core's memory, so a restart of hided while a child is blocked starts its grace again once, taking its root out of Needs You until a minute after the restored pane reads blocked, and may send its parent one more note.
+Keeping the start across a restart would need a durable record in the delivery ledger, which this does not add.
+
+Regression owners: the escalation tests in `agent_state/escalation.rs` (`a_blocked_child_rises_only_once_its_grace_from_the_blocks_start_ends`, `within_its_grace_a_blocked_child_still_rises_for_another_cause`), the block tests in `runtime/blocked_children.rs`, and `runtime/tests/blocked_children.rs` for the note, the grace's end on the tick, a parent that cannot be told and a device's reconnect.
+
 ## Persistence, clocks and limits
 
 The mailbox lives at the state directory's `delivery-ledger.json`, named by `hide_kit::layout::delivery_ledger`.
@@ -824,12 +849,12 @@ There is no cached response or retry during the same tick.
 Three consecutive read failures produce a rate-limited diagnostic.
 The ledger counts failures only up to those three (`watch::READ_FAILURES_REPORTED`): a read that keeps failing is still reported every ten minutes, and changes nothing the file holds, where counting every tick rewrote the whole file every minute while one watched target could not be read.
 
-A target that stopped on a question it asked only in its own pane, or that the engine holds at a blocked prompt, is told to a pane observer after one tick, 60 seconds of no activity, instead of 20 minutes, so the parent decides within about a minute whether to answer the child or ask the operator.
-The fact is the target's own row while its pane runs the watched session: for a question, activity stopped, a question demand ([status-model.md](status-model.md#where-each-axis-comes-from)) and no blocked prompt, where the question is not Hide's own about input it typed (`AskSubject::InputUnconfirmed`, laid on the row as a question but told to the parent by its notice, [Input an agent did not take](#input-an-agent-did-not-take)); for a prompt, the row's `blocked`, whatever its activity, since the engine reports no activity for a pane it holds at a menu.
-A blocked child also rises to the operator ([Delegated escalation](status-model.md#task-identity)); the parent is told as well because a native runtime can time the prompt out on its own (Claude Code's built-in `rm` check gives up after two minutes, 2026-10-16), and a parent that hears in a minute can still tell the operator or send the child a safer command.
+A target that stopped on a question it asked only in its own pane is told to a pane observer after one tick, 60 seconds of no activity, instead of 20 minutes, so the parent decides within about a minute whether to answer the child or ask the operator.
+The fact is the target's own row while its pane runs the watched session: activity stopped, a question demand ([status-model.md](status-model.md#where-each-axis-comes-from)) and no blocked prompt, where the question is not Hide's own about input it typed (`AskSubject::InputUnconfirmed`, laid on the row as a question but told to the parent by its notice, [Input an agent did not take](#input-an-agent-did-not-take)).
+A target held at a blocked prompt is not the watch's: its parent is told at once by a note of its own and its root is raised after a grace ([A blocked child](#a-blocked-child)), so the watch keeps its ordinary window for it.
 A child that works, such as Codex while its async question stays open, keeps the 20 minutes.
-A question the target already sent this observer as a `request` or `block` letter still awaiting its answer keeps the 20 minutes too, since that letter rang the observer's doorbell; a blocked prompt rang nothing, so it is told whatever letters wait.
-The early warning is the episode's first warning, and only its first line differs: `Stopped with a question (watch <id>).` or `Blocked at a prompt (watch <id>).` instead of `No activity for N minutes`.
+A question the target already sent this observer as a `request` or `block` letter still awaiting its answer keeps the 20 minutes too, since that letter rang the observer's doorbell.
+The early warning is the episode's first warning, and only its first line differs: `Stopped with a question (watch <id>).` instead of `No activity for N minutes`.
 The second warning, the unanswered-parent human notice and the escalation to the operator follow from its time exactly as from a 20-minute warning, and new activity of the target starts a new episode, so one question gives at most one early warning.
 The runtime reads the row it already holds when it hands each watch to the tick, under the lock that builds the tick's work; nothing is added to the tick's reads, threads or timers.
 
