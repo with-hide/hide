@@ -813,8 +813,10 @@ mod tests {
         let legacy = hide_kit::layout::mission_events(root.path());
         let histories = hide_kit::layout::mission_histories(root.path());
         let dir = hide_kit::layout::missions_dir(root.path());
-        let mut book = MissionBook::default();
-        book.next = 1;
+        let mut book = MissionBook {
+            next: 1,
+            ..MissionBook::default()
+        };
         book.missions.push(crate::missions::tests::mission());
         let save_old = |book: &MissionBook| {
             std::fs::write(
