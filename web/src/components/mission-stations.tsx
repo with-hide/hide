@@ -51,8 +51,7 @@ const LAND_TODO = "border-mission-land text-mission-land";
 export function StationLine({ stations, className }: { stations: readonly Station[]; className?: string }) {
   const { t } = useInterfaceTranslation();
   return (
-    // The regular weight is set here: the line sits in a card that is a button, whose medium weight it would take otherwise.
-    <span aria-hidden="true" className={cn("flex min-w-0 items-start font-normal", className)} data-node-stations={stations.map((station) => `${station.kind}:${station.state}`).join(" ")}>
+    <span aria-hidden="true" className={cn("flex min-w-0 items-start", className)} data-node-stations={stations.map((station) => `${station.kind}:${station.state}`).join(" ")}>
       {stations.map((station, index) => {
         const last = index === stations.length - 1;
         const Icon = iconOf(station);
