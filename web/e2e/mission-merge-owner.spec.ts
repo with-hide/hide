@@ -17,7 +17,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chooseTheme, enterWorkspace, screenshot } from "./wire";
 import { initGithubRepository } from "./github-remote";
-import { fakeGh, writes } from "./work-prs-fixture";
+import { fakeGh, git, writes } from "./work-prs-fixture";
 
 type Hide = (args: string[]) => Promise<HideAnswer>;
 type Answer = { ok: boolean; result?: Record<string, unknown> };
@@ -65,6 +65,10 @@ async function readyPull(page: Page, label: string, planned: ReturnType<typeof p
     daemon = await startHided(fixture, label, undefined, { PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
     const live = daemon;
     const repo = fs.realpathSync(path.join(fixture.root, "fixture"));
+    const origin = path.join(fixture.root, "origin.git");
+    git(fixture.root, ["init", "--bare", origin]);
+    git(repo, ["remote", "add", "origin", origin]);
+    git(repo, ["push", "-u", "origin", "main"]);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const conductor = fixture.runAs(fixture.panes[0]);
@@ -72,6 +76,25 @@ async function readyPull(page: Page, label: string, planned: ReturnType<typeof p
     await ok(conductor, ["mission", "create", "--title", "결제 테이블 정리"]);
     await ok(conductor, ["mission", "plan", "--json", JSON.stringify(planned)]);
     await ok(conductor, ["mission", "start"]);
+    if (planned.nodes[0]?.operator_merge) {
+      // Before a PR is ready, the plan names its owner and asks nothing.
+      const shown = (await conductor(["mission", "show"])).out;
+      const planFile = path.join(repo, "merge-owner-plan.txt");
+      fs.writeFileSync(planFile, shown);
+      await ok(conductor, ["file", "open", planFile]);
+      await expect(page.getByText("머지까지 · schema만 👤 내가 머지", { exact: false }).first()).toBeVisible();
+      await chooseTheme(page, "dark");
+      await screenshot(page, "merge-owner-plan-dark");
+      await chooseTheme(page, "light");
+      await screenshot(page, "merge-owner-plan-light");
+      await page.locator("[data-pane-mission-chip]").click();
+      const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+      await expect(map.locator('[data-mission-turn-item="merge"]')).toHaveCount(0);
+      await expect(page.locator("nav[data-sidebar] [data-mission-ask]")).toHaveCount(0);
+      await screenshot(page, "merge-owner-before-light");
+      await chooseTheme(page, "dark");
+      await screenshot(page, "merge-owner-before-dark");
+    }
     await ok(conductor, ["mission", "node", "schema", "--status", "working", "--pr", "31", "--line", "PR #31 열림"]);
     await ok(conductor, ["mission", "record", "schema", "c1", "--pass", "--evidence", "마이그레이션이 돌았다"]);
     await withControl(live, async (control) => {
