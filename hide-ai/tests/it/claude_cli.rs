@@ -295,6 +295,38 @@ fn a_model_turn_runs_with_thinking_off_whatever_the_shell_exports() {
     });
 }
 
+/// A model turn writes its prompt cache for five minutes, not the hour a
+/// subscription would choose: the transcript it writes is never read again.
+/// That holds with thinking on (a picked effort) as with it off, and over a
+/// lifetime the operator's shell exports.
+#[test]
+fn a_model_turn_writes_its_prompt_cache_for_five_minutes_whatever_the_shell_exports() {
+    let efforts = [Vec::new(), vec![(ProviderId::CLAUDE, "low".to_owned())]];
+    for provider_efforts in efforts {
+        with_mode("ok", || {
+            let folder = tempfile::tempdir().unwrap();
+            let ttl_file = folder.path().join("cache-ttl.txt");
+            unsafe {
+                std::env::set_var("FAKE_CACHE_TTL_FILE", &ttl_file);
+                std::env::set_var("CLAUDE_CODE_PROMPT_CACHE_TTL", "1h");
+            }
+            let request = AiRequest {
+                provider_efforts: provider_efforts.clone(),
+                ..request(Duration::from_secs(30))
+            };
+            let result = backend().execute(&request, &CancelToken::new());
+            unsafe {
+                std::env::remove_var("FAKE_CACHE_TTL_FILE");
+                std::env::remove_var("CLAUDE_CODE_PROMPT_CACHE_TTL");
+            }
+
+            result.unwrap();
+            let received = std::fs::read_to_string(&ttl_file).unwrap();
+            assert_eq!(received, "5m", "{provider_efforts:?}");
+        });
+    }
+}
+
 /// `result` carries the same JSON the schema bound, and it is still not the
 /// answer: without `structured_output` nothing validated the shape.
 #[test]
