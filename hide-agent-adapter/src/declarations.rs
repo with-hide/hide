@@ -262,6 +262,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
         bell: true,
         bell_names_inbox: false,
+        bell_echo: Some(BellEcho {
+            chrome: &['⏺', '⎿'],
+        }),
         turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Claude),
@@ -365,6 +368,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
         bell: true,
         bell_names_inbox: true,
+        bell_echo: Some(BellEcho {
+            chrome: &['•', '└', '├', '│'],
+        }),
         turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Codex),
@@ -460,6 +466,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         memory: Support::Unsupported(GROK_CONTEXT_ABSENCE),
         bell: true,
         bell_names_inbox: true,
+        bell_echo: Some(BellEcho {
+            chrome: &['◆', '◈', '┃'],
+        }),
         turn_end_letters: Some(HookDialect::Grok),
         tool_letters: Some(HookDialect::Grok),
         session: Some(SessionFormat::Grok),
@@ -580,6 +589,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // (measured 2026-10-07); letters reach it on its next prompt instead.
         bell: false,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::OpenCode),
         session: Some(SessionFormat::OpenCode),
@@ -698,6 +708,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // its next prompt instead.
         bell: false,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Pi),
         session: Some(SessionFormat::Pi),
@@ -805,6 +816,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // its next prompt instead.
         bell: false,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Omp),
         session: Some(SessionFormat::Omp),
@@ -919,6 +931,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // due as an injected system message (`tool_letters`).
         bell: false,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Antigravity),
         session: Some(SessionFormat::Antigravity),
@@ -1017,6 +1030,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     memory: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     bell: false,
     bell_names_inbox: false,
+    bell_echo: None,
     turn_end_letters: None,
     tool_letters: None,
     session: Some(SessionFormat::Cursor),

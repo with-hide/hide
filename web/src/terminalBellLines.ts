@@ -14,16 +14,31 @@
 // rows that carry a bell line moved.
 
 import type { IBufferLine, IDecoration, Terminal } from "@xterm/xterm";
+import { AGENT_ADAPTERS } from "./agentAdapters";
+
+/** The echo each agent that types the line declares (`hide-agent-adapter`, `BellEcho`). */
+export type BellEchoShape = { prompt: readonly string[]; chrome: readonly string[] };
+
+const escaped = (glyphs: readonly string[]) => glyphs.map((glyph) => glyph.replace(/[\\\]^-]/g, "\\$&")).join("");
 
 /**
- * A prompt glyph, the owl and a space, as Claude Code, Codex and Grok echo the
- * line (Grok leaves a margin before the glyph); group 1 is what stands before
- * the owl, whose width is the indent each row the line wraps onto carries.
+ * What the scan reads, built from the declared echoes: a row begins with one
+ * of the prompt glyphs, an owl and a space; group 1 is what stands before the
+ * owl (Grok leaves a margin before the glyph), whose width is the indent each
+ * row the line wraps onto carries. A row that begins with a prompt glyph or
+ * with one of the agents' own output glyphs never carries the line on.
  */
-const BELL_ROW = /^(\s*[❯›>]\s*)🦉\s/u;
+export function bellScan(echoes: readonly BellEchoShape[]): { bellRow: RegExp; chrome: RegExp } {
+  const prompts = echoes.flatMap((echo) => echo.prompt);
+  const chrome = [...prompts, ...echoes.flatMap((echo) => echo.chrome)];
+  return {
+    bellRow: new RegExp(`^(\\s*[${escaped(prompts)}]\\s*)🦉\\s`, "u"),
+    chrome: new RegExp(`[\\s${escaped(chrome)}]`, "u"),
+  };
+}
 
-/** What starts a row of an agent's own chrome, which never carries a bell line on. */
-const CHROME = /[\s⎿⏺└├│•›❯>◆◈┃]/u;
+const declared = AGENT_ADAPTERS.flatMap((row) => (row.bell_echo ? [row.bell_echo] : []));
+const declaredScan = bellScan(declared);
 
 /** A wrapped row leaves this many cells unused at most when the next word fits no better. */
 const WRAP_SLACK = 16;
@@ -35,25 +50,25 @@ const MAX_ROWS = 6;
 export type ScreenRow = { text: string; used: number };
 
 /** Whether a row starts with exactly the bell line's indent and then text rather than chrome. */
-function carriesOn(text: string, indent: string): boolean {
+function carriesOn(text: string, indent: string, chrome: RegExp): boolean {
   if (!text.startsWith(indent)) return false;
   const [first] = Array.from(text.slice(indent.length, indent.length + 2));
-  return first !== undefined && !CHROME.test(first);
+  return first !== undefined && !chrome.test(first);
 }
 
 /** The rows, counted from the top of `rows`, that carry a bell line. */
-export function bellRows(rows: readonly ScreenRow[], cols: number): number[] {
+export function bellRows(rows: readonly ScreenRow[], cols: number, scan = declaredScan): number[] {
   const found: number[] = [];
   for (let at = 0; at < rows.length; at += 1) {
     const row = rows[at]!;
-    const bell = row.text.includes("🦉") ? BELL_ROW.exec(row.text) : null;
+    const bell = row.text.includes("🦉") ? scan.bellRow.exec(row.text) : null;
     if (!bell) continue;
     found.push(at);
     const indent = " ".repeat(bell[1]!.length);
     let last = row;
     for (let extra = 1; extra < MAX_ROWS; extra += 1) {
       const next = rows[at + extra];
-      if (!next || last.used < cols - WRAP_SLACK || !carriesOn(next.text, indent)) break;
+      if (!next || last.used < cols - WRAP_SLACK || !carriesOn(next.text, indent, scan.chrome)) break;
       found.push(at + extra);
       last = next;
     }
