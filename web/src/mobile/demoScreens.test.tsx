@@ -20,6 +20,7 @@ const settle = (ms = 400) => act(async () => { await vi.advanceTimersByTimeAsync
 
 beforeAll(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
   vi.useFakeTimers();
   network = blockNetwork((name, value) => vi.stubGlobal(name, value), () => vi.unstubAllGlobals());
   window.history.replaceState(null, "", "/p/5/?demo=1");
@@ -107,6 +108,10 @@ describe("the sample host's screens", () => {
     expect(text()).toContain("Prepare release 1.2.0");
     await act(async () => openMission("mission-release"));
     expect(text()).toContain("The signing certificate expired");
+    const graph = document.querySelector("[data-phone-mission-steps]")!;
+    expect(graph.querySelectorAll("[data-mission-node]")).toHaveLength(6);
+    expect(graph.querySelector("[data-dependency-graph]")).not.toBeNull();
+    expect(graph.querySelector("[data-mission-report]")?.textContent).toContain("Report");
     await act(async () => setTab("prs"));
     expect(text()).toContain("fix: keep Windows paths on the wire");
     expect(text()).toContain("feat: show children on the phone list");

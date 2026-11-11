@@ -5,7 +5,7 @@ import { Button } from "./components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Hint } from "./components/ui/tooltip";
 import { holdsCommandKey, keySystem } from "./host";
-import { useInterfaceTranslation } from "./i18n/client";
+import { useInterfaceTranslation } from "./i18n/translator";
 import { cn } from "./lib/utils";
 import { clampMapZoom, mapFit, mapLayout, MAX_MAP_ZOOM, MIN_MAP_ZOOM, stepMapZoom } from "./missionMapZoom";
 import type { MissionMapFlow } from "./snapshot";
@@ -43,13 +43,14 @@ type Measured = {
  * left beside the panel; in a narrow slot the box is as tall as its map,
  * up to `page`'s height, and the panel follows under it.
  */
-export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide: boolean; page: HTMLElement | null; flow: MissionMapFlow; onFlow: (flow: MissionMapFlow) => void; children: ReactNode }) {
+export function MissionMapCanvas({ wide, page, flow, onFlow, children, touch = false, focusNodes = [] }: { wide: boolean; page: HTMLElement | null; flow: MissionMapFlow; onFlow: (flow: MissionMapFlow) => void; children: ReactNode; touch?: boolean; focusNodes?: string[] }) {
   const { t } = useInterfaceTranslation();
   const [box, boxRef] = useState<HTMLDivElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const controls = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState<Measured | null>(null);
   // Null while the map fits; a scale once the operator zoomed it.
+  const interacted = useRef(false);
   const [chosen, setChosen] = useState<number | null>(null);
 
   useLayoutEffect(() => {
@@ -107,17 +108,50 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
   }, [box]);
 
   const fitAgain = () => {
+    interacted.current = true;
     flushSync(() => setChosen(null));
     if (!box) return;
     box.scrollLeft = 0;
     box.scrollTop = 0;
   };
 
+  const focusKey = JSON.stringify(focusNodes);
+  useLayoutEffect(() => {
+    if (!touch || !box || !measured || interacted.current) return;
+    const keys = new Set<string>(JSON.parse(focusKey));
+    const inner = content.current;
+    if (!inner) return;
+    const origin = inner.getBoundingClientRect();
+    const nodes = [...inner.querySelectorAll<HTMLElement>("[data-mission-node]")].filter((node) => keys.has(node.dataset.missionNode ?? ""));
+    if (nodes.length === 0) {
+      setChosen(null);
+      box.scrollLeft = 0;
+      box.scrollTop = 0;
+      return;
+    }
+    const rects = nodes.map((node) => node.getBoundingClientRect());
+    const now = latest.current.scale;
+    const left = (Math.min(...rects.map((r) => r.left)) - origin.left) / now;
+    const top = (Math.min(...rects.map((r) => r.top)) - origin.top) / now;
+    const width = (Math.max(...rects.map((r) => r.right)) - origin.left) / now - left;
+    const height = (Math.max(...rects.map((r) => r.bottom)) - origin.top) / now - top;
+    const next = mapFit({ width, height }, measured.viewport, measured.below);
+    const after = mapLayout(measured.map, next, measured.viewport, measured.below);
+    setChosen(next);
+    // Scroll after React lays out the newly scaled surface.
+    const frame = requestAnimationFrame(() => {
+      box.scrollLeft = after.boxes[0]!.left + (left + width / 2) * next - measured.viewport.width / 2;
+      box.scrollTop = after.boxes[0]!.top + (top + height / 2) * next - (measured.viewport.height - measured.below) / 2;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [touch, box, measured, focusKey]);
+
   // A map turned the other way is another shape: it fits again from its start.
   const drawnFlow = useRef(flow);
   useLayoutEffect(() => {
     if (drawnFlow.current === flow) return;
     drawnFlow.current = flow;
+    interacted.current = false;
     setChosen(null);
     if (!box) return;
     box.scrollLeft = 0;
@@ -143,6 +177,7 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
         const pointer = client ? { x: client.x - rect.left - box.clientLeft, y: client.y - rect.top - box.clientTop } : null;
         const by = factor;
         factor = 1;
+        interacted.current = true;
         zoomTo(latest.current.scale * by, pointer);
       });
     };
@@ -155,16 +190,20 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
 
   const pannable = !!layout && !!measured && (layout.width > measured.viewport.width + 1 || layout.height > measured.viewport.height + 1);
   const pan = usePan(box, pannable);
+  const gestures = useTouchMap(box, touch, (factor, pointer) => {
+    interacted.current = true;
+    zoomTo(latest.current.scale * factor, pointer);
+  }, () => { interacted.current = true; });
   const percent = `${Math.round(scale * 100)}%`;
   return (
     <div className={cn("relative flex min-w-0 flex-col", wide && "min-h-0 flex-1")}>
       <div
         ref={boxRef}
-        className={cn("min-h-0 min-w-0 flex-1 overflow-auto [overflow-anchor:none]", pannable && (pan.dragging ? "cursor-grabbing select-none" : "cursor-grab"))}
+        className={cn("min-h-0 min-w-0 flex-1 overflow-auto [overflow-anchor:none]", touch && "touch-none overscroll-contain", pannable && (pan.dragging ? "cursor-grabbing select-none" : "cursor-grab"))}
         style={height != null ? { height } : undefined}
         data-mission-canvas={chosen === null ? "fit" : "zoomed"}
         data-mission-scale={scale.toFixed(2)}
-        {...pan.handlers}
+        {...(touch ? gestures : pan.handlers)}
       >
         <div className="relative" style={layout ? { width: layout.width, height: layout.height } : undefined}>
           <div
@@ -176,7 +215,7 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
           </div>
         </div>
       </div>
-      <div ref={controls} role="group" aria-label={t("mission.zoom")} className="absolute bottom-sm right-sm flex items-center gap-xxs rounded-md border border-border bg-popover p-xxs shadow-lg" data-mission-zoom={percent}>
+      <div ref={controls} role="group" aria-label={t("mission.zoom")} className={cn("absolute bottom-sm right-sm flex items-center gap-xxs rounded-md border border-border bg-popover p-xxs shadow-lg", touch && "[&_button]:min-h-(--size-touch-target) [&_button]:min-w-(--size-touch-target)")} data-mission-zoom={percent}>
         <ToggleGroup
           type="single"
           value={flow}
@@ -205,7 +244,7 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
           </ToggleGroupItem>
         </ToggleGroup>
         <span aria-hidden="true" className="mx-xxs h-(--size-icon) w-(--size-hairline) bg-border" />
-        <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomOut")} disabled={scale <= MIN_MAP_ZOOM + SCALE_EPSILON} onClick={() => zoomTo(stepMapZoom(scale, "out"), null)} data-mission-zoom-step="out">
+        <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomOut")} disabled={scale <= MIN_MAP_ZOOM + SCALE_EPSILON} onClick={() => { interacted.current = true; zoomTo(stepMapZoom(scale, "out"), null); }} data-mission-zoom-step="out">
           <MinusIcon />
         </Button>
         <Hint label={t("mission.zoom.hint", { key: keySystem() === "mac" ? "⌘" : "Ctrl" })}>
@@ -213,7 +252,7 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
             {percent}
           </span>
         </Hint>
-        <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomIn")} disabled={scale >= MAX_MAP_ZOOM - SCALE_EPSILON} onClick={() => zoomTo(stepMapZoom(scale, "in"), null)} data-mission-zoom-step="in">
+        <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomIn")} disabled={scale >= MAX_MAP_ZOOM - SCALE_EPSILON} onClick={() => { interacted.current = true; zoomTo(stepMapZoom(scale, "in"), null); }} data-mission-zoom-step="in">
           <PlusIcon />
         </Button>
         <span aria-hidden="true" className="mx-xxs h-(--size-icon) w-(--size-hairline) bg-border" />
@@ -253,7 +292,7 @@ function usePan(box: HTMLDivElement | null, pannable: boolean) {
       onPointerDown: (event: PointerEvent<HTMLElement>) => {
         // Every press starts anew: a drag that ended outside the box left no click to swallow.
         swallow.current = false;
-        if (!pannable || !box || event.button !== 0) return;
+        if (!pannable || !box || event.button !== 0 || event.pointerType === "touch") return;
         const target = event.target as Element;
         if (target.closest("button, a, input, [data-mission-node]")) return;
         // A press past the box's client area is on its scroll bar.
@@ -283,6 +322,76 @@ function usePan(box: HTMLDivElement | null, pannable: boolean) {
         swallow.current = false;
         event.stopPropagation();
       },
+    },
+  };
+}
+
+/** Two retained pointers at most; one coalesced frame, cancelled with the canvas. A tap stays a node press. */
+function useTouchMap(box: HTMLDivElement | null, enabled: boolean, zoom: (factor: number, at: Point) => void, moved: () => void) {
+  const pointers = useRef(new Map<number, Point>());
+  const swallow = useRef(false);
+  const start = useRef<Point | null>(null);
+  const pending = useRef<{ factor: number; at: Point; dx: number; dy: number } | null>(null);
+  const frame = useRef(0);
+  const latest = useRef({ zoom, moved });
+  useLayoutEffect(() => { latest.current = { zoom, moved }; });
+  useEffect(() => () => { cancelAnimationFrame(frame.current); }, []);
+  const end = (event: PointerEvent<HTMLElement>) => {
+    pointers.current.delete(event.pointerId);
+    start.current = pointers.current.values().next().value ?? null;
+  };
+  return {
+    onPointerDown: (event: PointerEvent<HTMLElement>) => {
+      if (!enabled || !box || event.button !== 0 || pointers.current.size >= 2) return;
+      if (pointers.current.size === 0) {
+        swallow.current = false;
+        start.current = { x: event.clientX, y: event.clientY };
+      }
+      pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    },
+    onPointerMove: (event: PointerEvent<HTMLElement>) => {
+      if (!box || !pointers.current.has(event.pointerId)) return;
+      const before = [...pointers.current.values()];
+      pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const after = [...pointers.current.values()];
+      const midpoint = (points: Point[]): Point => ({ x: points.reduce((sum, p) => sum + p.x, 0) / points.length, y: points.reduce((sum, p) => sum + p.y, 0) / points.length });
+      const from = midpoint(before);
+      const to = midpoint(after);
+      if (!swallow.current && after.length === 1 && start.current && Math.hypot(to.x - start.current.x, to.y - start.current.y) < DRAG_SLOP) return;
+      const firstMove = !swallow.current;
+      swallow.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const distance = (points: Point[]) => Math.hypot(points[1]!.x - points[0]!.x, points[1]!.y - points[0]!.y);
+      const factor = after.length === 2 && distance(before) > 0 ? distance(after) / distance(before) : 1;
+      const rect = box.getBoundingClientRect();
+      const at = { x: from.x - rect.left, y: from.y - rect.top };
+      const delta = firstMove && after.length === 1 && start.current ? { x: to.x - start.current.x, y: to.y - start.current.y } : { x: to.x - from.x, y: to.y - from.y };
+      const old = pending.current;
+      pending.current = { factor: (old?.factor ?? 1) * factor, at: old?.at ?? at, dx: (old?.dx ?? 0) + delta.x, dy: (old?.dy ?? 0) + delta.y };
+      if (frame.current) return;
+      frame.current = requestAnimationFrame(() => {
+        frame.current = 0;
+        const change = pending.current;
+        pending.current = null;
+        if (!change) return;
+        latest.current.moved();
+        latest.current.zoom(change.factor, change.at);
+        box.scrollLeft -= change.dx;
+        box.scrollTop -= change.dy;
+      });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+    onLostPointerCapture: (event: PointerEvent<HTMLElement>) => {
+      // Moving implicit touch capture from a card to the canvas releases the
+      // card first. Its bubbling event does not end the canvas's gesture.
+      if (event.target === event.currentTarget) end(event);
+    },
+    onClickCapture: (event: SyntheticEvent) => {
+      if (!swallow.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+      swallow.current = false;
     },
   };
 }
