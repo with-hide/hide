@@ -38,6 +38,8 @@ mod backlog;
 mod beside_spawn;
 #[path = "tests/birth_cwd.rs"]
 mod birth_cwd;
+#[path = "tests/blocked_children.rs"]
+mod blocked_children;
 mod checkout_git;
 mod closed_registrations;
 #[path = "tests/control_order.rs"]
