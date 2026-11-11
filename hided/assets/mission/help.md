@@ -61,7 +61,9 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
   Every change starts from the destination's newest commit, a pull request takes it as its base, a `direct` change is merged into it, and Hide reads whether a change is in from it. "main" in this guide means the repository's default branch and nothing else.
   When the operator names another branch for the results, put it in the plan as `"destination": "<branch>"` and say it in the plan in one line (`결과는 release/1.3로 · 지금 폴더는 main`); a plan that leaves it out keeps the one the mission has.
   Once the mission started, another destination is a change of scope: ask the operator with `hide mission decide` before you plan it.
-- Check the destination before the plan is approved: with a GitHub remote it has to be on the remote (`git ls-remote --exit-code origin <destination>`), since a pull request cannot take a base GitHub does not have. Push it, or ask the operator, when it is not there.
+- Check the destination before the plan is approved: a plan with `pr` nodes needs it on the remote (`git ls-remote --exit-code origin <destination>`), since a pull request cannot take a base GitHub does not have.
+  When it is only local, write it in the plan in one line (`feat/login을 시작할 때 원격에 올려요`): approving the plan approves that push. At the start, push it with `git push -u origin <destination>`, never with force.
+  A plan with only `direct` changes needs no push: the local branch is enough.
 - When the checkout has changes that are not committed (`git status --short`), ask the operator before any worker starts and write the answer in the plan: a worker starts from the destination's commits and never sees what is not committed.
 
 ## 2. The plan
