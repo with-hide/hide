@@ -740,6 +740,19 @@ mod tests {
         book.missions[0].decision = Some("Which base?".into());
         book.missions[131].status = MissionStatus::Running;
         book.missions[131].closed_at_unix_ms = None;
+        // A legacy book over the former count limit also loads whole.
+        std::fs::write(
+            hide_kit::layout::missions(state.path()),
+            serde_json::to_vec(&json!({
+                "schema_version": 4, "next": 132, "missions": book.missions,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let Restored::Moving(book) = MissionStore::new(state.path()).restore() else {
+            panic!("all 132 legacy missions are read");
+        };
+        assert_eq!((book.missions.len(), book.next), (132, 132));
         let dir = hide_kit::layout::missions_dir(state.path());
         MissionFiles::new(dir.clone(), None)
             .write(&book, &mut Vec::new())
