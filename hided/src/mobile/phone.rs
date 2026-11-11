@@ -2467,7 +2467,12 @@ mod tests {
         assert!(!sent.contains("older"));
         assert!(sent.len() > FRAME_LIMIT / 8, "{} bytes kept", sent.len());
         let open = sent.rfind('\x1b').unwrap();
-        assert!(sent[open..].ends_with('m'), "{:?}", &sent[open..]);
+        // The last sequence is whole (`\x1b[32m` or `\x1b[0m`), whatever text follows it.
+        let last = &sent[open..];
+        assert!(
+            last.starts_with("\x1b[32m") || last.starts_with("\x1b[0m"),
+            "{last:?}"
+        );
         assert_eq!(frame["more"], false);
     }
 
