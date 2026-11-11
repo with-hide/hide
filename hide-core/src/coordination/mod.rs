@@ -2532,7 +2532,7 @@ fn insert_record(
             pane: record.pane.clone(),
         }));
     }
-    room::for_agent(ledger, holds, record)?;
+    room::for_agent(ledger, holds)?;
     let mut record = record.clone();
     record.id = allocate(ledger, "agent")?;
     ledger.agents.push(record.clone());
@@ -2919,7 +2919,7 @@ mod tests {
         }
     }
 
-    fn command(intent: &str) -> Command {
+    pub(super) fn command(intent: &str) -> Command {
         Command::Spawn {
             pick: None,
             mission: None,
