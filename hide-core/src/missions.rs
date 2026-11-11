@@ -1419,6 +1419,16 @@ pub struct Decided {
     pub node: String,
 }
 
+/// The line a closing pull added to a mission's report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FolderLine {
+    pub text: String,
+    /// The checkout held the destination when the line was written: the
+    /// pull brought it there or found it there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Mission {
     pub id: String,
@@ -1518,7 +1528,7 @@ pub struct Mission {
     /// mission-destination D-28), so a later close replaces it rather than
     /// adding a second. A build from before it ignores and drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_line: Option<String>,
+    pub folder_line: Option<FolderLine>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     #[serde(default)]

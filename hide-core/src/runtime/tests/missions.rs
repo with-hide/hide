@@ -1700,6 +1700,8 @@ fn a_direct_changes_worktree_in_use_is_tried_again_and_one_with_changes_is_kept(
 struct PullNode {
     calls: Mutex<Vec<&'static str>>,
     gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// How far the checkout reads behind its destination.
+    behind: Mutex<u32>,
 }
 
 impl PullNode {
@@ -1708,6 +1710,7 @@ impl PullNode {
         let node = Arc::new(Self {
             calls: Mutex::new(Vec::new()),
             gate: Mutex::new(Some(gate)),
+            behind: Mutex::new(2),
         });
         (node, release)
     }
@@ -1748,7 +1751,7 @@ impl crate::node_access::NodeLink for PullNode {
                     upstream: Some("origin/feat/login".into()),
                     upstream_state: "tracked".into(),
                     ahead: Some(0),
-                    behind: Some(2),
+                    behind: Some(*self.behind.lock().unwrap()),
                     ..Default::default()
                 })
                 .unwrap(),
@@ -1854,6 +1857,63 @@ fn a_close_hands_the_pull_to_a_worker_off_the_lock_and_its_line_ends_the_report(
         Some("Done.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
     );
     assert_eq!(node.calls(), ["fetch", "read", "catch_up"]);
+}
+
+/// A mission Hide closed as done, pulling the checkout forward, and that
+/// its Conductor then closes again with its final report: the second pull
+/// finds the checkout current and the report keeps the one line that says
+/// what the first took, after the Conductor's new words.
+#[test]
+fn a_second_close_that_finds_the_checkout_current_keeps_the_pulled_line() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let (node, release) = PullNode::held();
+    release.send(()).unwrap();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.use_own_node(node.clone());
+    runtime.install_worker_context(Arc::downgrade(&fixture.runtime), ChangeNotifier::noop());
+    on_feat_login(&mut runtime);
+    done_direct(&mut runtime, false);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait", "report": "Done."}),
+    )
+    .unwrap();
+    land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
+    drop(runtime);
+    let read = || {
+        let runtime = fixture.runtime.lock().unwrap();
+        let report = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .report
+            .clone();
+        (runtime.missions.pulls.idle(), report)
+    };
+    wait_for("the first pull", || node.calls().len() == 3 && read().0);
+    assert_eq!(
+        read().1.as_deref(),
+        Some("Done.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+    );
+
+    *node.behind.lock().unwrap() = 0;
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "Final."}),
+    )
+    .unwrap();
+    drop(runtime);
+    wait_for("the second pull", || node.calls().len() == 5 && read().0);
+    assert_eq!(node.calls(), ["fetch", "read", "catch_up", "fetch", "read"]);
+    assert_eq!(
+        read().1.as_deref(),
+        Some("Final.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+    );
 }
 
 /// PRD mission-destination B38, D-43, D-47, D-28: a cancel pulls nothing, a

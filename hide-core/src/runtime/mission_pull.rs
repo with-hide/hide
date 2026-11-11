@@ -31,7 +31,7 @@ use serde_json::json;
 
 use super::Runtime;
 use super::mission_landing::{NodeLanding, node_landing};
-use crate::missions::{MissionStatus, NodeKind};
+use crate::missions::{FolderLine, MissionStatus, NodeKind};
 use crate::node_access::NodeLink;
 
 /// How long the checkout's read may take: the node bounds `CheckoutGit` at
@@ -400,7 +400,9 @@ impl Runtime {
     }
 
     /// Logs what came of mission `id`'s pull and puts its line in the
-    /// report of a mission still closed; whether the book changed.
+    /// report of a mission still closed; whether the book changed. A pull
+    /// that finds the checkout current after one that brought it there or
+    /// found it there keeps that line, which says what the first one took.
     fn note_folder_pull(&mut self, id: &str, job: Option<&Job>, pulled: &Pulled) -> bool {
         let (outcome, reason, commits) = pulled.logged();
         let detail = match pulled {
@@ -414,7 +416,7 @@ impl Runtime {
             "destination": job.map(|job| job.destination.as_str()),
             "message": detail,
         }));
-        let Some(line) = job.and_then(|job| pulled.line(&job.destination)) else {
+        let Some(text) = job.and_then(|job| pulled.line(&job.destination)) else {
             return false;
         };
         let Some(mission) = self.missions.book.get_mut(id).filter(|mission| {
@@ -425,13 +427,20 @@ impl Runtime {
         }) else {
             return false;
         };
+        let line = match &mission.folder_line {
+            Some(kept) if kept.current && *pulled == Pulled::Current => kept.clone(),
+            _ => FolderLine {
+                text,
+                current: matches!(pulled, Pulled::Updated { .. } | Pulled::Current),
+            },
+        };
         let report = with_line(
             mission.report.as_deref(),
-            mission.folder_line.as_deref(),
-            &line,
+            mission.folder_line.as_ref().map(|line| line.text.as_str()),
+            &line.text,
         );
         if mission.report.as_deref() == Some(report.as_str())
-            && mission.folder_line.as_deref() == Some(line.as_str())
+            && mission.folder_line.as_ref() == Some(&line)
         {
             return false;
         }
