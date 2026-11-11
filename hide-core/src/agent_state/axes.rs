@@ -804,7 +804,7 @@ impl ReadConnection {
 /// Whether the engine has settled this pane: it knows what the agent is doing and
 /// has numbered that state on this server. A restored engine can list a pane
 /// at sequence 0 and then `unknown` before it does.
-fn settled(agent: &SidebarAgentSnapshot) -> bool {
+pub(crate) fn settled(agent: &SidebarAgentSnapshot) -> bool {
     agent.state_change_seq != Some(0) && axes_of(agent).1 != AgentActivity::Unknown
 }
 

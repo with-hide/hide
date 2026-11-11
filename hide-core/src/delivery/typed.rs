@@ -259,6 +259,15 @@ pub enum InputKind {
 pub(crate) const HOOKS_NOT_CONNECTED: &str = "hooks_not_connected";
 pub(crate) const SESSION_UNREAD: &str = "session_unread";
 
+/// Who may answer another agent's screen, said in every note that asks a
+/// parent to: the operator's decision (2026-11-01) that an agent may answer
+/// another's screen, approvals included; Hide does not judge consent, and the
+/// operator sets how much agents approve in Settings > Agents.
+pub(crate) const SCREEN_CONSENT: &str = "Answering a trust or approval screen for it is your \
+     call: Hide does not check consent, and the operator sets how much agents may approve in \
+     Settings > Agents. A sign-in or a permission is the operator's: the agent at it declares \
+     it with `hide agent ask-human`.";
+
 /// The notice's body: its first line says what happened and the one command
 /// to start with, since the operator reads it in the wake summary. With no
 /// source for the agent's record (`source` names why), the input is not
@@ -278,13 +287,7 @@ pub(crate) fn notice_body(
         (InputKind::Letter, Some(id)) => format!("your letter {id}"),
         (InputKind::Letter, None) => "your letter".to_owned(),
     };
-    // The operator's decision (2026-11-01): an agent may answer another's
-    // screen, approvals included; Hide does not judge consent, and the
-    // operator sets how much agents approve in Settings > Agents.
-    let trust = "Answering a trust or approval screen for it is your call: Hide does not check \
-                 consent, and the operator sets how much agents may approve in Settings > Agents. \
-                 A sign-in or a permission is the operator's: the agent at it declares it with \
-                 `hide agent ask-human`.";
+    let trust = SCREEN_CONSENT;
     let read = format!("read its screen with `hide pane read {pane}`");
     let answer = format!(
         "Answer the screen with `hide pane send {pane} --key <name>` (esc, enter, up, down, \

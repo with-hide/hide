@@ -2006,6 +2006,11 @@ pub struct SidebarAgentSnapshot {
     /// the rest (needs-you-cleanup D-13).
     #[serde(skip)]
     pub(crate) laid_since_unix_ms: Option<u64>,
+    /// When the core first read this delegated child blocked, while it still
+    /// is (`runtime/blocked_children.rs`): the start of the grace its parent
+    /// has before its lineage root is raised (`escalation::grace_end`).
+    #[serde(skip)]
+    pub(crate) blocked_since_unix_ms: Option<u64>,
     #[serde(skip)]
     pub(crate) laid_more: usize,
     /// Which of the core's questions are laid on this row now, the one it
