@@ -397,3 +397,145 @@ async fn web_preflight() {
     );
     running.stop();
 }
+
+/// The host speaks the public socket protocol; the phone decrypts the actual
+/// local push request. Fences prove absence without guessing a quiet interval.
+#[test]
+fn computer_use_rests_then_releases_only_current_waits() {
+    with_runtime(computer_use());
+}
+
+async fn computer_use() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let directory = tempfile::tempdir().unwrap();
+    let phone_key = AppKey::new();
+    let registration = phone_key.registration(&"ab".repeat(32));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let state = directory.path().join("state");
+    assert!(store::write_logged(
+        &store::settings_path(&state),
+        &json!({
+            "enabled": true, "method": "relay", "push_mode": "app_closed",
+        })
+    ));
+    assert!(store::write_logged(
+        &store::phones_path(&state),
+        &json!({"phones": [{
+            "id": PHONE, "name": "Phone", "credential_sha256": "0".repeat(64),
+            "paired_at_ms": now_ms(), "last_seen_ms": now_ms(),
+            "notifications": "on", "origin": "relay",
+            "push": {"endpoint": format!("http://{}/push", listener.local_addr().unwrap()),
+                "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"]},
+        }]})
+    ));
+    let (sent, mut received) = tokio::sync::mpsc::channel(16);
+    let app = axum::Router::new().route(
+        "/push",
+        axum::routing::post(move |body: axum::body::Bytes| {
+            let sent = sent.clone();
+            async move {
+                sent.send(body).await.unwrap();
+                axum::http::StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = start(directory.path(), relay.local_addr().unwrap().port()).await;
+    let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "origin",
+        format!("http://127.0.0.1:{}", running.port)
+            .parse()
+            .unwrap(),
+    );
+    let (mut host, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    host.send(Message::Text(
+        json!({"token":running.token,"schema_version":2,"client_kind":"desktop"})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+
+    // The deliberate malformed frame is an ordered acknowledgement: every
+    // earlier valid report has been consumed when its error comes back.
+    macro_rules! report {
+        ($kind:expr, $payload:expr) => {{
+            for event in [json!({"schema_version":2,"kind":$kind,"payload":$payload}),
+                json!({"schema_version":2,"kind":"desktop_activity","payload":{"in_use":"invalid"}})] {
+                host.send(Message::Text(event.to_string().into())).await.unwrap();
+            }
+            loop {
+                if let Message::Text(text) = host.next().await.unwrap().unwrap() {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    if frame["type"] == "error" {
+                        assert_eq!(frame["message"], "desktop_activity.in_use must be a boolean");
+                        break;
+                    }
+                }
+            }
+        }};
+    }
+    let mobile = &running.mobile;
+    report!("desktop_notices", json!({"wanted":true,"needs_you":true}));
+    report!("desktop_activity", json!({"in_use":true}));
+    deliver(mobile, vec![notice("waiting"), notice("answered")], &[]);
+    fence().await;
+    assert!(
+        received.try_recv().is_err(),
+        "input anywhere on the computer rests phone pushes"
+    );
+    deliver(mobile, vec![], &["answered"]);
+    report!("desktop_activity", json!({"in_use":false}));
+    mobile.flush_rested();
+    let body = received.recv().await.unwrap();
+    let payload: Value = serde_json::from_slice(&phone_key.decrypt(&body)).unwrap();
+    assert_eq!(payload["tag"], "node|waiting");
+    mobile.flush_rested();
+    fence().await;
+    assert!(
+        received.try_recv().is_err(),
+        "away sends once, and never sends the answered agent"
+    );
+
+    // Lock/suspend is an immediate away report from the host: a new wait is
+    // sent even though its desktop window is still attached.
+    deliver(mobile, vec![notice("locked")], &[]);
+    let body = received.recv().await.unwrap();
+    assert!(!body.is_empty(), "locked sends immediately");
+    report!("desktop_activity", json!({"in_use":true}));
+    report!("desktop_notices", json!({"wanted":true,"needs_you":false}));
+    deliver(mobile, vec![notice("desktop-off")], &[]);
+    let body = received.recv().await.unwrap();
+    assert!(
+        !body.is_empty(),
+        "Done alone cannot replace a Needs You notice"
+    );
+    report!("desktop_notices", json!({"wanted":true,"needs_you":true}));
+    report!("mobile_push_mode", json!({"mode":"always"}));
+    deliver(mobile, vec![notice("rest-off")], &[]);
+    let body = received.recv().await.unwrap();
+    assert!(!body.is_empty(), "rest switch off always sends");
+    fence().await;
+    assert!(received.try_recv().is_err());
+    report!("mobile_push_mode", json!({"mode":"app_closed"}));
+    deliver(mobile, vec![notice("last-host-closes")], &[]);
+    fence().await;
+    assert!(received.try_recv().is_err());
+    host.close(None).await.unwrap();
+    let body = received.recv().await.unwrap();
+    assert!(
+        !body.is_empty(),
+        "disconnect releases the last active host's hold"
+    );
+    fence().await;
+    assert!(received.try_recv().is_err());
+    running.stop();
+    server.abort();
+    let _ = server.await;
+}

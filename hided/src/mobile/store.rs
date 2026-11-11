@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub enum PushMode {
     #[default]
     #[serde(alias = "off")]
-    /// Only while no desktop or web shell is connected to this daemon.
+    /// Rest during actual computer use when desktop Needs You notices are on.
     AppClosed,
     Always,
 }
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn phone_push_rests_while_the_desktop_is_open_including_saved_off() {
+    fn phone_push_rest_preserves_its_saved_spelling_including_saved_off() {
         for saved in [
             "{}",
             r#"{"push_mode":"off"}"#,

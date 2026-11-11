@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -1502,8 +1502,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** This desktop window shows agent notifications, or stops; hided judges agent changes only while one does. */
-    wantAgentNotices(wanted: boolean) {
-      dispatch({ schema_version: 2, kind: "desktop_notices", payload: { wanted } });
+    wantAgentNotices(wanted: boolean, needsYou = wanted) {
+      dispatch({ schema_version: 2, kind: "desktop_notices", payload: { wanted, needs_you: needsYou } });
+    },
+
+    reportComputerUse(inUse: boolean) {
+      dispatch({ schema_version: 2, kind: "desktop_activity", payload: { in_use: inUse } satisfies DesktopActivityPayload });
     },
 
     /** An agent's switch on its machine's row (agent adapters): its skill and hook go in or come out. */

@@ -391,30 +391,21 @@ impl Prepared {
     }
 }
 
-/// Whether a notification may go out under the operator's mode:
-/// app-closed-only while no desktop or web shell is connected, Always always.
-pub fn mode_allows(mode: PushMode, renderers: usize) -> bool {
-    match mode {
-        PushMode::AppClosed => renderers == 0,
-        PushMode::Always => true,
-    }
+/// The saved `app_closed` spelling is retained for compatibility; its policy
+/// rests only during actual computer use with a desktop notice route enabled.
+pub fn mode_allows(mode: PushMode, computer_in_use: bool) -> bool {
+    mode == PushMode::Always || !computer_in_use
 }
 
-/// Whether an operator notice can reach a phone at all, judged before any
-/// send is tried. `Err` is the first reason it cannot, as the code the log
-/// records: `app_open` (app-closed mode with a desktop or web
-/// shell connected), `mobile_off` or `no_subscription` (no phone has a Web
-/// Push subscription or an app registration). The mode is checked before the
-/// Mobile switch because it is the setting an operator changes to receive
-/// these notices.
+/// The first reason an operator notice cannot reach a phone, before sending.
 pub fn notice_route(
     mode: PushMode,
     mobile_on: bool,
-    renderers: usize,
+    computer_in_use: bool,
     subscriptions: usize,
 ) -> Result<(), &'static str> {
-    if !mode_allows(mode, renderers) {
-        return Err("app_open");
+    if !mode_allows(mode, computer_in_use) {
+        return Err("computer_in_use");
     }
     if !mobile_on {
         return Err("mobile_off");
@@ -1800,22 +1791,31 @@ mod tests {
     }
 
     #[test]
-    fn the_mode_decides_by_renderer_count() {
-        assert!(mode_allows(PushMode::AppClosed, 0));
-        assert!(!mode_allows(PushMode::AppClosed, 1));
-        assert!(mode_allows(PushMode::Always, 3));
+    fn the_mode_decides_by_computer_use() {
+        assert!(mode_allows(PushMode::AppClosed, false));
+        assert!(!mode_allows(PushMode::AppClosed, true));
+        assert!(mode_allows(PushMode::Always, true));
     }
 
     #[test]
     fn a_notice_goes_to_a_phone_only_when_every_condition_holds() {
         let route = notice_route;
-        assert_eq!(route(PushMode::Always, true, 3, 1), Ok(()));
-        assert_eq!(route(PushMode::AppClosed, true, 0, 1), Ok(()));
-        assert_eq!(route(PushMode::AppClosed, true, 1, 1), Err("app_open"));
-        assert_eq!(route(PushMode::Always, false, 0, 1), Err("mobile_off"));
-        assert_eq!(route(PushMode::Always, true, 0, 0), Err("no_subscription"));
+        assert_eq!(route(PushMode::Always, true, true, 1), Ok(()));
+        assert_eq!(route(PushMode::AppClosed, true, false, 1), Ok(()));
+        assert_eq!(
+            route(PushMode::AppClosed, true, true, 1),
+            Err("computer_in_use")
+        );
+        assert_eq!(route(PushMode::Always, false, false, 1), Err("mobile_off"));
+        assert_eq!(
+            route(PushMode::Always, true, false, 0),
+            Err("no_subscription")
+        );
         // Several causes at once report the first in the documented order.
-        assert_eq!(route(PushMode::AppClosed, false, 1, 0), Err("app_open"));
-        assert_eq!(route(PushMode::Always, false, 0, 0), Err("mobile_off"));
+        assert_eq!(
+            route(PushMode::AppClosed, false, true, 0),
+            Err("computer_in_use")
+        );
+        assert_eq!(route(PushMode::Always, false, false, 0), Err("mobile_off"));
     }
 }

@@ -29,7 +29,6 @@ pub mod tailscale;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -130,6 +129,8 @@ struct Held {
     /// A waiting root's notice's serial (`LiveNotices`); `None` for a human delivery notice.
     generation: Option<u64>,
     at: std::time::Instant,
+    /// Computer-use holds have no age deadline; the serial withdraws stale waits.
+    resting: bool,
 }
 
 /// Puts a notice at the end of a phone's held queue: it replaces the one held for the same agent tag, and the oldest
@@ -146,6 +147,7 @@ fn hold_in(
         payload,
         generation,
         at,
+        resting: false,
     });
     while held.len() > HELD_PER_PHONE {
         held.pop_front();
@@ -324,8 +326,6 @@ pub struct Config {
     /// Asked at every write to a pane, so a reply never lands in the shell
     /// under an agent that is ending, asleep or waking.
     pub input_gate: Arc<hide_core::input_gate::PaneInputGate>,
-    /// Shell windows (desktop and web) on this daemon: "the app is open".
-    pub renderers: Arc<AtomicUsize>,
     /// Which connections show a start surface; a phone's open start sheet is one.
     pub start_demand: Arc<crate::demand::ObservationDemand>,
     /// Whether the core may act outside this machine: a core on a move's
@@ -1327,7 +1327,7 @@ impl Mobile {
             push::notice_route(
                 inner.settings.push_mode,
                 inner.settings.enabled,
-                self.config.renderers.load(Ordering::SeqCst),
+                self.config.desktop.rests_phone(),
                 targets.len(),
             )?;
             let subject = inner
@@ -1583,6 +1583,7 @@ impl Mobile {
                     self.save_settings(&inner);
                 }
                 self.publish();
+                self.wake.notify_one();
             }
             other => return Err(format!("unknown mobile event {other}")),
         }
@@ -1611,6 +1612,7 @@ impl Mobile {
             let mut inner = self.lock();
             inner.pending_clear.remove(phone_id);
             inner.inputs.remove(phone_id);
+            inner.held.remove(phone_id);
             inner.phones.revoke(phone_id)
         };
         if let Some(phone) = removed {
@@ -2175,7 +2177,13 @@ impl Mobile {
     /// dropping the oldest past `HELD_PER_PHONE`; a waiting notice whose root stopped waiting is not kept (`false`).
     fn hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) -> bool {
         let mut inner = self.lock();
-        if !inner.live.is_current(&payload, generation) {
+        let ids: BTreeSet<_> = inner
+            .phones
+            .current()
+            .map(|phone| phone.id.clone())
+            .collect();
+        inner.held.retain(|id, _| ids.contains(id));
+        if !ids.contains(phone_id) || !inner.live.is_current(&payload, generation) {
             return false;
         }
         let held = inner.held.entry(phone_id.to_owned()).or_default();
@@ -2224,10 +2232,19 @@ impl Mobile {
     pub(crate) fn flush_held(self: &Arc<Self>) -> Option<tokio::task::JoinHandle<Vec<Handoff>>> {
         let waiting: Vec<(String, Held)> = {
             let mut inner = self.lock();
-            std::mem::take(&mut inner.held)
-                .into_iter()
-                .flat_map(|(phone, held)| held.into_iter().map(move |held| (phone.clone(), held)))
-                .collect()
+            let mut waiting = Vec::new();
+            for (phone, queue) in &mut inner.held {
+                let mut resting = VecDeque::new();
+                for held in queue.drain(..) {
+                    if held.resting {
+                        resting.push_back(held);
+                    } else {
+                        waiting.push((phone.clone(), held));
+                    }
+                }
+                *queue = resting;
+            }
+            waiting
         };
         if waiting.is_empty() {
             return None;
@@ -2252,6 +2269,9 @@ impl Mobile {
                         "route": "app", "after": "held",
                     }));
                     outcomes.push(Handoff::Withdrawn);
+                    continue;
+                }
+                if mobile.rest_job(&phone_id, &held.payload, held.generation) {
                     continue;
                 }
                 outcomes.push(Handoff::Tried);
@@ -2534,6 +2554,7 @@ impl Mobile {
             ) {
                 self.deliver(notices, seen, &current);
             }
+            self.flush_rested();
             // A phone notice waiting out its moment wakes the follower when it
             // is due. A change already there goes first, so the snapshot is
             // read and judged before any deadline (whose notice that pass also
@@ -2580,7 +2601,7 @@ impl Mobile {
         seen: BTreeSet<AgentKey>,
         projection: &Projection,
     ) {
-        let (mode, targets, subject) = {
+        let (targets, subject) = {
             let mut inner = self.lock();
             let ids: Vec<String> = inner
                 .phones
@@ -2608,18 +2629,10 @@ impl Mobile {
                 .as_ref()
                 .map(|serve| format!("https://{}", serve.dns_name))
                 .unwrap_or_else(|| "mailto:hide@localhost".to_owned());
-            (inner.settings.push_mode, targets, subject)
+            (targets, subject)
         };
-        let renderers = self.config.renderers.load(Ordering::SeqCst);
         let mut jobs = Vec::new();
         for notice in notices {
-            if !push::mode_allows(mode, renderers) {
-                hide_core::diagnostic!(json!({
-                    "component": "mobile_push", "kind": "push.skipped", "reason": "mode",
-                    "mode": mode.as_str(), "renderers": renderers,
-                }));
-                continue;
-            }
             if self.viewed(&notice.key, projection) {
                 hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.skipped", "reason": "viewing",
@@ -2649,6 +2662,53 @@ impl Mobile {
         tokio::task::spawn_blocking(move || mobile.send_jobs(jobs, &subject));
     }
 
+    /// Drains computer-use holds once the route opens. The existing queues cap
+    /// this at eight per phone and four phones; a close removes them by serial.
+    fn flush_rested(self: &Arc<Self>) {
+        let (jobs, subject) = {
+            let mut inner = self.lock();
+            if !push::mode_allows(inner.settings.push_mode, self.config.desktop.rests_phone()) {
+                return;
+            }
+            let routes: HashMap<_, _> = inner
+                .phones
+                .current()
+                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
+                .collect();
+            let mut jobs = Vec::new();
+            inner.held.retain(|id, _| routes.contains_key(id));
+            for (phone, queue) in &mut inner.held {
+                let mut relay = VecDeque::new();
+                for held in queue.drain(..) {
+                    if held.resting {
+                        if let Some(generation) = held.generation {
+                            jobs.push((
+                                phone.clone(),
+                                routes[phone].clone(),
+                                held.payload,
+                                generation,
+                            ));
+                        }
+                    } else {
+                        relay.push_back(held);
+                    }
+                }
+                *queue = relay;
+            }
+            let subject = inner
+                .settings
+                .serve
+                .as_ref()
+                .map(|serve| format!("https://{}", serve.dns_name))
+                .unwrap_or_else(|| "mailto:hide@localhost".to_owned());
+            (jobs, subject)
+        };
+        if !jobs.is_empty() {
+            let mobile = Arc::clone(self);
+            tokio::task::spawn_blocking(move || mobile.send_jobs(jobs, &subject));
+        }
+    }
+
     /// Sends the jobs of one burst in order, on a blocking thread. Each is
     /// checked right before it goes: one whose root stopped waiting since
     /// `deliver` made it is withdrawn, not sent or held.
@@ -2660,6 +2720,9 @@ impl Mobile {
                     "component": "mobile_push", "kind": "push.withdrawn", "phone_id": phone_id,
                 }));
                 outcomes.push(Handoff::Withdrawn);
+                continue;
+            }
+            if self.rest_job(&phone_id, &payload, Some(generation)) {
                 continue;
             }
             outcomes.push(Handoff::Tried);
@@ -2699,6 +2762,36 @@ impl Mobile {
             }
         }
         outcomes
+    }
+
+    /// The same decision gates both a new job and a relay reconnect. A hold
+    /// wakes the follower too, so an away report racing this worker is not lost.
+    fn rest_job(&self, phone_id: &str, payload: &Value, generation: Option<u64>) -> bool {
+        let mut inner = self.lock();
+        if push::mode_allows(inner.settings.push_mode, self.config.desktop.rests_phone()) {
+            return false;
+        }
+        let ids: BTreeSet<_> = inner
+            .phones
+            .current()
+            .map(|phone| phone.id.clone())
+            .collect();
+        inner.held.retain(|id, _| ids.contains(id));
+        if generation.is_some()
+            && ids.contains(phone_id)
+            && inner.live.is_current(payload, generation)
+        {
+            let queue = inner.held.entry(phone_id.to_owned()).or_default();
+            hold_in(
+                queue,
+                payload.clone(),
+                generation,
+                std::time::Instant::now(),
+            );
+            queue.back_mut().expect("just held").resting = true;
+            self.wake.notify_one();
+        }
+        true
     }
 }
 
@@ -2760,7 +2853,6 @@ pub(super) fn test_mobile(
         host_name: None,
         core: Arc::clone(&core),
         input_gate: Arc::clone(gate),
-        renderers: Arc::default(),
         start_demand: Arc::default(),
         // These tests drive the phone boundary directly, never a network supervisor.
         open: tokio::sync::watch::channel(false).1,
