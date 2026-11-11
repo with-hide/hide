@@ -18,6 +18,12 @@
 // typed that begins with the prompt glyph and an owl is marked too, and a Grok
 // row its keyboard focus frames (`│ ❯ 🦉 … │`) is not. Telling them apart needs
 // the core to mark the line it typed; that is a follow-up, not this file.
+//
+// Third limit: the band stays under a drag selection in the WebGL renderer
+// only. xterm's DOM renderer, which the pane falls back to when WebGL fails or
+// loses its context, paints a decoration over the selection, so a selected
+// letter row shows no selection background there (the copy is unaffected).
+// Showing it in both needs an overlay apart from decorations.
 
 import type { IBufferLine, IDecoration, IMarker, Terminal } from "@xterm/xterm";
 import { AGENT_ADAPTERS } from "./agentAdapters";
