@@ -29,7 +29,7 @@ function mission(id: string, title: string, over: Partial<PhoneMission> = {}): P
   };
 }
 
-/** The F11 mission: seven steps, four done, two at work and one stopped on the decision the Conductor asks, with `views` the Views linked to it to look at. */
+/** The F11 mission: eight steps, four done, two at work, one stopped on the decision the Conductor asks and one waiting on two of them, with `views` the Views linked to it to look at. */
 function release(views: boolean): PhoneMission {
   const started = Date.now() - (2 * 60 + 14) * MINUTE;
   return mission(RELEASE_MISSION, "1.2.0 릴리스 준비", {
@@ -49,8 +49,9 @@ function release(views: boolean): PhoneMission {
       merged("bump", "버전 번호 올리기", 2080, "claude"),
       merged("log", "체인지로그 확인", 2079, "codex"),
       step("holder", "holder 버전 폴더 정리", "working", { pr: 2091, worker_agent: "codex", stage: 2, agent: { device_id: "local", pane_id: "gallery-holder" } }),
-      step("rehearsal", "마이그레이션 리허설", "working", { pr: 2093, base_pr: 2091, worker_agent: "claude", stage: 1, agent: { device_id: "local", pane_id: "gallery-rehearsal" } }),
-      step("sign", "Windows 서명 단계", "working", { worker_agent: "claude", stage: 0 }),
+      step("rehearsal", "마이그레이션 리허설", "working", { depends_on: ["holder"], pr: 2093, base_pr: 2091, worker_agent: "claude", stage: 1, agent: { device_id: "local", pane_id: "gallery-rehearsal" } }),
+      step("sign", "Windows 서명 단계", "working", { depends_on: ["bump"], worker_agent: "claude", stage: 0 }),
+      step("verify", "릴리스 빌드 확인", "planned", { kind: "verify", delivery: null, depends_on: ["rehearsal", "sign"], worker_agent: null, agent_runtime: null }),
     ],
   });
 }

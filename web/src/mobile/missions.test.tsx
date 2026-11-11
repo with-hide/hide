@@ -433,3 +433,29 @@ it("lists a decision's first three Views and folds the rest behind +N, as the de
     await unmount();
   }
 });
+
+it("draws every step on one rail by what it waits on: side-by-side steps bracketed, a step not begun naming what it waits for, finished ones folded", async () => {
+  // a → (b, c side by side) → d; e was dropped and is not drawn; d names the two unfinished steps it waits for in its own order, by pull request or title, and not the finished a.
+  const { container, click, unmount } = await connect([mission("m-rail", { nodes: [
+    node("d", "planned", { depends_on: ["b", "a", "c"], agent_runtime: null }),
+    node("c", "working", { depends_on: ["a"] }),
+    node("b", "working", { depends_on: ["a"], pr: 7 }),
+    node("a", "done", { pr: 6, pr_state: "merged" }),
+    node("e", "dropped"),
+  ] })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-rail"]');
+    const steps = () => [...container.querySelectorAll<HTMLElement>("[data-phone-step]")].map((step) => step.dataset.phoneStep);
+    expect(steps()).toEqual(["c", "b", "d"]);
+    expect(container.querySelector('[data-phone-step="c"] [data-phone-step-together]')?.getAttribute("data-phone-step-together")).toBe("first");
+    expect(container.querySelector('[data-phone-step="b"] [data-phone-step-together]')?.getAttribute("data-phone-step-together")).toBe("next");
+    expect(container.querySelector('[data-phone-step="d"] [data-phone-step-together]')).toBeNull();
+    expect(container.querySelector('[data-phone-step="d"] [data-phone-step-line="planned"]')?.textContent).toBe("waiting for #7, Step c");
+    // The finished step opens in place, at the head of the rail it came first on.
+    await click('[data-phone-fold^="done:"]');
+    expect(steps()).toEqual(["a", "c", "b", "d"]);
+  } finally {
+    await unmount();
+  }
+});
