@@ -1023,6 +1023,9 @@ Moved to a private document: `docs/hide-ai-tool.md` in with-hide/hide-private.
 
 ## The mission screen
 
+A merge turn names the most recently held PR still open in the last GitHub read, with `+N` for the other open PRs; merged or closed PRs stay in the node history and never replace an open merge target.
+The turn card, sidebar, mission list and phone read the same open PR list (`node.merge.prs`); the closing report names all of them.
+
 Web owner: `web/src/MissionScreen.tsx`, `web/src/missionList.ts`, `web/src/components/sidebar-header.tsx`; core owner for which mission's events are sent: `hide-core/src/runtime/mission_events.rs` (`mission_shown`).
 Every mission is listed on a screen of the page's own beside the Overview and Desk, which lists the missions of the device in front on the rail, every project of it, and opens one's map beside the list; it edits no mission (PRD mission-screen D-01, D-02).
 A mission pressed anywhere else opens its map as a card in the 보기 slot of its Conductor's pane, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19).

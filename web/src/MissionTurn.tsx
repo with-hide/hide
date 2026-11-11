@@ -8,7 +8,7 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { attentionReasonText, heldLettersText, turnItems, type TurnItem } from "./missions";
+import { mergePull, attentionReasonText, heldLettersText, turnItems, type TurnItem } from "./missions";
 import { MissionTakeOver } from "./MissionTakeOver";
 import { useWorkerEscalation } from "./missionWorkers";
 import type { Mission, MissionHeldNode, MissionNode, MissionSafetyNet } from "./snapshot";
@@ -95,7 +95,7 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
             {item.nodes.map((node, index) => (
               <span key={node.key} className="flex min-w-0 items-center gap-xxs">
                 {index > 0 ? <span aria-hidden="true" className="text-muted-foreground">→</span> : null}
-                <NodeChip node={node} onSelect={onSelect} />
+                <NodeChip node={node} onSelect={onSelect} merging={!item.git} />
               </span>
             ))}
           </span>
@@ -160,13 +160,13 @@ function Row({ children, ...data }: { children: ReactNode } & Record<`data-${str
 }
 
 /** A node named in 내 차례, which picks it on the map (B25): its title, with its pull request's mark when it has one (PRD mission-tool B18). */
-function NodeChip({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
-  // The pull request a node waits on now is its last one (D-10).
-  const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+function NodeChip({ node, onSelect, merging = false }: { node: MissionNode; onSelect: (key: string) => void; merging?: boolean }) {
+  const pull = merging ? mergePull(node) : { number: node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null), state: node.pr_state, more: 0 };
   return (
     <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs bg-muted px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-mission-turn-node={node.key}>
       <span className="min-w-0 truncate">{node.title}</span>
-      {pr != null ? <MissionPrMark number={pr} state={node.pr_state} /> : null}
+      {pull.number != null ? <MissionPrMark number={pull.number} state={pull.state} /> : null}
+      {pull.more > 0 ? <span>+{pull.more}</span> : null}
     </button>
   );
 }

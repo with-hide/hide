@@ -975,6 +975,15 @@ export function openAttention<A extends Omit<MissionAttention, "choices">>(missi
  */
 export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number } & ({ kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } | { kind: "net"; net: MissionSafetyNet });
 
+/** The last still-open held PR and the other open PRs, from the core's
+ * merge reading. Older cores omit `prs` and keep their previous PR display. */
+export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; more: number } {
+  const open = node.merge?.prs;
+  const number = open === undefined ? node.pr : (open.at(-1) ?? null);
+  const state = number === node.pr ? node.pr_state : (node.prs?.find((pr) => pr.number === number)?.state ?? null);
+  return { number, state, more: Math.max(0, (open?.length ?? 1) - 1) };
+}
+
 /**
  * Since when a node's merge has been the operator's turn (`merge.state` `due`,
  * PRD mission-destination D-11): from its finish, as the core counts it in

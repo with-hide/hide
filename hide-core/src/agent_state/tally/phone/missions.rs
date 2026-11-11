@@ -231,6 +231,9 @@ pub struct PhoneMerge {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
     pub state: String,
+    /// Still-open held PRs; absent only from cores before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prs: Option<Vec<u32>>,
 }
 
 /// A step's gate as the map reads it (`GateView`), copied field by field: a
@@ -823,8 +826,7 @@ mod tests {
     /// as every step of a core before it, sends no key at all.
     #[test]
     fn a_steps_merge_reaches_the_phone_by_its_named_fields_only() {
-        let due =
-            json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "note": "private"});
+        let due = json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "prs": [31, 33], "note": "private"});
         let rest = rest(
             vec![mission(
                 "m1",
@@ -837,7 +839,7 @@ mod tests {
         let sent = serde_json::to_value(&projected(&rest).items[0].nodes).unwrap();
         assert_eq!(
             sent[0]["merge"],
-            json!({"by": "operator", "why": "DB 변경은 직접", "state": "due"})
+            json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "prs": [31, 33]})
         );
         assert!(sent[1].get("merge").is_none(), "{}", sent[1]);
         assert!(!sent.to_string().contains("private"));

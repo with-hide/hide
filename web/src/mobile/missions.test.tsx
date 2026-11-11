@@ -488,3 +488,15 @@ it("draws every step on one rail by what it waits on: side-by-side steps bracket
     await unmount();
   }
 });
+
+// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn.
+it("names only open PRs in the phone merge turn, newest first with the additional count", async () => {
+  const db = (prs: number[]) => node("db", "done", { pr: 37, pr_state: "merged", merge: { by: "operator", state: "due", why: "DB review", prs }, landing: { state: "left", action: "merge" } });
+  const items = [[31, 33], [31]].map((prs, index) => mission(`merge-${index}`, { nodes: [db(prs)], landing_order: ["db"] }));
+  const { container, click, unmount } = await connect(items);
+  try {
+    await click('[data-phone-tab="missions"]');
+    expect(container.querySelector('[data-phone-mission="merge-0"] [data-phone-mission-line]')?.textContent).toBe("Merge order #33 +1");
+    expect(container.querySelector('[data-phone-mission="merge-1"] [data-phone-mission-line]')?.textContent).toBe("Merge order #31");
+  } finally { await unmount(); }
+});

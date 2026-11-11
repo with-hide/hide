@@ -61,6 +61,8 @@ pub struct NodeMerge {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
     pub state: MergeStep,
+    /// Still-open held PRs in held order, from the same read as landing.
+    pub prs: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -114,7 +116,21 @@ pub(super) fn node_merge(mission: &Mission, node: &MissionNode, ready: bool) -> 
         }
         _ => MergeStep::Ahead,
     };
-    Some(NodeMerge { by, why, state })
+    Some(NodeMerge {
+        by,
+        why,
+        state,
+        prs: open_pulls(node).collect(),
+    })
+}
+
+/// Held PRs GitHub last read open. Unknown PRs are not evidence of an
+/// open merge; settled PRs stay in the history but never in a merge turn.
+pub(super) fn open_pulls(node: &MissionNode) -> impl Iterator<Item = u32> + '_ {
+    node.prs.iter().copied().filter(|number| {
+        node.seen(*number)
+            .is_some_and(|seen| !seen.merged && !seen.closed)
+    })
 }
 
 /// A change that reaches main as its branch, with no pull request.

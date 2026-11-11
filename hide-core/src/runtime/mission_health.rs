@@ -486,9 +486,11 @@ pub(super) fn closing_report(mission: &Mission) -> String {
             )
         })
         .map(|node| {
-            let pr = node
-                .current_pr()
-                .map_or_else(String::new, |pr| format!(" · PR #{pr}"));
+            let prs = super::mission_landing::open_pulls(node)
+                .map(|pr| format!("#{pr}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let pr = format!(" · PR {prs}");
             let why = node
                 .operator_merge
                 .as_deref()

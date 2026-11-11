@@ -1423,7 +1423,7 @@ export type MissionMergeBy = "operator" | "conductor";
 /** Where that merge stands, decided by the core (`mission_merge_step`): `due` is the operator's turn, only for a node whose own plan gives them its merge. */
 export type MissionMergeStep = "ahead" | "due" | "merged";
 /** Who merges a change delivered by pull request and where it stands (`NodeMerge`, D-45): `why` is the plan's reason when the node's own value gives the operator its merge, absent when the scope decides. */
-export type MissionNodeMerge = { by: MissionMergeBy; why?: string; state: MissionMergeStep };
+export type MissionNodeMerge = { by: MissionMergeBy; why?: string; state: MissionMergeStep; /** Still-open held PRs, in held order; older cores omit it. */ prs?: number[] };
 
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";

@@ -1330,3 +1330,18 @@ it("lists the Views linked to the decision, seen or not, each bringing its View 
     expect(none.q('[data-mission-material="ask"]')).toBeNull();
   } finally { await none.unmount(); }
 });
+
+// F1: the last held PR may be settled while an earlier one still needs a merge.
+it("names the latest open PR and the additional open count in the merge turn", async () => {
+  for (const open of [[31, 33], [31]]) {
+    const map = await mount({ items: [mission({ status: "running", landing_order: ["db"], nodes: [node("db", {
+      title: "DB", status: "done", pr: 37, pr_state: "merged", prs: [{ number: 31, state: "mergeable", url: null }, { number: 33, state: "mergeable", url: null }, { number: 37, state: "merged", url: null }],
+      landing: { state: "left", action: "merge" }, merge: { by: "operator", state: "due", why: "DB review", prs: open },
+    })] })] });
+    try {
+      const chip = map.q('[data-mission-turn-item="merge"] [data-mission-turn-node="db"]')!;
+      expect(chip.textContent).toBe(open.length === 2 ? "DB#33+1" : "DB#31");
+      expect(chip.querySelector('[data-pr-mark]')?.getAttribute("data-pr-mark")).toBe("mergeable");
+    } finally { await map.unmount(); }
+  }
+});

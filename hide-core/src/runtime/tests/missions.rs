@@ -14137,3 +14137,52 @@ fn a_plan_gives_the_operator_a_merge_only_where_the_scope_would_not() {
     .unwrap();
     assert_eq!(why(&runtime), None);
 }
+
+/// A node can hold several PRs. Its report must name every still-open
+/// one, even when the most recently held PR has already settled (F1).
+#[test]
+fn an_operator_merge_report_names_all_open_held_pull_requests() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", Some("DB review"));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for (merged, closed, expected) in [
+        (false, false, "PR #31 #37"),
+        (true, false, "PR #31"),
+        (false, true, "PR #31"),
+    ] {
+        let node = mission
+            .nodes
+            .iter_mut()
+            .find(|node| node.key == "fix")
+            .unwrap();
+        node.status = NodeStatus::Done;
+        node.prs = vec![31, 37];
+        node.pr_seen.clear();
+        for number in [31, 37] {
+            node.pr_seen.push(crate::missions::PrSeen {
+                number,
+                head: Some(HEAD.into()),
+                merged: number == 37 && merged,
+                closed: number == 37 && closed,
+                changes_requested: false,
+                ci_told: vec![],
+            });
+        }
+        let projected =
+            crate::runtime::mission_landing::node_merge(mission, &mission.nodes[0], true).unwrap();
+        assert_eq!(
+            projected.prs,
+            if merged || closed {
+                vec![31]
+            } else {
+                vec![31, 37]
+            }
+        );
+        let report = crate::runtime::mission_health::closing_report(mission);
+        let (_, left) = report
+            .split_once("Left for the operator to merge (1):\n")
+            .unwrap();
+        assert_eq!(left, format!("- Fix it (fix) · {expected} · DB review"));
+    }
+}

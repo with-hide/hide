@@ -7,7 +7,7 @@ import { machineName } from "../screenMachine";
 import { useInterfaceTranslation } from "../i18n/client";
 import { MissionTakeOver } from "../MissionTakeOver";
 import { cn } from "../lib/utils";
-import { missionAskWhat, missionAsks, projectAsks, safetyNetLine, type MissionAsk } from "../missions";
+import { mergePull, missionAskWhat, missionAsks, projectAsks, safetyNetLine, type MissionAsk } from "../missions";
 import { catalogWorkspaces, type SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { AskLine } from "./agent-tree";
@@ -76,7 +76,10 @@ export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?
   const { t } = useInterfaceTranslation();
   if (ask.kind === "net") return <AskLine ask={{ verb: "answer", what: safetyNetLine(ask.net, t), more: ask.more }} className={className} />;
   // A ready pull request the plan left to the operator: the node and its merge (PRD mission-destination D-11).
-  if (ask.kind === "merge") return <AskLine ask={{ verb: "answer", what: `${ask.node.title} · ${t("mission.merge.due", { pr: ask.node.pr ?? "" })}`, more: ask.more }} className={className} />;
+  if (ask.kind === "merge") {
+    const pr = mergePull(ask.node);
+    return <AskLine ask={{ verb: "answer", what: `${ask.node.title} · ${t("mission.merge.due", { pr: pr.number ?? "" })}${pr.more > 0 ? ` +${pr.more}` : ""}`, more: ask.more }} className={className} />;
+  }
   const look = ask.attention.reason === "human_gate" ? ask.node.gate?.look : undefined;
   const node = look ? `${ask.node.title} · ${look}` : ask.node.title;
   const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node, reason: ask.attention.reason, unmet: ask.attention.unmet_nodes } };

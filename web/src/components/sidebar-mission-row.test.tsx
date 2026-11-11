@@ -85,7 +85,7 @@ it("says which node's pull request is the operator's to merge on the mission's o
   await clientI18n.changeLanguage("ko");
   const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
   const [first] = mission.nodes;
-  const ready = { ...first!, status: "done" as const, pr: 33, finished_at_unix_ms: 1, attention: null, merge: { by: "operator" as const, why: "DB는 직접", state: "due" as const } };
+  const ready = { ...first!, status: "done" as const, pr: 37, pr_state: "merged" as const, finished_at_unix_ms: 1, attention: null, merge: { by: "operator" as const, why: "DB는 직접", state: "due" as const, prs: [31, 33] } };
   const due = { ...mission, conductor: { ...mission.conductor, present: true }, safety_net: null, nodes: [ready] };
   useShellStore.setState({ rest, connection: "live" });
   const [ask] = missionAsks([due], [due.id]);
@@ -97,7 +97,7 @@ it("says which node's pull request is the operator's to merge on the mission's o
   try {
     const row = container.querySelector<HTMLElement>(`[data-mission-ask="${due.id}"]`)!;
     expect(row.dataset.missionAskNode).toBe(ready.key);
-    expect(row.querySelector("[data-ask-line]")?.textContent).toContain(`${ready.title} · 머지할 차례 PR #33`);
+    expect(row.querySelector("[data-ask-line]")?.textContent).toContain(`${ready.title} · 머지할 차례 PR #33 +1`);
     const buttons = [...row.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
     expect(buttons).toEqual(["확인하기"]);
   } finally {
