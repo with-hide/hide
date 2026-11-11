@@ -391,30 +391,21 @@ impl Prepared {
     }
 }
 
-/// Whether a notification may go out under the operator's mode:
-/// app-closed-only while no desktop or web shell is connected, Always always.
-pub fn mode_allows(mode: PushMode, renderers: usize) -> bool {
-    match mode {
-        PushMode::AppClosed => renderers == 0,
-        PushMode::Always => true,
-    }
+/// The saved `app_closed` spelling is retained for compatibility; its policy
+/// rests only during actual computer use with a desktop notice route enabled.
+pub fn mode_allows(mode: PushMode, computer_in_use: bool) -> bool {
+    mode == PushMode::Always || !computer_in_use
 }
 
-/// Whether an operator notice can reach a phone at all, judged before any
-/// send is tried. `Err` is the first reason it cannot, as the code the log
-/// records: `app_open` (app-closed mode with a desktop or web
-/// shell connected), `mobile_off` or `no_subscription` (no phone has a Web
-/// Push subscription or an app registration). The mode is checked before the
-/// Mobile switch because it is the setting an operator changes to receive
-/// these notices.
+/// The first reason an operator notice cannot reach a phone, before sending.
 pub fn notice_route(
     mode: PushMode,
     mobile_on: bool,
-    renderers: usize,
+    computer_in_use: bool,
     subscriptions: usize,
 ) -> Result<(), &'static str> {
-    if !mode_allows(mode, renderers) {
-        return Err("app_open");
+    if !mode_allows(mode, computer_in_use) {
+        return Err("computer_in_use");
     }
     if !mobile_on {
         return Err("mobile_off");
@@ -451,21 +442,23 @@ pub const SETTLE_CAP: usize = 64;
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
-    standing: BTreeSet<AgentKey>,
+    standing: BTreeMap<AgentKey, Settled>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
 }
 
+/// The observation covered by the last settle, and where a phone first
+/// joining that notice starts. No declaration identities live per phone.
+#[derive(Clone, Copy)]
+pub(super) struct Settled {
+    pub before: u64,
+    pub through: u64,
+}
+
 struct Pending {
     due: Instant,
-    /// The newest notice the ledger announced for the root, whose person's
-    /// turn the notice says while it still stands on the row.
-    newest: Notice,
-    /// A person's turn added to a wait whose notice already stands: it is
-    /// sent only while that turn stands, never in favour of the row's older
-    /// ask. A root that entered the operator's turn says its row's latest ask.
-    added: bool,
+    observed: u64,
 }
 
 impl PhoneNotices {
@@ -480,18 +473,27 @@ impl PhoneNotices {
         self.ledger.seeded()
     }
 
-    /// Whether it holds anything a reset would drop.
-    pub fn tracking(&self) -> bool {
-        self.ledger.seeded() || !self.pending.is_empty() || !self.standing.is_empty()
-    }
-
     /// One ledger pass. The pass that seeds it announces nothing and makes
     /// every root then waiting standing, whichever path seeds it.
     fn judge(&mut self, projection: &Projection, at: Instant) -> (Vec<Notice>, BTreeSet<AgentKey>) {
         let seeding = !self.ledger.seeded();
         let judged = self.ledger.observe_at(projection, at);
         if seeding {
-            self.standing = self.ledger.waiting().cloned().collect();
+            self.standing = self
+                .ledger
+                .waiting()
+                .cloned()
+                .map(|key| {
+                    let through = self.ledger.observation();
+                    (
+                        key,
+                        Settled {
+                            before: through,
+                            through,
+                        },
+                    )
+                })
+                .collect();
         }
         judged
     }
@@ -512,11 +514,11 @@ impl PhoneNotices {
         // `close` itself.
         close.extend(
             self.standing
-                .iter()
+                .keys()
                 .filter(|key| ledger.present(key) && !ledger.waits_on_operator(key))
                 .cloned(),
         );
-        self.standing.retain(|key| !close.contains(key));
+        self.standing.retain(|key, _| !close.contains(key));
         self.pending.retain(|key, _| ledger.waits_on_operator(key));
         for notice in announced {
             // A finished turn, a View to look at or anything else the ledger
@@ -525,15 +527,15 @@ impl PhoneNotices {
                 continue;
             }
             match self.pending.get_mut(&notice.key) {
-                Some(pending) => pending.newest = notice,
+                Some(pending) => {
+                    pending.observed = self.ledger.observation();
+                }
                 None => {
-                    let added = self.standing.contains(&notice.key);
                     self.pending.insert(
                         notice.key.clone(),
                         Pending {
                             due: at + SETTLE,
-                            newest: notice,
-                            added,
+                            observed: self.ledger.observation(),
                         },
                     );
                 }
@@ -584,6 +586,36 @@ impl PhoneNotices {
             .collect()
     }
 
+    pub(super) fn settled(&self, key: &AgentKey) -> Settled {
+        *self
+            .standing
+            .get(key)
+            .expect("a delivered notice passed settle")
+    }
+
+    pub(super) fn waiting_after(
+        &self,
+        key: &AgentKey,
+        after: u64,
+        projection: &Projection,
+    ) -> Option<(Notice, u64)> {
+        let through = self.standing.get(key)?.through;
+        self.ledger
+            .waiting_between(key, after, through, projection)
+            .map(|notice| (notice, through))
+    }
+
+    #[cfg(test)]
+    pub(super) fn stand(&mut self, key: AgentKey) {
+        self.standing.insert(
+            key,
+            Settled {
+                before: 0,
+                through: 1,
+            },
+        );
+    }
+
     /// When the next pending notice is due.
     pub fn next_due(&self) -> Option<Instant> {
         self.pending.values().map(|pending| pending.due).min()
@@ -591,21 +623,19 @@ impl PhoneNotices {
 
     fn send(&mut self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
         let pending = self.pending.remove(key)?;
-        let agent = projection.find(key)?;
-        let declared = pending.newest.subject.as_ref();
-        if pending.added
-            && !agent
-                .human_turns
-                .values()
-                .any(|turn| Some(turn) == declared)
-        {
-            // The turn added to a standing wait is gone: nothing new to say.
-            return None;
-        }
-        self.standing.insert(key.clone());
-        Some(hide_core::agent_state::push::waiting_notice(
-            key, agent, declared,
-        ))
+        projection.find(key)?;
+        let before = self.standing.get(key).map_or(0, |old| old.through);
+        // A cancelled newest declaration still settles this observed range.
+        // Earlier current declarations in it can remain owed to a phone.
+        self.standing.insert(
+            key.clone(),
+            Settled {
+                before,
+                through: pending.observed,
+            },
+        );
+        self.ledger
+            .waiting_between(key, before, pending.observed, projection)
     }
 }
 
@@ -1800,22 +1830,31 @@ mod tests {
     }
 
     #[test]
-    fn the_mode_decides_by_renderer_count() {
-        assert!(mode_allows(PushMode::AppClosed, 0));
-        assert!(!mode_allows(PushMode::AppClosed, 1));
-        assert!(mode_allows(PushMode::Always, 3));
+    fn the_mode_decides_by_computer_use() {
+        assert!(mode_allows(PushMode::AppClosed, false));
+        assert!(!mode_allows(PushMode::AppClosed, true));
+        assert!(mode_allows(PushMode::Always, true));
     }
 
     #[test]
     fn a_notice_goes_to_a_phone_only_when_every_condition_holds() {
         let route = notice_route;
-        assert_eq!(route(PushMode::Always, true, 3, 1), Ok(()));
-        assert_eq!(route(PushMode::AppClosed, true, 0, 1), Ok(()));
-        assert_eq!(route(PushMode::AppClosed, true, 1, 1), Err("app_open"));
-        assert_eq!(route(PushMode::Always, false, 0, 1), Err("mobile_off"));
-        assert_eq!(route(PushMode::Always, true, 0, 0), Err("no_subscription"));
+        assert_eq!(route(PushMode::Always, true, true, 1), Ok(()));
+        assert_eq!(route(PushMode::AppClosed, true, false, 1), Ok(()));
+        assert_eq!(
+            route(PushMode::AppClosed, true, true, 1),
+            Err("computer_in_use")
+        );
+        assert_eq!(route(PushMode::Always, false, false, 1), Err("mobile_off"));
+        assert_eq!(
+            route(PushMode::Always, true, false, 0),
+            Err("no_subscription")
+        );
         // Several causes at once report the first in the documented order.
-        assert_eq!(route(PushMode::AppClosed, false, 1, 0), Err("app_open"));
-        assert_eq!(route(PushMode::Always, false, 0, 0), Err("mobile_off"));
+        assert_eq!(
+            route(PushMode::AppClosed, false, true, 0),
+            Err("computer_in_use")
+        );
+        assert_eq!(route(PushMode::Always, false, false, 0), Err("mobile_off"));
     }
 }

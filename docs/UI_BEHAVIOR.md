@@ -2080,7 +2080,7 @@ The app icon sums root agents in every enabled notification group across every d
 Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
 macOS draws it on the Dock once it lets Hide notify, Linux where the desktop shows launcher counts, and Windows as a dot on the taskbar button whose description gives the count.
 With both switches off nothing is sent and the app icon has no count; with Done alone on, it counts unread Done.
-The phone's push follows its own settings whatever these switches say (B36, B38).
+The phone's own settings decide whether it receives pushes; computer-use resting applies only while an attached window enables Needs You notices (Notifications).
 
 Settings > Devices keeps its own description.
 The persisted `screen_intros_seen` field remains readable for older builds; this release has no Factory introduction.
@@ -2703,8 +2703,11 @@ Each toggle sends one event and persists through the core's existing UI-state wr
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
-Its two description lines are `데스크톱 Hide가 열려 있으면 폰으로 알림을 보내지 않아요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
-On pauses phone pushes while any desktop renderer is connected (`app_closed`); Off allows them with the desktop open too (`always`).
+Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
+On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, and at least one attached desktop window has Needs You notifications enabled (`app_closed`).
+Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
+A rested notice still waiting for the operator is sent once when resting ends; an answered or withdrawn notice is discarded.
+Off always permits pushes (`always`), subject to the phone’s own receiving choice and viewing suppression.
 A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 
 ### Usage

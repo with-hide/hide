@@ -24,6 +24,43 @@ function Probe({ actions }: { actions: Actions }) {
   return null;
 }
 
+it("reports host activity on connection, transitions, and reconnect, and releases the listener", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  let current = true;
+  let listener: ((inUse: boolean) => void) | undefined;
+  window.hideHost = {
+    kind: "electron", platform: "linux",
+    reportBadge: () => undefined, onNotificationOpen: () => () => undefined,
+    onComputerUse: (next: (inUse: boolean) => void) => {
+      listener = next;
+      next(current);
+      return () => { listener = undefined; };
+    },
+  } as never;
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const saved = useShellStore.getState();
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  try {
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest: null });
+      root.render(<Probe actions={actions} />);
+    });
+    current = false;
+    await act(async () => listener?.(current));
+    await act(async () => useShellStore.setState({ connection: "connecting" } as never));
+    expect(listener).toBeUndefined();
+    await act(async () => useShellStore.setState({ connection: "live" }));
+    expect(events.filter((event) => event.kind === "desktop_activity").map((event) => event.payload)).toEqual([
+      { in_use: true }, { in_use: false }, { in_use: false },
+    ]);
+  } finally {
+    await act(async () => root.unmount());
+    expect(listener).toBeUndefined();
+    useShellStore.setState(saved, true);
+  }
+});
+
 it("asks for agent notices while the switch is on, words each one, withdraws a seen agent's, and opens a clicked one's pane (B31, B34, B35)", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const shown: unknown[][] = [];
@@ -51,7 +88,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
     useShellStore.setState({ connection: "live", rest: { ui_state: { desktop_notifications: true }, navigator: { devices: [] } } } as never);
     root.render(<Probe actions={actions} />);
   });
-  expect(events.filter((event) => event.kind === "desktop_notices").map((event) => event.payload)).toEqual([{ wanted: true }]);
+  expect(events.filter((event) => event.kind === "desktop_notices").map((event) => event.payload)).toEqual([{ wanted: true, needs_you: true }]);
 
   await act(async () => {
     receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", place: "my-app" }], clear: [] });
@@ -102,7 +139,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   await act(async () => {
     useShellStore.setState({ rest: { ui_state: { desktop_notifications: false }, navigator: { devices: [] } } } as never);
   });
-  expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false });
+  expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false, needs_you: false });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p2", device_id: "node", pane_id: "w1:p2", title: "x", state: "done", place: "" }], clear: [] }));
   expect(shown).toHaveLength(13);
   await act(async () => root.unmount());
@@ -149,7 +186,7 @@ it.each([
     ], clear: [] }));
     expect(shown).toEqual(bodies);
     expect(reported).toEqual([badge]);
-    expect(events.filter((event) => event.kind === "desktop_notices").map((event) => event.payload)).toEqual(wanted ? [{ wanted: true }] : []);
+    expect(events.filter((event) => event.kind === "desktop_notices").map((event) => event.payload)).toEqual(wanted ? [{ wanted: true, needs_you: needsYou }] : []);
   } finally {
     await act(async () => root.unmount());
     useShellStore.setState(saved, true);
