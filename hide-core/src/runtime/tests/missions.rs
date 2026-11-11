@@ -3614,11 +3614,12 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
     command(&mut runtime, "sender", close).unwrap();
 }
 
-/// B11, B12, B21: the Conductor goes past a line only with a reason, past
-/// the check command only on an answered decision about the node, and a
-/// later node's defect opens the node again with the defect as a line.
+/// B11, B21: the Conductor goes past a line only with a reason, and a later
+/// node's defect opens the node again with the defect as a line. Which line
+/// it skips on its own and which needs the operator's answer is
+/// `the_conductor_skips_a_line_alone_unless_its_ci_failed`.
 #[test]
-fn a_skip_needs_its_reason_and_the_check_command_the_operators_answer() {
+fn a_skip_needs_its_reason_and_a_defect_opens_the_node_again() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -3661,48 +3662,6 @@ fn a_skip_needs_its_reason_and_the_check_command_the_operators_answer() {
             .unwrap()
             .1
     );
-    let protected = |runtime: &mut Runtime, decision: Option<u64>| {
-        crate::coordination::split_refusal(
-            &command(
-                runtime,
-                "sender",
-                skip("check", "fails on main too", decision),
-            )
-            .unwrap_err(),
-        )
-        .0
-        .to_owned()
-    };
-    assert_eq!(protected(&mut runtime, None), "mission_criteria_protected");
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "decide", "line": "Skip the failing check?", "node": "fix"}),
-    )
-    .unwrap();
-    // Not yet answered.
-    assert_eq!(
-        protected(&mut runtime, Some(1)),
-        "mission_criteria_protected"
-    );
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "decide", "line": null}),
-    )
-    .unwrap();
-    let (shown, _) = command(
-        &mut runtime,
-        "sender",
-        skip("check", "fails on main too", Some(1)),
-    )
-    .unwrap();
-    let check = &shown["mission"]["nodes"][0]["criteria"][1];
-    assert_eq!(
-        (&check["state"], &check["skip"]["decision"]),
-        (&json!("skipped"), &json!(1))
-    );
-
     // A defect the docs node found opens the fix again.
     let defect =
         json!({"op": "defect", "node": "fix", "found_by": "docs", "line": "drops a v1 node"});
@@ -7006,11 +6965,19 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
         "mission_conducted"
     );
     // One the operator settles is no reason either, however old.
-    raise(&mut runtime, AttentionReason::ConductorFailed, now - 30 * MINUTE);
+    raise(
+        &mut runtime,
+        AttentionReason::ConductorFailed,
+        now - 30 * MINUTE,
+    );
     assert!(!runtime.mission_handover_event("mission-1", token));
     // Unsettled 20 minutes, the safety net holds, but a take without the
     // operator's handover is still refused (B15).
-    raise(&mut runtime, AttentionReason::WorkerEnded, now - 20 * MINUTE - 1_000);
+    raise(
+        &mut runtime,
+        AttentionReason::WorkerEnded,
+        now - 20 * MINUTE - 1_000,
+    );
     assert_eq!(
         refused(take(&mut runtime, "recipient", None)),
         "mission_conducted"
@@ -10833,4 +10800,694 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
     )
     .unwrap_err();
     assert!(refused.contains("mission_external_invalid"), "{refused}");
+}
+
+/// The plan of five change nodes, none waiting on another, each with a
+/// line of its own: one cause can raise all five at once.
+fn five_nodes_plan() -> Value {
+    let nodes: Vec<Value> = (1..=5)
+        .map(|at| {
+            json!({"key": format!("n{at}"), "title": format!("Node {at}"), "kind": "change",
+                   "delivery": "pr", "criteria": ["it works"]})
+        })
+        .collect();
+    json!({"op": "plan", "plan": {"nodes": nodes}})
+}
+
+/// What the operator's turn holds of one mission (hide-private
+/// docs/missions.md, the principle of 2026-11-11): the node cards (a raise
+/// whose view says it waits on the operator), the rows carrying a raised
+/// node's question, the safety net's held nodes, and whether the mission is
+/// its device's own Needs You item.
+#[derive(Debug, Eq, PartialEq)]
+struct OperatorTurn {
+    node_cards: usize,
+    row_asks: usize,
+    safety_net: Option<usize>,
+    mission_item: bool,
+}
+
+fn operator_turn(runtime: &mut Runtime) -> OperatorTurn {
+    runtime.snapshot_delta_payload(0);
+    let view = runtime.mission_view_of("mission-1").unwrap();
+    let node_cards = view
+        .nodes
+        .iter()
+        .filter_map(|node| node.attention.as_ref())
+        .filter(|attention| attention.to == crate::missions::AttentionTo::Operator)
+        .count();
+    let row_asks = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.ask_subject,
+                Some(crate::model::AskSubject::MissionAttention { .. })
+            )
+        })
+        .count();
+    let mission_item = runtime
+        .snapshot
+        .navigator
+        .devices
+        .iter()
+        .find(|device| device.id == crate::node::TEST_NODE)
+        .is_some_and(|device| {
+            device
+                .agent_scope
+                .mission_asks
+                .contains(&"mission-1".to_owned())
+        });
+    OperatorTurn {
+        node_cards,
+        row_asks,
+        safety_net: view.safety_net.map(|net| net.nodes.len()),
+        mission_item,
+    }
+}
+
+/// What the principle answers for one cause raised on five nodes: the
+/// operator's turn with no Conductor at once, and with a Conductor 19 and
+/// 20 minutes after the raise.
+struct Expected {
+    absent: OperatorTurn,
+    present_19: OperatorTurn,
+    present_20: OperatorTurn,
+}
+
+/// A raise of the Conductor's: never a card per node; the mission's one
+/// safety net holds all five, at once with no Conductor and at 20 minutes
+/// with one.
+fn conductors_raise() -> Expected {
+    let net = OperatorTurn {
+        node_cards: 0,
+        row_asks: 0,
+        safety_net: Some(5),
+        mission_item: true,
+    };
+    Expected {
+        absent: OperatorTurn { ..net },
+        present_19: OperatorTurn {
+            safety_net: None,
+            mission_item: false,
+            ..net
+        },
+        present_20: net,
+    }
+}
+
+/// A raise only the operator settles (`operator_first`): its own path, one
+/// card per node as before, laid on the resting Conductor's row (`외 N건`)
+/// while it is there, the mission's own item with no Conductor; never in the
+/// safety net.
+fn operators_raise() -> Expected {
+    let present = OperatorTurn {
+        node_cards: 5,
+        row_asks: 1,
+        safety_net: None,
+        mission_item: false,
+    };
+    Expected {
+        absent: OperatorTurn {
+            row_asks: 0,
+            mission_item: true,
+            ..present
+        },
+        present_19: OperatorTurn { ..present },
+        present_20: present,
+    }
+}
+
+/// The table every raise reason joins (hide-private docs/missions.md, the
+/// principle of 2026-11-11, question 2): an `AttentionReason` added without
+/// a row here fails to compile, and the contract's list of reasons
+/// (`contracts/snapshot-wire-enums.json`) is what the test walks.
+fn expected_for(reason: crate::missions::AttentionReason) -> Expected {
+    use crate::missions::AttentionReason;
+    match reason {
+        AttentionReason::MergedUnproven => conductors_raise(),
+        AttentionReason::WorkerEnded => conductors_raise(),
+        AttentionReason::PrClosed => conductors_raise(),
+        AttentionReason::UnplannedPr => conductors_raise(),
+        AttentionReason::WakeRefused => conductors_raise(),
+        AttentionReason::CloseRefused => conductors_raise(),
+        AttentionReason::NotStarted => conductors_raise(),
+        AttentionReason::WarningStood => conductors_raise(),
+        AttentionReason::WaitStood => conductors_raise(),
+        // A planned gate is the operator's own card (PRD mission-human-gate).
+        AttentionReason::HumanGate => operators_raise(),
+        // Only on a record from before schema 3.
+        AttentionReason::ConductorFailed => operators_raise(),
+    }
+}
+
+/// A running five-node mission whose Conductor rests on its row (or is
+/// gone), each node raised for `reason` by one cause at `since`.
+fn five_raised(
+    runtime: &mut Runtime,
+    reason: crate::missions::AttentionReason,
+    present: bool,
+    since: u64,
+) {
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Five nodes"}),
+    )
+    .unwrap();
+    command(runtime, "sender", five_nodes_plan()).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    if !present {
+        runtime.delivery_observations.remove("sender");
+        runtime.snapshot.navigator.agents.clear();
+    }
+    // The health pass notes since when the Conductor is there.
+    runtime.drive_mission_health(since);
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for at in 1..=5 {
+        let raised = crate::runtime::mission_health::raise(
+            mission,
+            &format!("n{at}"),
+            reason,
+            Some(7),
+            since,
+        );
+        assert!(!raised.is_empty(), "{reason:?} on n{at}");
+    }
+    runtime.save_missions();
+}
+
+/// The principle's count (hide-private docs/missions.md, question 2): one
+/// cause raised on five nodes shows the operator no card per node for a
+/// raise of the Conductor's, and one safety net for the mission: at once
+/// with no Conductor, and with one only once the raise stood 20 minutes. A
+/// raise only the operator settles keeps its own path.
+#[test]
+fn one_cause_on_five_nodes_shows_the_operator_one_card_at_most() {
+    use crate::missions::AttentionReason;
+    const MINUTE: u64 = 60_000;
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/snapshot-wire-enums.json"
+    ))
+    .unwrap();
+    let reasons = contract["mission_attention_reason"].as_array().unwrap();
+    assert!(!reasons.is_empty());
+    // Every row is judged before the test answers, so a defect shows each
+    // row it breaks.
+    let mut wrong = Vec::new();
+    for name in reasons {
+        let reason: AttentionReason = serde_json::from_value(name.clone()).unwrap();
+        let expected = expected_for(reason);
+        let now = crate::runtime::unix_milliseconds();
+        for (present, since, want) in [
+            (false, now - MINUTE, &expected.absent),
+            (true, now - 19 * MINUTE, &expected.present_19),
+            (true, now - 20 * MINUTE - 5_000, &expected.present_20),
+        ] {
+            let fixture = conducting();
+            let mut runtime = fixture.runtime.lock().unwrap();
+            five_raised(&mut runtime, reason, present, since);
+            let shown = operator_turn(&mut runtime);
+            if &shown != want {
+                wrong.push(format!(
+                    "{reason:?}, Conductor present {present}, raised {} min ago: {shown:?}, expected {want:?}",
+                    (now - since) / MINUTE
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The safety net is excused exactly where a stall is (`stall_excused`): a
+/// decision waiting on the operator, a delay, a node's hold, and a node whose
+/// gate waits on the operator's answer, which is the operator's own turn
+/// already; what is excused on one node leaves the others held.
+#[test]
+fn the_safety_net_is_held_off_where_a_stall_is_excused() {
+    use crate::missions::AttentionReason;
+    const MINUTE: u64 = 60_000;
+    let now = crate::runtime::unix_milliseconds();
+    let held = |excuse: &dyn Fn(&mut Runtime)| {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        five_raised(
+            &mut runtime,
+            AttentionReason::WorkerEnded,
+            true,
+            now - 30 * MINUTE,
+        );
+        excuse(&mut runtime);
+        runtime
+            .mission_view_of("mission-1")
+            .unwrap()
+            .safety_net
+            .map(|net| {
+                net.nodes
+                    .into_iter()
+                    .map(|node| node.key)
+                    .collect::<Vec<_>>()
+            })
+    };
+    let all: Vec<String> = (1..=5).map(|at| format!("n{at}")).collect();
+    assert_eq!(held(&|_| {}), Some(all.clone()), "nothing excuses it");
+    assert_eq!(
+        held(&|runtime| {
+            command(
+                runtime,
+                "sender",
+                json!({"op": "decide", "line": "Drop the five?", "node": "n1"}),
+            )
+            .unwrap();
+        }),
+        None,
+        "a decision open"
+    );
+    assert_eq!(
+        held(&|runtime| {
+            command(
+                runtime,
+                "sender",
+                json!({"op": "delay", "line": "usage near its limit", "for_minutes": 30}),
+            )
+            .unwrap();
+        }),
+        None,
+        "a delay"
+    );
+    assert_eq!(
+        held(&|runtime| {
+            let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+            mission.nodes[0].hold = Some(crate::missions::NodeHold {
+                why: "on the phone in the morning".into(),
+                until_unix_ms: now + 60 * MINUTE,
+            });
+        }),
+        Some(all[1..].to_vec()),
+        "a node's hold"
+    );
+}
+
+/// A node whose only wait is its gate is the operator's own turn: a mission
+/// with one gate asking and no other raise shows the gate's card and no
+/// safety net, with a Conductor and without one (the human gate letter of
+/// mission-53).
+#[test]
+fn a_gate_asking_shows_its_card_and_no_safety_net() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    reached_gate(&mut runtime);
+    let view = runtime.mission_view_of("mission-1").unwrap();
+    assert!(
+        view.decision.is_some(),
+        "the gate asks on the decision card"
+    );
+    assert_eq!(view.safety_net, None);
+    // The Conductor gone: the gate is the mission's own raise to the
+    // operator, and still no safety net.
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let view = runtime.mission_view_of("mission-1").unwrap();
+    let gate = view.nodes[0].attention.as_ref();
+    assert_eq!(
+        gate.map(|attention| (attention.reason, attention.to)),
+        Some((
+            crate::missions::AttentionReason::HumanGate,
+            crate::missions::AttentionTo::Operator
+        ))
+    );
+    assert_eq!(view.safety_net, None);
+}
+
+/// A mission saved by the build before, with raises its ten minutes had
+/// handed to the operator (`operator_at_unix_ms`), restores with them at the
+/// Conductor: no card per node; with the Conductor there its 20 minutes
+/// start when this daemon first sees it, so nothing is the operator's at
+/// once; with none, the safety net holds them.
+#[test]
+fn a_mission_saved_with_raises_at_the_operator_restores_them_at_the_conductor() {
+    use crate::missions::{AttentionReason, AttentionTo, MissionStore, Restored};
+    const MINUTE: u64 = 60_000;
+    let now = crate::runtime::unix_milliseconds();
+    let saved = {
+        let fixture = conducting();
+        let path = fixture._root.path().join("missions.json");
+        let mut runtime = fixture.runtime.lock().unwrap();
+        let store = crate::mission_events::MissionEventStore::with_book(
+            fixture._root.path().join("mission-events"),
+            path.clone(),
+        );
+        runtime.install_mission_events(store, Default::default());
+        // Closed pull requests GitHub has not been read for since the restart: the
+        // raise stands through the health pass after it.
+        five_raised(
+            &mut runtime,
+            AttentionReason::PrClosed,
+            true,
+            now - 2 * 60 * MINUTE,
+        );
+        // Dropping the one writer waits for the save it queued.
+        drop(runtime.missions.event_store.take());
+        let mut book: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // As the build before wrote them: each raise reached the operator.
+        let nodes = book["missions"][0]["nodes"].as_array_mut().unwrap();
+        assert_eq!(nodes.len(), 5);
+        for node in nodes {
+            node["attention"]["operator_at_unix_ms"] = json!(now - 110 * MINUTE);
+        }
+        book
+    };
+    for present in [true, false] {
+        let fixture = conducting();
+        let path = fixture._root.path().join("missions.json");
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        let store = MissionStore::new(path.clone());
+        let restored = store.restore();
+        assert!(matches!(restored, Restored::Read(_)), "the old book reads");
+        runtime.install_mission_store(store, restored);
+        runtime.snapshot.navigator.agents = vec![conductor_row()];
+        if !present {
+            runtime.delivery_observations.remove("sender");
+            runtime.snapshot.navigator.agents.clear();
+        }
+        runtime.drive_mission_health(now);
+        let view = runtime.mission_view_of("mission-1").unwrap();
+        assert!(
+            view.nodes
+                .iter()
+                .filter_map(|node| node.attention.as_ref())
+                .all(|attention| attention.to == AttentionTo::Conductor),
+            "present {present}"
+        );
+        assert_eq!(
+            view.nodes
+                .iter()
+                .filter(|node| node.attention.is_some())
+                .count(),
+            5
+        );
+        assert_eq!(
+            view.safety_net.map(|net| net.nodes.len()),
+            (!present).then_some(5),
+            "present {present}"
+        );
+        assert_eq!(
+            operator_turn(&mut runtime).node_cards,
+            0,
+            "present {present}"
+        );
+    }
+}
+
+/// The safety net is told by notice once as it comes up, however many nodes
+/// it holds, and not again while it stands; a raise joining it later tells
+/// nothing new (hide-private docs/missions.md: one card per mission).
+#[test]
+fn a_safety_net_is_told_to_the_operator_once() {
+    use crate::delivery::worker::HumanNoticeKind;
+    use crate::missions::AttentionReason;
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    five_raised(
+        &mut runtime,
+        AttentionReason::PrClosed,
+        true,
+        now - 10 * MINUTE,
+    );
+    assert!(
+        runtime.claim_mission_notices().is_empty(),
+        "under 20 minutes"
+    );
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let notices = runtime.claim_mission_notices();
+    assert_eq!(
+        notices
+            .iter()
+            .map(|notice| (notice.kind, notice.id.as_str(), notice.about.as_str()))
+            .collect::<Vec<_>>(),
+        [(HumanNoticeKind::MissionAttention, "mission-1", "Node 1")]
+    );
+    assert!(runtime.claim_mission_notices().is_empty(), "told once");
+}
+
+/// The operator's own actions on a raised node stay reachable from its
+/// panel for a raise its Conductor holds: `drop` and `leave` settle it and
+/// tell the Conductor (B15-B17).
+#[test]
+fn the_operator_settles_a_raise_the_conductor_holds_from_the_map() {
+    use crate::missions::{AttentionReason, AttentionTo, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    five_raised(&mut runtime, AttentionReason::WorkerEnded, true, now);
+    let attention = node_view(&runtime, "n1").attention.unwrap();
+    assert_eq!(attention.to, AttentionTo::Conductor);
+    assert!(
+        attention
+            .choices
+            .contains(&crate::missions::OperatorAction::Drop)
+    );
+    let answer = |runtime: &mut Runtime, node: &str, action: &str, since: u64| {
+        let payload: crate::runtime::mission_health::MissionAttentionPayload =
+            serde_json::from_value(json!({"mission": "mission-1", "node": node,
+                "action": action, "since_unix_ms": since}))
+            .unwrap();
+        runtime.mission_attention_act(&payload, now + 1)
+    };
+    assert_eq!(
+        answer(&mut runtime, "n1", "drop", now - 1).unwrap_err(),
+        "mission_attention_moved"
+    );
+    assert!(answer(&mut runtime, "n1", "drop", now).unwrap());
+    assert!(answer(&mut runtime, "n2", "leave", now).unwrap());
+    assert_eq!(node_view(&runtime, "n1").status, NodeStatus::Dropped);
+    assert!(node_view(&runtime, "n2").attention.is_none());
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(
+        mission
+            .wakes
+            .iter()
+            .filter(|wake| wake.event == WakeEvent::Resolved)
+            .count(),
+        2
+    );
+}
+
+/// One line of the skip table: what the line's kind and state are, and
+/// whether the Conductor's skip with a reason alone passes.
+struct SkipRow {
+    line: &'static str,
+    state: &'static str,
+    /// Brings the fix node's line to `state`.
+    setup: fn(&mut Runtime),
+    alone: Result<(), &'static str>,
+}
+
+fn ci_read(runtime: &mut Runtime, checks: PullRequestChecks, failed: &[&str]) {
+    let read = checked(7, HEAD, checks, failed);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+}
+
+/// The principle of 2026-11-11 (hide-private docs/missions.md): the
+/// Conductor skips the `check` line and a `ci` line that has not failed
+/// with its reason and no decision; only a failed `ci` waits on the
+/// operator's answer (`mission_criteria_protected`), and a gate is never the
+/// Conductor's. Every line it skipped on its own is in the mission's view
+/// and in Hide's close report with its reason, who and when; a skip on the
+/// operator's answer is not.
+#[test]
+fn the_conductor_skips_a_line_alone_unless_its_ci_failed() {
+    use crate::mission_criteria::{CriterionKind, CriterionState};
+    let rows = [
+        SkipRow {
+            line: "c1",
+            state: "open",
+            setup: |_| {},
+            alone: Ok(()),
+        },
+        SkipRow {
+            line: "review",
+            state: "open",
+            setup: |_| {},
+            alone: Ok(()),
+        },
+        SkipRow {
+            line: "check",
+            state: "open",
+            setup: |_| {},
+            alone: Ok(()),
+        },
+        SkipRow {
+            line: "check",
+            state: "fail",
+            setup: |runtime| {
+                command(
+                    runtime,
+                    "recipient",
+                    record_of("fix", "check", json!({"commit": HEAD, "pass": false})),
+                )
+                .unwrap();
+            },
+            alone: Ok(()),
+        },
+        SkipRow {
+            line: "ci",
+            state: "open",
+            setup: |runtime| ci_read(runtime, PullRequestChecks::Pending, &[]),
+            alone: Ok(()),
+        },
+        SkipRow {
+            line: "ci",
+            state: "pass",
+            setup: |runtime| ci_read(runtime, PullRequestChecks::Passing, &[]),
+            alone: Ok(()),
+        },
+        SkipRow {
+            line: "ci",
+            state: "fail",
+            setup: |runtime| ci_read(runtime, PullRequestChecks::Failed, &["verify"]),
+            alone: Err("mission_criteria_protected"),
+        },
+    ];
+    let skip = |line: &str, decision: Option<u64>| {
+        let mut asked = json!({"op": "skip", "node": "fix", "line": line,
+                               "reason": "main merged, CI proved it"});
+        if let Some(decision) = decision {
+            asked["decision"] = json!(decision);
+        }
+        asked
+    };
+    for row in rows {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        running_criteria_mission(&mut runtime);
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+        )
+        .unwrap();
+        (row.setup)(&mut runtime);
+        let named = format!("{} {}", row.line, row.state);
+        let state = line_state(&runtime, row.line);
+        let expected_state = match row.state {
+            "open" => CriterionState::Open,
+            "pass" => CriterionState::Pass,
+            _ => CriterionState::Fail,
+        };
+        assert_eq!(
+            state, expected_state,
+            "{named}: the row's line stands as named"
+        );
+        let answer = command(&mut runtime, "sender", skip(row.line, None));
+        let view = runtime.mission_view_of("mission-1").unwrap();
+        match row.alone {
+            Ok(()) => {
+                assert!(answer.is_ok(), "{named}: {answer:?}");
+                assert_eq!(
+                    line_state(&runtime, row.line),
+                    CriterionState::Skipped,
+                    "{named}"
+                );
+                let listed: Vec<(String, String, String, String)> = view
+                    .skipped_alone
+                    .iter()
+                    .map(|skip| {
+                        (
+                            skip.node.clone(),
+                            skip.line.clone(),
+                            skip.reason.clone(),
+                            skip.by.clone(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    listed,
+                    [(
+                        "fix".to_owned(),
+                        row.line.to_owned(),
+                        "main merged, CI proved it".to_owned(),
+                        "sender".to_owned()
+                    )],
+                    "{named}"
+                );
+                assert!(view.skipped_alone[0].at_unix_ms > 0);
+                let mission = runtime.missions.book.get("mission-1").unwrap();
+                let report = crate::runtime::mission_health::closing_report(mission);
+                assert!(
+                    report.contains(&format!(
+                        "Fix it (fix) · {}: main merged, CI proved it · sender",
+                        row.line
+                    )),
+                    "{named}: {report}"
+                );
+            }
+            Err(code) => {
+                let refused = answer.unwrap_err();
+                assert_eq!(
+                    crate::coordination::split_refusal(&refused).0,
+                    code,
+                    "{named}"
+                );
+                assert!(view.skipped_alone.is_empty(), "{named}");
+                // Once the operator answered a question about the node, the
+                // skip names it and is the operator's decision, not the
+                // Conductor's own.
+                command(
+                    &mut runtime,
+                    "sender",
+                    json!({"op": "decide", "line": "Skip the failed CI?", "node": "fix"}),
+                )
+                .unwrap();
+                command(
+                    &mut runtime,
+                    "sender",
+                    json!({"op": "decide", "line": null}),
+                )
+                .unwrap();
+                let (shown, _) = command(&mut runtime, "sender", skip(row.line, Some(1))).unwrap();
+                let line = shown["mission"]["nodes"][0]["criteria"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|line| line["key"] == row.line)
+                    .unwrap()
+                    .clone();
+                assert_eq!(
+                    (&line["state"], &line["skip"]["decision"]),
+                    (&json!("skipped"), &json!(1)),
+                    "{named}"
+                );
+                let view = runtime.mission_view_of("mission-1").unwrap();
+                assert!(view.skipped_alone.is_empty(), "{named}");
+                assert_eq!(
+                    view.nodes[0]
+                        .criteria
+                        .iter()
+                        .find(|line| line.key == row.line)
+                        .map(|line| line.kind),
+                    Some(CriterionKind::Ci)
+                );
+            }
+        }
+    }
+    // A gate is the operator's own: the Conductor never skips it.
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reached_gate(&mut runtime);
+    let refused = command(&mut runtime, "sender", skip("human", None)).unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused).0,
+        "mission_gate_operator_only"
+    );
 }

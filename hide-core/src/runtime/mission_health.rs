@@ -430,7 +430,7 @@ fn hide_event(now: u64, node: &str, mark: &HideMark) -> MissionEvent {
 
 /// The report Hide gives a mission it closed (B18): each node's result,
 /// its pull requests and its lines met.
-fn closing_report(mission: &Mission) -> String {
+pub(super) fn closing_report(mission: &Mission) -> String {
     let mut lines = vec![format!(
         "Hide closed the mission: every node is done or dropped ({} nodes).",
         mission.nodes.len()
@@ -474,7 +474,10 @@ fn closing_report(mission: &Mission) -> String {
     // (hide-private docs/missions.md, the principle of 2026-11-11).
     let alone = super::missions::skipped_alone(mission);
     if !alone.is_empty() {
-        lines.push(format!("Skipped by the Conductor on its own ({}):", alone.len()));
+        lines.push(format!(
+            "Skipped by the Conductor on its own ({}):",
+            alone.len()
+        ));
         for skip in alone {
             lines.push(format!(
                 "- {} ({}) · {}: {} · {}",
@@ -1851,9 +1854,7 @@ impl Runtime {
     /// A Conductor came to the mission (a take or a resume): its safety-net
     /// time starts now.
     pub(super) fn note_conductor_arrived(&mut self, mission: &str, now: u64) {
-        self.missions
-            .conductor_seen
-            .insert(mission.to_owned(), now);
+        self.missions.conductor_seen.insert(mission.to_owned(), now);
     }
 
     /// Whether the mission worker `target` waits on someone else now

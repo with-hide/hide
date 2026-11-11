@@ -781,7 +781,10 @@ pub(crate) fn safety_net(
         return None;
     }
     let nodes = held_nodes(mission, operator_waits);
-    let oldest = mission.nodes[*nodes.first()?].attention.as_ref()?.since_unix_ms;
+    let oldest = mission.nodes[*nodes.first()?]
+        .attention
+        .as_ref()?
+        .since_unix_ms;
     let since = if present {
         oldest.max(present_since)
     } else {
@@ -807,8 +810,13 @@ pub(crate) fn safety_net_due(
         return None;
     }
     let nodes = held_nodes(mission, operator_waits);
-    let oldest = mission.nodes[*nodes.first()?].attention.as_ref()?.since_unix_ms;
-    let due = oldest.max(present_since).saturating_add(SAFETY_NET_AFTER_MS);
+    let oldest = mission.nodes[*nodes.first()?]
+        .attention
+        .as_ref()?
+        .since_unix_ms;
+    let due = oldest
+        .max(present_since)
+        .saturating_add(SAFETY_NET_AFTER_MS);
     (due > now).then_some(due)
 }
 

@@ -265,7 +265,10 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         let _ = writeln!(out, "{mark} {}", fields.join(" · "));
     }
     // What the Conductor settled on its own, as the map's `Conductor가 정한 것`.
-    let alone = mission["skipped_alone"].as_array().cloned().unwrap_or_default();
+    let alone = mission["skipped_alone"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     if !alone.is_empty() {
         let _ = writeln!(out, "Conductor가 정한 것 {}", alone.len());
         for skip in &alone {
@@ -563,6 +566,39 @@ mod tests {
              \x20 later · 계획 · 기다림 show\n\
              \x20 old · 빠짐\n"
         );
+    }
+
+    /// The safety net is one line under the head naming the held nodes and
+    /// since when they stand, and the lines the Conductor skipped on its own
+    /// follow the nodes, each with its reason, who and when, as the map's
+    /// `Conductor가 정한 것` lists them.
+    #[test]
+    fn the_safety_net_and_the_conductors_own_skips_are_shown() {
+        let mut value = mission();
+        value["mission"]["safety_net"] = json!({
+        "conductor_present": true, "since_unix_ms": NOW - 25 * MINUTE,
+        "nodes": [
+            {"key": "show", "title": "Show", "reason": "worker_ended", "pr": null, "since_unix_ms": NOW - 25 * MINUTE},
+            {"key": "ci", "title": "CI", "reason": "wait_stood", "pr": 8, "since_unix_ms": NOW - 70 * MINUTE},
+        ]});
+        value["mission"]["skipped_alone"] = json!([
+            {"node": "docs", "title": "Docs", "line": "check", "kind": "check",
+             "reason": "main merged, CI passed", "by": "lead", "at_unix_ms": NOW - 40 * MINUTE},
+        ]);
+        let text = draw(&value, NOW).unwrap();
+        assert!(
+            text.contains(
+                "안전망 · 걸린 일 2건 · 25분 전부터 그대로 · 운영자에게 보임 · show ci\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(
+                "Conductor가 정한 것 1\n  ⤳ docs · check 넘김 · main merged, CI passed · lead · 40분 전\n"
+            ),
+            "{text}"
+        );
+        assert!(!draw(&mission(), NOW).unwrap().contains("안전망"));
     }
 
     /// Each line says what the core decided its node waits on, in words for
