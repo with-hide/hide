@@ -15,32 +15,45 @@
 
 import type { IBufferLine, IDecoration, Terminal } from "@xterm/xterm";
 
-/** A prompt glyph, the owl and a space: how Claude Code and Codex echo the line. */
-const BELL_ROW = /^\s*[❯›>]\s*🦉\s/u;
+/**
+ * A prompt glyph, the owl and a space, as Claude Code, Codex and Grok echo the
+ * line (Grok leaves a margin before the glyph); group 1 is what stands before
+ * the owl, whose width is the indent each row the line wraps onto carries.
+ */
+const BELL_ROW = /^(\s*[❯›>]\s*)🦉\s/u;
 
-/** A row that carries on a wrapped bell line: indented two cells, then text. */
-const CONTINUATION = /^ {2}[^\s⎿⏺└├│•›❯>]/u;
+/** What starts a row of an agent's own chrome, which never carries a bell line on. */
+const CHROME = /[\s⎿⏺└├│•›❯>◆◈┃]/u;
 
 /** A wrapped row leaves this many cells unused at most when the next word fits no better. */
 const WRAP_SLACK = 16;
 
-/** The most rows one bell line may run over; a summary is cut at 60 characters. */
-const MAX_ROWS = 3;
+/** The most rows one bell line may run over: about 130 cells, in a pane a few words wide. */
+const MAX_ROWS = 6;
 
 /** One screen row as the scan reads it: its text and how many cells it uses. */
 export type ScreenRow = { text: string; used: number };
+
+/** Whether a row starts with exactly the bell line's indent and then text rather than chrome. */
+function carriesOn(text: string, indent: string): boolean {
+  if (!text.startsWith(indent)) return false;
+  const [first] = Array.from(text.slice(indent.length, indent.length + 2));
+  return first !== undefined && !CHROME.test(first);
+}
 
 /** The rows, counted from the top of `rows`, that carry a bell line. */
 export function bellRows(rows: readonly ScreenRow[], cols: number): number[] {
   const found: number[] = [];
   for (let at = 0; at < rows.length; at += 1) {
     const row = rows[at]!;
-    if (!row.text.includes("🦉") || !BELL_ROW.test(row.text)) continue;
+    const bell = row.text.includes("🦉") ? BELL_ROW.exec(row.text) : null;
+    if (!bell) continue;
     found.push(at);
+    const indent = " ".repeat(bell[1]!.length);
     let last = row;
     for (let extra = 1; extra < MAX_ROWS; extra += 1) {
       const next = rows[at + extra];
-      if (!next || last.used < cols - WRAP_SLACK || !CONTINUATION.test(next.text)) break;
+      if (!next || last.used < cols - WRAP_SLACK || !carriesOn(next.text, indent)) break;
       found.push(at + extra);
       last = next;
     }
