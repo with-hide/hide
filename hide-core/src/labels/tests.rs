@@ -295,7 +295,14 @@ impl Harness {
         &self,
         store: Arc<LabelStore>,
     ) -> (LabelWorker, Receiver<()>, Arc<CountingSource>) {
-        let source = Arc::new(CountingSource {
+        let source = self.counting_source();
+        let (worker, woken) = self.spawn(store, LOCAL_TARGET, "local.sock", source.clone());
+        (worker, woken, source)
+    }
+
+    /// A reader of this harness's home that counts its reads.
+    fn counting_source(&self) -> Arc<CountingSource> {
+        Arc::new(CountingSource {
             inner: {
                 let node: Arc<dyn crate::node_access::NodeLink> =
                     Arc::new(hide_node::Local::new(Some(self.home.path().to_path_buf())));
@@ -305,9 +312,50 @@ impl Harness {
             completed: AtomicUsize::new(0),
             held: Mutex::new(false),
             released: Condvar::new(),
-        });
-        let (worker, woken) = self.spawn(store, LOCAL_TARGET, "local.sock", source.clone());
-        (worker, woken, source)
+        })
+    }
+
+    /// A worker whose reads find their session record in a running links
+    /// ledger, as a core's do. Without one every read's record lookup fails
+    /// and asks for another read 15 s later (`UNAVAILABLE_RETRY`), which
+    /// hides whether the worker scheduled a read of its own.
+    pub(crate) fn linked_worker(&self) -> (LabelWorker, Receiver<()>, Arc<CountingSource>, Links) {
+        use crate::links::worker::{LinkWorker, Paths};
+        let home = tempfile::tempdir().unwrap();
+        let worker = LinkWorker::spawn(
+            Paths {
+                store: self.state.path().join("links.sqlite3"),
+                search: self.state.path().join("search.sqlite3"),
+                local_device: LOCAL_TARGET.into(),
+            },
+            Arc::new(hide_node::Local::new(Some(home.path().into()))),
+            record_tests::QuietLinks,
+        )
+        .unwrap();
+        let client = worker.client();
+        client.projects(Arc::default());
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while client.ledger_started_at().is_none() {
+            assert!(Instant::now() < deadline, "the links ledger did not start");
+            std::thread::yield_now();
+        }
+        let source = self.counting_source();
+        let (labels, woken) = self.spawn_with_ledger(
+            self.store(),
+            LOCAL_TARGET,
+            "local.sock",
+            source.clone(),
+            Arc::new(Mutex::new(Some(client))),
+        );
+        (
+            labels,
+            woken,
+            source,
+            Links {
+                _worker: worker,
+                _home: home,
+            },
+        )
     }
 
     /// A device's worker, reading through whatever channel `channel` hands out.
@@ -403,6 +451,13 @@ impl Harness {
         std::fs::write(&path, lines).unwrap();
         path
     }
+}
+
+/// The links ledger a [`Harness::linked_worker`] reads its records in, kept
+/// for as long as the label worker runs.
+pub(crate) struct Links {
+    _worker: crate::links::worker::LinkWorker,
+    _home: tempfile::TempDir,
 }
 
 fn agent(path: &Path, status: &str, seq: u64) -> ObservedAgent {
@@ -5276,6 +5331,249 @@ fn a_turn_end_is_not_a_stop_until_its_session_read_lands() {
     settle(&mut worker, &woken);
     assert_eq!(activity_shown(&worker, &done), "stopped");
     assert_eq!(shown_facts(&worker, &done).unwrap().wake_devices, 1);
+}
+
+/// A turn that asked the operator something and stopped, its answer not yet
+/// in the session file: the engine reads the stop from the screen, and the
+/// agent writes its records after it.
+fn stopped_before_its_answer(
+    harness: &Harness,
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    name: &str,
+) -> (PathBuf, ObservedAgent) {
+    let path = harness.session(name, "native-late", &[("user", "배포할까?")]);
+    harness.backend.begin("배포 방식 결정 작업");
+    let working = agent(&path, "working", 4);
+    observe(worker, &working);
+    settle(worker, woken);
+    assert_eq!(harness.backend.calls(), 1, "the turn's start is named");
+    let done = agent(&path, "done", 5);
+    observe(worker, &done);
+    settle(worker, woken);
+    assert_eq!(
+        harness.backend.calls(),
+        1,
+        "no end is judged from a turn whose answer is not written"
+    );
+    (path, done)
+}
+
+/// The agent writes the turn's answer to its session file.
+fn write_answer(path: &Path, session_id: &str, text: &str) {
+    let answer = json!({"type":"assistant","sessionId":session_id,
+        "timestamp":"2026-10-01T00:00:09Z",
+        "message":{"role":"assistant","content":[{"type":"text","text":text}]}});
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    use std::io::Write;
+    writeln!(file, "{answer}").unwrap();
+}
+
+/// The row once the turn's end is judged a question. The end waits for its
+/// ledger context, which is asked again a quarter second on, so the clock is
+/// moved on until the question is shown.
+fn judged_question(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    agent: &ObservedAgent,
+) -> AgentLabel {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(label) = shown(worker, agent).filter(|label| label.question) {
+            return label;
+        }
+        assert!(Instant::now() < deadline, "the turn's end was not judged");
+        let _ = woken.recv_timeout(Duration::from_millis(200));
+        worker.drain(Instant::now(), unix_now_ms());
+        worker.tick(Instant::now() + Duration::from_secs(1));
+    }
+}
+
+/// Moves the clock past every read the stop scheduled, one at a time.
+fn spend_answer_reads(worker: &mut LabelWorker, woken: &Receiver<()>) {
+    let backoff = super::worker::READ_RETRY_BACKOFF;
+    for _ in 0..backoff.len() + 3 {
+        worker.tick(Instant::now() + backoff[backoff.len() - 1]);
+        settle(worker, woken);
+    }
+}
+
+/// 2026-11-11: a stop read before the agent wrote its answer found the
+/// operator's message last, and nothing read the session again, so the
+/// question the turn ended on never reached the operator.
+#[test]
+fn a_stop_read_before_the_answer_is_written_reads_again_and_judges_the_end() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    let (path, done) = stopped_before_its_answer(&harness, &mut worker, &woken, "late");
+    let reads = source.reads.load(Ordering::SeqCst);
+
+    write_answer(&path, "native-late", "A와 B 중 고르세요");
+    harness
+        .backend
+        .answer("배포 방식 결정 작업", "question", "A/B 선택");
+    worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
+    settle(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+
+    let label = judged_question(&mut worker, &woken, &done);
+    assert_eq!(label.expected_reply.as_deref(), Some("A/B 선택"));
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+}
+
+/// A stop whose answer never reaches the file (the agent died, or wrote
+/// nothing) is read again once at the follow-up interval and then as often
+/// as the backoff allows, then left to the agent's next state change, and the
+/// log says so once.
+#[test]
+fn a_stop_whose_answer_never_lands_stops_reading_at_the_cap() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    let _ = stopped_before_its_answer(&harness, &mut worker, &woken, "never");
+    let reads = source.reads.load(Ordering::SeqCst);
+    let backoff = super::worker::READ_RETRY_BACKOFF;
+
+    let ((), diagnostics) = crate::diagnostics::capture(|| spend_answer_reads(&mut worker, &woken));
+
+    assert_eq!(
+        source.reads.load(Ordering::SeqCst),
+        reads + 1 + backoff.len()
+    );
+    assert_eq!(harness.backend.calls(), 1, "no request is spent on it");
+    let unwritten: Vec<_> = diagnostics
+        .iter()
+        .filter(|record| record["kind"] == "turn_end.unwritten")
+        .collect();
+    assert_eq!(unwritten.len(), 1, "{diagnostics:?}");
+    assert_eq!(unwritten[0]["pane_id"], "w1:p1");
+    assert_eq!(unwritten[0]["session_id"], "native-late");
+    assert_eq!(unwritten[0]["state_change_seq"], 5);
+}
+
+/// The reads a stop is owed belong to its session: a pane that now reads
+/// another session at the same engine state starts that session's own
+/// budget, and a read of the old session that lands late changes nothing.
+#[test]
+fn another_session_in_the_pane_gets_its_own_answer_reads() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    let _ = stopped_before_its_answer(&harness, &mut worker, &woken, "first");
+    spend_answer_reads(&mut worker, &woken);
+
+    // A read of the first session is still in flight when the pane moves on.
+    source.hold();
+    let held = source.reads.load(Ordering::SeqCst);
+    worker.read_again(&["w1:p1".to_owned()]);
+    worker.tick(Instant::now());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while source.reads.load(Ordering::SeqCst) == held {
+        assert!(
+            Instant::now() < deadline,
+            "the first session's read did not start"
+        );
+        std::thread::yield_now();
+    }
+    let path = harness.session("second", "native-second", &[("user", "어디에 올릴까?")]);
+    let done = agent(&path, "done", 5);
+    harness.backend.begin("업로드 위치 결정 작업");
+    observe(&mut worker, &done);
+    source.release();
+    settle(&mut worker, &woken);
+    let reads = source.reads.load(Ordering::SeqCst);
+    assert_eq!(
+        reads,
+        held + 2,
+        "the late read, then the second session's own"
+    );
+
+    write_answer(&path, "native-second", "S3와 GCS 중 고르세요");
+    harness
+        .backend
+        .answer("업로드 위치 결정 작업", "question", "S3/GCS 선택");
+    worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
+    settle(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+    let label = judged_question(&mut worker, &woken, &done);
+    assert_eq!(label.expected_reply.as_deref(), Some("S3/GCS 선택"));
+}
+
+/// The read a stop scheduled ends with the stop: the answer found by another
+/// read, the agent working again, or another stop leaves no read behind it.
+#[test]
+fn a_stop_s_read_ends_when_the_stop_does() {
+    let mut extra = Vec::new();
+    for case in ["answer read", "working again", "another stop"] {
+        let harness = Harness::new();
+        let (mut worker, woken, source, _links) = harness.linked_worker();
+        let (path, done) = stopped_before_its_answer(&harness, &mut worker, &woken, "ends");
+        let reads = source.reads.load(Ordering::SeqCst);
+        match case {
+            "answer read" => {
+                write_answer(&path, "native-late", "A와 B 중 고르세요");
+                harness
+                    .backend
+                    .answer("배포 방식 결정 작업", "question", "A/B 선택");
+                worker.read_again(&["w1:p1".to_owned()]);
+                worker.tick(Instant::now());
+                settle(&mut worker, &woken);
+            }
+            "working again" => {
+                write_answer(&path, "native-late", "A와 B 중 고르세요");
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap();
+                use std::io::Write;
+                let next = json!({"type":"user","sessionId":"native-late",
+                    "timestamp":"2026-10-01T00:00:10Z","origin":{"kind":"human"},
+                    "message":{"role":"user","content":"A로 해줘"}});
+                writeln!(file, "{next}").unwrap();
+                harness.backend.begin("배포 방식 결정 작업");
+                observe(
+                    &mut worker,
+                    &ObservedAgent {
+                        status: Some("working".to_owned()),
+                        state_change_seq: 6,
+                        ..done.clone()
+                    },
+                );
+                settle(&mut worker, &woken);
+            }
+            _ => {
+                write_answer(&path, "native-late", "A와 B 중 고르세요");
+                harness
+                    .backend
+                    .answer("배포 방식 결정 작업", "question", "A/B 선택");
+                observe(
+                    &mut worker,
+                    &ObservedAgent {
+                        state_change_seq: 7,
+                        ..done.clone()
+                    },
+                );
+                settle(&mut worker, &woken);
+            }
+        }
+        assert_eq!(
+            source.reads.load(Ordering::SeqCst),
+            reads + 1,
+            "{case}: its own read"
+        );
+        // Reads past the stop's own, by the time its schedule would have
+        // read again.
+        worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ + Duration::from_secs(1));
+        settle(&mut worker, &woken);
+        extra.push((case, source.reads.load(Ordering::SeqCst) - reads - 1));
+    }
+    assert_eq!(
+        extra,
+        [
+            ("answer read", 0),
+            ("working again", 0),
+            ("another stop", 0)
+        ],
+        "a stop's scheduled read ended with it"
+    );
 }
 
 /// Takes the worker's results until it settles and says whether any of them
