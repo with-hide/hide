@@ -251,16 +251,20 @@ impl ArchiveRecord {
 
     /// Whether nothing is under way on this record, so it may go to make
     /// room for a newer one: archived whole, every member closed and none
-    /// resumed or being resumed, and no delete out. A record still saving
+    /// resumed or being resumed, and no delete out. A failed start that
+    /// made no pane is at rest too. A record still saving
     /// or closing, one whose close failed or is unknown, and the record of
     /// an agent end whose pane has not left yet are all still archiving.
     fn at_rest(&self) -> bool {
         self.phase == ArchivePhase::Archived
             && !self.deleting
-            && self
-                .members
-                .iter()
-                .all(|member| member.closed && member.resume == Resume::Idle)
+            && self.members.iter().all(|member| {
+                member.closed
+                    && matches!(
+                        member.resume,
+                        Resume::Idle | Resume::Failed { pane_id: None, .. }
+                    )
+            })
     }
 
     fn validate(&self) -> Result<(), &'static str> {
@@ -492,18 +496,18 @@ impl SessionArchive {
 /// Why the archive did not take a record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmitRefusal {
-    /// It would hold more than [`MAX_ARCHIVED_SESSIONS`] sessions, and
-    /// every record that could make room is being archived, resumed or
-    /// deleted.
+    /// It would hold more than [`MAX_ARCHIVED_SESSIONS`] sessions, and no
+    /// record that could make room is at rest.
     Full,
-    /// Hide could not form the record (its shape or its identity): a fault
-    /// of Hide's, never the operator's.
+    /// Hide could not form the record or start the deletes that make room:
+    /// a fault of Hide's, never the operator's.
     Fault(&'static str),
 }
 
-/// The refusal of an archive whose every record is busy, so none could make
-/// room.
-pub const ARCHIVE_FULL: &str = "The archive is full and every archived session is being archived, resumed or deleted; archive again once they finish. Nothing was closed.";
+/// The refusal of an archive whose every record is still in use (archiving,
+/// resuming, deleting, or needed by an open mission or a waiting plan), so
+/// none could make room.
+pub const ARCHIVE_FULL: &str = "The archive is full and every archived session is still in use, so none could make room. Nothing was closed.";
 
 /// One archived root as the 태스크 list and the record draw it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -859,6 +863,24 @@ mod tests {
                 &|_| true,
             ),
             Err(AdmitRefusal::Full)
+        );
+    }
+
+    #[test]
+    fn a_failed_resume_that_made_no_pane_is_at_rest_and_can_make_room() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
+        archive.records.get_mut(&id(1)).unwrap().members[0].resume = Resume::Failed {
+            reason: "checkout_missing".into(),
+            pane_id: None,
+        };
+        assert_eq!(
+            archive.admit(
+                id(1000),
+                fixture_record(vec![fixture_member("new", None)], 1000),
+                &|_| false,
+                &|_| false,
+            ),
+            Ok(vec![id(1)]),
         );
     }
 

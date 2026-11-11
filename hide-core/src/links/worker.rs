@@ -366,15 +366,23 @@ impl LinkClient {
         request: String,
         sessions: Vec<SessionIdentity>,
     ) -> Result<(), String> {
+        self.delete_session_records(vec![(request, sessions)])
+    }
+
+    /// Enqueues one admission's archive deletes together or none of them.
+    pub(crate) fn delete_session_records(
+        &self,
+        requests: Vec<(String, Vec<SessionIdentity>)>,
+    ) -> Result<(), String> {
         let (lock, wake) = &*self.0;
         let mut mailbox = lock.lock().map_err(|_| "links_worker_closed")?;
         if mailbox.stop {
             return Err("links_worker_closed".into());
         }
-        if mailbox.deletes.len() >= DELETE_QUEUE_LIMIT {
+        if mailbox.deletes.len() + requests.len() > DELETE_QUEUE_LIMIT {
             return Err("links_delete_capacity".into());
         }
-        mailbox.deletes.push_back((request, sessions));
+        mailbox.deletes.extend(requests);
         wake.notify_one();
         Ok(())
     }
@@ -1811,6 +1819,24 @@ mod tests {
         assert!(answer.error.is_none() && !answer.has_more);
         store.apply_answer("local", &answer, "stamp").unwrap();
         answer
+    }
+
+    #[test]
+    fn an_eviction_batch_that_cannot_fit_enqueues_no_partial_delete() {
+        let client = LinkClient::open_mailbox_for_test();
+        for n in 0..DELETE_QUEUE_LIMIT - 1 {
+            client
+                .delete_sessions(format!("already-{n}"), vec![])
+                .unwrap();
+        }
+        assert_eq!(
+            client
+                .delete_session_records(vec![("first".into(), vec![]), ("second".into(), vec![]),]),
+            Err("links_delete_capacity".into())
+        );
+        assert_eq!(client.deletes_for_test().len(), DELETE_QUEUE_LIMIT - 1);
+        client.delete_sessions("last".into(), vec![]).unwrap();
+        assert_eq!(client.deletes_for_test().last().unwrap().0, "last");
     }
 
     /// The ledger's links can name a session it holds no record of: a Pi or

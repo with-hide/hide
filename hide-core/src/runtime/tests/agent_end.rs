@@ -553,7 +553,7 @@ fn a_full_archive_keeps_the_ended_conversation_and_drops_its_oldest_session() {
         let mut runtime = ending.runtime.lock().unwrap();
         runtime.links_work.client = Some(client.clone());
         let archive = &mut runtime.snapshot.ui_state.session_archive;
-        let members = (1..MAX_ARCHIVED_SESSIONS)
+        let members = (1..MAX_ARCHIVED_SESSIONS - 1)
             .map(|n| fixture_member(&format!("newer-{n}"), (n > 1).then_some("newer-1")))
             .collect();
         archive
@@ -567,7 +567,13 @@ fn a_full_archive_keeps_the_ended_conversation_and_drops_its_oldest_session() {
         archive
             .admit(
                 oldest.clone(),
-                fixture_record(vec![fixture_member("oldest", None)], 1),
+                fixture_record(
+                    vec![
+                        fixture_member("oldest", None),
+                        fixture_member("oldest-child", Some("oldest")),
+                    ],
+                    1,
+                ),
                 &|_| false,
                 &|_| false,
             )
@@ -595,7 +601,41 @@ fn a_full_archive_keeps_the_ended_conversation_and_drops_its_oldest_session() {
             .iter()
             .map(|session| session.session_id.as_str())
             .collect::<Vec<_>>(),
-        ["oldest"]
+        ["oldest", "oldest-child"]
+    );
+
+    // The delete runs against the real on-disk store, as the link worker
+    // does. Reopening it proves both members' Hide records went and an
+    // unrelated session stayed; native conversation files are never owned
+    // by this delete (session-archive D-15).
+    let store_path = ending._root.path().join("archive-links.sqlite3");
+    let mut identities = deletes[0].1.clone();
+    let mut kept = identities[0].clone();
+    kept.session_id = "kept".into();
+    identities.push(kept.clone());
+    let (mut store, _) = crate::links::store::LinkStore::open(&store_path).unwrap();
+    store
+        .apply_panes(
+            &identities
+                .iter()
+                .map(|session| crate::links::PaneFact {
+                    device_id: session.device_id.clone(),
+                    agent: session.agent.clone(),
+                    session_id: session.session_id.clone(),
+                    cwd: "/repo".into(),
+                    branch: None,
+                })
+                .collect::<Vec<_>>(),
+            1,
+        )
+        .unwrap();
+    assert_eq!(store.held(&identities).unwrap().len(), 3);
+    store.delete_sessions(&deletes[0].1).unwrap();
+    drop(store);
+    let (store, _) = crate::links::store::LinkStore::open(&store_path).unwrap();
+    assert_eq!(
+        store.held(&identities).unwrap(),
+        [kept].into_iter().collect()
     );
 
     // The link worker's answer, then the writer's receipt, remove it.
@@ -610,7 +650,60 @@ fn a_full_archive_keeps_the_ended_conversation_and_drops_its_oldest_session() {
             .is_some_and(|(id, _)| *id != newer),
         "the ended conversation is archived"
     );
-    assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS);
+    assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS - 1);
+    assert!(
+        runtime
+            .snapshot
+            .navigator
+            .archived_sessions
+            .iter()
+            .all(|row| row.id != oldest.as_str())
+    );
+}
+
+/// A failed eviction enqueue leaves the prior archive intact and does not
+/// turn a worker failure into archive_full or let repeated ends grow it.
+#[test]
+fn an_unavailable_or_full_delete_worker_does_not_admit_past_the_archive_cap() {
+    use crate::session_archive::{
+        ArchiveId, MAX_ARCHIVED_SESSIONS, fixture_member, fixture_record,
+    };
+    for full in [false, true] {
+        let ending = ending();
+        let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+        if full {
+            for n in 0..64 {
+                client
+                    .delete_sessions(format!("other-{n}"), vec![])
+                    .unwrap();
+            }
+        }
+        let id = ArchiveId::new().unwrap();
+        {
+            let mut runtime = ending.runtime.lock().unwrap();
+            runtime.links_work.client = full.then(|| client.clone());
+            runtime.snapshot.ui_state.session_archive.records.insert(
+                id.clone(),
+                fixture_record(
+                    (0..MAX_ARCHIVED_SESSIONS)
+                        .map(|n| fixture_member(&format!("old-{n}"), (n > 0).then_some("old-0")))
+                        .collect(),
+                    1,
+                ),
+            );
+        }
+        let (answer, records) = crate::diagnostics::capture(|| ending.end(false));
+        assert_eq!(answer.unwrap()["conversation"], "none");
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "session_archive.eviction_failed")
+        );
+        let archive = ending.archive();
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive[0].members.len(), MAX_ARCHIVED_SESSIONS);
+        assert_eq!(client.deletes_for_test().len(), if full { 64 } else { 0 });
+    }
 }
 
 /// Only when every archived session is busy, here being resumed, does the

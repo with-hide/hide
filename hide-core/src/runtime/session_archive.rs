@@ -348,19 +348,11 @@ impl Runtime {
                 .and_then(|mark| mark.starred_at_unix_ms),
             deleting: false,
         };
-        let sent = &self.archive_deletes_sent;
-        let pinned = archive_pins(&self.missions.book, &self.plans.book, &self.delivery_ledger);
-        let evicted = self
-            .snapshot
-            .ui_state
-            .session_archive
-            .admit(id.clone(), record, &|held| sent.contains(held), &pinned)
+        self.admit_archive_record(id.clone(), record)
             .map_err(|refusal| match refusal {
                 AdmitRefusal::Full => ("archive.full", ARCHIVE_FULL.to_owned()),
                 AdmitRefusal::Fault(reason) => ("archive.save_failed", reason.to_owned()),
             })?;
-        drop(pinned);
-        self.evict_archived(&id, evicted);
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.saving",
             "archive_id": id.as_str(), "pane_id": pane_id, "members": tree.len(),
@@ -464,9 +456,7 @@ impl Runtime {
             starred_at_unix_ms,
         } = ended;
         member.closed = self.pane_left(&member.machine, &member.pane_id);
-        let sent = &self.archive_deletes_sent;
-        let pinned = archive_pins(&self.missions.book, &self.plans.book, &self.delivery_ledger);
-        let archive = &mut self.snapshot.ui_state.session_archive;
+        let archive = &self.snapshot.ui_state.session_archive;
         if archive
             .find(&member.machine, &member.kind, &member.native_session_id)
             .is_some()
@@ -475,7 +465,7 @@ impl Runtime {
         }
         let pane_id = member.pane_id.clone();
         let id = ArchiveId::new().map_err(AdmitRefusal::Fault)?;
-        let evicted = archive.admit(
+        self.admit_archive_record(
             id.clone(),
             ArchiveRecord {
                 phase: ArchivePhase::Archived,
@@ -488,15 +478,11 @@ impl Runtime {
                 starred_at_unix_ms,
                 deleting: false,
             },
-            &|held| sent.contains(held),
-            &pinned,
         )?;
-        drop(pinned);
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.agent_ended",
             "archive_id": id.as_str(), "pane_id": pane_id,
         }));
-        self.evict_archived(&id, evicted);
         self.archive_ended_changed();
         Ok(Some(id))
     }
@@ -1113,7 +1099,7 @@ impl Runtime {
             );
             return true;
         }
-        if let Err(code) = self.send_archive_delete(id) {
+        if let Err(code) = self.send_archive_deletes(std::slice::from_ref(&id)) {
             crate::diagnostic!(serde_json::json!({
                 "component": "session_archive", "kind": "session_archive.delete_failed",
                 "archive_id": payload.archive_id, "code": code,
@@ -1134,54 +1120,92 @@ impl Runtime {
     /// answer (`ingest_archive_record_deleted`) marks it deleting, and the
     /// writer's receipt removes it and releases what it held
     /// (`ingest_archive_saved`).
-    fn send_archive_delete(&mut self, id: ArchiveId) -> Result<(), String> {
-        let record = self
+    fn send_archive_deletes(&mut self, ids: &[ArchiveId]) -> Result<(), String> {
+        let requests = ids
+            .iter()
+            .map(|id| {
+                let record = self
+                    .snapshot
+                    .ui_state
+                    .session_archive
+                    .records
+                    .get(id)
+                    .ok_or("archive_record_unknown")?;
+                let sessions = record
+                    .held()
+                    .filter(|member| member.closed)
+                    .map(|member| crate::links::ledger::SessionIdentity {
+                        device_id: member.machine.clone(),
+                        agent: super::links::session_agent(&member.kind)
+                            .unwrap_or(member.kind.as_str())
+                            .to_owned(),
+                        session_id: member.native_session_id.clone(),
+                    })
+                    .collect();
+                Ok((id.as_str().to_owned(), sessions))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let client = self
+            .links_work
+            .client
+            .as_ref()
+            .ok_or("links_store_unavailable")?;
+        client.delete_session_records(requests)?;
+        self.archive_deletes_sent.extend(ids.iter().cloned());
+        Ok(())
+    }
+
+    /// Both entry points admit once, and use the manual delete's worker and
+    /// receipts. If the deletes cannot start, restore the incoming record
+    /// before returning the failure; a full mailbox must not grow the archive.
+    fn admit_archive_record(
+        &mut self,
+        id: ArchiveId,
+        record: ArchiveRecord,
+    ) -> Result<(), AdmitRefusal> {
+        let previous = self
             .snapshot
             .ui_state
             .session_archive
             .records
             .get(&id)
-            .ok_or("archive_record_unknown")?;
-        let sessions = record
-            .held()
-            .filter(|member| member.closed)
-            .map(|member| crate::links::ledger::SessionIdentity {
-                device_id: member.machine.clone(),
-                agent: super::links::session_agent(&member.kind)
-                    .unwrap_or(member.kind.as_str())
-                    .to_owned(),
-                session_id: member.native_session_id.clone(),
-            })
-            .collect::<Vec<_>>();
-        match self.links_work.client.as_ref() {
-            Some(client) => client.delete_sessions(id.as_str().to_owned(), sessions)?,
-            None => return Err("links_store_unavailable".to_owned()),
+            .cloned();
+        let pinned = archive_pins(&self.missions.book, &self.plans.book, &self.delivery_ledger);
+        let evicted = self.snapshot.ui_state.session_archive.admit(
+            id.clone(),
+            record,
+            &|held| self.archive_deletes_sent.contains(held),
+            &pinned,
+        )?;
+        drop(pinned);
+        if evicted.is_empty() {
+            return Ok(());
         }
-        self.archive_deletes_sent.insert(id);
-        Ok(())
-    }
-
-    /// Deletes the oldest records at rest that admitting `admitted` made
-    /// room from (operator principle: at a cap, drop what is finished,
-    /// oldest first). A delete that cannot start leaves the record, and the
-    /// archive past its cap until the next admission picks it again; the
-    /// operator did not ask for it, so only the log says so.
-    fn evict_archived(&mut self, admitted: &ArchiveId, evicted: Vec<ArchiveId>) {
-        for id in evicted {
-            let sessions = self
-                .snapshot
-                .ui_state
-                .session_archive
-                .records
-                .get(&id)
-                .map_or(0, |record| record.members.len());
-            let sent = self.send_archive_delete(id.clone());
+        if let Err(code) = self.send_archive_deletes(&evicted) {
+            self.snapshot.ui_state.session_archive.records.remove(&id);
+            if let Some(previous) = previous {
+                self.snapshot
+                    .ui_state
+                    .session_archive
+                    .records
+                    .insert(id.clone(), previous);
+            }
+            crate::diagnostic!(serde_json::json!({
+                "component": "session_archive", "kind": "session_archive.eviction_failed",
+                "archive_id": id.as_str(), "code": code,
+            }));
+            return Err(AdmitRefusal::Fault(
+                "The archive could not make room; its delete worker is unavailable",
+            ));
+        }
+        for evicted in evicted {
             crate::diagnostic!(serde_json::json!({
                 "component": "session_archive", "kind": "session_archive.evicted",
-                "archive_id": id.as_str(), "for_archive_id": admitted.as_str(),
-                "sessions": sessions, "code": sent.err(),
+                "archive_id": evicted.as_str(), "for_archive_id": id.as_str(),
+                "sessions": self.snapshot.ui_state.session_archive.records[&evicted].members.len(),
             }));
         }
+        Ok(())
     }
 
     /// The link worker's answer to a delete.
@@ -1906,7 +1930,13 @@ fn archive_pins<'a>(
                 .collect::<HashSet<_>>();
             let workers = open
                 .flat_map(|mission| &mission.nodes)
-                .filter_map(|node| node.agent_id.clone())
+                .flat_map(|node| {
+                    node.agent_id
+                        .as_deref()
+                        .into_iter()
+                        .chain(node.checker_agents())
+                })
+                .map(str::to_owned)
                 .collect::<HashSet<_>>();
             let digests = ledger
                 .as_ref()
@@ -1924,7 +1954,12 @@ fn archive_pins<'a>(
             (sessions, workers, digests)
         });
         record.members.iter().any(|member| {
-            sessions.contains(&(member.machine.clone(), member.native_session_id.clone()))
+            // Without the ledger, an ended worker's native session cannot
+            // be matched to its mission registration. Keep it until that
+            // identity can be read, rather than treating the failed read
+            // as proof that no mission needs it.
+            (!workers.is_empty() && ledger.is_err())
+                || sessions.contains(&(member.machine.clone(), member.native_session_id.clone()))
                 || member
                     .registration
                     .as_ref()
@@ -2064,6 +2099,11 @@ mod tests {
         open.status = MissionStatus::Running;
         open.conductor.session = Some(identity("conductor"));
         open.nodes = vec![worker("agent-held"), worker("agent-ended")];
+        open.nodes[0].criteria = serde_json::from_value(serde_json::json!([{
+            "key": "review", "title": "Review", "kind": "review",
+            "checkers": [{"agent_id": "agent-checker", "worker": {"agent": "claude"}}]
+        }]))
+        .unwrap();
         let mut closed = open.clone();
         closed.id = "mission-2".into();
         closed.status = MissionStatus::Done;
@@ -2084,6 +2124,7 @@ mod tests {
         let ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
             agents: vec![
                 registration_of("agent-ended", "worker-ended"),
+                registration_of("agent-checker", "checker"),
                 registration_of("agent-of-done", "done-worker"),
             ],
             ..Default::default()
@@ -2103,6 +2144,7 @@ mod tests {
             "an open mission's worker, ended by hide agent end"
         );
         assert!(pinned(&single("planning")), "a plan that waits");
+        assert!(pinned(&single("checker")), "an open mission's checker");
         // A descendant pins its whole record.
         assert!(pinned(&fixture_record(
             vec![
@@ -2120,5 +2162,9 @@ mod tests {
         ] {
             assert!(!pinned(&single(free)), "{free} pins nothing");
         }
+        let unavailable = Err("ledger_unavailable".into());
+        assert!(archive_pins(&missions, &plans, &unavailable)(&single(
+            "worker-ended"
+        )));
     }
 }
