@@ -27,6 +27,8 @@ use crate::missions::{
 
 /// Events one mission keeps; past this the oldest goes (B21).
 pub const EVENT_LIMIT: usize = 500;
+/// Shelved bodies/history held until durable, separate from loaded work.
+pub(crate) const PENDING_SHELVED_LIMIT: usize = 32;
 /// The longest line an event keeps.
 const LINE_LIMIT: usize = 600;
 /// 500 events of a few hundred bytes each, with room to spare.
@@ -328,6 +330,9 @@ struct Pending {
     /// The missions shelved since the last book written, whose files take
     /// their last state before the book's memory lets go of them.
     leaving: Vec<crate::missions::Mission>,
+    /// Includes bodies owned by both this queue and the writer, until the
+    /// matching book and histories have all been saved.
+    unsaved_shelved: std::collections::BTreeSet<String>,
     barrier: Option<std::sync::mpsc::SyncSender<Result<(), String>>>,
     stop: bool,
 }
@@ -504,9 +509,21 @@ impl MissionEventStore {
         let (lock, wake) = &*self.shared;
         let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
         pending.book = Some(book);
+        pending
+            .unsaved_shelved
+            .extend(leaving.iter().map(|mission| mission.id.clone()));
         pending.leaving.extend(leaving);
         drop(pending);
         wake.notify_one();
+    }
+
+    pub(crate) fn unsaved_shelved(&self) -> std::collections::BTreeSet<String> {
+        self.shared
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unsaved_shelved
+            .clone()
     }
 
     /// Lets the save thread drop its copy of a shelved mission's log; the
@@ -613,6 +630,7 @@ fn run(
     let mut book_failing = false;
     let mut book_held = false;
     let mut releasing = std::collections::BTreeSet::new();
+    let mut shelving = std::collections::BTreeSet::new();
     loop {
         let (mut work, barrier, stop) = {
             let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -640,6 +658,7 @@ fn run(
             if let Some(newer) = pending.book.take() {
                 book = Some(newer);
             }
+            shelving.extend(pending.leaving.iter().map(|mission| mission.id.clone()));
             leaving.append(&mut pending.leaving);
             (
                 std::mem::take(&mut pending.work),
@@ -703,10 +722,12 @@ fn run(
                 }
             }
         }
+        let mut saved = false;
         match (&book, files.as_mut()) {
             (Some(_), None) => {
                 book = None;
                 leaving.clear();
+                saved = true;
             }
             (Some(_), Some(_)) if !failing.is_empty() => {
                 if !book_held {
@@ -723,6 +744,7 @@ fn run(
                     Ok(()) => {
                         book = None;
                         book_failing = false;
+                        saved = true;
                     }
                     Err(reason) => {
                         if !book_failing {
@@ -736,6 +758,14 @@ fn run(
                 }
             }
             (None, _) => {}
+        }
+        if saved {
+            let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
+            for id in std::mem::take(&mut shelving) {
+                if !pending.leaving.iter().any(|mission| mission.id == id) {
+                    pending.unsaved_shelved.remove(&id);
+                }
+            }
         }
         if let Some(barrier) = barrier {
             let outcome = if failing.is_empty() && book.is_none() {

@@ -1551,7 +1551,7 @@ impl Runtime {
             return;
         }
         let leaving = self.shelve_missions();
-        self.trim_shelved_missions();
+        self.trim_shelved_missions(&leaving);
         if let Some(store) = &self.missions.event_store {
             store.save_book(Arc::new(self.missions.book.clone()), leaving);
         }
@@ -1569,9 +1569,15 @@ impl Runtime {
             .iter()
             .filter(|mission| crate::missions::MissionLine::of(mission).at_rest())
             .count();
-        let Some(over) = resting.checked_sub(crate::mission_store::LOADED_CLOSED_LIMIT) else {
+        let Some(mut over) = resting.checked_sub(crate::mission_store::LOADED_CLOSED_LIMIT) else {
             return Vec::new();
         };
+        if let Some(store) = &self.missions.event_store {
+            over = over.min(
+                crate::mission_events::PENDING_SHELVED_LIMIT
+                    .saturating_sub(store.unsaved_shelved().len()),
+            );
+        }
         if over == 0 {
             return Vec::new();
         }
@@ -1625,15 +1631,31 @@ impl Runtime {
 
     /// Finished records are discarded oldest first, never new work refused
     /// for a full shelf. The writer removes their body/history after index.
-    fn trim_shelved_missions(&mut self) {
+    fn trim_shelved_missions(&mut self, leaving: &[Mission]) {
         let lines = &mut self.missions.book.shelved;
-        if lines.len() <= crate::mission_store::SHELVED_LIMIT {
+        let mut resting = lines.iter().filter(|line| line.at_rest()).count();
+        if resting <= crate::mission_store::SHELVED_LIMIT {
             return;
         }
+        let mut protected = self
+            .missions
+            .event_store
+            .as_ref()
+            .map(|store| store.unsaved_shelved())
+            .unwrap_or_default();
+        protected.extend(leaving.iter().map(|mission| mission.id.clone()));
         lines.sort_by_key(crate::missions::MissionLine::closed_order);
-        let gone: Vec<_> = lines
-            .drain(..lines.len() - crate::mission_store::SHELVED_LIMIT)
-            .collect();
+        let mut gone = Vec::new();
+        while resting > crate::mission_store::SHELVED_LIMIT {
+            let Some(at) = lines
+                .iter()
+                .position(|line| line.at_rest() && !protected.contains(&line.id))
+            else {
+                break;
+            };
+            gone.push(lines.remove(at));
+            resting -= 1;
+        }
         for line in gone {
             crate::diagnostic!(
                 json!({"component":"missions","kind":"missions.shelved_evicted","mission":line.id})
@@ -1754,6 +1776,18 @@ impl Runtime {
             } => {
                 if self.missions.book.conducted_open(&actor).is_some() {
                     return Err("mission_already_conducting".into());
+                }
+                if let Some(store) = &self.missions.event_store {
+                    let pending = store.unsaved_shelved().len();
+                    if pending >= crate::mission_events::PENDING_SHELVED_LIMIT {
+                        crate::diagnostic!(
+                            json!({"component":"missions","kind":"missions.save_pending_full","pending":pending,"limit":crate::mission_events::PENDING_SHELVED_LIMIT})
+                        );
+                        return Err(crate::coordination::refusal(
+                            "mission_save_pending",
+                            "32 shelved mission saves are pending; fix storage and retry",
+                        ));
+                    }
                 }
                 let project = match project {
                     Some(project) => project,

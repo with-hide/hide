@@ -10945,6 +10945,197 @@ fn a_129th_mission_is_created_and_a_shelved_mission_is_found_shown_and_reopened(
     assert_eq!(book.next, 130);
 }
 
+/// A saved fixture with closed records uses the real folder reader and writer.
+fn saved_closed_missions(fixture: &Fixture, state: &std::path::Path, count: u64) {
+    use crate::mission_events::MissionEventStore;
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    let store = MissionStore::new(state);
+    let mut files = MissionFiles::new(store.dir().to_owned(), None);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op":"create","title":"Saved work"}),
+    )
+    .unwrap();
+    let template = runtime.missions.book.missions[0].clone();
+    runtime.missions.book.missions = (1..=count)
+        .map(|n| {
+            let mut mission = template.clone();
+            mission.id = format!("mission-{n}");
+            mission.status = MissionStatus::Done;
+            mission.closed_at_unix_ms = Some(n);
+            mission
+        })
+        .collect();
+    runtime.missions.book.next = count;
+    files
+        .write(&runtime.missions.book, &mut Vec::new())
+        .unwrap();
+    let Restored::Read(book) = store.restore() else {
+        panic!("saved fixture reads")
+    };
+    let files = MissionFiles::new(store.dir().to_owned(), Some(&book));
+    runtime.install_mission_store(store, Restored::Read(book));
+    runtime.install_mission_events(
+        MissionEventStore::with_book(hide_kit::layout::mission_histories(state), files),
+        Default::default(),
+    );
+}
+
+/// A fixed storage failure must bound pending bodies without losing them;
+/// the caller can retry creation once the same writer saves them all.
+#[test]
+fn a_failed_store_refuses_new_work_at_32_pending_shelves_and_recovers_without_loss() {
+    use crate::mission_events::{EventKind, read_log};
+    use crate::mission_store::{MissionStore, Restored};
+    let fixture = conducting();
+    let state = fixture._root.path().join("pending-store");
+    saved_closed_missions(&fixture, &state, 128);
+    let history = hide_kit::layout::mission_histories(&state);
+    std::fs::write(&history, b"storage stays blocked").unwrap();
+    let barrier = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        for n in 129..=160 {
+            let (created, _) = command(
+                &mut runtime,
+                "sender",
+                json!({"op":"create","title":"New work"}),
+            )
+            .unwrap();
+            assert_eq!(created["mission"]["id"], format!("mission-{n}"));
+            command(
+                &mut runtime,
+                "sender",
+                json!({"op":"close","end":"cancelled"}),
+            )
+            .unwrap();
+        }
+        assert_eq!(runtime.missions.book.missions.len(), 128);
+        assert_eq!(runtime.missions.book.shelved.len(), 32);
+        assert_eq!(
+            runtime
+                .missions
+                .event_store
+                .as_ref()
+                .unwrap()
+                .unsaved_shelved()
+                .len(),
+            32
+        );
+        let failure = command(
+            &mut runtime,
+            "sender",
+            json!({"op":"create","title":"Refused until saved"}),
+        )
+        .unwrap_err();
+        assert!(failure.contains("mission_save_pending"), "{failure}");
+        assert_eq!(runtime.missions.book.next, 160);
+        runtime
+            .missions
+            .event_store
+            .as_ref()
+            .unwrap()
+            .read_barrier()
+    };
+    assert!(barrier.wait().is_err());
+    std::fs::remove_file(&history).unwrap();
+    let barrier = fixture
+        .runtime
+        .lock()
+        .unwrap()
+        .missions
+        .event_store
+        .as_ref()
+        .unwrap()
+        .read_barrier();
+    barrier.wait().unwrap();
+    let Restored::Read(book) = MissionStore::new(&state).restore() else {
+        panic!("recovery saved the book")
+    };
+    assert_eq!(book.next, 160);
+    assert_eq!(book.missions.len() + book.shelved.len(), 160);
+    for n in 129..=160 {
+        assert!(
+            read_log(&history, &format!("mission-{n}"))
+                .unwrap()
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| event.kind == EventKind::Cancelled)
+        );
+    }
+    let mut runtime = fixture.runtime.lock().unwrap();
+    assert!(
+        runtime
+            .missions
+            .event_store
+            .as_ref()
+            .unwrap()
+            .unsaved_shelved()
+            .is_empty()
+    );
+    let (created, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op":"create","title":"Storage recovered"}),
+    )
+    .unwrap();
+    assert_eq!(created["mission"]["id"], "mission-161");
+}
+
+/// At the shelf cap, ordinary create/close keeps accepting work and deletes
+/// only the oldest finished body's row and history after the index commits.
+#[test]
+fn a_full_shelf_discards_the_oldest_finished_files_and_accepts_new_work() {
+    let fixture = conducting();
+    let state = fixture._root.path().join("full-shelf");
+    saved_closed_missions(&fixture, &state, 2176);
+    let history = hide_kit::layout::mission_histories(&state);
+    std::fs::create_dir_all(&history).unwrap();
+    let oldest =
+        hide_kit::layout::mission_history(&hide_kit::layout::missions_dir(&state), "mission-1");
+    std::fs::write(&oldest, br#"{"schema_version":1,"events":[]}"#).unwrap();
+    let barrier = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        let (created, _) = command(
+            &mut runtime,
+            "sender",
+            json!({"op":"create","title":"After the cap"}),
+        )
+        .unwrap();
+        assert_eq!(created["mission"]["id"], "mission-2177");
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op":"close","end":"cancelled"}),
+        )
+        .unwrap();
+        assert_eq!(runtime.missions.book.shelved.len(), 2048);
+        assert!(runtime.missions.book.shelf("mission-1").is_none());
+        assert!(runtime.missions.book.shelf("mission-2").is_some());
+        runtime
+            .missions
+            .event_store
+            .as_ref()
+            .unwrap()
+            .read_barrier()
+    };
+    barrier.wait().unwrap();
+    let dir = hide_kit::layout::missions_dir(&state);
+    assert!(!hide_kit::layout::mission_file(&dir, "mission-1").exists());
+    assert!(!oldest.exists());
+    assert!(hide_kit::layout::mission_file(&dir, "mission-2").exists());
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let (created, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op":"create","title":"Still accepted"}),
+    )
+    .unwrap();
+    assert_eq!(created["mission"]["id"], "mission-2178");
+}
+
 /// A take and close can share one writer batch. If the taken body's write
 /// fails, restart must keep its former owner in list, reopen and deletion.
 #[test]
@@ -11042,6 +11233,14 @@ fn a_failed_taken_body_keeps_one_owner_after_a_close_shelves_it() {
         .unwrap()))
     };
     let mut runtime = fixture.runtime.lock().unwrap();
+    // The interrupted close left the caller's other mission open in the
+    // old index too. Finish that close before testing its right to reopen.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op":"close","mission":"mission-129","end":"cancelled"}),
+    )
+    .unwrap();
     let reopen: MissionCommand =
         serde_json::from_value(json!({"op":"reopen","mission":"mission-1"})).unwrap();
     for (pane, expected) in [
