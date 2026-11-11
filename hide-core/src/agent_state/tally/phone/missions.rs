@@ -215,6 +215,25 @@ pub struct PhoneNode {
     /// (`GateView`, PRD mission-human-gate B13); absent for a step without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<PhoneGate>,
+    /// Who merges the step's pull request and where that stands
+    /// (`NodeMerge`, PRD mission-destination D-45): the operator's turn on a
+    /// ready one the plan gave them reads it; absent for a step that is no
+    /// change by pull request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<PhoneMerge>,
+}
+
+/// A step's merge as the map reads it (`NodeMerge`), copied field by field:
+/// a field the core adds stays on the Mac until it is named here.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneMerge {
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    pub state: String,
+    /// Still-open held PRs; absent only from cores before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prs: Option<Vec<u32>>,
 }
 
 /// A step's gate as the map reads it (`GateView`), copied field by field: a
@@ -367,6 +386,8 @@ struct NodeIn {
     worker: Option<WorkerIn>,
     #[serde(default)]
     gate: Option<PhoneGate>,
+    #[serde(default)]
+    merge: Option<PhoneMerge>,
 }
 
 #[derive(Deserialize)]
@@ -553,6 +574,10 @@ fn phone_mission(
                     look: cut(&gate.look),
                     said: gate.said.as_deref().map(cut),
                     ..gate
+                }),
+                merge: source.merge.map(|merge| PhoneMerge {
+                    why: merge.why.as_deref().map(cut),
+                    ..merge
                 }),
             }
         })
@@ -792,6 +817,31 @@ mod tests {
             sent[1]["landing"],
             json!({"state": "left", "action": "merge"})
         );
+        assert!(!sent.to_string().contains("private"));
+    }
+
+    /// PRD mission-destination D-45, B17: who merges a step's pull request
+    /// and where it stands reach the phone by their named fields, so its
+    /// 내 차례 rises on a due merge as the desktop's does; a step with none,
+    /// as every step of a core before it, sends no key at all.
+    #[test]
+    fn a_steps_merge_reaches_the_phone_by_its_named_fields_only() {
+        let due = json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "prs": [31, 33], "note": "private"});
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![node("a", json!({"merge": due})), node("b", json!({}))],
+            )],
+            json!({}),
+        );
+        let sent = serde_json::to_value(&projected(&rest).items[0].nodes).unwrap();
+        assert_eq!(
+            sent[0]["merge"],
+            json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "prs": [31, 33]})
+        );
+        assert!(sent[1].get("merge").is_none(), "{}", sent[1]);
         assert!(!sent.to_string().contains("private"));
     }
 

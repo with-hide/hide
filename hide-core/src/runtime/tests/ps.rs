@@ -330,6 +330,7 @@ fn mission(
             waiting_on: None,
             work: None,
             gate: None,
+            merge: None,
         }],
         merge_order: Vec::new(),
         landing_order: Vec::new(),

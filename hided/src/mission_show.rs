@@ -199,6 +199,19 @@ fn pr_words(node: &Value) -> Option<String> {
     Some(words)
 }
 
+/// A node whose plan gives the operator its merge (`merge.why`, PRD
+/// mission-destination D-10), and where that merge stands; none for every
+/// other node, a scope `pr` mission's included, which reads as before.
+fn merge_words(node: &Value) -> Option<&'static str> {
+    let merge = &node["merge"];
+    merge["why"].as_str()?;
+    Some(match merge["state"].as_str() {
+        Some("due") => "👤 머지할 차례",
+        Some("merged") => "👤 머지함",
+        _ => "👤 내가 머지",
+    })
+}
+
 /// What the node waits on, as the core decided it (`waiting_on`); a
 /// value this build cannot read is refused rather than drawn as nothing.
 fn waits_on(node: &Value) -> Result<Option<String>, String> {
@@ -261,6 +274,16 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
     if let Some(destination) = mission["destination"].as_str() {
         let _ = writeln!(out, "도착 · {destination}");
     }
+    // The scope's line, said only when the plan gave the operator a merge
+    // the scope does not (PRD mission-destination B18).
+    let mine: Vec<&str> = nodes
+        .iter()
+        .filter(|node| node["merge"]["why"].is_string())
+        .map(|node| text(node, "key"))
+        .collect();
+    if !mine.is_empty() {
+        let _ = writeln!(out, "머지까지 · {}만 👤 내가 머지", mine.join(", "));
+    }
     if let Some(decision) = mission["decision"].as_str() {
         let _ = writeln!(out, "결정 · {decision}");
     }
@@ -295,6 +318,7 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         fields.extend(push_words(node, now));
         fields.extend(stop_words(node, now));
         fields.extend(pr_words(node));
+        fields.extend(merge_words(node).map(str::to_owned));
         fields.extend(waits_on(node)?);
         let mark = if warning_count(node) > 0 { WARN } else { " " };
         let _ = writeln!(out, "{mark} {}", fields.join(" · "));
@@ -442,6 +466,10 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     // stacked on another.
     if let (Some(destination), "change") = (result["destination"].as_str(), text(node, "kind")) {
         let _ = writeln!(out, "도착 {destination}");
+    }
+    // Its merge is the operator's: never the Conductor's to make.
+    if let (Some(words), Some(why)) = (merge_words(node), node["merge"]["why"].as_str()) {
+        let _ = writeln!(out, "{words} · {why}");
     }
     if let Some(worker) = worker_words(node) {
         let _ = writeln!(out, "작업자 {worker}");
@@ -944,6 +972,46 @@ mod tests {
                 "브랜치 feat/fix\n읽지 못함 · Neither feat/login nor origin/feat/login could be read\n"
             ),
             "{text}"
+        );
+    }
+
+    /// PRD mission-destination B18: a node the plan gives the operator to
+    /// merge is named in the scope's line under the head and marked on its
+    /// line and in full with why; a node the scope gives the operator (scope
+    /// `pr`) or the Conductor reads as before.
+    #[test]
+    fn a_node_the_operator_merges_is_named_under_the_head_and_on_its_line() {
+        let mut value = mission();
+        let before = draw(&value, NOW).unwrap();
+        value["mission"]["nodes"][2]["merge"] = json!({"by": "operator", "state": "merged"});
+        value["mission"]["nodes"][1]["merge"] = json!({"by": "conductor", "state": "ahead"});
+        assert_eq!(
+            draw(&value, NOW).unwrap(),
+            before,
+            "the scope decides: as before"
+        );
+
+        value["mission"]["nodes"][1]["merge"] =
+            json!({"by": "operator", "why": "DB는 직접 보고 머지", "state": "due"});
+        let text = draw(&value, NOW).unwrap();
+        let (head, rest) = before.split_once('\n').unwrap();
+        let rest = rest.replace(
+            "#8 대기 · CI 통과 ·",
+            "#8 대기 · CI 통과 · 👤 머지할 차례 ·",
+        );
+        assert_eq!(
+            text,
+            format!("{head}\n머지까지 · ci만 👤 내가 머지\n{rest}")
+        );
+
+        let alone = draw(
+            &json!({"mission_id": "mission-33", "node": value["mission"]["nodes"][1], "letters": []}),
+            NOW,
+        )
+        .unwrap();
+        assert!(
+            alone.contains("\n👤 머지할 차례 · DB는 직접 보고 머지\n"),
+            "{alone}"
         );
     }
 

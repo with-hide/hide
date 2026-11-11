@@ -7,7 +7,7 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, safetyNetLine, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
+import { mergePull, attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, safetyNetLine, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
 import type { Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionSafetyNet, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
@@ -178,7 +178,7 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     case "attention":
       return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes)}`;
     case "landing":
-      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => (node.pr != null ? `#${node.pr}` : node.title)).join(" → ")}`;
+      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => { const pr = line.join ? { number: node.pr, more: 0 } : mergePull(node); return pr.number != null ? `#${pr.number}${pr.more > 0 ? ` +${pr.more}` : ""}` : node.title; }).join(" → ")}`;
     case "planning":
       return t("mission.planning");
     case "now":

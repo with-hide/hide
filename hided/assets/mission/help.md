@@ -126,6 +126,9 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   When the operator says where they want to check ("여기는 내가 확인하고 싶어"), put a gate on those nodes, and take one away the same way; a later plan that leaves `gate` out keeps it, and `"gate": null` takes it away.
   A gate you change or take away while it asks takes its question off the map with it, and the next gate asks.
   A done node keeps the gate it has (`mission_gate_node_done`), an outside node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
+- `"operator_merge": "<why in one line>"` gives the operator a node's merge in a mission whose scope is `merge`: when the operator wants to merge one pull request themselves ("DB는 내가 머지할게"), put it on that `change` node delivered by `pr`, with why in at most 80 characters (`mission_operator_merge_invalid` on any other node, a longer or multi-line reason, or with scope `pr`, where every pull request is the operator's already).
+  Hide marks that node `done` once its pull request is green and approved, as in scope `pr`, and its merge is left to the operator; a later plan that leaves `operator_merge` out keeps it, and `"operator_merge": null` gives the merge back to you.
+  Say it in the plan's scope line, `머지까지 · <node>만 👤 내가 머지` in the operator's language, which `hide mission show` prints under its head too.
 - Name a node `<what> · <how>` in the operator's language, such as `결제 DB · 환불 상태 열`: the map's card shows the title alone, with no description under it, so the title says what the node makes and by what means. A longer description goes in its `steps` and its brief.
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from the destination and its pull request takes the destination as its base.
@@ -145,7 +148,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
   Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
-- Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
+- Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub account, and any overlap.
   Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - The plan shows on your pane's mission chip; nothing opens in the operator's lane, so tell them the plan is up in the conversation.
@@ -284,7 +287,7 @@ Anything else is yours to settle, with your reason recorded where the command ta
 
 Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a worker falling asleep or ending, a `record`, a node finishing, you leaving) and does what is certain by itself; each shows on the node as Hide's own line in `hide mission show <node>` and in the map's history.
 
-- A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`), and whose lines all pass, is set `done`; a `research`, `verify` or `direct` node with no pull request is set `done` when its lines all pass.
+- A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a `research`, `verify` or `direct` node with no pull request is set `done` when its lines all pass.
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
 - A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request is not merged or a `direct` change's branch is not in the destination, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
@@ -372,10 +375,12 @@ The operator's words are the controls; there are no buttons.
 ## 6. Merging
 
 - With scope `merge`, merge from the bottom up, and right before each merge run the plan's check command on the change merged onto the destination as it is now.
+  Never merge a node with `operator_merge` (`hide mission show` marks it `👤 내가 머지`): once its pull request is ready the operator's turn rises on it (`👤 머지할 차례`), and their merge on GitHub is read by Hide with nothing for you to do. A node that needs its change stacks on its pull request, as in scope `pr`.
   A branch rule that needs a person's approval, a failing CI or a conflict is not merged; handle it as a failure above.
 - With a `direct` delivery and scope `merge`, merge the branches that passed into the destination in order, running the check command on the destination before each merge.
   With scope `pr`, merge nothing: report the branches with the merge order from the bottom, which the operator's turn shows, and merge them from the bottom up only when the operator tells you to.
 - With scope `pr`, merge nothing.
+  A ready pull request of a scope `pr` mission calls no one: the operator chose to merge them all after your report.
 
 ## 7. The report
 
@@ -386,11 +391,11 @@ Write it so a reader who saw none of the mission can act, in four parts:
 - Every pull request or branch with its state, its review, its verify result and the merge order.
 - What was not finished, by node, with why and what would finish it; an unfinished node is never reported as done.
 - The skipped lines, by node, each with its reason, and the checks that passed only on a rerun; Hide lists the lines you skipped on your own beside the report as well.
-- What the operator has to do, as a list they can tick.
+- What the operator has to do, as a list they can tick, each pull request left for their merge first (Hide's own close lists them as `Left for the operator to merge`).
 
 For each node, the evidence of its lines goes with its pull request or branch.
 
-A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged, and every `direct` change's `--branch` is in the destination, Hide closes the mission as done itself, with or without you there.
+A `pr`-scope mission that leaves a stack waiting for the operator's merge, or a mission whose `operator_merge` node the operator has not merged yet, closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged, and every `direct` change's `--branch` is in the destination, Hide closes the mission as done itself, with or without you there.
 Hide reads a branch in the destination from git, as this repository or its last fetch has it, with no GitHub needed. A mission from before destinations records none and is read against main, which in a repository with no remote is the branch its main worktree has out. A `direct` change that names no branch keeps the mission waiting and shows unread, so name each one's branch before the close.
 A waiting mission closes itself only as your close would be allowed: a node a defect sent back to work keeps it waiting, and so does a branch you changed, one with new commits past the destination, or one Hide could not read this time (shown unread), until Hide reads it in the destination again; a reopened mission reads its branches again. A `direct` change's branch is read from the moment its node is done, so the map shows it in the destination while the mission still runs, and a close `--as merge_wait` with every branch already in the destination is done at once.
 A further instruction to a done mission opens it again (`hide mission reopen`), and so does a review asking for changes or a CI letter about one of its open pull requests; its merge does not.

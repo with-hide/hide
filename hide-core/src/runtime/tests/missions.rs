@@ -13777,3 +13777,412 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
         "no release folder holds the missions in each state: {compared:?}"
     );
 }
+
+/// A criteria mission of `scope` whose fix node the plan gives the operator
+/// to merge when `operator_merge` names why, with every line of fix met and
+/// its pull request 7 open, not yet approved.
+fn merge_owner_mission(runtime: &mut Runtime, scope: &str, operator_merge: Option<&str>) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "scope": scope}),
+    )
+    .unwrap();
+    let mut plan = criteria_plan();
+    if let Some(why) = operator_merge {
+        plan["plan"]["nodes"][0]["operator_merge"] = json!(why);
+    }
+    command(runtime, "sender", plan).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+    checkout_at(runtime, HEAD);
+    met_fix(runtime);
+}
+
+/// GitHub answers pull request 7 of the fixture at `HEAD` as `badge` with
+/// `review`, and Hide reads the mission on it.
+fn github_answers(runtime: &mut Runtime, badge: PullRequestBadge, review: Option<ReviewDecision>) {
+    let read = github(vec![pull(7, HEAD, badge, review)], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+}
+
+/// The fix node's merge as the map reads it: who, why, where it stands.
+fn fix_merge(
+    runtime: &Runtime,
+) -> Option<(
+    crate::runtime::mission_landing::MergeBy,
+    Option<String>,
+    crate::runtime::mission_landing::MergeStep,
+)> {
+    node_view(runtime, "fix")
+        .merge
+        .map(|merge| (merge.by, merge.why, merge.state))
+}
+
+/// Whether the device's Needs You lists mission-1 as its own item, the
+/// number the sidebar, the Overview and the device rail read.
+fn mission_asked(runtime: &mut Runtime) -> bool {
+    runtime.snapshot_delta_payload(0);
+    runtime
+        .snapshot
+        .navigator
+        .devices
+        .iter()
+        .find(|device| device.id == crate::node::TEST_NODE)
+        .is_some_and(|device| {
+            device
+                .agent_scope
+                .mission_asks
+                .contains(&"mission-1".to_owned())
+        })
+}
+
+/// PRD mission-destination B18, B19, B21-B23, D-10, D-11: a node the plan
+/// gives the operator to merge, in a mission that goes through the merge,
+/// is no turn while its pull request is not ready; once it is green and
+/// approved the node is done with its merge left (`left` to merge), and
+/// the operator's turn and Needs You item rise on it. Nothing else
+/// finished first, so the mission closes waiting on that merge with a
+/// report naming the node and its pull request, and the operator's merge
+/// on GitHub alone settles it: the next read finds it merged and the
+/// mission done.
+#[test]
+fn a_node_the_operator_merges_is_done_when_ready_and_its_merge_waits_for_them() {
+    use crate::runtime::mission_landing::NodeLanding;
+    use crate::runtime::mission_landing::{LandingAction, LandingProof, MergeBy, MergeStep};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let why = "DB 변경은 직접 보고 머지하시도록";
+    merge_owner_mission(&mut runtime, "merge", Some(why));
+    let mine = || Some((MergeBy::Operator, Some(why.to_owned()), MergeStep::Ahead));
+
+    // Green but not approved: planned for the operator, nothing asked yet.
+    github_answers(&mut runtime, PullRequestBadge::Open, None);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    assert_eq!(fix_merge(&runtime), mine());
+    assert!(
+        !mission_asked(&mut runtime),
+        "no turn before the pull request is ready"
+    );
+
+    // Ready: the node is done without its merge, and the merge is the operator's now.
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::Approved),
+    );
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    assert_eq!(
+        fix.landing,
+        Some(NodeLanding::Left {
+            action: LandingAction::Merge
+        })
+    );
+    assert_eq!(
+        fix_merge(&runtime),
+        Some((MergeBy::Operator, Some(why.to_owned()), MergeStep::Due))
+    );
+    assert_eq!(
+        mission_status(&runtime),
+        MissionStatus::Running,
+        "docs is open"
+    );
+    assert!(
+        mission_asked(&mut runtime),
+        "the operator's turn rises on it"
+    );
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().landing_order,
+        vec!["fix".to_owned()]
+    );
+
+    // A review asking for changes takes the turn back down until it is ready again.
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ChangesRequested),
+    );
+    assert_eq!(fix_merge(&runtime), mine());
+    assert!(!mission_asked(&mut runtime));
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::Approved),
+    );
+
+    // The rest finishes first: the mission waits on the operator's merge and says which.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    let report = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .report
+        .clone()
+        .unwrap();
+    assert!(
+        report.contains("Left for the operator to merge (1):\n- Fix it (fix) · PR #7 · DB 변경은"),
+        "{report}"
+    );
+    assert!(
+        mission_asked(&mut runtime),
+        "still theirs while the mission waits"
+    );
+
+    // The operator merges on GitHub; Hide's next read settles it with nothing pressed.
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Merged,
+        Some(ReviewDecision::Approved),
+    );
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(
+        fix.landing,
+        Some(NodeLanding::Landed {
+            proof: LandingProof::Merged
+        })
+    );
+    assert_eq!(
+        fix_merge(&runtime),
+        Some((MergeBy::Operator, Some(why.to_owned()), MergeStep::Merged))
+    );
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert!(!mission_asked(&mut runtime));
+}
+
+/// PRD mission-destination B20, D-35: in a mission whose scope ends at
+/// ready pull requests every one is the operator's to merge, but a ready
+/// one raises no turn and no Needs You item; the mission closes waiting on
+/// the merges as before, its report naming what to merge, and their merge
+/// settles it.
+#[test]
+fn a_ready_pull_request_of_a_scope_pr_mission_asks_the_operator_nothing() {
+    use crate::runtime::mission_landing::{MergeBy, MergeStep};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "pr", None);
+    let theirs = |state| Some((MergeBy::Operator, None, state));
+    github_answers(&mut runtime, PullRequestBadge::Open, None);
+    assert_eq!(fix_merge(&runtime), theirs(MergeStep::Ahead));
+
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::Approved),
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+    assert_eq!(fix_merge(&runtime), theirs(MergeStep::Ahead), "never due");
+    assert!(!mission_asked(&mut runtime));
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    let report = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .report
+        .clone()
+        .unwrap();
+    assert!(
+        report.ends_with("Left for the operator to merge (1):\n- Fix it (fix) · PR #7"),
+        "{report}"
+    );
+    assert_eq!(fix_merge(&runtime), theirs(MergeStep::Ahead));
+    assert!(
+        !mission_asked(&mut runtime),
+        "a waiting mission's merges ask nothing new"
+    );
+
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Merged,
+        Some(ReviewDecision::Approved),
+    );
+    assert_eq!(fix_merge(&runtime), theirs(MergeStep::Merged));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+}
+
+/// PRD mission-destination B49: a node left to the scope in a mission that
+/// goes through the merge is the Conductor's to merge, as before: ready
+/// and approved it still works until GitHub says merged, and nothing waits
+/// on the operator.
+#[test]
+fn a_node_the_conductor_merges_waits_for_the_merge_as_before() {
+    use crate::runtime::mission_landing::{MergeBy, MergeStep};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::Approved),
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    assert_eq!(
+        fix_merge(&runtime),
+        Some((MergeBy::Conductor, None, MergeStep::Ahead))
+    );
+    assert!(!mission_asked(&mut runtime));
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Merged,
+        Some(ReviewDecision::Approved),
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+    assert_eq!(
+        fix_merge(&runtime),
+        Some((MergeBy::Conductor, None, MergeStep::Merged))
+    );
+    // Work that merges nothing of the mission's has no merge at all.
+    assert_eq!(node_view(&runtime, "docs").merge, None);
+}
+
+/// PRD mission-destination D-10: only a change delivered by pull request in
+/// a mission that goes through the merge takes the operator's merge, with
+/// why in one line; a replan that leaves it out keeps it, `null` gives the
+/// node back to the scope, and a scope `pr` plan cannot keep one.
+#[test]
+fn a_plan_gives_the_operator_a_merge_only_where_the_scope_would_not() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "scope": "merge"}),
+    )
+    .unwrap();
+    let plan = |fix: Value, docs: Value, scope: &str| {
+        let mut plan = criteria_plan();
+        plan["plan"]["scope"] = json!(scope);
+        for (at, extra) in [(0, fix), (1, docs)] {
+            for (key, value) in extra.as_object().unwrap() {
+                plan["plan"]["nodes"][at][key] = value.clone();
+            }
+        }
+        plan
+    };
+    let refused = |runtime: &mut Runtime, plan: Value| {
+        let refusal = command(runtime, "sender", plan).unwrap_err();
+        refusal.split('\u{1f}').next().unwrap().to_owned()
+    };
+    let invalid = "mission_operator_merge_invalid".to_owned();
+    for (fix, docs) in [
+        (json!({}), json!({"operator_merge": "보고 싶어서"})),
+        (
+            json!({"delivery": "direct", "operator_merge": "보고 싶어서"}),
+            json!({}),
+        ),
+        (json!({"operator_merge": "  "}), json!({})),
+        (json!({"operator_merge": "가".repeat(81)}), json!({})),
+        (json!({"operator_merge": "두 줄\n이유"}), json!({})),
+    ] {
+        assert_eq!(refused(&mut runtime, plan(fix, docs, "merge")), invalid);
+    }
+    assert_eq!(
+        refused(
+            &mut runtime,
+            plan(json!({"operator_merge": "보고 싶어서"}), json!({}), "pr")
+        ),
+        invalid,
+        "with scope pr it is the operator's already"
+    );
+    let why = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .operator_merge
+            .clone()
+    };
+    command(
+        &mut runtime,
+        "sender",
+        plan(
+            json!({"operator_merge": " 가".repeat(26)}),
+            json!({}),
+            "merge",
+        ),
+    )
+    .unwrap();
+    assert_eq!(why(&runtime), Some(" 가".repeat(26).trim().to_owned()));
+    command(&mut runtime, "sender", plan(json!({}), json!({}), "merge")).unwrap();
+    assert!(
+        why(&runtime).is_some(),
+        "a replan that leaves it out keeps it"
+    );
+    assert_eq!(
+        refused(&mut runtime, plan(json!({}), json!({}), "pr")),
+        invalid,
+        "a scope pr plan cannot keep it"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        plan(json!({"operator_merge": null}), json!({}), "pr"),
+    )
+    .unwrap();
+    assert_eq!(why(&runtime), None);
+}
+
+/// A node can hold several PRs. Its report must name every still-open
+/// one, even when the most recently held PR has already settled (F1).
+#[test]
+fn an_operator_merge_report_names_all_open_held_pull_requests() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", Some("DB review"));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for (merged, closed, expected) in [
+        (false, false, "PR #31 #37"),
+        (true, false, "PR #31"),
+        (false, true, "PR #31"),
+    ] {
+        let node = mission
+            .nodes
+            .iter_mut()
+            .find(|node| node.key == "fix")
+            .unwrap();
+        node.status = NodeStatus::Done;
+        node.prs = vec![31, 37];
+        node.pr_seen.clear();
+        for number in [31, 37] {
+            node.pr_seen.push(crate::missions::PrSeen {
+                number,
+                head: Some(HEAD.into()),
+                merged: number == 37 && merged,
+                closed: number == 37 && closed,
+                changes_requested: false,
+                ci_told: vec![],
+            });
+        }
+        let projected =
+            crate::runtime::mission_landing::node_merge(mission, &mission.nodes[0], true).unwrap();
+        assert_eq!(
+            projected.prs,
+            if merged || closed {
+                vec![31]
+            } else {
+                vec![31, 37]
+            }
+        );
+        let report = crate::runtime::mission_health::closing_report(mission);
+        let (_, left) = report
+            .split_once("Left for the operator to merge (1):\n")
+            .unwrap();
+        assert_eq!(left, format!("- Fix it (fix) · {expected} · DB review"));
+    }
+}

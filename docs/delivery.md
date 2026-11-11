@@ -1259,6 +1259,7 @@ Like `hide agent catalog`, it needs the running daemon and a Hide credential but
 ## Missions
 
 Moved to a private document: `docs/missions.md` in with-hide/hide-private.
+Its section "A merge the plan leaves to the operator" owns per-node merge ownership, the ready-PR turn and the quiet `pr` scope.
 
 ## Plans
 
