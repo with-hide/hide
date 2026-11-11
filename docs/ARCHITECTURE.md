@@ -3653,16 +3653,25 @@ An older worker ignores the new fields; a new worker with an older page's words 
 Encryption accepts at most 3,993 plaintext bytes, so the aes128gcm HTTP body is at most 4,096 bytes including its 103-byte overhead; a payload beyond that returns the fixed size-limit failure through the existing push delivery diagnostic before a POST.
 An agent that leaves the list is remembered for ten minutes, so one that comes back in the same state is not announced again; the cost is that the notification of a root that left for good is cleared up to ten minutes later.
 Settings > Notifications stores `app_closed` by default (the pause switch on) or `always` (off); an old saved `off` deserializes as `app_closed` and is written back with that name.
-`app_closed` rests phone pushes only while any attached desktop host reports in use and any attached desktop window enables Needs You notifications; `always` permits pushes regardless of computer use.
+`app_closed` rests phone pushes only while any attached desktop host reports in use, any attached desktop window enables Needs You notifications, and no later accepted phone action has taken over; `always` permits pushes regardless of computer use.
+The most recently used device wins: hided timestamps accepted phone actions and computer-use reports on its own monotonic clock, in memory only.
+Phone replies and keys (including connected-device panes), answers, approvals, wakes and successful starts count only after acceptance; reads, opening the app, refusals and repeated request IDs do not.
+Desktop notifications are independent of this phone routing rule.
 The Electron main host owns one one-second timer reading `powerMonitor.getSystemIdleState` and `getSystemIdleTime`, and the lock/unlock/suspend/resume subscriptions.
 `COMPUTER_AWAY_SECONDS` is the single ten-minute threshold for input anywhere on the system; lock or suspend immediately reports away where Electron emits that event, and unsupported idle sources retain in-use behavior (the Linux limit is in `INSTALL.md`, What each system supports).
-The preload replays current use when the shell connects, then forwards transitions only as the typed `desktop_activity` message (`{in_use}`); hided accepts it only from a desktop connection, never dispatches it under the runtime lock, and releases its entry on disconnect.
+The existing one-second host poll also reports `in_use: true` once when idle time falls after the previous poll observed at least five seconds idle (`COMPUTER_INPUT_PAUSE_SECONDS`); continuous typing sends no additional reports.
+The preload replays current use when the shell connects, then forwards use transitions and those input resumptions as the typed `desktop_activity` message (`{in_use}`); hided accepts it only from a desktop connection and releases its entry on disconnect.
+A true report counts as computer input, including input after unlock or wake; lock, suspend, ten minutes idle and no desktop host retain the existing phone fallback.
+No new timer, thread, setting, saved file or snapshot publication is added; the daemon logs one content-free, identifier-free `phone.rest_changed` diagnostic only when the routing state changes.
+Two deliberate boundaries apply: inputs within one second favor the computer, and continuous typing mixed with a phone action leaves the phone in charge until input resumes after a five-second pause.
+The same Electron idle-time API and poll run on macOS, Windows and Linux; the existing unknown-idle Linux limit still applies.
 Connection admission bounds the per-connection activity and notification demand sets; a web tab contributes neither.
 Computer rest discards new phone notice candidates while continuing to observe the shared transition ledger and to close notices whose roots stop waiting.
-The follower moves pending candidates to standing without sending, remembering their observation boundary so a later declaration cannot replay an earlier ask.
+The follower moves new resting candidates to standing without sending, remembering their observation boundary so a later declaration cannot replay an earlier ask.
 A wait that began during computer use stays silent even if the operator leaves before `SETTLE`; it remains in the phone's list and badge count.
 When resting ends, only a new wait or declaration starts the existing `SETTLE` window; no backlog is rebuilt, and switching to `always` does not replay discarded candidates.
-Delivery still checks computer use immediately before transport, so a queued job or relay reconnect that finds the computer in use discards that attempt too.
+A candidate first observed while phone delivery is allowed waits out `SETTLE` and uses the device routing state at send time; changing devices during that window neither sends early nor schedules a replay.
+Delivery still checks the routing state immediately before transport, so a queued job or relay reconnect that finds phone pushes resting discards that attempt too.
 `LiveNotices` retains only the current serial per root, so a closed root or older job cannot send after a newer wait replaces it.
 The relay-only payload queue retains its existing eight-per-phone cap and sixty-second expiry; computer rest adds no queue, per-phone watermark, setting or timer.
 A phone viewing that agent’s detail is skipped in both modes.

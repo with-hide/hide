@@ -432,6 +432,10 @@ impl Mobile {
             Exposure::Off
         };
         let push_mode = settings.push_mode;
+        let starts = start::Desk::new({
+            let desktop = Arc::clone(&config.desktop);
+            move || desktop.phone_input(std::time::Instant::now())
+        });
         let mobile = Arc::new(Self {
             inner: Mutex::new(Inner {
                 settings,
@@ -460,7 +464,7 @@ impl Mobile {
             prs: watch::channel(Arc::new(PhonePrs::default())).0,
             catalog: watch::channel(Arc::new(start::Catalog::default())).0,
             answers: watch::channel(Arc::new(Vec::new())).0,
-            starts: start::Desk::default(),
+            starts,
             meta: watch::channel(PhoneMeta {
                 push_mode,
                 live_phones: 0,
@@ -1994,7 +1998,11 @@ impl Mobile {
         match state {
             Some(state) => {
                 if let Some(entry) = seen.iter_mut().find(|(id, _)| id == request_id) {
+                    let accepted = state == InputState::Written && entry.1 != InputState::Written;
                     entry.1 = state;
+                    if accepted {
+                        self.config.desktop.phone_input(std::time::Instant::now());
+                    }
                 }
             }
             None => seen.retain(|(id, _)| id != request_id),
@@ -2743,8 +2751,9 @@ fn judge_pass(
 ) -> Option<(Vec<push::Notice>, BTreeSet<AgentKey>)> {
     let phone_on = phone_mode.is_some();
     let (mut notices, mut seen) = (Vec::new(), BTreeSet::new());
+    let resting = phone_mode.is_some_and(|mode| !push::mode_allows(mode, desktop.rests_phone()));
     if changed && phone_on {
-        (notices, seen) = phone.observe(current, at);
+        (notices, seen) = phone.observe_with_rest(current, at, resting);
     }
     if changed && desktop.wanted() {
         desktop.observe(current);
@@ -2757,11 +2766,9 @@ fn judge_pass(
     if read && desktop.seed_pending() {
         desktop.observe(current);
     }
-    if let Some(mode) = phone_mode {
-        if push::mode_allows(mode, desktop.rests_phone()) {
-            notices.extend(phone.due(current, at));
-        } else {
-            phone.discard_pending();
+    if phone_on {
+        notices.extend(phone.due(current, at));
+        if resting {
             notices.clear();
         }
     }

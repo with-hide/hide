@@ -464,7 +464,13 @@ impl RestFixture {
         let mobile = test_mobile(directory.path(), &Arc::default());
         mobile.relay_keys().unwrap();
         mobile.config.desktop.set_waiting(1, true);
-        mobile.config.desktop.activity(1, true);
+        // Use the injected observation clock, with the initial computer input
+        // outside the one-second tie window of a subsequent phone action.
+        mobile.config.desktop.activity_at(
+            1,
+            true,
+            std::time::Instant::now() - std::time::Duration::from_secs(2),
+        );
         Self {
             mobile,
             received,
@@ -840,5 +846,101 @@ fn a_relay_reconnect_rests_again_before_the_transport_handoff() {
             .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
             .await;
         assert!(fixture.take().is_empty());
+    });
+}
+
+#[test]
+fn an_accepted_phone_action_only_sends_new_waits_to_all_phones_until_computer_input() {
+    with_runtime(async {
+        let mut fixture = RestFixture::new(2).await;
+        let t = std::time::Instant::now();
+        fixture
+            .mobile
+            .config
+            .desktop
+            .activity_at(1, true, t - std::time::Duration::from_secs(2));
+        fixture.pass(&roots(3, &[0, 1, 2], &[]), t, true).await;
+        fixture.pass(&roots(3, &[1, 2], &[]), t, true).await;
+        assert!(matches!(
+            fixture.mobile.reserve_input("phone-1", "accepted"),
+            Reservation::Write
+        ));
+        fixture
+            .mobile
+            .settle_input("phone-1", "accepted", Some(InputState::Written));
+        fixture
+            .pass(&roots(3, &[1, 2], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(
+            fixture.take().is_empty(),
+            "taking over never sends the old wait"
+        );
+        fixture
+            .pass(&roots(3, &[2], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(
+                &roots(3, &[2], &[]),
+                t + push::SETTLE * 2 - std::time::Duration::from_millis(1),
+                false,
+            )
+            .await;
+        assert!(fixture.take().is_empty());
+        fixture
+            .pass(&roots(3, &[2], &[]), t + push::SETTLE * 2, false)
+            .await;
+        assert_eq!(
+            fixture.take(),
+            [("phone-0".into(), topic(1)), ("phone-1".into(), topic(1))]
+        );
+        fixture.mobile.config.desktop.activity(1, true);
+        fixture
+            .pass(&roots(3, &[], &[]), t + push::SETTLE * 2, true)
+            .await;
+        fixture
+            .pass(&roots(3, &[], &[]), t + push::SETTLE * 3, false)
+            .await;
+        assert!(
+            fixture.take().is_empty(),
+            "resumed computer input rests new waits again"
+        );
+    });
+}
+
+#[test]
+fn an_eligible_settle_uses_the_device_at_send_and_a_resting_candidate_never_replays() {
+    with_runtime(async {
+        for phone_at_send in [true, false] {
+            let mut fixture = RestFixture::new(1).await;
+            let t = std::time::Instant::now();
+            let desktop = Arc::clone(&fixture.mobile.config.desktop);
+            desktop.activity_at(1, true, t - std::time::Duration::from_secs(2));
+            desktop.phone_input(t);
+            fixture.pass(&roots(1, &[0], &[]), t, true).await;
+            fixture.pass(&roots(1, &[], &[]), t, true).await;
+            desktop.activity_at(1, true, t + std::time::Duration::from_millis(10));
+            fixture
+                .pass(
+                    &roots(1, &[], &[]),
+                    t + std::time::Duration::from_millis(10),
+                    false,
+                )
+                .await;
+            if phone_at_send {
+                desktop.phone_input(t + std::time::Duration::from_secs(2));
+            }
+            fixture
+                .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+                .await;
+            assert_eq!(fixture.take().len(), usize::from(phone_at_send));
+            desktop.phone_input(t + push::SETTLE * 2);
+            fixture
+                .pass(&roots(1, &[], &[]), t + push::SETTLE * 2, false)
+                .await;
+            assert!(
+                fixture.take().is_empty(),
+                "no second send or replay after a discarded settle"
+            );
+        }
     });
 }

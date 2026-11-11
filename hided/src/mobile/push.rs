@@ -488,10 +488,20 @@ impl PhoneNotices {
     /// turn start waiting out `SETTLE`, the pending ones that left it stop,
     /// and the standing ones that left it are closed. Returns what goes out
     /// now (only past the cap) and the agents whose notices to close.
+    #[cfg(test)]
     pub fn observe(
         &mut self,
         projection: &Projection,
         at: Instant,
+    ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
+        self.observe_with_rest(projection, at, false)
+    }
+
+    pub(super) fn observe_with_rest(
+        &mut self,
+        projection: &Projection,
+        at: Instant,
+        resting: bool,
     ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
         let (announced, mut close) = self.judge(projection, at);
         let ledger = &self.ledger;
@@ -510,6 +520,13 @@ impl PhoneNotices {
             // A finished turn, a View to look at or anything else the ledger
             // announces for the desktop is no phone notice.
             if !self.ledger.waits_on_operator(&notice.key) {
+                continue;
+            }
+            // Consume candidates first observed during computer rest now,
+            // even if the operator switches to the phone before SETTLE.
+            if resting {
+                self.pending.remove(&notice.key);
+                self.standing.insert(notice.key, self.ledger.observation());
                 continue;
             }
             match self.pending.get_mut(&notice.key) {
@@ -570,16 +587,6 @@ impl PhoneNotices {
         due.iter()
             .filter_map(|key| self.send(key, projection))
             .collect()
-    }
-
-    /// Computer use consumes these candidates without a phone send. Keep
-    /// their observation boundary so a later new declaration cannot replay
-    /// an older ask, and still close any notice when its root stops waiting.
-    pub(super) fn discard_pending(&mut self) {
-        for (key, pending) in std::mem::take(&mut self.pending) {
-            self.standing.insert(key, pending.observed);
-        }
-        self.capped = false;
     }
 
     /// When the next pending notice is due.

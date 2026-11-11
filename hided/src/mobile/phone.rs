@@ -1331,6 +1331,19 @@ async fn sleeping_session(
     let bytes = json!({"schema_version": hide_core::SCHEMA_VERSION, "kind": event, "payload": {"sleep_id": id}})
         .to_string()
         .into_bytes();
+    if message["type"] == "wake_sleeping_session" {
+        return match dispatch_action(
+            mobile,
+            phone_id,
+            request_id_of(message).expect("validated above"),
+            bytes,
+        )
+        .await
+        {
+            Ok(()) => answer(true, None),
+            Err(reason) => answer(false, Some(reason)),
+        };
+    }
     let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
     let dispatched = tokio::task::spawn_blocking(move || {
         mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
@@ -1429,7 +1442,7 @@ async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -
             return answer(false, Some(reason));
         }
     };
-    match dispatch_mission_event(mobile, phone_id, request_id, bytes).await {
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
         Ok(()) => answer(true, None),
         Err(reason) => answer(false, Some(reason)),
     }
@@ -1482,7 +1495,7 @@ async fn ask_mission_material(mobile: &Arc<Mobile>, phone_id: &str, message: &Va
             return answer(false, Some(reason));
         }
     };
-    match dispatch_mission_event(mobile, phone_id, request_id, bytes).await {
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
         Ok(()) => answer(true, None),
         Err(reason) => answer(false, Some(reason)),
     }
@@ -1545,7 +1558,7 @@ async fn reopen_mission_view(mobile: &Arc<Mobile>, phone_id: &str, message: &Val
             return answer(false, Some(reason));
         }
     };
-    match dispatch_mission_event(mobile, phone_id, request_id, bytes).await {
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
         Ok(()) => answer(true, None),
         Err(reason) => answer(false, Some(reason)),
     }
@@ -1556,7 +1569,7 @@ async fn reopen_mission_view(mobile: &Arc<Mobile>, phone_id: &str, message: &Val
 /// another, answers from the claim, one still being sent answers
 /// `in_flight`, and a dispatch that failed releases the claim so the phone
 /// may send the id again.
-async fn dispatch_mission_event(
+async fn dispatch_action(
     mobile: &Arc<Mobile>,
     phone_id: &str,
     request_id: &str,
@@ -1692,15 +1705,16 @@ async fn wake_agent(
     if mobile.still_admitted(phone_id).is_err() {
         return answer(false, Some("unavailable"));
     }
-    let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
-    let dispatched = tokio::task::spawn_blocking(move || {
-        mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
-        mobile.config.core.dispatch(bytes)
-    })
-    .await;
-    match dispatched {
-        Ok(Ok(())) => answer(true, None),
-        _ => answer(false, Some("unavailable")),
+    match dispatch_action(
+        mobile,
+        phone_id,
+        request_id_of(message).expect("validated above"),
+        bytes,
+    )
+    .await
+    {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
     }
 }
 
@@ -1726,15 +1740,16 @@ async fn human_turn_done(
     if mobile.still_admitted(phone_id).is_err() {
         return answer(false, Some("unavailable"));
     }
-    let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
-    let dispatched = tokio::task::spawn_blocking(move || {
-        mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
-        mobile.config.core.dispatch(bytes)
-    })
-    .await;
-    match dispatched {
-        Ok(Ok(())) => answer(true, None),
-        _ => answer(false, Some("unavailable")),
+    match dispatch_action(
+        mobile,
+        phone_id,
+        request_id_of(message).expect("validated above"),
+        bytes,
+    )
+    .await
+    {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
     }
 }
 
@@ -3000,6 +3015,13 @@ mod tests {
         let mobile = mobile_with(directory.path(), &gate);
         mobile.missions.send_replace(Arc::new(deciding()));
         let phone = paired(&mobile);
+        mobile.config.desktop.set_waiting(1, true);
+        mobile.config.desktop.activity_at(
+            1,
+            true,
+            std::time::Instant::now() - std::time::Duration::from_secs(2),
+        );
+        assert!(mobile.config.desktop.rests_phone());
 
         let first = answer_mission(
             &mobile,
@@ -3012,12 +3034,17 @@ mod tests {
         assert_eq!(first["mission"], "mission-1");
         assert_eq!(first["ok"], true, "{first}");
         assert!(
+            !mobile.config.desktop.rests_phone(),
+            "a newly accepted answer takes over"
+        );
+        assert!(
             matches!(
                 mobile.reserve_input(&phone, "press-1"),
                 Reservation::Seen(InputState::Written)
             ),
             "the press is recorded as written, so a repeat is not typed again"
         );
+        mobile.config.desktop.activity(1, true);
         let again = answer_mission(
             &mobile,
             &phone,
@@ -3025,6 +3052,10 @@ mod tests {
         )
         .await;
         assert_eq!(again["ok"], true, "{again}");
+        assert!(
+            mobile.config.desktop.rests_phone(),
+            "a duplicate answer cannot take over again"
+        );
 
         // A press still being sent is told so, never sent a second time.
         assert!(matches!(
