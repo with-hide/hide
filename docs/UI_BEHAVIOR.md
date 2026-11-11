@@ -912,7 +912,10 @@ Web owner: `web/src/close.ts` (which sheet, which panes and descendants, and the
 
 Hide types `🦉 <writer> <kind>: …` into a Claude Code, Codex or Grok pane to wake it for a letter, and the agent echoes it as a prompt row (`❯ 🦉 …`, `› 🦉 …`).
 It is a letter between agents, not something the operator owes an answer to, so the pane draws that row, and the rows the agent wraps it onto, in the terminal's dim grey (`--terminal-bright-black`); Needs You stays the place for what the operator has to do.
-A line the operator typed themselves, such as `❯ 🦉가 뭐야?` or `❯ 🦉 hello`, is not a letter and stays as bright as the rest, because the dim color is only laid over a row that begins with the agent's prompt glyph, an owl and a space, and over the rows indented under it that begin with text rather than the agent's own output marks.
+The shell reads only the shape of a row: it begins with the agent's prompt glyph, an owl and a space, and the rows indented under it begin with text rather than the agent's own output marks.
+It does not know who typed the row, so two limits stand: a line a person types in the same shape (`❯ 🦉 hello`, also while it is still a draft in the composer) is dimmed too, and a Grok row that its keyboard focus frames (`│ ❯ 🦉 … │`) is not dimmed until focus moves.
+A line that does not match the shape, such as `❯ 🦉가 뭐야?` or one with no prompt glyph, is drawn as the agent drew it.
+Telling a typed line from a letter needs the core to mark the line it typed, which is not built.
 The text, the selection and the copy are unchanged: the shell lays a foreground color over the agent's own cells and rewrites nothing.
 The prompt glyphs and the output marks that end a wrapped line are the agents' declarations (`BellEcho`, [delivery.md](delivery.md#the-bell-line)), not a list in the web shell.
 Web owner: `web/src/terminalBellLines.ts`, read after a frame by `web/src/terminals.ts`; cost contract: [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-doorbells-lines-in-a-terminal).
