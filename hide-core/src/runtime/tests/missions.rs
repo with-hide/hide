@@ -11271,16 +11271,18 @@ fn a_gate_asking_shows_its_card_and_no_safety_net() {
 /// once; with none, the safety net holds them.
 #[test]
 fn a_mission_saved_with_raises_at_the_operator_restores_them_at_the_conductor() {
-    use crate::missions::{AttentionReason, AttentionTo, MissionStore, Restored};
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    use crate::missions::{AttentionReason, AttentionTo};
     const MINUTE: u64 = 60_000;
     let now = crate::runtime::unix_milliseconds();
     let saved = {
         let fixture = conducting();
-        let path = fixture._root.path().join("missions.json");
+        let dir = hide_kit::layout::missions_dir(fixture._root.path());
+        let path = hide_kit::layout::mission_file(&dir, "mission-1");
         let mut runtime = fixture.runtime.lock().unwrap();
         let store = crate::mission_events::MissionEventStore::with_book(
             fixture._root.path().join("mission-events"),
-            path.clone(),
+            MissionFiles::new(dir, None),
         );
         runtime.install_mission_events(store, Default::default());
         // Closed pull requests GitHub has not been read for since the restart: the
@@ -11294,6 +11296,7 @@ fn a_mission_saved_with_raises_at_the_operator_restores_them_at_the_conductor() 
         // Dropping the one writer waits for the save it queued.
         drop(runtime.missions.event_store.take());
         let mut book: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        book["next"] = json!(runtime.missions.book.next);
         // As the build before wrote them: each raise reached the operator.
         let nodes = book["missions"][0]["nodes"].as_array_mut().unwrap();
         assert_eq!(nodes.len(), 5);
@@ -11307,9 +11310,9 @@ fn a_mission_saved_with_raises_at_the_operator_restores_them_at_the_conductor() 
         let path = fixture._root.path().join("missions.json");
         std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
         let mut runtime = fixture.runtime.lock().unwrap();
-        let store = MissionStore::new(path.clone());
+        let store = MissionStore::new(fixture._root.path());
         let restored = store.restore();
-        assert!(matches!(restored, Restored::Read(_)), "the old book reads");
+        assert!(matches!(restored, Restored::Moving(_)), "the old book reads");
         runtime.install_mission_store(store, restored);
         runtime.snapshot.navigator.agents = vec![conductor_row()];
         if !present {
