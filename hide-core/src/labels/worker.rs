@@ -53,8 +53,9 @@ use crate::links::worker::LinkClient;
 use crate::suggestions::ledger::{ImprovementKind, Signal};
 
 /// The minimum interval between native-file current-metadata reads, also
-/// used for the single follow-up when a starting turn has no prompt yet.
-const FOLLOW_UP_READ: Duration = Duration::from_secs(3);
+/// used for the single follow-up when a starting turn has no prompt yet and
+/// for the first read again of a stop whose answer was not written yet.
+pub(crate) const FOLLOW_UP_READ: Duration = Duration::from_secs(3);
 /// How long a turn must have been working before its start is asked. About
 /// a quarter of turns end within 15 s (2,384 turns measured 2026-10-16: 23%
 /// within 15 s, 38% within 30 s), and the end call names the goal too, so a
@@ -2113,8 +2114,8 @@ impl LabelWorker {
     /// its records after: a read under the stop can find the operator's
     /// message still last, the turn's answer not yet in the file, and with
     /// nothing else moving no read would come again, so the turn's end would
-    /// never be judged. Such a stop reads its session again on
-    /// `READ_RETRY_BACKOFF`, until a read finds the answer, the agent works
+    /// never be judged. Such a stop reads its session again after
+    /// `FOLLOW_UP_READ` and then on `READ_RETRY_BACKOFF`, until a read finds the answer, the agent works
     /// again or another stop comes; past the backoff it waits for the
     /// agent's next state change and says so once. An agent whose session is
     /// read on a cadence of its own (`requires_native_file_proof`) needs none.
@@ -2138,10 +2139,16 @@ impl LabelWorker {
             Some((stop, spent)) if stop == seq => spent,
             _ => 0,
         };
-        if let Some(wait) = READ_RETRY_BACKOFF.get(usize::from(spent)) {
-            let due = now + *wait;
+        // The answer usually lands within a second of the stop, so the first
+        // read again comes at the follow-up interval and the backoff after it.
+        let wait = match usize::from(spent) {
+            0 => Some(FOLLOW_UP_READ),
+            spent => READ_RETRY_BACKOFF.get(spent - 1).copied(),
+        };
+        if let Some(wait) = wait {
+            let due = now + wait;
             pane.follow_up_at = Some(pane.follow_up_at.map_or(due, |at| at.min(due)));
-        } else if usize::from(spent) == READ_RETRY_BACKOFF.len() {
+        } else if usize::from(spent) == READ_RETRY_BACKOFF.len() + 1 {
             crate::diagnostic!(json!({
                 "component": "labels",
                 "kind": "turn_end.unwritten",

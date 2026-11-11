@@ -5381,7 +5381,7 @@ fn a_stop_read_before_the_answer_is_written_reads_again_and_judges_the_end() {
     harness
         .backend
         .answer("배포 방식 결정 작업", "question", "A/B 선택");
-    worker.tick(Instant::now() + super::worker::READ_RETRY_BACKOFF[0]);
+    worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
     settle(&mut worker, &woken);
     assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
 
@@ -5399,8 +5399,9 @@ fn a_stop_read_before_the_answer_is_written_reads_again_and_judges_the_end() {
 }
 
 /// A stop whose answer never reaches the file (the agent died, or wrote
-/// nothing) is read again only as often as the backoff allows, then left to
-/// the agent's next state change, and the log says so once.
+/// nothing) is read again once at the follow-up interval and then as often
+/// as the backoff allows, then left to the agent's next state change, and the
+/// log says so once.
 #[test]
 fn a_stop_whose_answer_never_lands_stops_reading_at_the_cap() {
     let harness = Harness::new();
@@ -5410,13 +5411,16 @@ fn a_stop_whose_answer_never_lands_stops_reading_at_the_cap() {
     let backoff = super::worker::READ_RETRY_BACKOFF;
 
     let ((), diagnostics) = crate::diagnostics::capture(|| {
-        for _ in 0..backoff.len() + 2 {
+        for _ in 0..backoff.len() + 3 {
             worker.tick(Instant::now() + backoff[backoff.len() - 1]);
             settle(&mut worker, &woken);
         }
     });
 
-    assert_eq!(source.reads.load(Ordering::SeqCst), reads + backoff.len());
+    assert_eq!(
+        source.reads.load(Ordering::SeqCst),
+        reads + 1 + backoff.len()
+    );
     assert_eq!(harness.backend.calls(), 1, "no request is spent on it");
     let unwritten: Vec<_> = diagnostics
         .iter()
