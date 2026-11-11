@@ -1639,8 +1639,14 @@ fn a_direct_changes_worktree_is_retired_once_its_branch_is_read_in_the_destinati
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     done_direct(&mut runtime, false);
-    assert!(runtime.github.projects.is_empty(), "no GitHub answer at all");
-    assert!(runtime.mission_cleanup_targets().is_empty(), "not read in yet");
+    assert!(
+        runtime.github.projects.is_empty(),
+        "no GitHub answer at all"
+    );
+    assert!(
+        runtime.mission_cleanup_targets().is_empty(),
+        "not read in yet"
+    );
 
     first_node(&mut runtime).in_main = Some(crate::missions::Landed {
         branch: "fix".into(),
@@ -1787,7 +1793,13 @@ fn a_close_hands_the_pull_to_a_worker_off_the_lock_and_its_line_ends_the_report(
     on_feat_login(&mut runtime);
     done_direct(&mut runtime, false);
     assert_eq!(
-        runtime.missions.book.get("mission-1").unwrap().destination.as_deref(),
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .destination
+            .as_deref(),
         Some("feat/login")
     );
     command(
@@ -1809,7 +1821,13 @@ fn a_close_hands_the_pull_to_a_worker_off_the_lock_and_its_line_ends_the_report(
     let runtime = fixture.runtime.lock().unwrap();
     assert_eq!(status(&runtime), MissionStatus::Done);
     assert_eq!(
-        runtime.missions.book.get("mission-1").unwrap().report.as_deref(),
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .report
+            .as_deref(),
         Some("Done.")
     );
     drop(runtime);
@@ -1855,13 +1873,17 @@ fn a_cancel_a_close_with_nothing_landed_and_a_device_checkout_ask_the_node_nothi
         json!({"op": "close", "end": "cancelled"}),
     )
     .unwrap();
-    let idle = |runtime: &Runtime| {
-        runtime.missions.pulls.idle() && node.gate.lock().unwrap().is_some()
-    };
+    let idle =
+        |runtime: &Runtime| runtime.missions.pulls.idle() && node.gate.lock().unwrap().is_some();
     assert!(idle(&runtime), "a cancel owes no pull");
 
     // A mission of research alone has nothing in its destination.
-    command(&mut runtime, "sender", json!({"op": "create", "title": "Look"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Look"}),
+    )
+    .unwrap();
     let id = runtime
         .missions
         .book
@@ -1887,10 +1909,21 @@ fn a_cancel_a_close_with_nothing_landed_and_a_device_checkout_ask_the_node_nothi
         json!({"op": "node", "node": "look", "patch": {"status": "done"}}),
     )
     .unwrap();
-    command(&mut runtime, "sender", json!({"op": "close", "end": "done", "report": "Found."})).unwrap();
-    assert_eq!(runtime.missions.book.get(&id).unwrap().status, MissionStatus::Done);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "Found."}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.missions.book.get(&id).unwrap().status,
+        MissionStatus::Done
+    );
     assert!(idle(&runtime), "nothing landed, nothing asked");
-    assert_eq!(runtime.missions.book.get(&id).unwrap().report.as_deref(), Some("Found."));
+    assert_eq!(
+        runtime.missions.book.get(&id).unwrap().report.as_deref(),
+        Some("Found.")
+    );
 
     // A landed change of a mission on a connected device.
     let mission = runtime.missions.book.get_mut(&id).unwrap();

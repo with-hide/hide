@@ -79,7 +79,10 @@ pub(crate) enum Pulled {
     /// destination.
     Elsewhere { branch: Option<String> },
     /// Nothing was done, for a reason only the log keeps.
-    Skipped { reason: Skip, detail: Option<String> },
+    Skipped {
+        reason: Skip,
+        detail: Option<String>,
+    },
 }
 
 /// Why a checkout behind its destination was left as it is.
@@ -483,8 +486,18 @@ mod tests {
         let output = Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(["-c", "user.name=Hide", "-c", "user.email=hide@example.invalid"])
-            .args(["-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"])
+            .args([
+                "-c",
+                "user.name=Hide",
+                "-c",
+                "user.email=hide@example.invalid",
+            ])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
             .args(args)
             .output()
             .unwrap();
@@ -512,11 +525,19 @@ mod tests {
         fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
             let origin = root.path().join("origin.git");
-            git(root.path(), &["init", "-q", "--bare", origin.to_str().unwrap()]);
+            git(
+                root.path(),
+                &["init", "-q", "--bare", origin.to_str().unwrap()],
+            );
             let checkout = root.path().join("project");
             git(
                 root.path(),
-                &["clone", "-q", origin.to_str().unwrap(), checkout.to_str().unwrap()],
+                &[
+                    "clone",
+                    "-q",
+                    origin.to_str().unwrap(),
+                    checkout.to_str().unwrap(),
+                ],
             );
             commit(&checkout, "README", "one\n");
             git(&checkout, &["push", "-q", "origin", "HEAD:main"]);
@@ -587,6 +608,44 @@ mod tests {
         assert_eq!(repos.head(), before);
     }
 
+    /// A mission with direct changes merged into the destination in this
+    /// checkout itself leaves it at or ahead of `origin/<destination>`:
+    /// that is current, never behind or diverged, and nothing moves.
+    #[test]
+    fn a_checkout_at_or_ahead_of_its_destination_on_origin_reads_current() {
+        let repos = Repos::new();
+        let job = repos.job(Some("feat/login"));
+        assert_eq!(pull(&own_host(), &job), Pulled::Current);
+        git(&repos.checkout, &["switch", "-q", "-c", "fix"]);
+        commit(&repos.checkout, "fix", "fixed\n");
+        git(&repos.checkout, &["switch", "-q", "feat/login"]);
+        git(
+            &repos.checkout,
+            &["merge", "-q", "--no-ff", "-m", "join fix", "fix"],
+        );
+        let head = repos.head();
+        let pulled = pull(&own_host(), &job);
+        assert_eq!(pulled, Pulled::Current);
+        assert_eq!(repos.head(), head);
+        assert_eq!(
+            pulled.line("feat/login").as_deref(),
+            Some("내 폴더도 이미 최신이에요")
+        );
+    }
+
+    /// A project with no remote at all fetches nothing and pulls nothing,
+    /// and the report says nothing of the folder.
+    #[test]
+    fn a_project_with_no_remote_is_skipped_with_no_line() {
+        let repos = Repos::new();
+        git(&repos.checkout, &["remote", "remove", "origin"]);
+        let head = repos.head();
+        let pulled = pull(&own_host(), &repos.job(Some("feat/login")));
+        assert_eq!(pulled, Pulled::skipped(Skip::NoOrigin));
+        assert_eq!(pulled.line("feat/login"), None);
+        assert_eq!(repos.head(), head);
+    }
+
     /// B35: a checkout with a commit of its own, or with a change the
     /// fast-forward would overwrite, stays exactly as it is and the report
     /// says how far behind it is.
@@ -643,10 +702,7 @@ mod tests {
                 branch: Some("main".into())
             }
         );
-        assert_eq!(
-            git(&repos.checkout, &["branch", "--show-current"]),
-            "main"
-        );
+        assert_eq!(git(&repos.checkout, &["branch", "--show-current"]), "main");
         assert_eq!(repos.head(), head);
         assert_eq!(
             pulled.line("feat/login").as_deref(),
