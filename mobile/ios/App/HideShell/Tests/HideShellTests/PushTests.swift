@@ -35,6 +35,17 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(failed, .failure(.unavailable))
     }
 
+    func testTheSceneAndDelegateDeliverOneLaunchIntent() {
+        let inbox = PushOpenInbox()
+        let info: [AnyHashable: Any] = ["room": room, "device_id": "mini", "pane_id": "w1:p1"]
+        XCTAssertTrue(inbox.offer(info, notificationID: "first"))
+        XCTAssertNotNil(inbox.take())
+        XCTAssertFalse(inbox.offer(info, notificationID: "first"))
+        XCTAssertNil(inbox.take(), "the delegate must not reopen the detail after the scene delivered it")
+        XCTAssertTrue(inbox.offer(info, notificationID: "second"))
+        XCTAssertNotNil(inbox.take(), "a later notification of the same agent still opens it")
+    }
+
     func testTheTokenGivesUpWhenAppleDoesNotAnswer() {
         let token = PushToken()
         token.register = {}

@@ -3031,6 +3031,12 @@ A phone is told only when an agent waits on the operator’s answer, a question,
 
 ### The phone app
 
+In the iOS app, a rightward swipe from the left edge uses the visible back control: a conversation, mission or pull request returns to its list, a View returns to its Views, and the start settings and add-computer pages return through their own back action.
+An open sheet prevents a swipe from pressing a back control behind it; swipes starting inside the page keep their horizontal scrolling or panning.
+A notification cold start keeps the launch background until its agent can open, without showing the computer or agent list on the way.
+An offline, refused or unavailable connection still shows its existing recovery actions.
+The browser phone app keeps its existing navigation.
+
 A reply or quick key sent while its pane is being forked waits for that fork under the same 64 KiB and 30-second holder bounds as desktop input.
 The phone reports success only after the engine confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
 A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.

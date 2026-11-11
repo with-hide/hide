@@ -4,7 +4,7 @@ import WebKit
 
 /// Capacitor's view controller with the app's guards put in place once the bridge exists.
 @objc(ShellViewController)
-open class ShellViewController: CAPBridgeViewController {
+open class ShellViewController: CAPBridgeViewController, UIGestureRecognizerDelegate {
     private var navigationPolicy: NavigationPolicy?
 
     /// The plugins a script of the app may call. A test names its own.
@@ -54,13 +54,43 @@ open class ShellViewController: CAPBridgeViewController {
     /// What makes the page stop feeling like a page: the whole page does not rubber-band or zoom (the lists inside it
     /// scroll as they do), and the web view ends where the keyboard begins so the reply field is never under it.
     private func feelNative(_ webView: WKWebView) {
+        // Keep the launch surface through WebKit's first paint and the loader-to-bundle navigation.
+        webView.isOpaque = false
+        webView.backgroundColor = UIColor(named: "LaunchBackground")
+        webView.underPageBackgroundColor = UIColor(named: "LaunchBackground") ?? .systemBackground
         let scroll = webView.scrollView
+        scroll.backgroundColor = .clear
+        // Styles can paint before the module that calls followPhoneTheme. Seed that same stored choice at document
+        // start, including each protocol navigation; settings.ts continues to own subsequent changes.
+        webView.configuration.userContentController.addUserScript(WKUserScript(source: """
+        (() => {
+          let theme;
+          try { theme = JSON.parse(localStorage.getItem('hide.phone.settings'))?.theme; } catch {}
+          const dark = theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+          const apply = () => {
+            if (!document.documentElement) return false;
+            document.documentElement.classList.toggle('dark', dark);
+            return true;
+          };
+          if (!apply()) {
+            const observer = new MutationObserver(() => { if (apply()) observer.disconnect(); });
+            observer.observe(document, { childList: true });
+          }
+        })();
+        """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         scroll.bounces = false
         scroll.alwaysBounceVertical = false
         scroll.alwaysBounceHorizontal = false
         scroll.minimumZoomScale = 1
         scroll.maximumZoomScale = 1
         scroll.pinchGestureRecognizer?.isEnabled = false
+        // Detail screens are page state, not WebKit history. One edge recognizer presses the page's own back
+        // control, so a mission, a View and the start pages keep their existing owner and action.
+        let back = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(swipeBack(_:)))
+        back.edges = .left
+        back.delegate = self
+        webView.addGestureRecognizer(back)
+        scroll.panGestureRecognizer.require(toFail: back)
         // The web view's own answer to the keyboard (an inset and a scroll of the page) would be made a second time on
         // top of the frame below, as Capacitor's keyboard plugin found: the frame alone makes room.
         let center = NotificationCenter.default
@@ -70,6 +100,27 @@ open class ShellViewController: CAPBridgeViewController {
         }
         center.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         center.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    public func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard let edge = gesture as? UIScreenEdgePanGestureRecognizer else { return true }
+        let velocity = edge.velocity(in: webView)
+        return velocity.x > abs(velocity.y)
+    }
+
+    @objc private func swipeBack(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        guard gesture.state == .ended, let webView,
+              gesture.translation(in: webView).x > 0,
+              gesture.translation(in: webView).x > webView.bounds.width / 2 || gesture.velocity(in: webView).x > webView.bounds.width else { return }
+        webView.evaluateJavaScript("""
+        (() => {
+          const dialog = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].pop();
+          const back = (dialog || document).querySelector('button[data-phone-back]:not(:disabled)');
+          if (!back || !back.getClientRects().length) return;
+          document.activeElement?.blur();
+          back.click();
+        })()
+        """, completionHandler: nil)
     }
 
     /// The window the web view fills; the screen before it has one.

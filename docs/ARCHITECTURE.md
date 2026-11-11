@@ -4524,6 +4524,11 @@ A pairing link `https://app.withhide.dev/#pair=<code>` opens the app through a u
 `SceneDelegate` hands the link to `PairLinkInbox` and does not pass a pairing link on to Capacitor's scene proxy, which would keep it in `lastURL` for the life of the process.
 The inbox accepts only that exact form (no query, port or user, at most 1024 bytes), keeps it in memory for one minute and gives it out once, to the page's `takeLink`; the web app then asks the person before it connects, so a link never pairs a phone by itself.
 The page tells the host its light or dark choice through `HideApp.appearance`, which sets the window's interface style so the status bar and keyboard follow it, and the shell turns the web view's bounce and zoom off, gives the keyboard the bottom of its frame so the reply field stays visible (measured from the window, since the web view is the controller's own view, and with the web view's own keyboard handling taken off so room is made once), and supports the portrait iPhone only.
+The phone screens use page state rather than WebKit history.
+One native left-edge recognizer activates the visible `data-phone-back` button, within the top sheet when one is open, so the page remains the sole owner of its back action.
+At a notification cold start, the scene offers the response before creating the web view; the inbox suppresses the delegate delivery of that same request.
+The loader reads that intent alongside the saved computers and chooses the destination in place, without reloading itself; the protocol bundle keeps its background while its native credential read and pending detail are unresolved, and exposes normal recovery on a connection failure.
+The web view uses the launch background and seeds the page's stored light/dark choice before styles can paint; the page's settings subscriber owns later theme changes.
 The build is in [BUILD.md](BUILD.md#the-ios-app).
 
 ### The desktop host

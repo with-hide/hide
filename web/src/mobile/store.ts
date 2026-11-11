@@ -12,6 +12,8 @@ import { holds, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
+  /** The native app is still reading its saved connection, so no destination is known yet. */
+  | "starting"
   /** No code and no credential on this phone (B13). */
   | "version"
   | "unpaired"
