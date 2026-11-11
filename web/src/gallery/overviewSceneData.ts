@@ -302,10 +302,11 @@ export function overviewWorld(now: number): OverviewWorld {
     artifacts: ["사이드바 가독성 점검표"],
     children: [child("h-a1c1", "컴포넌트 구조 정리"), child("h-a1c2", "한글 가독성 확인")],
   };
-  // The device's open missed work, which the backlog's `놓친 일 N` gathers (scene state backlog-missed opens it).
+  // The device's open missed work, which the backlog's `놓친 일 N` gathers (scene state backlog-missed opens it), a question the session ended without an answer to among it.
   const missed = (id: string, kind: MissedWork["kind"], text: string, ago: number): MissedWork => ({ id, kind, text, status: "open", at_unix_ms: now - ago, turn_offset: 1, issue_repository: null, issue_number: null, backlog_key: null, creating: false });
   const linkSummaries: LinkSummaries = { filling: false, projects: { hide: { work: [
-    { session: { device_id: "local", agent: "claude", session_id: "session-missed-1" }, title: "채점 목업 정리", fallback_title: "Claude", native_title: "채점 목업 정리", manual_title: null, cwd: "/work/hide", ended_at_unix_ms: now - 12 * MINUTE, open_missed: 2, subtree_open_missed: 2, missed: [
+    { session: { device_id: "local", agent: "claude", session_id: "session-missed-1" }, title: "채점 목업 정리", fallback_title: "Claude", native_title: "채점 목업 정리", manual_title: null, cwd: "/work/hide", ended_at_unix_ms: now - 12 * MINUTE, open_missed: 3, subtree_open_missed: 3, missed: [
+      missed("missed-4", "ask", "첨부별 쪽수 칸을 새로 만들지", 11 * MINUTE),
       missed("missed-1", "problem", "좁은 폭에서 점수 열이 겹쳐요", 12 * MINUTE),
       missed("missed-2", "follow_up", "첨부별 쪽수 칸을 따로 두면 비교가 쉬워요", 14 * MINUTE),
     ] },

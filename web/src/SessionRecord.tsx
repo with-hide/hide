@@ -695,7 +695,7 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
  * An open problem or follow-up (PRD overview-device-tasks B43-B46; PRD
  * session-record-goal-flow D-13): one line led by its kind in the missed-work
  * colour (`--missed`), never the warning colour a Needs You ask wears, with
- * `백로그로 · 무시` at its
+ * `백로그로 · 무시` (a missed question `무시` alone) at its
  * end. `백로그로` makes the item at once in the project the session works in
  * and shows `만드는 중` meanwhile; the line then leaves, as one dismissed does.
  * A failure keeps the line with its reason and a retry that converges on one
@@ -731,7 +731,8 @@ function MissedLine({ missed, session, cwd, actions, className }: { missed: Miss
         : project ? <Button size="sm" variant="ghost" className={small} disabled={!connected} onClick={toBacklog} data-missed-backlog-add={missed.id}>{t("missed.toBacklog")}</Button> : null}
       <Button size="sm" variant="ghost" className={small} onClick={() => actions.dismissBacklog(failed.intent)} data-missed-failed-dismiss={missed.id}>{t("sessionWork.dismiss")}</Button>
     </span> : <span className="flex shrink-0 items-center gap-xxs">
-      {project ? <Hint label={!connected ? t("devices.rail.notConnected") : t(`quickAdd.dest.${destination}`)}><span><Button size="sm" variant="outline" className={small} disabled={!connected} data-missed-backlog-add={missed.id} onClick={toBacklog}>
+      {/* A missed question is answered nowhere here: it only leaves, with 무시하기. */}
+      {project && missed.kind !== "ask" ? <Hint label={!connected ? t("devices.rail.notConnected") : t(`quickAdd.dest.${destination}`)}><span><Button size="sm" variant="outline" className={small} disabled={!connected} data-missed-backlog-add={missed.id} onClick={toBacklog}>
         {t("missed.toBacklog")}
         {destination === "public" ? <span className="text-micro text-warning" data-missed-public="true">{t("missed.public")}</span> : destination === "unknown" ? <span className="text-micro text-warning" data-missed-public="unknown">{t("missed.maybePublic")}</span> : null}
       </Button></span></Hint> : null}

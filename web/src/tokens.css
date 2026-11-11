@@ -97,6 +97,7 @@
   --color-kind-mission: var(--kind-mission);
   --color-kind-task: var(--kind-task);
   --color-missed: var(--missed);
+  --color-open-ask: var(--open-ask);
   --color-mission-done: var(--mission-done);
   --color-mission-working: var(--mission-working);
   --color-mission-review: var(--mission-review);
@@ -499,7 +500,8 @@
   --pr-draft: #6e7781;
   --kind-mission: #b8337f;
   --kind-task: #0e7490;
-  --missed: #6d4ae0;
+  --missed: #0f766e;
+  --open-ask: var(--agent-working);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
@@ -608,7 +610,8 @@
   --pr-draft: #9198a1;
   --kind-mission: #f0a6d2;
   --kind-task: #4fd1e0;
-  --missed: #a493ff;
+  --missed: #2fc4b2;
+  --open-ask: var(--agent-working);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);

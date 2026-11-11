@@ -9,21 +9,23 @@ export type AskLine = { id: string; text: string; at_unix_ms: number };
 
 /**
  * 나를 기다리는 것 (session-record-goal-flow D-12; status-model.md, A question
- * still waiting): the agent's open questions, oldest first, each with 무시하기,
- * in grey: the list is where the questions are kept, not a call to answer, so
- * it never takes the warning colour a Needs You row wears.
+ * still waiting): the agent's open questions, oldest first, each with 무시하기.
  * A line put away keeps its place with 되돌리기 while the list stays drawn, and
  * leaves that state when the core lists it as open again after it was gone.
  * The session record and the turn card draw this one list, each in its own
- * frame, which is drawn while a line is, an open one or one put away.
+ * frame, which is drawn while a line is, an open one or one put away; the
+ * record marks an open line in the warning colour, and the turn card, which
+ * keeps the list quiet beside the pane, in its own (`mark`).
  */
-export function OpenAskList({ asks, onSet, time, frame }: {
+export function OpenAskList({ asks, onSet, time, frame, mark = "text-warning" }: {
   asks: readonly AskLine[];
   onSet: (id: string, status: "open" | "dismissed") => void;
   /** Draws when each was asked at the line's end (the turn card). */
   time?: (at: number) => ReactNode;
   /** The list in its place, with how many still wait. */
   frame: (list: ReactNode, open: number) => ReactNode;
+  /** The colour of an open line's question mark. */
+  mark?: string;
 }) {
   const { t } = useInterfaceTranslation();
   // `gone` is set once the core no longer lists the line; listed again after that, it is open again.
@@ -44,8 +46,8 @@ export function OpenAskList({ asks, onSet, time, frame }: {
         const dismissed = away.some((one) => one.ask.id === ask.id);
         return (
           <li key={ask.id} className="flex min-w-0 items-start gap-xs border-b border-border py-xs last:border-b-0" data-record-ask={ask.id} data-dismissed={dismissed ? "true" : undefined}>
-            <CircleHelpIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-            <span className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", dismissed ? "text-muted-foreground line-through" : "text-subtle-foreground")} title={ask.text}>{ask.text}</span>
+            <CircleHelpIcon aria-hidden="true" className={cn("mt-xxs size-(--size-icon-sm) shrink-0", dismissed ? "text-muted-foreground" : mark)} />
+            <span className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", dismissed ? "text-muted-foreground line-through" : "text-foreground")} title={ask.text}>{ask.text}</span>
             {time ? time(ask.at_unix_ms) : null}
             {dismissed ? (
               <Button size="sm" variant="ghost" className={small} onClick={() => { onSet(ask.id, "open"); setAway((held) => held.filter((one) => one.ask.id !== ask.id)); }} data-record-ask-undo={ask.id}>{t("backlog.panel.undo")}</Button>

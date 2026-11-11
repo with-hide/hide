@@ -259,12 +259,13 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
 }
 
 /**
- * The pane's `질문 N` after its title, in plain grey words: how many questions
- * the agent put to the operator still wait (status-model.md, A question still
- * waiting), at every turn row mode and while the agent works, since the second
- * row then keeps its progress. It takes no warning colour, border or fill: a
- * kept question is no call to act, and only a Needs You ask wears the warning
- * colour. A press opens the turn card, which lists them with 무시하기.
+ * The pane's `질문 N` after its title, in words in the question colour
+ * (`--open-ask`): how many questions the agent put to the operator still wait
+ * (status-model.md, A question still waiting), at every turn row mode and
+ * while the agent works, since the second row then keeps its progress. It takes
+ * no warning colour, border or fill: a kept question is no call to act, and
+ * only a Needs You ask wears the warning colour. A press opens the turn card,
+ * which lists them with 무시하기.
  */
 export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -278,7 +279,7 @@ export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions:
       data-pane-open-asks={paneId}
       data-open-asks={count}
       data-state={state.open ? "open" : "closed"}
-      className="shrink-0 whitespace-nowrap text-caption text-muted-foreground tabular-nums data-[state=open]:text-foreground"
+      className="shrink-0 whitespace-nowrap text-caption font-semibold text-open-ask tabular-nums hover:text-open-ask"
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
       onFocus={state.onFocus}
