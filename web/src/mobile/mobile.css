@@ -8,6 +8,8 @@
 html,
 body,
 #root {
+  /* What the keyboard leaves of the screen (viewport.ts); the full height where the browser has no visual viewport. */
+  height: var(--phone-viewport-height, 100%);
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-text-size-adjust: 100%;

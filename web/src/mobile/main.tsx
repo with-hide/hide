@@ -16,11 +16,13 @@ import { followNativeLinks } from "./nativeLink";
 import { followPushOpens, pushOpenAddress } from "./pushOpen";
 import { hostedPhone } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
+import { followVisualViewport } from "./viewport";
 import { patch, usePhone } from "./store";
 import { PALETTE_HIDE_CLASS, readColorTheme } from "../theme";
 
 markAppHost();
 followPhoneTheme();
+followVisualViewport();
 // A pairing link that opens the app while a computer is connected goes to the start page, which asks before connecting.
 followNativeLinks((_pair, link) => window.location.assign(`/${new URL(link).hash}`), () => patch({ relayError: "qrError" }));
 
