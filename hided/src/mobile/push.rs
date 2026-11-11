@@ -429,16 +429,20 @@ pub const SETTLE: Duration = Duration::from_secs(3);
 pub const SETTLE_CAP: usize = 64;
 
 /// The phones' notice state: the ledger of transitions every phone shares,
-/// and the roots that entered the operator's turn and are waiting out
-/// `SETTLE`. A root that leaves the operator's turn before its moment is up
-/// is dropped and sends nothing; the deadline is set when it enters and never
-/// moves, so a notice is late by at most `SETTLE` and one follower pass.
-/// Nothing pending survives a restart, and a fresh ledger seeds silently, so
-/// a restart never sends a notice twice.
+/// the roots that entered the operator's turn and are waiting out `SETTLE`
+/// (`pending`), and the roots whose notice may stand on a phone (`standing`).
+/// Every root the ledger holds as waiting on the operator is in one of the
+/// two. A root that leaves the operator's turn while pending is dropped and
+/// sends nothing; one that leaves while standing is closed once. The deadline
+/// is set when a root enters and never moves, so a notice is late by at most
+/// `SETTLE` and one follower pass. Nothing pending survives a restart: the
+/// ledger seeds silently and every root then waiting is standing, so a
+/// restart never sends a notice twice and still closes the ones it finds.
 #[derive(Default)]
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
+    standing: BTreeSet<AgentKey>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
@@ -446,16 +450,20 @@ pub struct PhoneNotices {
 
 struct Pending {
     due: Instant,
-    /// The newest notice the ledger announced for the root: the person's
-    /// turn it says is kept while that turn still stands on the row;
-    /// otherwise the row's own ask is said.
+    /// The newest notice the ledger announced for the root, whose person's
+    /// turn the notice says while it still stands on the row.
     newest: Notice,
+    /// A person's turn added to a wait whose notice already stands: it is
+    /// sent only while that turn stands, never in favour of the row's older
+    /// ask. A root that entered the operator's turn says its row's latest ask.
+    added: bool,
 }
 
 impl PhoneNotices {
     pub fn reset(&mut self) {
         self.ledger.reset();
         self.pending.clear();
+        self.standing.clear();
         self.capped = false;
     }
 
@@ -463,17 +471,43 @@ impl PhoneNotices {
         self.ledger.seeded()
     }
 
+    /// Whether it holds anything a reset would drop.
+    pub fn tracking(&self) -> bool {
+        self.ledger.seeded() || !self.pending.is_empty() || !self.standing.is_empty()
+    }
+
+    /// One ledger pass. The pass that seeds it announces nothing and makes
+    /// every root then waiting standing, whichever path seeds it.
+    fn judge(&mut self, projection: &Projection, at: Instant) -> (Vec<Notice>, BTreeSet<AgentKey>) {
+        let seeding = !self.ledger.seeded();
+        let judged = self.ledger.observe_at(projection, at);
+        if seeding {
+            self.standing = self.ledger.waiting().cloned().collect();
+        }
+        judged
+    }
+
     /// Judges a changed projection: the roots that entered the operator's
-    /// turn start waiting out `SETTLE`, the ones that left it stop. Returns
-    /// what goes out now (only past the cap) and the agents whose notices to
-    /// close.
+    /// turn start waiting out `SETTLE`, the pending ones that left it stop,
+    /// and the standing ones that left it are closed. Returns what goes out
+    /// now (only past the cap) and the agents whose notices to close.
     pub fn observe(
         &mut self,
         projection: &Projection,
         at: Instant,
     ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
-        let (announced, seen) = self.ledger.observe_at(projection, at);
+        let (announced, mut close) = self.judge(projection, at);
         let ledger = &self.ledger;
+        // A root absent from the projection keeps its notice through the
+        // ledger's disappearance grace, whose end the ledger reports in
+        // `close` itself.
+        close.extend(
+            self.standing
+                .iter()
+                .filter(|key| ledger.present(key) && !ledger.waits_on_operator(key))
+                .cloned(),
+        );
+        self.standing.retain(|key| !close.contains(key));
         self.pending.retain(|key, _| ledger.waits_on_operator(key));
         for notice in announced {
             // A finished turn, a View to look at or anything else the ledger
@@ -484,11 +518,13 @@ impl PhoneNotices {
             match self.pending.get_mut(&notice.key) {
                 Some(pending) => pending.newest = notice,
                 None => {
+                    let added = self.standing.contains(&notice.key);
                     self.pending.insert(
                         notice.key.clone(),
                         Pending {
                             due: at + SETTLE,
                             newest: notice,
+                            added,
                         },
                     );
                 }
@@ -517,12 +553,12 @@ impl PhoneNotices {
         } else if self.pending.len() < SETTLE_CAP {
             self.capped = false;
         }
-        (now, seen)
+        (now, close)
     }
 
     /// Seeds the ledger with what already waits, which is never announced.
     pub fn seed(&mut self, projection: &Projection, at: Instant) {
-        self.ledger.observe_at(projection, at);
+        self.judge(projection, at);
     }
 
     /// The notices whose moment is up at `at`, each worded from its root's
@@ -547,10 +583,19 @@ impl PhoneNotices {
     fn send(&mut self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
         let pending = self.pending.remove(key)?;
         let agent = projection.find(key)?;
+        let declared = pending.newest.subject.as_ref();
+        if pending.added
+            && !agent
+                .human_turns
+                .values()
+                .any(|turn| Some(turn) == declared)
+        {
+            // The turn added to a standing wait is gone: nothing new to say.
+            return None;
+        }
+        self.standing.insert(key.clone());
         Some(hide_core::agent_state::push::waiting_notice(
-            key,
-            agent,
-            pending.newest.subject.as_ref(),
+            key, agent, declared,
         ))
     }
 }
@@ -1599,6 +1644,150 @@ mod tests {
         assert!(phone.observe(&asking, t0).0.is_empty());
         assert_eq!(phone.next_due(), None);
         assert!(phone.due(&asking, t0 + SETTLE).is_empty());
+    }
+
+    /// A root already waiting when the ledger seeds may have a notice on a
+    /// phone from before: it is closed once when it stops waiting, whether it
+    /// finishes unread, leaves only a View, or goes back to work, by either
+    /// path that seeds the ledger.
+    #[test]
+    fn a_wait_found_at_the_seed_is_closed_once_when_it_stops_waiting() {
+        let looking = {
+            let mut agent = row("w1:p1", "needs_you", "none", None);
+            agent["look"] =
+                json!({"group": "working", "count": 1, "view_id": "d1", "label": "report.html"});
+            project(&rest(json!([agent])), "local")
+        };
+        let asking = rested("needs_you", "question", "question", "Ship it?");
+        for (label, after) in [
+            ("finished unread", rested("done", "none", "done", "")),
+            ("a View alone", looking),
+            ("back at work", rested("working", "none", "working", "")),
+        ] {
+            for seed_by_observe in [false, true] {
+                let t0 = Instant::now();
+                let mut phone = PhoneNotices::default();
+                if seed_by_observe {
+                    assert_eq!(phone.observe(&asking, t0), (Vec::new(), BTreeSet::new()));
+                } else {
+                    phone.seed(&asking, t0);
+                }
+                let (now, close) = phone.observe(&after, t0 + SETTLE);
+                assert!(now.is_empty(), "{label}");
+                assert_eq!(
+                    close.into_iter().map(|key| key.pane_id).collect::<Vec<_>>(),
+                    ["w1:p1"],
+                    "{label}"
+                );
+                assert!(
+                    phone.observe(&after, t0 + SETTLE * 2).1.is_empty(),
+                    "{label}: once"
+                );
+                assert!(phone.due(&after, t0 + SETTLE * 3).is_empty(), "{label}");
+            }
+        }
+    }
+
+    /// A notice sent while running is closed the same way, and a root that
+    /// leaves before its moment had nothing sent and nothing to close.
+    #[test]
+    fn a_sent_notice_is_closed_when_its_root_finishes_and_an_unsent_one_is_not() {
+        let t0 = Instant::now();
+        let working = rested("working", "none", "working", "");
+        let asking = rested("needs_you", "question", "question", "Ship it?");
+        let done = rested("done", "none", "done", "");
+        let mut phone = PhoneNotices::default();
+        phone.seed(&working, t0);
+        phone.observe(&asking, t0);
+        assert!(
+            phone
+                .observe(&done, t0 + Duration::from_secs(1))
+                .1
+                .is_empty()
+        );
+        phone.observe(&asking, t0 + SETTLE);
+        assert_eq!(phone.due(&asking, t0 + SETTLE * 2).len(), 1);
+        assert_eq!(phone.observe(&done, t0 + SETTLE * 3).1.len(), 1);
+    }
+
+    /// A root absent from the list keeps its notice through the ledger's
+    /// disappearance grace, and back still waiting it sends nothing.
+    #[test]
+    fn a_standing_root_that_drops_out_of_the_list_keeps_its_notice() {
+        let t0 = Instant::now();
+        let asking = rested("needs_you", "question", "question", "Ship it?");
+        let mut phone = PhoneNotices::default();
+        phone.seed(&asking, t0);
+        let gone = project(&rest(json!([])), "local");
+        assert_eq!(
+            phone.observe(&gone, t0 + SETTLE),
+            (Vec::new(), BTreeSet::new())
+        );
+        assert_eq!(
+            phone.observe(&asking, t0 + SETTLE * 2),
+            (Vec::new(), BTreeSet::new())
+        );
+        assert_eq!(phone.next_due(), None);
+    }
+
+    fn declared(raised: &[&str]) -> Projection {
+        let turn = |id: &str| json!({"cause": "human_turn", "id": id, "kind": "auth", "place": "github.com/login", "device": "mini"});
+        let mut root = row("w1:p1", "needs_you", "none", None);
+        root["raised"] = json!(
+            raised
+                .iter()
+                .map(|id| json!({"subject": turn(id)}))
+                .collect::<Vec<_>>()
+        );
+        root["human_turn"] = json!({"id": raised[0], "own": false});
+        project(&rest(json!([root])), "local")
+    }
+
+    fn turn_id(notice: &Notice) -> Value {
+        serde_json::to_value(&notice.subject).unwrap()["id"].clone()
+    }
+
+    /// A turn added to a wait whose notice already stands, and taken back
+    /// inside its moment, sends nothing: never the older ask again, whether
+    /// that ask was announced before a restart or in this run.
+    #[test]
+    fn a_turn_added_to_a_standing_wait_and_taken_back_sends_nothing() {
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&declared(&["agent-1.1"]), t0);
+        phone.observe(&declared(&["agent-1.1", "agent-2.2"]), t0);
+        let back = declared(&["agent-1.1"]);
+        phone.observe(&back, t0 + Duration::from_secs(2));
+        assert!(phone.due(&back, t0 + SETTLE).is_empty());
+        let t1 = t0 + SETTLE * 2;
+        let kept = declared(&["agent-1.1", "agent-3.3"]);
+        phone.observe(&kept, t1);
+        let notices = phone.due(&kept, t1 + SETTLE);
+        assert_eq!(
+            notices.iter().map(turn_id).collect::<Vec<_>>(),
+            [json!("agent-3.3")]
+        );
+    }
+
+    /// A root that newly waits says its row's latest ask, even when a turn
+    /// added inside its moment is taken back.
+    #[test]
+    fn a_new_wait_whose_added_turn_is_taken_back_says_its_rows_ask() {
+        let t0 = Instant::now();
+        let mut phone = PhoneNotices::default();
+        phone.seed(&rested("working", "none", "working", ""), t0);
+        phone.observe(&declared(&["agent-1.1"]), t0);
+        phone.observe(
+            &declared(&["agent-1.1", "agent-2.2"]),
+            t0 + Duration::from_secs(1),
+        );
+        let back = declared(&["agent-1.1"]);
+        phone.observe(&back, t0 + Duration::from_secs(2));
+        let notices = phone.due(&back, t0 + SETTLE);
+        assert_eq!(
+            notices.iter().map(turn_id).collect::<Vec<_>>(),
+            [json!("agent-1.1")]
+        );
     }
 
     #[test]

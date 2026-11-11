@@ -1016,9 +1016,9 @@ async fn notices_that_found_no_relay_link_are_sent_once_when_it_comes_up() {
     let mobile = std::sync::Arc::clone(&running.mobile);
     tokio::task::spawn_blocking(move || {
         // The same agent twice: the newer replaces the older. A second agent keeps its own.
-        mobile.push_or_hold("phone-1", notice("d|w1:p1", "first"));
-        mobile.push_or_hold("phone-1", notice("d|w1:p2", "other agent"));
-        mobile.push_or_hold("phone-1", notice("d|w1:p1", "newer"));
+        mobile.push_or_hold("phone-1", notice("d|w1:p1", "first"), None);
+        mobile.push_or_hold("phone-1", notice("d|w1:p2", "other agent"), None);
+        mobile.push_or_hold("phone-1", notice("d|w1:p1", "newer"), None);
     })
     .await
     .unwrap();

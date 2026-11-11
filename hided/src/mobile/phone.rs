@@ -2101,39 +2101,7 @@ mod tests {
         }
     }
 
-    fn mobile_with(
-        directory: &std::path::Path,
-        gate: &Arc<hide_core::input_gate::PaneInputGate>,
-    ) -> Arc<Mobile> {
-        let core = Arc::new(crate::core::CoreHandle::bare(directory));
-        let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
-        Mobile::start(super::super::Config {
-            state_dir: directory.join("state"),
-            home: directory.to_path_buf(),
-            port: 0,
-            relay_url: crate::env::RELAY_URL.to_owned(),
-            cli: super::super::tailscale::CliSource {
-                pinned: None,
-                search_path: None,
-            },
-            host_name: None,
-            core: Arc::clone(&core),
-            input_gate: Arc::clone(gate),
-            renderers: Arc::default(),
-            start_demand: Arc::default(),
-            // These tests drive the phone boundary directly, never a network supervisor.
-            open: tokio::sync::watch::channel(false).1,
-            desktop: Arc::default(),
-            boundary: Arc::clone(&boundary),
-            roots: Arc::new(crate::RootFollower::new(
-                Arc::clone(&core),
-                boundary,
-                Arc::new(crate::watch::WatchService::new(Arc::clone(&core))),
-                Arc::new(crate::index::IndexService::new()),
-            )),
-            browser_control: Arc::default(),
-        })
-    }
+    use super::super::test_mobile as mobile_with;
 
     fn input_message(request_id: &str, body: Value) -> Value {
         let mut message = json!({

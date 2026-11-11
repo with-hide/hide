@@ -1314,6 +1314,23 @@ pub mod push {
                 .is_some_and(|(state, _)| *state == Effective::NeedsYou)
         }
 
+        /// Whether `key` was in the last projection observed: a root absent
+        /// from it is in the disappearance grace, not gone.
+        pub fn present(&self, key: &AgentKey) -> bool {
+            self.last
+                .as_ref()
+                .is_some_and(|last| last.contains_key(key))
+        }
+
+        /// The roots the last projection observed has waiting on the operator.
+        pub fn waiting(&self) -> impl Iterator<Item = &AgentKey> {
+            self.last.iter().flat_map(|last| {
+                last.iter()
+                    .filter(|(_, (state, _))| *state == Effective::NeedsYou)
+                    .map(|(key, _)| key)
+            })
+        }
+
         pub fn observe(&mut self, projection: &Projection) -> (Vec<Notice>, BTreeSet<AgentKey>) {
             self.observe_at(projection, std::time::Instant::now())
         }

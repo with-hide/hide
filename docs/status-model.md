@@ -984,10 +984,15 @@ That is a root whose ledger state is `NeedsYou` (`Transitions::waits_on_operator
 A finished turn (끝남, 일 남음, 멈춤), a View to look at alone, and anything Working, Seen or resting send no push; the desktop's own ledger and its Done switch are unchanged.
 A root that enters the operator's turn is held for `push::SETTLE` (3 s) from that moment, a deadline that never moves, and then sent worded from its row as it is then, so an agent that passes through an approval or a stop on its way to a question is one notice of the question; one that leaves the operator's turn before then sends nothing (`push::PhoneNotices`).
 The follower wakes for the earliest deadline without waiting for another change, at most `push::SETTLE_CAP` (64) roots wait at once, and past it the one due first goes out at once with a `push.settle_capped` diagnostic, so none is dropped.
-Nothing waiting is kept across a restart and a fresh ledger seeds silently, so a restart sends nothing twice; a notice held for a relay that is down is sent once on reconnect as before.
-A notice already on a phone is closed as before: an agent the ledger reports seen rides as a `clear` tag on that phone's next push, which the PWA's worker closes, and a later notice of the same agent replaces it by tag and APNs collapse id.
+Every root waiting on the operator is either pending (it entered and nothing went out yet) or standing (its notice went to delivery, or it already waited when the ledger seeded, since a notice from before a restart may be on a phone).
+A root that leaves the operator's turn while pending sends nothing; one that leaves while standing, unread to Done, to a View alone or back to work, is closed once, as is one the ledger reports seen; a root absent from the list keeps its notice through the ledger's ten-minute disappearance grace.
+A person's turn added to a standing wait is sent only while that turn stands, never in favour of the row's older ask; a root that newly waits says its row's latest ask.
+A close rides as a `clear` tag on each phone's next push, which the PWA's worker closes, and a later notice of the same agent replaces it by tag and APNs collapse id.
+Each notice handed to delivery takes a serial of the Mobile's life (`LiveNotices`), and a close withdraws it: the worker checks it right before each send, a hold for a relay that is down refuses it, a flush checks it right before each send, and what is held for a closed root goes, so a notice closed before it went out is never sent; one already handed to the network is not recalled.
+The ledger-claimed human delivery notices carry no serial and are never withdrawn by a close.
+Nothing waiting is kept across a restart and the ledger seeds silently, so a restart sends nothing twice; when the follower stops tracking (Mobile off, no phone, or the follower ends) every waiting notice it handed out is withdrawn.
 Known gap: the iOS app's notification extension does not apply `clear`, so on iOS an answered ask stays on the lock screen until that agent asks again or the operator dismisses it; closing it needs the extension to remove delivered notifications whose thread is listed in `clear`.
-Regression owners: the `PhoneNotices` tests in `hided/src/mobile/push.rs` and `each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told` in `hided/src/mobile/mod.rs`.
+Regression owners: the `PhoneNotices` tests in `hided/src/mobile/push.rs`, and `each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told`, `a_job_of_a_closed_wait_is_withdrawn_and_the_next_wait_of_its_root_goes` and `a_held_notice_of_a_closed_wait_is_never_sent_and_a_delivery_notice_stays` in `hided/src/mobile/mod.rs`.
 
 ### With and without Hide AI
 
