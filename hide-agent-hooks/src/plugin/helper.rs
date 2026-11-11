@@ -425,16 +425,17 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
         done: input.done,
     };
     let who = reporter(agent, &input);
-    if counters::store(home, &pane, counts, who).is_err() {
-        return json!({});
-    }
+    // A refused record write does not keep the session's identity from the
+    // core: the counts it carried are left out instead (engineering rules 4
+    // and 10).
+    let stored = counters::store(home, &pane, counts, who);
     let outcome = report::report(
         &report::HookStatusReport {
             runtime: agent.runtime().to_owned(),
             version: hide_agent_hooks::HOOK_VERSION,
             session: who.session.map(str::to_owned),
             turn: None,
-            counts: Some(report::HookCounts {
+            counts: stored.is_ok().then_some(report::HookCounts {
                 working: counts.working,
                 done: counts.done,
             }),
@@ -444,7 +445,12 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
         },
         started + report::REPORT_TIMEOUT,
     );
-    let _ = report::record_outcome(home, &pane, agent.runtime(), "subagent count", &outcome);
+    let record_error = stored
+        .err()
+        .map(|error| format!("the pane's count could not be stored: {error}"))
+        .map_or(Ok(()), Err);
+    let outcome = report::outcome(record_error, outcome);
+    report::record_and_say(home, &pane, agent.runtime(), "subagent count", &outcome);
     json!({ "reported": outcome.is_ok() })
 }
 
@@ -459,34 +465,41 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     }
     let who = reporter(agent, &input);
     let counted = agent.adapter.subagent_counts.is_some();
-    let outcome = counters::apply(
+    // The turn comes from the script's own event, so a refused record write
+    // keeps its report and leaves out only the counts the record held
+    // (engineering rules 4 and 10).
+    let kept = counters::apply(
         home,
         &pane,
         counters::Change::None,
         who,
         counters::Said::Turn(turn),
         None,
-    )
-    .map_err(|error| format!("the pane's record could not be changed: {error}"))
-    .and_then(|applied| {
-        report::report(
-            &report::HookStatusReport {
-                runtime: agent.runtime().to_owned(),
-                version: hide_agent_hooks::HOOK_VERSION,
-                session: who.session.map(str::to_owned),
-                turn: Some(turn),
-                counts: counted.then_some(report::HookCounts {
+    );
+    let reported = report::report(
+        &report::HookStatusReport {
+            runtime: agent.runtime().to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: who.session.map(str::to_owned),
+            turn: Some(turn),
+            counts: kept.as_ref().ok().and_then(|applied| {
+                counted.then_some(report::HookCounts {
                     working: applied.counters.working,
                     done: applied.counters.done,
-                }),
-                session_start: false,
-                waiting: None,
-                account: None,
-            },
-            started + report::REPORT_TIMEOUT,
-        )
-    });
-    let _ = report::record_outcome(home, &pane, agent.runtime(), "turn", &outcome);
+                })
+            }),
+            session_start: false,
+            waiting: None,
+            account: None,
+        },
+        started + report::REPORT_TIMEOUT,
+    );
+    let record_error = kept
+        .err()
+        .map(|error| format!("the pane's record could not be changed: {error}"))
+        .map_or(Ok(()), Err);
+    let outcome = report::outcome(record_error, reported);
+    report::record_and_say(home, &pane, agent.runtime(), "turn", &outcome);
     json!({ "reported": outcome.is_ok() })
 }
 
@@ -504,34 +517,39 @@ fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> 
     if input.guard_only || who.session.is_none() {
         return json!({});
     }
-    let outcome = counters::apply(
+    // The session's identity is what the core binds a start by, and it comes
+    // from the script's own call, so a refused record write does not keep it
+    // back (engineering rules 4 and 10).
+    let kept = counters::apply(
         home,
         &pane,
         counters::Change::None,
         who,
         counters::Said::Nothing,
         None,
-    )
-    .map_err(|error| format!("the pane's record could not be changed: {error}"))
-    .and_then(|_| {
-        report::report(
-            &report::HookStatusReport {
-                runtime: agent.runtime().to_owned(),
-                version: hide_agent_hooks::HOOK_VERSION,
-                session: who.session.map(str::to_owned),
-                turn: None,
-                counts: None,
-                session_start: true,
-                waiting: None,
-                // The plugin's helper runs in the agent's own environment.
-                account: hide_agent_hooks::account::reported_variables(agent.runtime(), |name| {
-                    std::env::var_os(name)
-                }),
-            },
-            started + report::REPORT_TIMEOUT,
-        )
-    });
-    let _ = report::record_outcome(home, &pane, agent.runtime(), "session start", &outcome);
+    );
+    let reported = report::report(
+        &report::HookStatusReport {
+            runtime: agent.runtime().to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: who.session.map(str::to_owned),
+            turn: None,
+            counts: None,
+            session_start: true,
+            waiting: None,
+            // The plugin's helper runs in the agent's own environment.
+            account: hide_agent_hooks::account::reported_variables(agent.runtime(), |name| {
+                std::env::var_os(name)
+            }),
+        },
+        started + report::REPORT_TIMEOUT,
+    );
+    let record_error = kept
+        .err()
+        .map(|error| format!("the pane's record could not be changed: {error}"))
+        .map_or(Ok(()), Err);
+    let outcome = report::outcome(record_error, reported);
+    report::record_and_say(home, &pane, agent.runtime(), "session start", &outcome);
     json!({ "reported": outcome.is_ok() })
 }
 

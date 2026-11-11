@@ -1252,6 +1252,10 @@ impl<'a> Heard<'a> {
 /// after its first. `counted` says whether the agent's hooks keep its
 /// subagent counts at all: one that keeps none reports none, rather than a
 /// zero its hooks never changed (Cursor, issue 911).
+///
+/// The report does not depend on the record: a refused record still reports
+/// the session's identity, and both failures are kept where `doctor` and
+/// Settings read them.
 fn report_pane(
     home: &std::path::Path,
     event: HookEvent,
@@ -1265,10 +1269,16 @@ fn report_pane(
         return;
     };
     let Some(agent) = who.agent else { return };
-    let outcome = match counters::apply(home, &pane_id, change, who, said, transcript) {
-        Err(error) => Err(format!("the pane's count could not be changed: {error}")),
+    let starts = event == HookEvent::SessionStart;
+    // The record is what the counts and the turn are read from. A record
+    // that could not be written is not the end of the event: the session's
+    // identity is what a spawn waits for, and it comes from the hook's own
+    // input, so it is reported whether or not the record was kept
+    // (engineering rules 4 and 10). What the record alone says, the counts
+    // and the turn, is left out of that report rather than guessed at.
+    let kept = counters::apply(home, &pane_id, change, who, said, transcript);
+    let (turn, counts, waiting) = match &kept {
         Ok(applied) => {
-            let starts = event == HookEvent::SessionStart;
             // An event that says something of the turn reports it each time,
             // and a tool event only when it moved the turn or an approval;
             // one that says nothing restates neither, so it never brings back
@@ -1281,34 +1291,59 @@ fn report_pane(
             if !(starts || change != Change::None || speaks) {
                 return;
             }
-            report::report(
-                &HookStatusReport {
-                    runtime: agent.to_owned(),
-                    version: hide_agent_hooks::HOOK_VERSION,
-                    session: who.session.map(str::to_owned),
-                    turn: speaks.then_some(applied.turn).flatten(),
-                    counts: counted.then_some(HookCounts {
-                        working: applied.counters.working,
-                        done: applied.counters.done,
-                    }),
-                    session_start: starts,
-                    waiting: speaks.then(|| applied.waiting.clone()),
-                    account: starts
-                        .then(|| {
-                            hide_agent_hooks::account::reported_variables(agent, |name| {
-                                std::env::var_os(name)
-                            })
-                        })
-                        .flatten(),
-                },
-                deadline,
+            (
+                speaks.then_some(applied.turn).flatten(),
+                counted.then_some(HookCounts {
+                    working: applied.counters.working,
+                    done: applied.counters.done,
+                }),
+                speaks.then(|| applied.waiting.clone()),
             )
         }
+        Err(error) => {
+            // Nothing but the identity is known: an event that names neither
+            // a session nor a start has nothing to report under, and its
+            // record failure is all that is left to keep.
+            if !starts && who.session.is_none() {
+                let failed = report::outcome(
+                    Err(format!("the pane's count could not be changed: {error}")),
+                    Ok(()),
+                );
+                report::record_and_say(home, &pane_id, agent, event.name(), &failed);
+                return;
+            }
+            (None, None, None)
+        }
     };
+    let reported = report::report(
+        &HookStatusReport {
+            runtime: agent.to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: who.session.map(str::to_owned),
+            turn,
+            counts,
+            session_start: starts,
+            waiting,
+            account: starts
+                .then(|| {
+                    hide_agent_hooks::account::reported_variables(agent, |name| {
+                        std::env::var_os(name)
+                    })
+                })
+                .flatten(),
+        },
+        deadline,
+    );
+    let record_error = kept
+        .err()
+        .map(|error| format!("the pane's count could not be changed: {error}"))
+        .map_or(Ok(()), Err);
     // The outcome is written down rather than surfaced here: a hook's
     // stderr reaches nobody, and the record is what `doctor` and Settings
-    // show (engineering rule 10).
-    let _ = report::record_outcome(home, &pane_id, agent, event.name(), &outcome);
+    // show (engineering rule 10). A record that cannot be written is said on
+    // standard error, so the hook never fails silently.
+    let outcome = report::outcome(record_error, reported);
+    report::record_and_say(home, &pane_id, agent, event.name(), &outcome);
 }
 
 /// Reports a Claude Code or Codex event under the session its input names,

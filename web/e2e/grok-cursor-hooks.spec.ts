@@ -15,7 +15,7 @@ import path from "node:path";
 import { agentRunner, type AgentRun, type HideAnswer } from "./agent-pane";
 import { agentIn, newTab, sendKeys, viewPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { hookRecords, startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
 // The kit writes POSIX hook files and the agents' hook commands are shell commands.
@@ -305,8 +305,8 @@ async function grokAgentPane(page: Page, stack: Stack): Promise<{ pane: string; 
 }
 
 /** The runtimes of the opener guard's refusals so far, in order: the hooks' log, one `opener.refused` line each. */
-const refusals = (home: string): string[] =>
-  read(path.join(home, ".hide", "agent-hooks", "spawn-guard.log"))
+const refusals = (daemon: Daemon): string[] =>
+  read(path.join(hookRecords(daemon), "spawn-guard.log"))
     .split("\n")
     .filter((line) => line.includes('"opener.refused"'))
     .map((line) => (JSON.parse(line) as { runtime: string }).runtime);
@@ -332,7 +332,7 @@ test("the installed Grok guard refuses the system opener while retired Cursor ca
     const answer = JSON.parse(refused.stdout) as { hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string } };
     expect(answer.hookSpecificOutput).toMatchObject({ hookEventName: "PreToolUse", permissionDecision: "deny" });
     expect(answer.hookSpecificOutput.permissionDecisionReason).toContain("browser open report.html");
-    expect(refusals(home)).toEqual(["grok"]);
+    expect(refusals(stack.daemon)).toEqual(["grok"]);
     expect(runHook(stack, grok, installed.grok(home, "PreToolUse"), grokCall("cargo test"), GROK_ENV("pre_tool_use")).stdout).toBe("");
 
     // B31: an explicitly invoked stale Cursor entry neither refuses nor emits an allow response.
@@ -340,7 +340,7 @@ test("the installed Grok guard refuses the system opener while retired Cursor ca
     for (const command of ["open report.html", "cargo test"]) {
       expect(runHook(stack, cursor, legacyCursor(home, "PreToolUse"), cursorCall(command), CURSOR_ENV)).toEqual({ status: 0, stdout: "", stderr: "" });
     }
-    expect(refusals(home)).toEqual(["grok"]);
+    expect(refusals(stack.daemon)).toEqual(["grok"]);
     expect(read(cursorFile(home))).toBe(CURSOR_BYTES);
   } finally {
     stop(stack);
@@ -421,7 +421,7 @@ test("inside Grok, only its own hook counts and refuses beside Claude compatibil
       expect({ agent, status: run.status, stdout: run.stdout }).toEqual({ agent, status: 0, stdout: "" });
     }
     // The pane's record is the only one: no hook counted under another pane.
-    const records = path.join(home, ".hide", "agent-hooks", "panes");
+    const records = path.join(hookRecords(stack.daemon), "panes");
     const names = fs.readdirSync(records).filter((name) => name.endsWith(".json"));
     expect(names).toHaveLength(1);
     expect(json(path.join(records, names[0]!))).toMatchObject({ sessions: [{ agent: "grok", working: 1, done: 0 }] });
@@ -433,7 +433,7 @@ test("inside Grok, only its own hook counts and refuses beside Claude compatibil
     expect(answers.claude).toBe("");
     expect(answers.cursor).toBe("");
     expect(JSON.parse(answers.grok!).hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(refusals(home)).toEqual(["grok"]);
+    expect(refusals(stack.daemon)).toEqual(["grok"]);
   } finally {
     stop(stack);
   }

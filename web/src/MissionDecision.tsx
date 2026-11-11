@@ -1,5 +1,5 @@
 import { CheckIcon, CircleAlertIcon, FileDiffIcon, FilePlusIcon, GlobeIcon, PencilIcon, ThumbsUpIcon } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed, useMinuteClock } from "./components/elapsed";
 import { FileMark } from "./components/file-mark";
@@ -43,6 +43,8 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   const minute = useMinuteClock();
   const long = gateWaitedLong(gateAsked(mission)?.gate, minute);
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
+  // The other nodes it is about, in the order the Conductor named them (mission-49: one question for seven merged nodes).
+  const others = (question?.nodes ?? []).flatMap((key) => mission.nodes.filter((node) => node.key === key));
   const view = answerView(mission, device, pressed);
   const views = mission.decision_views ?? [];
   const { key, options, sent, unreachable, closed } = view;
@@ -109,6 +111,19 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
+      {others.length > 0 ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-xs text-caption text-muted-foreground" data-mission-banner-also={others.length}>
+          <span className="shrink-0">{t("mission.banner.also")}</span>
+          {others.map((node, index) => (
+            <Fragment key={node.key}>
+            {index > 0 ? <span aria-hidden="true">·</span> : null}
+            <Button variant="text" size="inline" onClick={() => onNode(node.key)} className="max-w-(--size-flow-title) truncate text-caption text-foreground underline-offset-2 hover:underline" title={node.title} data-mission-banner-also-node={node.key}>
+              {node.title}
+            </Button>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
       {views.length > 0 ? <DecisionViews views={views} onOpen={(linked) => actions.openDecisionView(mission.id, key, linked)} /> : null}
       {sent?.line === "unconfirmed" ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent="unconfirmed">

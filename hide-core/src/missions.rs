@@ -749,6 +749,12 @@ pub struct Question {
     /// The node the decision stopped.
     #[serde(default)]
     pub node: Option<String>,
+    /// The other nodes the decision is about, beside `node`
+    /// (`hide mission decide --node <key>...`): while it is open their
+    /// raises stay with the Conductor (`Mission::deciding_on`), and its card
+    /// names them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<String>,
     pub asked_at_unix_ms: u64,
     /// The Views the Conductor linked to this question: the ones `--show`
     /// named and the ones it opened since the question before was asked
@@ -760,6 +766,14 @@ pub struct Question {
     /// answering (`볼 자료 요청`): asked once per question.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub material_asked: bool,
+}
+
+impl Question {
+    /// Whether the question is about node `key`: the node it stopped or
+    /// one of the others it names.
+    pub fn names(&self, key: &str) -> bool {
+        self.node.as_deref() == Some(key) || self.nodes.iter().any(|node| node == key)
+    }
 }
 
 /// The most Views one question or one node links; past it the oldest goes.
@@ -1562,6 +1576,16 @@ impl Mission {
         self.nodes.iter().find(|node| node.key == key)
     }
 
+    /// Whether the open decision is about node `key` (`Question::names`):
+    /// its raises then wait on the operator's answer with the Conductor.
+    pub(crate) fn deciding_on(&self, key: &str) -> bool {
+        self.decision.is_some()
+            && self
+                .question
+                .as_ref()
+                .is_some_and(|question| question.names(key))
+    }
+
     /// The node a spawn's intent names as its worker's,
     /// `<mission id>:<node key>` (`hide mission help`); none for another
     /// intent, such as a checker's.
@@ -2007,6 +2031,9 @@ pub enum MissionCommand {
         recommend: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node: Option<String>,
+        /// The other nodes the question is about, beside `node`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        nodes: Vec<String>,
         /// Views of the Conductor's checkout to show with the question, by
         /// id; the CLI opens a path as a View first and sends its id.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2176,6 +2203,7 @@ impl MissionCommand {
                 why,
                 options,
                 node,
+                nodes,
                 show,
                 ..
             } => {
@@ -2189,6 +2217,8 @@ impl MissionCommand {
                     && valid_line(why, LINE_LIMIT)
                     && options.len() <= NODE_LIMIT
                     && node.as_deref().is_none_or(valid_key)
+                    && nodes.len() < NODE_LIMIT
+                    && nodes.iter().all(|key| valid_key(key))
                     && show.len() <= VIEW_LINK_LIMIT
                     && show
                         .iter()
@@ -3052,9 +3082,14 @@ pub(crate) fn check_question(
     options: &[String],
     recommend: Option<u8>,
     node: Option<&str>,
+    nodes: &[String],
 ) -> Result<(), String> {
     if line.is_none()
-        && (why.is_some() || !options.is_empty() || recommend.is_some() || node.is_some())
+        && (why.is_some()
+            || !options.is_empty()
+            || recommend.is_some()
+            || node.is_some()
+            || !nodes.is_empty())
     {
         return Err("mission_question_without_line".into());
     }
@@ -3070,8 +3105,21 @@ pub(crate) fn check_question(
     if recommend.is_some_and(|choice| choice == 0 || usize::from(choice) > options.len()) {
         return Err("mission_recommend_invalid".into());
     }
-    if node.is_some_and(|key| mission.node(key).is_none()) {
+    if node.is_some_and(|key| mission.node(key).is_none())
+        || nodes.iter().any(|key| mission.node(key).is_none())
+    {
         return Err("mission_node_unknown".into());
+    }
+    // The others are named beside the node it stopped, each once.
+    let mut named: Vec<&str> = node
+        .into_iter()
+        .chain(nodes.iter().map(String::as_str))
+        .collect();
+    let count = named.len();
+    named.sort_unstable();
+    named.dedup();
+    if (node.is_none() && !nodes.is_empty()) || named.len() != count {
+        return Err("mission_question_nodes_invalid".into());
     }
     Ok(())
 }
@@ -3189,6 +3237,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_model_missing" => {
             "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
+        }
+        "mission_question_nodes_invalid" => {
+            "Name the node the decision stopped with the first --node, and each other node it is about once after it"
         }
         "mission_question_without_line" => {
             "Give --why, --option, --recommend, --node and --show with --line; --clear takes none of them"

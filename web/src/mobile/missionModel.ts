@@ -8,6 +8,7 @@
 import { useMemo } from "react";
 import { missionEntry, turnCount, type MissionEntry } from "../missionList";
 import { missionCounts, summaryGroups, type WorkerEscalation } from "../missions";
+import { orderByDependencies } from "../projectBoard";
 import type { PhoneMission, PhoneMissionNode } from "./protocol";
 import { usePhone } from "./store";
 
@@ -45,6 +46,34 @@ export function openCount(entries: readonly MissionEntry<PhoneMission>[]): numbe
 export function missionSteps(mission: PhoneMission): { hold: PhoneMissionNode[]; working: PhoneMissionNode[]; done: PhoneMissionNode[] } {
   const { attention, working, done } = summaryGroups(mission, workerOf);
   return { hold: attention, working, done };
+}
+
+/** What a step on the page's rail is now: waiting on someone, at work, finished, or not begun. */
+export type StepKind = "hold" | "working" | "done" | "planned";
+
+/** One step on the rail: `depth` is the longest chain of steps before it, and `waits` the steps before it not finished yet. */
+export type RailStep = { node: PhoneMissionNode; kind: StepKind; depth: number; waits: PhoneMissionNode[] };
+
+/**
+ * The page's steps as one rail (B36): every step still in the plan, top down by what it waits on, as the desktop's map
+ * and the progress cells order them (`orderByDependencies`); steps of one depth run side by side. A step's kind is the
+ * `missionSteps` split, so a step the decision stopped or whose worker the core raised reads as waiting here too; a
+ * dropped step is left out, as the cells leave it out.
+ */
+export function stepRail(mission: PhoneMission): RailStep[] {
+  const { hold, working, done } = missionSteps(mission);
+  const kindOf = (node: PhoneMissionNode): StepKind => (hold.includes(node) ? "hold" : working.includes(node) ? "working" : done.includes(node) ? "done" : "planned");
+  const live = mission.nodes.filter((node) => node.status !== "dropped");
+  const byKey = new Map(live.map((node) => [node.key, node]));
+  return orderByDependencies(live, (node) => node.key, (node) => node.depends_on).map(({ item, depth }) => ({
+    node: item,
+    kind: kindOf(item),
+    depth,
+    waits: item.status === "done" ? [] : item.depends_on.flatMap((key) => {
+      const before = byKey.get(key);
+      return before && before.status !== "done" ? [before] : [];
+    }),
+  }));
 }
 
 /** The escalation hided read from a step's worker row and sent with the node. */

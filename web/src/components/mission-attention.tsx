@@ -16,7 +16,7 @@ import { Button } from "./ui/button";
 // (the core's judgment, conflict and merge queue included), and a line of
 // the node that failed and that reason does not already say, so the choice
 // is made with the cause in view. Then the choices the core offers for the
-// raise, in its order (`AttentionReason::choices`): 지휘 에이전트에게 넘기기
+// raise, in its order (`AttentionReason::choices`): Conductor에게 다시 맡기기
 // first, or 그대로 두기 with no Conductor, and 이 단계 빼기 last, which never
 // goes on one press: the first turns it into 빼기 확인 in place, a press
 // elsewhere puts it back, and only the second press sends. A refused close

@@ -77,6 +77,11 @@ impl Machine {
         }
     }
 
+    /// The hooks' records folder of the daemon this machine stands in for.
+    pub(super) fn records(&self) -> PathBuf {
+        self.daemon.records()
+    }
+
     fn run(&self, operation: &str, input: &Value, in_pane: bool) -> Value {
         self.run_as("opencode", operation, input, in_pane)
     }
@@ -267,8 +272,7 @@ fn a_result_handed_to_the_system_opener_is_refused_for_opencode_pi_and_omp() {
             "{reason}"
         );
         assert_eq!(machine.calls(), ["workspace bootstrap"]);
-        let log = std::fs::read_to_string(machine.home.join(".hide/agent-hooks/spawn-guard.log"))
-            .unwrap();
+        let log = std::fs::read_to_string(machine.records().join("spawn-guard.log")).unwrap();
         assert!(log.contains(&format!("\"runtime\":\"{agent}\"")), "{log}");
         assert!(!log.contains("shot.png"), "a path is never logged: {log}");
 
@@ -381,10 +385,9 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         true,
     );
     assert_eq!(answer, json!({"reported": true}));
-    let stored: Value = serde_json::from_slice(
-        &std::fs::read(machine.home.join(".hide/agent-hooks/panes/w1_p1.json")).unwrap(),
-    )
-    .unwrap();
+    let stored: Value =
+        serde_json::from_slice(&std::fs::read(machine.records().join("panes/w1_p1.json")).unwrap())
+            .unwrap();
     assert_eq!(
         stored,
         json!({"sessions": [{"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,
@@ -414,7 +417,9 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         true,
     );
     assert_eq!(answer, json!({"reported": false}));
-    let failure = hide_agent_hooks::report::last_failure(&machine.home).unwrap();
+    let failure = hide_agent_hooks::report::last_failure_at(&machine.records())
+        .expect("records read")
+        .expect("the failed report is recorded");
     assert_eq!(
         (
             failure.pane_id.as_str(),

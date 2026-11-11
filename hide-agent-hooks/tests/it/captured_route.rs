@@ -37,7 +37,7 @@ fn invoke(
     arguments: &[&str],
     input: serde_json::Value,
     explicit: Option<&str>,
-) -> String {
+) -> (String, String) {
     let mut command = Command::new(helper);
     for (name, _) in std::env::vars_os() {
         let name_text = name.to_string_lossy();
@@ -72,7 +72,10 @@ fn invoke(
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).unwrap()
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
 }
 
 #[test]
@@ -135,7 +138,7 @@ fn all_seven_active_hook_transports_receive_letters_with_only_the_shells_xdg_sta
         ),
     ] {
         arguments.extend(["--state-dir-b64", &encoded]);
-        let stdout = invoke(&helper, &home, &state, &arguments, input, None);
+        let (stdout, _) = invoke(&helper, &home, &state, &arguments, input, None);
         assert!(
             stdout.contains("CAPTURED-ROUTE-LETTER"),
             "{arguments:?}: {stdout:?}"
@@ -165,7 +168,7 @@ fn explicit_routes_win_empty_routes_fall_back_and_malformed_routes_never_fall_ba
         ("malformed!".to_owned(), state.to_str().unwrap(), true),
         ("malformed!".to_owned(), "", false),
     ] {
-        let stdout = invoke(
+        let (stdout, _) = invoke(
             &helper,
             root.path(),
             &state,
@@ -185,8 +188,13 @@ fn explicit_routes_win_empty_routes_fall_back_and_malformed_routes_never_fall_ba
     }
 }
 
+/// A captured state folder the kit has not rewritten yet is that folder's
+/// failure and never the account's: the call is refused, and nothing lands in
+/// `~/.hide/agent-hooks` on behalf of a daemon that is not there
+/// (engineering rule 4). The entry is rewritten by the next kit pass, and the
+/// agent goes on without its letter.
 #[test]
-fn a_removed_captured_state_records_unavailable_until_the_kit_rewrites_it() {
+fn a_removed_captured_state_writes_nothing_in_the_accounts_folder() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir(&home).unwrap();
@@ -198,7 +206,7 @@ fn a_removed_captured_state_records_unavailable_until_the_kit_rewrites_it() {
     assert!(!previous_state.exists());
     let encoded =
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(previous_state.to_str().unwrap());
-    let stdout = invoke(
+    let (stdout, stderr) = invoke(
         &helper,
         &home,
         &current_state,
@@ -215,9 +223,24 @@ fn a_removed_captured_state_records_unavailable_until_the_kit_rewrites_it() {
         None,
     );
     assert!(!stdout.contains("CAPTURED-ROUTE-LETTER"));
-    let diagnostic: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(home.join(".hide/agent-hooks/delivery-diagnostics.json")).unwrap(),
-    )
-    .unwrap();
-    assert!(diagnostic["last"]["unavailable"].is_u64(), "{diagnostic}");
+    // The account's records folder is another daemon's. A hook whose route
+    // named a folder that is gone writes no failure record, no log and no
+    // delivery diagnostic there, and creates nothing.
+    let account = home.join(".hide/agent-hooks");
+    assert!(
+        !account.exists(),
+        "the account's records folder was written: {:?}",
+        std::fs::read_dir(&account)
+            .map(|entries| entries
+                .flatten()
+                .map(|entry| entry.file_name())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+    // The failure is not silent: the same cause `doctor` and the journey read
+    // reaches the agent on standard error, naming the folder that failed.
+    assert!(
+        stderr.contains("\"code\":\"unavailable\"") && stderr.contains("removed-daemon"),
+        "the route's own failure is printed: {stderr}"
+    );
 }

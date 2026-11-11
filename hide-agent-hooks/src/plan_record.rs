@@ -127,9 +127,14 @@ struct Record {
     context: PlanContext,
 }
 
-/// Where the pane's record lives, under Hide's own directory.
-fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    crate::route::pane_file(&crate::route::pane_records(home).join("plans"), pane_id)
+/// Where the pane's record lives, under Hide's own directory. A state route
+/// that does not resolve is that error, so a hook writes no plan record into
+/// another daemon's folder (engineering rule 4).
+fn record_path(home: &Path, pane_id: &str) -> std::io::Result<PathBuf> {
+    Ok(crate::route::pane_file(
+        &crate::route::pane_records(home)?.join("plans"),
+        pane_id,
+    ))
 }
 
 /// Writes the pane's record whole, private to the account.
@@ -139,7 +144,7 @@ pub fn write(
     session: &str,
     context: &PlanContext,
 ) -> std::io::Result<()> {
-    let path = record_path(home, pane_id);
+    let path = record_path(home, pane_id)?;
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
     }
@@ -155,7 +160,7 @@ pub fn write(
 /// The pane's record for `session`, if the hook wrote one for it.
 pub fn read(home: &Path, pane_id: &str, session: Option<&str>) -> Option<PlanContext> {
     use std::io::Read;
-    let file = std::fs::File::open(record_path(home, pane_id)).ok()?;
+    let file = std::fs::File::open(record_path(home, pane_id).ok()?).ok()?;
     let mut bytes = Vec::new();
     file.take(RECORD_LIMIT + 1).read_to_end(&mut bytes).ok()?;
     if bytes.len() as u64 > RECORD_LIMIT {
@@ -322,7 +327,7 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, refused: Refused) 
         "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
+    crate::hook_log::append(home, &line);
 }
 
 /// The refusal `action` meets under `context`, if any. Reading, searching
@@ -667,7 +672,7 @@ mod tests {
         );
         // The record the hook wrote before the change.
         let home = tempfile::tempdir().unwrap();
-        let path = record_path(home.path(), "w1:p2");
+        let path = record_path(home.path(), "w1:p2").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let saved = serde_json::json!({"version": 1, "session": "session-a", "context": worker});
         std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();

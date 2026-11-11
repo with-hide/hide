@@ -147,7 +147,7 @@ impl Machine {
             diagnostics: format!(
                 "stderr={:?}; guard={:?}; hide_calls={:?}",
                 String::from_utf8_lossy(&output.stderr),
-                std::fs::read_to_string(self.home.join(".hide/agent-hooks/spawn-guard.log")),
+                std::fs::read_to_string(self.daemon.records().join("spawn-guard.log")),
                 std::fs::read_to_string(self.root.join("hide-calls")),
             ),
         }
