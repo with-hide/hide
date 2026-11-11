@@ -6,8 +6,8 @@
 //!
 //! The record is the core's: the Conductor changes it only through the
 //! pane-bound `hide mission` commands (D-23), each one event applied under
-//! the runtime lock, and the file is written by its own save thread
-//! (`LatestFile`). What a node should do next, how a failure is retried and
+//! the runtime lock, and the files are written by the missions' save thread
+//! (`mission_events::MissionEventStore`). What a node should do next, how a failure is retried and
 //! when to ask the operator are the Conductor's judgement (D-37); the record
 //! holds only the facts the map shows and the contracts Hide enforces: one
 //! Conductor per mission, no worker before the plan is approved, and the
