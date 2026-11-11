@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use hide_core::agent_state::phone::{DormantPhase, SleepId};
+use hide_core::agent_state::phone::{DormantPhase, FRAME_LIMIT, SleepId, wire_len};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -55,8 +55,7 @@ const SILENT_LIMIT: Duration = Duration::from_secs(45);
 const SEND_LIMIT: Duration = Duration::from_secs(10);
 // The list frames' budget is the relay's message limit (hide-core names it
 // without linking the relay crate).
-const _: () =
-    assert!(hide_core::agent_state::phone::FRAME_LIMIT == hide_relay_protocol::noise::MAX_MESSAGE);
+const _: () = assert!(FRAME_LIMIT == hide_relay_protocol::noise::MAX_MESSAGE);
 
 /// Sends one message; false when the socket failed or stalled past
 /// `SEND_LIMIT`, and the connection should end.
@@ -81,10 +80,9 @@ async fn send(socket: &mut Socket, message: Message, phone_id: &str) -> bool {
 /// The one function every application frame to a phone passes through.
 /// Relay messages leave this boundary only as authenticated ciphertext.
 fn encode(
-    frame: &Value,
+    text: String,
     session: Option<&mut hide_relay_protocol::noise::Session>,
 ) -> Result<Vec<Message>, hide_relay_protocol::Error> {
-    let text = frame.to_string();
     match session {
         Some(session) => Ok(session
             .send_message(text.as_bytes())?
@@ -95,12 +93,54 @@ fn encode(
     }
 }
 
+/// Sends one frame; false when the connection should end. A frame past
+/// [`FRAME_LIMIT`] is never handed to the relay, which would close the
+/// session over it and the phone would reconnect into the same frame: it is
+/// logged and the connection stays, and when its kind has a failure the
+/// phone already reads ([`over_limit_answer`]) that is sent in its place, so
+/// the request it answers is not left waiting.
 async fn send_frame(socket: &mut Socket, frame: &Value, phone_id: &str) -> bool {
+    let text = frame.to_string();
+    if text.len() <= FRAME_LIMIT {
+        return send_text(socket, text, phone_id).await;
+    }
+    let answer = over_limit_answer(frame);
+    hide_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "phone.frame_too_large", "phone_id": phone_id,
+        "frame": frame.get("type"), "bytes": text.len(), "limit": FRAME_LIMIT,
+        "answered": answer.as_ref().and_then(|answer| answer.get("type")),
+    }));
+    match answer {
+        Some(answer) => send_text(socket, answer.to_string(), phone_id).await,
+        None => true,
+    }
+}
+
+/// The failure a phone already reads for the request a frame past the limit
+/// answers, or none when that kind has none to give: `rows` (an open or a
+/// `more`) reads `unavailable`, `look_changes` (a `look_open`) reads the
+/// View as `too_large`. Every other frame is bounded where it is built, or
+/// its kind has no failure the phone knows, and is only logged.
+fn over_limit_answer(frame: &Value) -> Option<Value> {
+    match frame.get("type").and_then(Value::as_str)? {
+        "rows" => Some(json!({
+            "type": "rows", "device_id": frame.get("device_id"), "pane_id": frame.get("pane_id"),
+            "state": PaneError::Unavailable(String::new()).reason(),
+        })),
+        "look_changes" => Some(json!({
+            "type": "look_result", "request_id": frame.get("request_id"),
+            "view_id": frame.get("view_id"), "state": "too_large",
+        })),
+        _ => None,
+    }
+}
+
+async fn send_text(socket: &mut Socket, text: String, phone_id: &str) -> bool {
     let session = match socket {
         Socket::Direct(_) => None,
         Socket::Relay(relay) => Some(&mut relay.session),
     };
-    let messages = match encode(frame, session) {
+    let messages = match encode(text, session) {
         Ok(messages) => messages,
         Err(reason) => {
             hide_core::diagnostic!(
@@ -574,12 +614,7 @@ impl RowsReader {
                 {
                     return None;
                 }
-                let frame = json!({
-                    "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
-                    "state": "ok", "text": rows.text, "lines": asked,
-                    // The engine says whether it cut older rows off this read.
-                    "more": asked < pane::MAX_LINES && rows.truncated,
-                });
+                let frame = rows_frame(key, &rows.text, rows.truncated, asked);
                 self.last = Some((rows.text, asked));
                 Some(frame)
             }
@@ -601,6 +636,82 @@ impl RowsReader {
             }
         }
     }
+}
+
+/// The `rows` frame of a read, within [`FRAME_LIMIT`]: what the text takes
+/// as JSON (an escape byte takes six) is measured against what the frame's
+/// other fields leave, and the oldest lines go first. `more` offers older
+/// rows only when the engine cut some (`truncated`), the cap is not reached
+/// and nothing was left out here, so a phone that reached the budget or the
+/// cap asks for nothing more (engineering #15).
+fn rows_frame(key: &AgentKey, text: &str, truncated: bool, asked: u32) -> Value {
+    // Measured with `false`, the longer of the two values `more` takes.
+    let mut frame = json!({
+        "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
+        "state": "ok", "text": "", "lines": asked, "more": false,
+    });
+    let room = FRAME_LIMIT.saturating_sub(wire_len(&frame));
+    let (kept, cut) = newest_within(text, room);
+    frame["text"] = Value::String(kept);
+    frame["more"] = Value::Bool(!cut && truncated && asked < pane::MAX_LINES);
+    frame
+}
+
+/// The newest whole lines of `text` whose JSON takes at most `room` bytes,
+/// and whether any were left out. When the newest line alone is longer (a
+/// minified file is one line), its start is kept up to `room`, without an
+/// escape sequence the cut would leave open.
+fn newest_within(text: &str, room: usize) -> (String, bool) {
+    // A string's JSON is its escaped bytes between two quotes; escaping is
+    // per character, so the pieces' lengths add up.
+    let json = |piece: &str| wire_len(piece) - 2;
+    if json(text) <= room {
+        return (text.to_owned(), false);
+    }
+    let bytes = text.as_bytes();
+    let (mut start, mut used) = (text.len(), 0);
+    while start > 0 {
+        let line = bytes[..start - 1]
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |newline| newline + 1);
+        let len = json(&text[line..start]);
+        if used + len > room {
+            break;
+        }
+        used += len;
+        start = line;
+    }
+    if start < text.len() {
+        return (text[start..].to_owned(), true);
+    }
+    let newest = &text[bytes[..text.len() - 1]
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(0, |newline| newline + 1)..];
+    let mut head = String::new();
+    let mut used = 0;
+    let mut buffer = [0; 4];
+    for ch in newest.chars() {
+        let len = json(ch.encode_utf8(&mut buffer));
+        if used + len > room {
+            break;
+        }
+        used += len;
+        head.push(ch);
+    }
+    if let Some(escape) = head.rfind('\x1b') {
+        let rest = &head.as_bytes()[escape + 1..];
+        let closed = match rest.first() {
+            Some(b'[') => rest[1..].iter().any(|byte| (0x40..=0x7e).contains(byte)),
+            Some(b'\\') => true,
+            _ => false,
+        };
+        if !closed {
+            head.truncate(escape);
+        }
+    }
+    (head, true)
 }
 
 fn key_of(message: &Value) -> Option<AgentKey> {
@@ -2277,6 +2388,137 @@ mod tests {
         second.abort();
         let _ = second.await;
         mobile.shutdown().await;
+    }
+
+    fn terminal_key() -> AgentKey {
+        AgentKey {
+            device_id: "test-node".into(),
+            pane_id: "w1:p1".into(),
+        }
+    }
+
+    /// Colorful rows: every line carries escape sequences, which JSON writes
+    /// as six bytes each, so the frame outgrows the text's own length.
+    fn colored_lines(count: usize) -> String {
+        (0..count)
+            .map(|line| {
+                format!(
+                    "\x1b[38;5;{}m{line:04} {}\x1b[0m\r\n",
+                    line % 200,
+                    "\x1b[1m█\x1b[0m".repeat(15)
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rows_frame_past_the_relay_message_keeps_the_newest_lines_and_offers_no_more() {
+        let text = colored_lines(1000);
+        assert!(text.len() < FRAME_LIMIT, "the raw text alone fits");
+        assert!(
+            serde_json::to_string(&text).unwrap().len() > FRAME_LIMIT,
+            "its JSON does not"
+        );
+        let frame = rows_frame(&terminal_key(), &text, true, 600);
+        let bytes = frame.to_string().len();
+        assert!(
+            bytes <= hide_relay_protocol::noise::MAX_MESSAGE,
+            "{bytes} bytes"
+        );
+        let sent = frame["text"].as_str().unwrap();
+        assert!(sent.contains("0999 "), "the newest line was dropped");
+        assert!(!sent.contains("0000 "), "the oldest line was kept");
+        assert!(
+            text.ends_with(sent),
+            "the lines kept are not the newest, whole"
+        );
+        assert!(sent.is_empty() || text[..text.len() - sent.len()].ends_with('\n'));
+        assert_eq!(
+            frame["more"], false,
+            "a phone told there is more asks into the same budget"
+        );
+        assert_eq!(frame["lines"], 600);
+        // Within the budget nothing is cut, and older rows stay offered
+        // until the cap.
+        let small = colored_lines(100);
+        let frame = rows_frame(&terminal_key(), &small, true, 200);
+        assert_eq!(
+            (frame["text"].as_str().unwrap(), &frame["more"]),
+            (small.as_str(), &json!(true))
+        );
+        assert_eq!(
+            rows_frame(&terminal_key(), &small, true, pane::MAX_LINES)["more"],
+            false
+        );
+        assert_eq!(
+            rows_frame(&terminal_key(), &small, false, 200)["more"],
+            false
+        );
+    }
+
+    #[test]
+    fn a_newest_line_longer_than_the_frame_keeps_its_start_without_an_open_escape() {
+        // A minified file is one line once soft wraps are joined.
+        let line = "\x1b[32mx\x1b[0m".repeat(40_000);
+        let frame = rows_frame(&terminal_key(), &format!("older\r\n{line}"), true, 200);
+        assert!(frame.to_string().len() <= FRAME_LIMIT);
+        let sent = frame["text"].as_str().unwrap();
+        assert!(sent.starts_with("\x1b[32mx"), "{:?}", &sent[..20]);
+        assert!(!sent.contains("older"));
+        assert!(sent.len() > FRAME_LIMIT / 8, "{} bytes kept", sent.len());
+        let open = sent.rfind('\x1b').unwrap();
+        assert!(sent[open..].ends_with('m'), "{:?}", &sent[open..]);
+        assert_eq!(frame["more"], false);
+    }
+
+    /// A frame past the relay's message is never handed to the relay, which
+    /// would close the session; the request it answers gets the failure its
+    /// kind has, and the connection carries the next frame.
+    #[tokio::test]
+    async fn a_frame_past_the_limit_is_answered_by_its_failure_and_the_connection_stays() {
+        use hide_relay_protocol::noise::{NoiseKeypair, Session};
+        let key = NoiseKeypair::generate().unwrap();
+        let mut responder = Session::responder(&key, 1).unwrap();
+        let mut phone = Session::initiator(&key.public_key(), 1).unwrap();
+        responder
+            .read_handshake(&phone.write_handshake().unwrap())
+            .unwrap();
+        phone
+            .read_handshake(&responder.write_handshake().unwrap())
+            .unwrap();
+        let (_incoming, rx) = mpsc::channel(8);
+        let (tx, mut outgoing) = mpsc::channel(32);
+        let mut socket = Socket::relay(responder, rx, tx, 1);
+        let mut received = async || loop {
+            let Some(super::super::relay::Output::Frame { bytes, .. }) = outgoing.recv().await
+            else {
+                panic!("the relay connection closed");
+            };
+            if let Some(plain) = phone.recv_message(&bytes, 0).unwrap() {
+                break serde_json::from_slice::<Value>(&plain).unwrap();
+            }
+        };
+        let huge = "x".repeat(FRAME_LIMIT);
+        let changes = json!({
+            "type": "look_changes", "request_id": "r-1", "view_id": "v-1",
+            "files": [{"path": huge}], "count": 1, "added": 0, "removed": 0,
+        });
+        assert!(send_frame(&mut socket, &changes, "phone-a").await);
+        assert_eq!(
+            received().await,
+            json!({"type": "look_result", "request_id": "r-1", "view_id": "v-1", "state": "too_large"})
+        );
+        let rows = json!({"type": "rows", "device_id": "test-node", "pane_id": "w1:p1", "state": "ok", "text": huge});
+        assert!(send_frame(&mut socket, &rows, "phone-a").await);
+        assert_eq!(
+            received().await,
+            json!({"type": "rows", "device_id": "test-node", "pane_id": "w1:p1", "state": "unavailable"})
+        );
+        // A kind with no failure to give is only logged.
+        let catalog = json!({"type": "start_catalog", "targets": [huge]});
+        assert!(send_frame(&mut socket, &catalog, "phone-a").await);
+        assert!(send_frame(&mut socket, &json!({"type": "pong", "id": 7}), "phone-a").await);
+        assert_eq!(received().await, json!({"type": "pong", "id": 7}));
     }
 
     /// B21: a page whose screen cannot be taken (no desktop window here, no
