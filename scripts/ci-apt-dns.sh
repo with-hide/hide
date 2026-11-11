@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Ubuntu package DNS on disposable CI runners (with-hide/hide-private#871).
-# Healthy defaults are left alone. The two real package hosts are checked
+# Healthy defaults are left alone. The real package hosts are checked
 # within bounded lookups; a failed repair fails the caller, never the tests.
 set -euo pipefail
 
-export HIDE_CI_APT_DNS_SERVER=1.1.1.1
+export HIDE_CI_APT_DNS_SERVERS='1.1.1.1 8.8.8.8'
 export HIDE_CI_APT_DNS_HOSTS='archive.ubuntu.com security.ubuntu.com azure.archive.ubuntu.com'
 
 case "$(uname -s)" in
@@ -12,10 +12,12 @@ case "$(uname -s)" in
     powershell.exe -NoProfile -Command '
       $ErrorActionPreference = "Stop"
       $hosts = $env:HIDE_CI_APT_DNS_HOSTS.Split(" ")
-      function Test-DefaultDns {
+      function Test-Dns([string] $server) {
         try {
+          $options = @{}
+          if ($server) { $options.Server = $server }
           foreach ($name in $hosts) {
-            Resolve-DnsName $name -Type A -DnsOnly -QuickTimeout | Out-Host
+            Resolve-DnsName $name -Type A -DnsOnly -QuickTimeout @options | Out-Host
           }
           return $true
         } catch {
@@ -23,23 +25,23 @@ case "$(uname -s)" in
           return $false
         }
       }
-      if (Test-DefaultDns) { Write-Host "Ubuntu package DNS is ready; keeping the resolver"; exit 0 }
+      if (Test-Dns) { Write-Host "Ubuntu package DNS is ready; keeping the resolver"; exit 0 }
       Get-DnsClientServerAddress -AddressFamily IPv4 | Out-Host
       if ($env:RUNNER_ENVIRONMENT -ne "github-hosted") {
         throw "DNS repair is restricted to disposable GitHub-hosted runners"
       }
-      $server = $env:HIDE_CI_APT_DNS_SERVER
-      foreach ($name in $hosts) {
-        Resolve-DnsName $name -Type A -Server $server -DnsOnly -QuickTimeout | Out-Host
-      }
       $interfaces = @(Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Select-Object -ExpandProperty InterfaceIndex -Unique)
       if ($interfaces.Count -eq 0) { throw "the runner has no default IPv4 route" }
-      foreach ($index in $interfaces) {
-        Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses $server
+      foreach ($server in $env:HIDE_CI_APT_DNS_SERVERS.Split(" ")) {
+        if (!(Test-Dns $server)) { continue }
+        foreach ($index in $interfaces) {
+          Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses $server
+        }
+        Clear-DnsClientCache
+        if (Test-Dns) { Write-Host "Ubuntu package DNS repaired with $server"; exit 0 }
+        Write-Host "Ubuntu package DNS still fails after selecting $server"
       }
-      Clear-DnsClientCache
-      if (!(Test-DefaultDns)) { throw "Ubuntu package DNS still fails after selecting $server" }
-      Write-Host "Ubuntu package DNS repaired with $server"
+      throw "Ubuntu package DNS still fails with every public resolver candidate"
     '
     ;;
   Linux)
@@ -66,26 +68,32 @@ case "$(uname -s)" in
     }
     root=()
     (( EUID == 0 )) || root=(sudo)
+    links=
     if [[ -d /run/systemd/system ]]; then
       # Ask the active owner rather than overwrite its generated stub file.
       links=$(ip -o -4 route show default | awk '{for (i=1; i<NF; i++) if ($i == "dev") print $(i+1)}' | sort -u)
       [[ -n $links ]] || { echo 'the runner has no default IPv4 route' >&2; exit 1; }
-      for link in $links; do
-        timeout --kill-after=1 10 "${root[@]}" resolvectl dns "$link" "$HIDE_CI_APT_DNS_SERVER"
-        timeout --kill-after=1 10 "${root[@]}" resolvectl domain "$link" '~.'
-      done
-      timeout --kill-after=1 10 "${root[@]}" resolvectl flush-caches
-    else
-      # The bare Ubuntu package container has no systemd or sudo. Its own
-      # resolver file is writable and dies with that container.
-      printf 'nameserver %s\n' "$HIDE_CI_APT_DNS_SERVER" | "${root[@]}" tee /etc/resolv.conf >/dev/null
     fi
-    if ! probe; then
+    for server in $HIDE_CI_APT_DNS_SERVERS; do
+      if [[ -n $links ]]; then
+        for link in $links; do
+          timeout --kill-after=1 10 "${root[@]}" resolvectl dns "$link" "$server"
+        done
+        timeout --kill-after=1 10 "${root[@]}" resolvectl flush-caches
+      else
+        # The bare Ubuntu package container has no systemd or sudo. Its own
+        # resolver file is writable and dies with that container.
+        printf 'nameserver %s\n' "$server" | "${root[@]}" tee /etc/resolv.conf >/dev/null
+      fi
+      if probe; then
+        echo "Ubuntu package DNS repaired with $server"
+        exit 0
+      fi
+      echo "Ubuntu package DNS still fails after selecting $server" >&2
       diagnostics
-      echo "Ubuntu package DNS still fails after selecting $HIDE_CI_APT_DNS_SERVER" >&2
-      exit 1
-    fi
-    echo "Ubuntu package DNS repaired with $HIDE_CI_APT_DNS_SERVER"
+    done
+    echo 'Ubuntu package DNS still fails with every public resolver candidate' >&2
+    exit 1
     ;;
   *) echo 'Ubuntu package DNS is supported only on the Linux and Windows CI runners' >&2; exit 2 ;;
 esac

@@ -666,7 +666,7 @@ Locally: `bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/tar
 The runner runs WSL 2 itself, not WSL 1 (WSL 3.0.3, a 6.18 WSL 2 kernel, systemd as process 1, measured on `windows-latest` on 2026-10-28), so the lane proves the WSL 2 path and no WSL 1 path exists to prove.
 `wsl-device.yml` builds the Linux programs on a Linux runner, because the Windows runner cannot, and hands them to the Windows job as an artifact; `setup-wsl` makes a fresh `Ubuntu-24.04` with its first-run setup undone.
 Before WSL starts, `scripts/ci-apt-dns.sh` checks the Ubuntu package hosts and leaves a working default resolver alone; Azure's default resolver returned `SERVFAIL` in Windows as well as WSL, and failed the Linux package lane too (with-hide/hide-private#871).
-Only a GitHub-hosted runner with failed lookups selects `1.1.1.1` and checks resolution again; Windows also checks that server before selecting it on its default-route interfaces, leaving WSL's normal DNS tunnel intact.
+Only a GitHub-hosted runner with failed lookups tries the public candidates `1.1.1.1` and `8.8.8.8` until resolution succeeds; Windows also checks each candidate before selecting it on its default-route interfaces, leaving WSL's normal DNS tunnel intact.
 A separate root step runs `scripts/ci-apt-install.sh` in the checkout mounted in WSL to install `git`, `python3` and `openssh-server`.
 The shared installer checks DNS before downloading, with both DNS and downloads inside its existing 300-second network budget.
 Linux lookups each take at most five seconds; a failed default is repaired through `systemd-resolved` on the runner or through the resolver file of a bare Ubuntu container, and failed resolution after repair fails installation before any package is fetched.

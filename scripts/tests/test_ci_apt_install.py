@@ -38,6 +38,7 @@ exit 0
 GETENT = r'''#!/usr/bin/env bash
 if [ -e "$DNS_STATE" ]; then
   [ "${DNS_REPAIRED_OK:-1}" = 1 ] || exit 2
+  if [ -n "${DNS_FAILED_SERVER:-}" ] && [[ $(cat "$DNS_STATE") == *"$DNS_FAILED_SERVER"* ]]; then exit 2; fi
 else
   [ "${DNS_DEFAULT_OK:-1}" = 1 ] || exit 2
 fi
@@ -154,6 +155,12 @@ class CiAptInstall(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn('Ubuntu package DNS still fails', done.stderr)
         self.assertEqual(calls, [])
+
+    def test_an_unreachable_public_resolver_does_not_hide_a_working_candidate(self):
+        done, _, _ = self.run_script('git', APT_BUDGET_SECONDS='30',
+                                     DNS_DEFAULT_OK='0', DNS_FAILED_SERVER='1.1.1.1')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('8.8.8.8', self.dns_state.read_text())
 
     def test_a_non_disposable_runner_refuses_dns_changes(self):
         done, calls, _ = self.run_script('git', APT_BUDGET_SECONDS='30',
