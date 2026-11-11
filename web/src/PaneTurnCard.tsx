@@ -16,7 +16,7 @@ import { sessionOfAgent } from "./sessionWork";
 import { type AgentRow, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PeerLine, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead, type WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { lettersBefore, peerCount } from "./turnCard";
-import { OpenAskList, OpenAsksMark } from "./components/open-asks";
+import { OpenAskList } from "./components/open-asks";
 
 /** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
@@ -443,12 +443,9 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, onAsk, answerOp
               onSet={(id, status) => asking && onAsk(asking, id, status)}
               time={(at) => <Clock at={at} />}
               frame={(list, count) => (
-                <RailItem dot="past-asks" data-turn-card-asks={count}>
-                  <div className="flex min-w-0 flex-col rounded-md border border-warning/60 bg-warning/10 px-sm pt-xs">
-                    <h3 className="flex items-center gap-xs text-micro font-semibold text-warning">
-                      <OpenAsksMark count={count} />
-                      <span>{t("record.waiting")}</span>
-                    </h3>
+                <RailItem dot="past" data-turn-card-asks={count}>
+                  <div className="flex min-w-0 flex-col border-l-2 border-border pl-sm">
+                    <h3 className="text-micro text-muted-foreground">{t("record.waiting")} · {t("openAsks.count", { count })}</h3>
                     {list}
                   </div>
                 </RailItem>

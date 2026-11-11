@@ -6,7 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { RELATION_ANSWER_TIMEOUT_MS } from "./lineage";
-import { PaneAskMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
+import { PaneAskMark, PaneHeadChildren, PaneHeaderBand, PaneOpenAsksMark, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
 import type { AgentRow, PaneBand, PaneHeader, PaneFocusRequest, SessionPull, SnapshotRest, Workspace } from "./snapshot";
 import { localDeviceId } from "./snapshot";
 import { LOCAL } from "../test/legacyAgentRow";
@@ -726,6 +726,37 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
   }
 });
 
+// docs/UI_BEHAVIOR.md, the pane head: the questions still waiting ride after
+// the title as plain words, `질문 N` (`Questions N`), whose press opens the turn
+// card that lists them; a pane with none draws nothing there.
+it("counts a pane's waiting questions in words that open the turn card, and draws nothing without them", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  initializeInterfaceI18n("en");
+  const agent = turnAgent();
+  agent.device_id = "";
+  agent.open_asks = { session: { device_id: "local", agent: "claude", session_id: "s1" }, items: [{ id: "m1", text: "Decide the closed tab defect", at_unix_ms: 2_500 }, { id: "m2", text: "Merge now or wait for CI", at_unix_ms: 2_600 }] };
+  const quiet = legacyAgentRow({ id: "q", pane_id: "quiet", identity_label: "Quiet", agent_kind: "claude", device_id: "" });
+  useShellStore.setState({ agents: [agent, quiet], rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: { working: true, notice: null, band: null } } } } as unknown as SnapshotRest });
+  const actions = createActions(() => true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PaneOpenAsksMark paneId="solo" actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" actions={actions} /></span></TooltipProvider>));
+  try {
+    const mark = container.querySelector<HTMLButtonElement>("[data-pane-open-asks=solo]")!;
+    expect(mark.textContent).toBe("Questions 2");
+    expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
+    await act(async () => mark.click());
+    expect(mark.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector("[data-pane-turn-card=solo] [data-turn-card-asks]")?.querySelectorAll("[data-record-ask]")).toHaveLength(2);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 // The card's later half (docs/UI_BEHAVIOR.md, the turn card): the answer to
 // the request in bold over its first lines, the questions to the operator that
 // still wait right under it (the session record's 나를 기다리는 것), a line per
@@ -763,12 +794,12 @@ it("draws the answer, the questions still waiting and the letters since the requ
     expect(card().querySelector("[data-turn-card-answer-line]")?.textContent).toBe("Yes, rarely: a profile-only machine");
     expect(card().querySelector("[data-turn-card-answer-head]")?.textContent).toBe("Yes, it can happen.\nNot common though.");
     expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("4 agents · 13 letters");
-    // The questions still waiting sit between the answer and the letters, oldest first, counted as ?N.
+    // The questions still waiting sit between the answer and the letters, oldest first, under a grey head that counts them.
     const order = [...card().querySelectorAll("[data-turn-card-answer], [data-turn-card-asks], [data-turn-card-letters]")].map((part) => (part.hasAttribute("data-turn-card-asks") ? "asks" : part.hasAttribute("data-turn-card-answer") ? "answer" : "letters"));
     expect(order).toEqual(["answer", "asks", "letters"]);
     const asks = () => [...card().querySelectorAll<HTMLElement>("[data-turn-card-asks] [data-record-ask]")];
     expect(asks().map((ask) => ask.textContent?.includes("Decide the closed tab defect") || ask.textContent?.includes("Merge now or wait for CI"))).toEqual([true, true]);
-    expect(card().querySelector("[data-turn-card-asks] [data-open-asks]")?.textContent).toBe("?2");
+    expect(card().querySelector("[data-turn-card-asks] h3")?.textContent).toBe("Waiting on you · Questions 2");
     // 무시하기 puts the question away in the session's record, and the line stays to undo while the card is open.
     await act(async () => card().querySelector<HTMLButtonElement>("[data-record-ask-dismiss=m1]")!.click());
     expect(events.filter((event) => event.kind === "session_missed_status").map((event) => event.payload)).toEqual([{ session, id: "m1", status: "dismissed" }]);

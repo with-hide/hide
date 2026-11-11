@@ -42,12 +42,13 @@ const openAsks = (session: string, texts: string[]): NonNullable<AgentRow["open_
   session: { device_id: "local", agent: "claude", session_id: session },
   items: texts.map((text, index) => ({ id: `${session}-${index}`, text, at_unix_ms: Date.now() - 86_400_000 + index * 60_000 })),
 });
-/** The rows and panes that keep questions: a working row asked one, a resting row and the pane head's progress case keep two. */
+/** The rows and panes that keep questions: a working row asked one, a resting row and the pane head's progress case keep two, the narrow pane three. */
 const OPEN_ASKS: Record<string, NonNullable<AgentRow["open_asks"]>> = {
   s4: openAsks("gallery-s4", ["실패한 검증을 이 PR에서 고칠까요?"]),
   s6: openAsks("gallery-s6", ["(a)로 별도 PR로 할지", "설정 탭에 행을 넣을지"]),
   progress: openAsks("gallery-progress", ["(a)로 별도 PR로 할지", "설정 탭에 행을 넣을지"]),
   "turn-working": openAsks("gallery-turn-working", ["종합 뷰를 별도 탭으로 둘까요?"]),
+  "turn-narrow": openAsks("gallery-turn-narrow", ["1~3번을 한 PR로 묶을지", "캡처를 갱신할지", "설정 탭에 행을 넣을지"]),
 };
 const TURN_REQUEST = { text: "제안대로 진행 + 애매한 상태 더 점검", images: 0 };
 /** The turn card's facts for the request cases: the raw request, its summary and two earlier turns. */

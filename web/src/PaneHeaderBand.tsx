@@ -31,7 +31,6 @@ import { Button } from "./components/ui/button";
 import { RowOverlayButton } from "./components/ui/row-button";
 import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
 import { HumanTurnCopy } from "./components/human-turn-copy";
-import { OpenAsksMark } from "./components/open-asks";
 
 /** The View menu's turn row mode; absent reads as one line. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
@@ -260,10 +259,12 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
 }
 
 /**
- * The pane's `?N` after its title: how many questions the agent put to the
- * operator still wait (status-model.md, A question still waiting), at every
- * turn row mode and while the agent works, since the second row then keeps its
- * progress. A press opens the turn card, which lists them with 무시하기.
+ * The pane's `질문 N` after its title, in plain grey words: how many questions
+ * the agent put to the operator still wait (status-model.md, A question still
+ * waiting), at every turn row mode and while the agent works, since the second
+ * row then keeps its progress. It takes no warning colour, border or fill: a
+ * kept question is no call to act, and only a Needs You ask wears the warning
+ * colour. A press opens the turn card, which lists them with 무시하기.
  */
 export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -271,20 +272,20 @@ export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions:
   if (count === 0) return null;
   return <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => (
     <Button
-      variant="ghost"
+      variant="text"
       size="inline"
-      aria-label={t("openAsks.mark", { count })}
       aria-expanded={state.open}
       data-pane-open-asks={paneId}
+      data-open-asks={count}
       data-state={state.open ? "open" : "closed"}
-      className="shrink-0 rounded-xs data-[state=open]:bg-secondary"
+      className="shrink-0 whitespace-nowrap text-caption text-muted-foreground tabular-nums data-[state=open]:text-foreground"
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
       onFocus={state.onFocus}
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
     >
-      <OpenAsksMark count={count} />
+      {t("openAsks.count", { count })}
     </Button>
   )} />;
 }

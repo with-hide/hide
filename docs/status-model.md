@@ -106,14 +106,14 @@ The row reads that one list and decides nothing of its own: the link summary car
 It adds no status, mark, colour or group.
 
 - A resting row with no demand of its own, waiting on its children included, stands in Needs You with the question asked first as its line and the rest counted behind it (`외 N건`); a working row asks nothing, so a turn the agent is still on can resolve the question before the operator is told.
-- Every row of the session carries the list as `open_asks` `{session, items}`, oldest first, whether a question is laid or not: the row's line ends with `?N` while none is its ask, the pane head draws `?N` after its title, and the turn card lists them.
+- Every row of the session carries the list as `open_asks` `{session, items}`, oldest first, whether a question is laid or not: no row draws a mark for it, the pane head counts it after its title in plain grey words, `질문 N`, and the turn card lists it under a grey head; only a question laid as the row's ask wears the warning colour, as every Needs You ask does (operator decision 2026-11-12: a count on every row and a warning-coloured box drew the eye to questions that were stale).
 - What the operator sends the agent after a question takes it off the row at once (`open_ask_stands`, read from the row's `operator_request`); Hide AI reads the turn that follows and keeps or resolves it.
 - Only a row the operator owns carries the list: a delegated child's questions are its parent's to answer.
   A row that arrives is laid before the lineage says whether it is owned, so the lineage the read axis compares lifts the list again from the rows it found delegated (`Runtime::settle_delegated_asks`, in `lineage_across_machines`); without it the child's question came and went with the pass that laid it, and its parent turned unread and read again on each.
 - With Hide AI's summaries off nothing keeps the list, so none is laid, as a plain-text question asks nothing then (below).
 
 The question is named by its record id (`ask:<session>#<id>`), so a read one stays read while the agent works and rests under it, and a new one is news.
-Regression owners: `hide-core/src/runtime/tests/open_asks.rs`, `an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_work` in `links/ledger_store_tests.rs`, the open-question test of `web/src/agentRow.test.ts` and the turn card's in `web/src/PaneHeaderBand.test.tsx`.
+Regression owners: `hide-core/src/runtime/tests/open_asks.rs`, `an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_work` in `links/ledger_store_tests.rs`, the open-question test of `web/src/agentRow.test.ts` and the pane head's and the turn card's in `web/src/PaneHeaderBand.test.tsx`.
 
 ### A person's turn an agent declares
 
@@ -494,7 +494,7 @@ A line leads with the word for how the turn ended or stuck (`막힘 · …`, `�
 A working row says its sentence alone or has no line; a waiting row's line leads with what it waits for and its sentence, or with none the cause's detail: `백그라운드 기다림`, `자식 기다림 · 자식 N개 작업 중`, `답장 기다림`, `CI 기다림 · PR #N`, and `대기 · ` with a sentence when no cause is proven (B10, B29; needs-you-cleanup B17, B18).
 The web splits a line into its lead word, sentence and background tail (`lineParts`), and a narrow row cuts only the sentence, so the lead and the tail always show.
 A Needs You line's ask verb says the same word: an Answer reads `질문` (Question) and an Approval `승인` (Approval), followed by ` · ` and what to do.
-A line whose row has questions to the operator still waiting, none of them laid as its ask, ends with `?N` in the warning colour (`OpenAsksMark`, read from `open_asks` by `openAsksCount` in `web/src/agentRow.ts`), which the narrow row keeps with the lead and the tail and its accessible name says as `나를 기다리는 것 N개` ([A question still waiting](#a-question-still-waiting)).
+A line carries no count of the questions to the operator that still wait: the pane head counts them and the turn card lists them, and one reaches the row only once the core lays it as the row's ask, as that ask's sentence ([A question still waiting](#a-question-still-waiting)).
 A row of unknown state, or on an unreachable device, has no mark and is drawn dimmed whole, and its line says why (B16).
 A slot with no live agent behind it, an ended session in a record or a link's timeline, a closed feedback recipient, draws no mark either (sidebar-quiet-mark-indent D-05): the ring says an agent is there and resting.
 A row on a device that is not connected still carries the last state Hide knew of it, which may be long over; while `status.remote` says the device is not connected, the shell draws that row and a tree popover's child with no mark, dimmed, with the line `<device> 연결 끊김` (`agents.line.disconnected`), and its hover and accessible name say the same instead of the stale mark words.
