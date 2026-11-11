@@ -109,9 +109,9 @@ async function readyPull(page: Page, label: string, planned: ReturnType<typeof p
 }
 
 /** Where the Conductor's schema node stands, as `hide mission show --json` reads it. */
-async function schemaNode(conductor: Hide): Promise<{ status?: string; merge?: { by?: string; why?: string; state?: string } }> {
+async function schemaNode(conductor: Hide): Promise<{ status?: string; merge?: { by?: string; why?: string; state?: string; prs?: number[] } }> {
   const shown = (await ok(conductor, ["mission", "show", "--json"])).result as { mission: { nodes: { key: string }[] } };
-  return shown.mission.nodes.find((node) => node.key === "schema") as { status?: string; merge?: { by?: string; why?: string; state?: string } };
+  return shown.mission.nodes.find((node) => node.key === "schema") as { status?: string; merge?: { by?: string; why?: string; state?: string; prs?: number[] } };
 }
 
 /** The `hide mission show` text the Conductor reads, kept beside the captures. */
@@ -128,22 +128,29 @@ test("a node the plan leaves to the operator is done once its pull request is re
     keepText("merge-owner-plan-text", shown);
 
     // GitHub answers pull request 31 ready: the node is done without its merge, and the merge is the operator's now.
-    await expect.poll(async () => (await schemaNode(conductor)).merge?.state, { timeout: 30_000 }).toBe("due");
+    await expect.poll(async () => (await schemaNode(conductor)).merge?.state, { timeout: 30_000 }).toBe("due"); // wait-ok: the fresh GitHub read finishes the node and publishes its operator merge turn
     const node = await schemaNode(conductor);
     expect(node.status).toBe("done");
-    expect(node.merge).toEqual({ by: "operator", why: WHY, state: "due" });
+    expect(node.merge).toEqual({ by: "operator", why: WHY, state: "due", prs: [31] });
     const detail = (await conductor(["mission", "show", "schema"])).out;
     expect(detail).toContain("👤 머지할 차례");
     keepText("merge-owner-node-text", detail);
+
+    // F1: the last held PR is already merged while #31 stays open and ready.
+    await ok(conductor, ["mission", "node", "schema", "--pr", "37"]);
+    await expect.poll(async () => (await schemaNode(conductor)).merge?.prs, { timeout: 30_000 }).toEqual([31]); // wait-ok: the added held PR receives GitHub's merged state before the turn is read
 
     // The mission's map: its turn names the merge as the operator's.
     await page.locator("[data-pane-mission-chip]").click();
     const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
     const turn = map.locator('[data-mission-turn] [data-mission-turn-item="merge"]');
     await expect(turn).toContainText("머지할 차례");
+    await expect(turn).toContainText("#31");
+    await expect(turn).not.toContainText("#37");
     // Needs You lists the mission for the merge.
     const ask = page.locator('nav[data-sidebar] [data-mission-ask][data-mission-ask-node="schema"]').first();
-    await expect(ask).toContainText("머지할 차례");
+    await expect(ask).toContainText("머지할 차례 PR #31");
+    await expect(ask).not.toContainText("#37");
     await chooseTheme(page, "dark");
     await screenshot(page, "merge-owner-turn-dark");
     await chooseTheme(page, "light");
@@ -155,9 +162,18 @@ test("a node the plan leaves to the operator is done once its pull request is re
     const row = page.locator('[data-mission-row-group="turn"]');
     await expect(row).toHaveCount(1);
     await expect(row.locator('[data-mission-row-pill="landing"]')).toHaveText("머지하기");
+    await expect(row.locator('[data-mission-row-line="merge"]')).toContainText("#31");
+    await expect(row.locator('[data-mission-row-line="merge"]')).not.toContainText("#37");
     await screenshot(page, "merge-owner-list-light");
     await chooseTheme(page, "dark");
     await screenshot(page, "merge-owner-list-dark");
+
+    // The same PR identity survives the close and is the one named in the report.
+    await ok(conductor, ["mission", "node", "guide", "--status", "dropped"]);
+    await expect.poll(async () => {
+      const shown = (await ok(conductor, ["mission", "show", "--json"])).result as { mission: { report?: string } };
+      return shown.mission.report?.split("Left for the operator to merge (1):\n")[1];
+    }, { timeout: 30_000 }).toBe(`- DB 스키마 변경 (schema) · PR #31 · ${WHY}`); // wait-ok: the mission closes merge_wait after its last unfinished node is dropped
 
     // Nothing in Hide merged it: the operator's merge is theirs to make.
     expect(writes(gh.state).filter((args) => args[0] === "pr" && args[1] === "merge")).toEqual([]);
@@ -167,9 +183,9 @@ test("a node the plan leaves to the operator is done once its pull request is re
 test("a mission whose scope stops at the pull request asks nothing for a ready one", async ({ page }) => {
   await readyPull(page, "mission-merge-owner-pr", plan("pr", false), async ({ conductor }) => {
     // The same ready pull request finishes the node, and no merge is the operator's turn.
-    await expect.poll(async () => (await schemaNode(conductor)).status, { timeout: 30_000 }).toBe("done");
+    await expect.poll(async () => (await schemaNode(conductor)).status, { timeout: 30_000 }).toBe("done"); // wait-ok: the fresh GitHub read finishes the PR-scope node without adding a turn
     const node = await schemaNode(conductor);
-    expect(node.merge).toEqual({ by: "operator", state: "ahead" });
+    expect(node.merge).toEqual({ by: "operator", state: "ahead", prs: [31] });
     expect((await conductor(["mission", "show"])).out).not.toContain("👤");
 
     await page.locator("[data-pane-mission-chip]").click();
