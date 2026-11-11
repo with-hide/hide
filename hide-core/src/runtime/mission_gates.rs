@@ -562,6 +562,7 @@ impl Runtime {
             options,
             recommend: None,
             node: Some(key.to_owned()),
+            nodes: Vec::new(),
             asked_at_unix_ms: now,
             views,
             material_asked: false,

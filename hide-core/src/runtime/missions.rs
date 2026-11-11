@@ -324,13 +324,7 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             reason: attention.reason,
         });
     }
-    if mission.decision.is_some()
-        && mission
-            .question
-            .as_ref()
-            .and_then(|question| question.node.as_deref())
-            == Some(view.key.as_str())
-    {
+    if mission.deciding_on(&view.key) {
         return Some(WaitingOn::Decision);
     }
     match view.status {
@@ -1877,13 +1871,14 @@ impl Runtime {
                 options,
                 recommend,
                 node,
+                nodes,
                 show,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 let changed = self.decide_mission(
                     &id,
                     line,
-                    (why, options, recommend, node),
+                    (why, options, recommend, node, nodes),
                     Some((&actor, &show)),
                     now,
                 )?;

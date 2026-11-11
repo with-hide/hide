@@ -1306,6 +1306,8 @@ pub const COMMANDS: &[Spec] = &[
             optional("--why", Text),
             optional("--option", Text),
             optional("--recommend", Unsigned),
+            // Given more than once like `--option`: the first names the node
+            // the decision stopped, the rest the other nodes it is about.
             optional("--node", Key),
             // A View id or a path the CLI opens as one; given more than once
             // like `--option`, up to the core's `missions::VIEW_LINK_LIMIT`.

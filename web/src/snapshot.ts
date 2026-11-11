@@ -1504,6 +1504,8 @@ export type MissionQuestion = {
   recommend: number | null;
   /** The node the decision stopped. */
   node: string | null;
+  /** The other nodes the decision is about, beside `node`, whose raises wait on it with the Conductor; absent when it names none, and from an older core. */
+  nodes?: string[];
   asked_at_unix_ms: number;
   /** The operator asked the Conductor for something to look at (`자료 요청`); absent until then. */
   material_asked?: boolean;
