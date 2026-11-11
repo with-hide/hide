@@ -57,9 +57,13 @@ pub struct MissionView {
     pub device_id: String,
     pub status: MissionStatus,
     pub scope: MissionScope,
-    /// The branch the mission's results go to (`Mission::destination`);
-    /// absent for a mission that records none, whose destination is the
-    /// project's default branch.
+    /// The branch the mission's results go to. In the snapshot it is the
+    /// branch the core judges the mission against
+    /// (`Runtime::judged_destination`): the one it records, else for a
+    /// mission that records none the project's default branch, so the map
+    /// names the branch the judgment uses; absent only while neither can be
+    /// read. A command's answer, `hide mission show` among them, says what
+    /// the mission records: absent when it records none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
     pub cap: u8,
@@ -770,6 +774,10 @@ struct ViewsMadeFrom {
     /// its card lists the ones still open and whether each was seen; zero
     /// with none linked.
     views_generation: u64,
+    /// Each mission's judged destination (`Runtime::judged_destination`),
+    /// which moves with the project catalog's default branch and not with
+    /// the book.
+    destinations: Vec<Option<String>>,
     made: bool,
 }
 
@@ -4454,6 +4462,13 @@ impl Runtime {
         let laid = self.laid_panes();
         let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
         let views_generation = self.decision_views_generation();
+        let destinations: Vec<Option<String>> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.judged_destination(mission))
+            .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -4466,7 +4481,8 @@ impl Runtime {
             && before.github_edit == self.missions.github_edit
             && before.stale == stale
             && before.sleeping == sleeping
-            && before.laid == laid;
+            && before.laid == laid
+            && before.destinations == destinations;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -4495,7 +4511,8 @@ impl Runtime {
             .book
             .missions
             .iter()
-            .map(|mission| {
+            .zip(&destinations)
+            .map(|(mission, destination)| {
                 let kept = kept_closed(mission)
                     .then(|| {
                         self.snapshot
@@ -4507,7 +4524,10 @@ impl Runtime {
                     .flatten();
                 match kept {
                     Some(view) => view.clone(),
-                    None => self.view_mission(mission, &agents, &sleeping, ledger.as_deref()),
+                    None => MissionView {
+                        destination: destination.clone(),
+                        ..self.view_mission(mission, &agents, &sleeping, ledger.as_deref())
+                    },
                 }
             })
             .collect();
@@ -4553,6 +4573,7 @@ impl Runtime {
             laid,
             rows_and_holds,
             views_generation,
+            destinations,
             made: true,
         };
     }

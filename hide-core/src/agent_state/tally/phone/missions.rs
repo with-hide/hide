@@ -53,6 +53,17 @@ pub struct PhoneMission {
     pub id: String,
     pub title: String,
     pub device_id: String,
+    /// The branch the mission's results go to, as the map names it
+    /// (`MissionView::destination`, PRD mission-destination D-38, B17):
+    /// absent when the core cannot read one, and so from a core before
+    /// destinations, where the phone names no branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// How far the mission goes (`MissionView::scope`): `pr` leaves every
+    /// merge to the operator, so the phone draws no `👤` strip for a node
+    /// the plan gave them (D-35, D-45); absent from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     /// The device's name for a mission away from the paired Mac; `None` on the Mac.
     pub device_label: Option<String>,
     pub status: String,
@@ -200,6 +211,21 @@ pub struct PhoneNode {
     pub pr: Option<u32>,
     pub pr_state: Option<String>,
     pub base_pr: Option<u32>,
+    /// The branch its current pull request merges into, as GitHub last
+    /// answered (`NodePrView::base`), which ends its station line when it
+    /// is not the destination (PRD mission-destination D-14); absent until
+    /// GitHub answered and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_base: Option<String>,
+    /// How many pull requests the step holds besides its current one, the
+    /// `+N` of its PR station (D-37); left out at zero.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub pr_more: usize,
+    /// The pull request an outside step watches (`External::Pr`), its PR
+    /// station; absent for one that watches a branch, for every other step
+    /// and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_pr: Option<u32>,
     pub stage: Option<u8>,
     pub attention: Option<PhoneAttention>,
     /// Where the work is on its way to main.
@@ -314,6 +340,10 @@ struct MissionIn {
     id: String,
     title: String,
     device_id: String,
+    #[serde(default)]
+    destination: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
     status: String,
     #[serde(default)]
     decision: Option<String>,
@@ -375,6 +405,10 @@ struct NodeIn {
     #[serde(default)]
     base_pr: Option<u32>,
     #[serde(default)]
+    prs: Vec<NodePrIn>,
+    #[serde(default)]
+    external: Option<ExternalIn>,
+    #[serde(default)]
     stage: Option<u8>,
     #[serde(default)]
     attention: Option<PhoneAttention>,
@@ -393,6 +427,20 @@ struct NodeIn {
 #[derive(Deserialize)]
 struct WorkerIn {
     agent: String,
+}
+
+/// One of a node's pull requests, the current one last: only its base is read.
+#[derive(Deserialize)]
+struct NodePrIn {
+    #[serde(default)]
+    base: Option<String>,
+}
+
+/// What an outside node watches: only a pull request's number is read.
+#[derive(Deserialize)]
+struct ExternalIn {
+    #[serde(default)]
+    pr: Option<u32>,
 }
 
 /// The facts of one raw agent row the missions join on: whether the core
@@ -563,6 +611,9 @@ fn phone_mission(
                 pr: source.pr,
                 pr_state: source.pr_state,
                 base_pr: source.base_pr,
+                pr_more: source.prs.len().saturating_sub(1),
+                pr_base: source.prs.into_iter().next_back().and_then(|pr| pr.base),
+                external_pr: source.external.and_then(|external| external.pr),
                 stage: source.stage,
                 attention: source.attention,
                 landing: source.landing,
@@ -586,6 +637,8 @@ fn phone_mission(
         id: mission.id,
         title: cut(&mission.title),
         device_id: mission.device_id,
+        destination: mission.destination,
+        scope: mission.scope,
         device_label,
         status: mission.status,
         decision: mission.decision,
@@ -843,6 +896,69 @@ mod tests {
         );
         assert!(sent[1].get("merge").is_none(), "{}", sent[1]);
         assert!(!sent.to_string().contains("private"));
+    }
+
+    /// PRD mission-destination D-14, D-35, D-37, D-38, B17: what the
+    /// desktop's station line and strip read reach the phone, so its line
+    /// ends where the desktop's does: the branch a mission's results go to,
+    /// its scope, the branch a step's current pull request merges into, how
+    /// many more it holds and an outside step's pull request; a core before
+    /// them sends none, and the phone gets no key for them.
+    #[test]
+    fn what_the_station_line_reads_reaches_the_phone() {
+        let prs = json!([
+            {"number": 30, "state": "closed", "url": "https://github.com/private/never-send/30", "base": "main"},
+            {"number": 31, "state": "pending", "url": "https://github.com/private/never-send/31", "base": "release/1.2"},
+        ]);
+        let mut current = mission(
+            "m1",
+            10,
+            "running",
+            vec![
+                node("a", json!({"pr": 31, "prs": prs})),
+                node("b", json!({})),
+                node(
+                    "c",
+                    json!({"kind": "external", "delivery": null, "external": {"pr": 1232}}),
+                ),
+                node(
+                    "d",
+                    json!({"kind": "external", "delivery": null, "external": {"branch": "private-branch"}}),
+                ),
+            ],
+        );
+        current["destination"] = json!("feat/login");
+        let rest = rest(
+            vec![
+                current,
+                mission("m0", 5, "running", vec![node("a", json!({}))]),
+            ],
+            json!({}),
+        );
+        let missions = projected(&rest);
+        let sent = serde_json::to_value(&missions).unwrap();
+        let (new, old) = (&sent["items"][0], &sent["items"][1]);
+        assert_eq!(new["destination"], json!("feat/login"));
+        assert_eq!(new["scope"], json!("merge"));
+        assert_eq!(
+            (&new["nodes"][0]["pr_base"], new["nodes"][1].get("pr_base")),
+            (&json!("release/1.2"), None)
+        );
+        // The step holds two pull requests: its PR station says the current one `+1`; one with a single one says nothing.
+        assert_eq!(
+            (&new["nodes"][0]["pr_more"], new["nodes"][1].get("pr_more")),
+            (&json!(1), None)
+        );
+        // An outside step's pull request is its station; one that watches a branch has none, and the branch stays on the Mac.
+        assert_eq!(
+            (
+                &new["nodes"][2]["external_pr"],
+                new["nodes"][3].get("external_pr")
+            ),
+            (&json!(1232), None)
+        );
+        assert!(old.get("destination").is_none(), "{old}");
+        assert!(!sent.to_string().contains("never-send"));
     }
 
     #[test]

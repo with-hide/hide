@@ -44,7 +44,7 @@ use serde_json::json;
 
 use super::Runtime;
 use crate::missions::{
-    External, MissionBook, MissionNode, MissionStatus, NodeKind, NodeStatus, WakeEvent,
+    External, Mission, MissionBook, MissionNode, MissionStatus, NodeKind, NodeStatus, WakeEvent,
 };
 use crate::model::{GithubProjectSnapshot, PullRequestBadge};
 use crate::node_access::NodeLink;
@@ -445,6 +445,24 @@ impl Runtime {
         changed
     }
 
+    /// The project's default branch as `device`'s worktree catalog lists
+    /// it, what an outside branch and a mission that records no
+    /// destination are judged against; none until the catalog answered.
+    pub(super) fn project_default_branch(&self, device: &str, project: &str) -> Option<String> {
+        self.project_worktrees_on(device, project)
+            .and_then(|listed| listed.base_branch.clone())
+    }
+
+    /// The branch `mission`'s results are judged against (PRD
+    /// mission-destination D-06): the destination it records, else its
+    /// project's default branch; none only while neither can be read.
+    pub(super) fn judged_destination(&self, mission: &Mission) -> Option<String> {
+        mission
+            .destination
+            .clone()
+            .or_else(|| self.project_default_branch(&mission.device_id, &mission.project))
+    }
+
     /// Where `project` on `device` is read: its GitHub repository and what
     /// the branches `asks` name are judged against, copied under the lock
     /// as owned data. Each base is taken once however many nodes name it.
@@ -456,9 +474,7 @@ impl Runtime {
     ) -> (Result<crate::github::Where, String>, Bases) {
         let machine = (device != self.node.as_str()).then_some(device);
         let mut bases = Bases {
-            default: self
-                .project_worktrees_on(device, project)
-                .and_then(|listed| listed.base_branch.clone()),
+            default: self.project_default_branch(device, project),
             merged_heads: BTreeMap::new(),
         };
         let github = self.github_project_on(device, project);

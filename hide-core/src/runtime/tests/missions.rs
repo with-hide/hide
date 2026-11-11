@@ -13190,6 +13190,64 @@ fn a_mission_records_the_branch_its_checkout_is_on_as_its_destination() {
     }
 }
 
+/// B17 and the parent's letter-35602: a mission that records no
+/// destination, as one written before destinations, is drawn with the
+/// branch the core judges it against, its project's default branch, on the
+/// map and the phone alike, here another branch than `main`; its record and
+/// `hide mission show` keep saying it records none, and while that branch is
+/// unread neither screen names one.
+#[test]
+fn a_mission_that_records_no_destination_is_drawn_with_the_default_branch_it_is_judged_against() {
+    use crate::agent_state::phone::{PhoneMissions, project};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    assert_eq!(runtime.missions.book.missions[0].destination, None);
+    let drawn = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        let rest = json!({
+            "navigator": {"agents": []},
+            "missions": serde_json::to_value(&runtime.snapshot.missions).unwrap(),
+        });
+        let phone = PhoneMissions::project(
+            &rest,
+            crate::node::TEST_NODE,
+            &project(&rest, crate::node::TEST_NODE),
+        );
+        let on_phone = phone.find("mission-1").expect("the mission is listed");
+        (
+            runtime.snapshot.missions.items[0].destination.clone(),
+            on_phone.destination.clone(),
+        )
+    };
+    assert_eq!(drawn(&mut runtime), (None, None));
+    // The project's settings name `develop` its default branch.
+    checkout_on(&mut runtime, None, Some("develop"));
+    assert_eq!(
+        drawn(&mut runtime),
+        (Some("develop".to_owned()), Some("develop".to_owned()))
+    );
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "show", "mission": "mission-1"}),
+    )
+    .unwrap();
+    assert_eq!(shown["mission"].get("destination"), None);
+    let record = serde_json::to_value(&runtime.missions.book.missions[0]).unwrap();
+    assert_eq!(record.get("destination"), None);
+    // One that records a destination is drawn with it, whatever the default.
+    runtime.missions.book.missions[0].destination = Some("release/1.2".into());
+    runtime.missions.book_edit += 1;
+    assert_eq!(
+        drawn(&mut runtime),
+        (
+            Some("release/1.2".to_owned()),
+            Some("release/1.2".to_owned())
+        )
+    );
+}
+
 /// B5: a worker of the mission starts its worktree from the destination,
 /// which its admission carries off the lock; a mission that records none
 /// names none, so its worktree starts as it always did.
