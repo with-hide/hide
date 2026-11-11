@@ -2981,8 +2981,8 @@ In the hosted app, the header's device name opens the shared bottom sheet with e
 A device whose protocol differs from the open bundle shows a warning dot and both versions instead of counts; selecting it asks the root loader for its matching bundle or update guidance.
 Neither the root list nor a bundle's picker authenticates to an incompatible device to read its status.
 Choosing another device replaces the page and closes the old connection; drafts and pending actions do not move between devices.
-다른 기기 연결 opens the camera scanner inside the installed app, with a QR-link paste alternative when camera permission is unavailable.
-The browser holds at most sixteen devices and reports its limit or a failed storage write inline.
+다른 기기 연결 opens the add page, which is the first screen's title and three steps under a back arrow, the big `QR 스캔` button, and `QR 링크 붙여넣기 ›` as one small row under it that opens a link field and 연결 on one line in place, so the keyboard never covers 연결; back returns to the list, or to the first screen when no device is kept.
+The browser holds at most sixteen devices: a full browser says so above `QR 스캔` before anything is scanned, and a new device is refused while a kept one can still reconnect; a failed storage write is reported inline.
 기기 지우기 asks for confirmation before removing that browser's saved connection and its notification subscription; scanning a fresh QR connects it again.
 A device that refused this phone's credential (`revoked`) stays listed as a dimmed row marked 연결 해제됨, with the one line 7일 동안 쓰지 않았거나 이 기기에서 해제했어요 and 다시 연결, which opens the QR scanner, beside 기기 지우기.
 The browser keeps that device's name and room but not the refused credential, opens no status check, reconnect or notification worker for it, and a link to it shows the revoked guidance without dialing; a fresh QR from the same device clears the mark.
@@ -3058,6 +3058,8 @@ When hided is out of reach the last list stays dimmed under "연결 안 됨 · M
 A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the connected state never outlasts a hided that has stopped answering by more than 30 seconds.
 A row opens its detail: ← 목록, the elapsed time and the row's head, with 대화 | 터미널 | 볼 것 between ← 목록 and the elapsed time (each tab only when it has something to show; 볼 것 is described below), a Claude Code, Codex, Grok, Pi, omp, Cursor or OpenCode agent on this Mac whose session the engine reports.
 The header keeps the back label, view tabs and elapsed time at their content widths and wraps them when they do not fit, so a narrow phone or a long elapsed time never overlaps the controls.
+Under the agent's title a chip names each open mission and listed pull request the agent belongs to, by its own row only: the mission's flag in its state's colour with its title and `n/m` for its Conductor, or with the step's title for a step's worker, and the pull request's state mark with `#number`; a long title is cut short so a chip never takes more than one line.
+A chip closes the detail and opens that mission's or pull request's page on its tab, whose back arrow returns to that tab's list; a finished mission and an agent that merely works in the same checkout get no chip.
 대화 is the agent's own conversation, its newest 30 messages with the newest at the bottom: the operator's messages as ❯ blocks on a grey ground, the agent's Markdown drawn at full width (headings, emphasis, lists, tables, code wrapped without highlighting and a `mermaid` fence as its diagram the way Markdown Live draws it, shown as code until it is drawn, a link or an image as its text), an interruption as 중단됨, and the time after each turn; pulling to the top loads 30 older messages at a time up to the first, and at 300 it says 최근 300개까지 볼 수 있어요.
 What the agent writes next arrives on its own, and tool output and injected context are never shown.
 Pi, omp and Grok use their recorded native message units and times (a Grok prompt's blocks and a turn's answer runs joined into one message each), with the same 30-message paging and text bounds; every page, idle poll and copied pager proves the reported native owner and exact checkout under its default root again.
@@ -3171,7 +3173,7 @@ The start page with no computer connected is a first screen that says what to do
 It has `hide` with a gear at the right, the title `컴퓨터를 연결하세요`, one line (`Hide는 내 컴퓨터에서 도는 에이전트를 폰에서 보고 답하는 앱이에요.`) and three steps: `컴퓨터에 Hide 설치` (`맥, 윈도우, 리눅스` and a `withhide.dev` link that opens outside the app), `설정 > 모바일 열기` (`컴퓨터의 Hide에서 QR이 보여요`) and `아래 버튼으로 QR 스캔`.
 At the bottom is the big `QR 스캔` button, and under it `체험해 보기` with its one line.
 With two computers or more, or a computer whose connection was refused, the page is the list of computers it was; with one, it opens that computer ([Mobile companion](#mobile-companion)).
-In the iOS app `QR 스캔` opens the camera at once; in a browser, which has no native scanner, it opens the scan and paste page, where the browser's own camera or a pasted link connects.
+In the iOS app `QR 스캔` opens the camera at once; in a browser, which has no native scanner, it opens the add page, where `QR 스캔` opens the browser's own camera drawn as the app's scanner and a pasted link connects too.
 The gear opens the same display and about rows as the Settings tab, with `연결한 컴퓨터가 아직 없어요` under 연결된 컴퓨터, and a back arrow returns to the first screen; a language chosen there applies at once.
 The demo's own Settings tab is unchanged.
 
@@ -3180,6 +3182,8 @@ The camera permission is asked when `QR 스캔` is pressed, never at launch.
 Only a Hide pairing link ends the scan; any other QR code is ignored and the camera keeps looking.
 When the camera is refused, or cannot be opened (another app holds it), the view is not black: it says `카메라를 쓸 수 없어요` with `QR을 읽으려면 카메라 권한이 필요해요. iPhone 설정에서 Hide의 카메라를 켜 주세요.` and a `설정 열기` button that opens the app's page in iPhone Settings, and the close button is there in every state.
 The words are sent by the page, in the language and with the catalog it shows, so the scanner never disagrees with the page.
+A browser draws the same view itself (`WebScanner` in `web/src/mobile/ScanQr.tsx`), dark whatever the page's theme, with the frame where the app draws it and only what is inside it read; it asks for the camera when `QR 스캔` is pressed, stops the camera when it closes, connects or the page is hidden, and ignores any QR that is not a Hide pairing link.
+A camera the browser refuses or cannot open says `카메라를 쓸 수 없어요` with `브라우저에서 이 페이지의 카메라를 허용하거나, QR 링크를 붙여넣으세요.` and a `QR 링크 붙여넣기` button that closes the view and opens the link field, since a page cannot open the browser's settings.
 
 Directional terminal focus stays within the keyboard owner's drawn tab and Agent area, on local and remote devices.
 It selects the pane sharing the requested edge, preferring the greatest shared edge, then the closest perpendicular centre, then layout order.

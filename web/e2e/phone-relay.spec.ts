@@ -223,8 +223,9 @@ test("the device list marks a device that refuses its status check as disconnect
 
 test("the in-app link scanner adds a device and CSP refuses external scripts", async ({ page, relay }) => {
   await page.goto(relay.origin);
-  // No computer yet: the first screen's big button opens the browser's scan and paste page.
+  // No computer yet: the first screen's big button opens the browser's add page, whose pasted link is one row under the scan.
   await page.getByRole("button", { name: "Scan QR code", exact: true }).click();
+  await page.getByRole("button", { name: "Paste QR link", exact: true }).click();
   await page.getByRole("textbox", { name: "Paste QR link" }).fill(relay.qr);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
@@ -236,18 +237,20 @@ test("the in-app link scanner adds a device and CSP refuses external scripts", a
   await expect(page.locator("script[src^='https://']")).toHaveCount(1); // Only the rejected test script.
 });
 
-test("the in-app camera decodes a QR and releases its video track", async ({ page, relay }) => {
+test("the in-app camera decodes a QR inside its frame and releases its video track", async ({ page, relay }) => {
   const qr = qrcode(0, "M"); qr.addData(relay.qr); qr.make();
   const matrix = Array.from({ length: qr.getModuleCount() }, (_, row) =>
     Array.from({ length: qr.getModuleCount() }, (_, column) => qr.isDark(row, column)));
   await page.addInitScript((cells) => {
     navigator.mediaDevices.getUserMedia = async () => {
+      // A wide camera picture with the code where the frame is, as a person aims it.
       const canvas = document.createElement("canvas");
-      canvas.width = canvas.height = (cells.length + 8) * 4;
+      canvas.width = canvas.height = 1920;
       const context = canvas.getContext("2d")!;
+      const left = 960 - ((cells.length + 8) * 4) / 2;
       context.fillStyle = "white"; context.fillRect(0, 0, canvas.width, canvas.height);
       context.fillStyle = "black";
-      cells.forEach((row, y) => row.forEach((dark, x) => { if (dark) context.fillRect((x + 4) * 4, (y + 4) * 4, 4, 4); }));
+      cells.forEach((row, y) => row.forEach((dark, x) => { if (dark) context.fillRect(left + (x + 4) * 4, left + (y + 4) * 4, 4, 4); }));
       const stream = canvas.captureStream(4);
       (window as unknown as { cameraTrack: MediaStreamTrack }).cameraTrack = stream.getVideoTracks()[0]!;
       return stream;

@@ -56,7 +56,7 @@ pub enum StepStatus {
 }
 
 impl StepStatus {
-    fn finished(self) -> bool {
+    pub(crate) fn finished(self) -> bool {
         matches!(self, Self::Done | Self::Dropped)
     }
 }

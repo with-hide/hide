@@ -1205,6 +1205,7 @@ pub(super) fn seed_missed_turn(
                 missed: vec![NewMissedWork {
                     kind: MissedKind::FollowUp,
                     text: missed.into(),
+                    same_as: None,
                 }],
                 ..Default::default()
             },

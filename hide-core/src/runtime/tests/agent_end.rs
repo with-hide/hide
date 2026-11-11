@@ -322,6 +322,7 @@ fn registered(
             .unwrap()
             .context;
     }
+    ready_archive_protections(&mut runtime.lock().unwrap());
     Ending {
         pane,
         engine_pane,
@@ -537,17 +538,189 @@ fn a_refused_close_is_answered_and_the_same_command_closes_the_pane() {
     assert!(ending.open().is_empty());
 }
 
-/// A full archive keeps no conversation and still closes the pane, which is
-/// what the end is for; the answer and the diagnostic log both say the
-/// conversation was not kept.
+/// A full archive makes room for the ended conversation from its oldest
+/// archived session: the conversation is kept, and the oldest record goes
+/// with its sessions' lines in Hide's record, through the delete the archive
+/// already has (operator decision 2026-11-11, replacing B12's refusal).
 #[test]
-fn a_full_archive_closes_the_pane_and_says_the_conversation_was_not_kept() {
+fn a_full_archive_keeps_the_ended_conversation_and_drops_its_oldest_session() {
+    use crate::session_archive::{
+        ArchiveId, MAX_ARCHIVED_SESSIONS, fixture_member, fixture_record,
+    };
+    let ending = ending();
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    let (oldest, newer) = (ArchiveId::new().unwrap(), ArchiveId::new().unwrap());
+    {
+        let mut runtime = ending.runtime.lock().unwrap();
+        runtime.links_work.client = Some(client.clone());
+        let archive = &mut runtime.snapshot.ui_state.session_archive;
+        let members = (1..MAX_ARCHIVED_SESSIONS - 1)
+            .map(|n| fixture_member(&format!("newer-{n}"), (n > 1).then_some("newer-1")))
+            .collect();
+        archive
+            .admit(
+                newer.clone(),
+                fixture_record(members, 2),
+                &|_| false,
+                &|_| false,
+            )
+            .unwrap();
+        archive
+            .admit(
+                oldest.clone(),
+                fixture_record(
+                    vec![
+                        fixture_member("oldest", None),
+                        fixture_member("oldest-child", Some("oldest")),
+                    ],
+                    1,
+                ),
+                &|_| false,
+                &|_| false,
+            )
+            .unwrap();
+        assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS);
+    }
+    let (answer, records) = crate::diagnostics::capture(|| ending.end(false));
+    let answer = answer.unwrap();
+    assert_eq!(answer["pane"], "closed");
+    assert_eq!(answer["conversation"], "archived");
+    assert!(ending.open().is_empty());
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "session_archive.evicted"
+                && record["archive_id"] == oldest.as_str()),
+        "{records:?}"
+    );
+    let deletes = client.deletes_for_test();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].0, oldest.as_str());
+    assert_eq!(
+        deletes[0]
+            .1
+            .iter()
+            .map(|session| session.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["oldest", "oldest-child"]
+    );
+
+    // The delete runs against the real on-disk store, as the link worker
+    // does. Reopening it proves both members' Hide records went and an
+    // unrelated session stayed; native conversation files are never owned
+    // by this delete (session-archive D-15).
+    let store_path = ending._root.path().join("archive-links.sqlite3");
+    let mut identities = deletes[0].1.clone();
+    let mut kept = identities[0].clone();
+    kept.session_id = "kept".into();
+    identities.push(kept.clone());
+    let (mut store, _) = crate::links::store::LinkStore::open(&store_path).unwrap();
+    store
+        .apply_panes(
+            &identities
+                .iter()
+                .map(|session| crate::links::PaneFact {
+                    device_id: session.device_id.clone(),
+                    agent: session.agent.clone(),
+                    session_id: session.session_id.clone(),
+                    cwd: "/repo".into(),
+                    branch: None,
+                })
+                .collect::<Vec<_>>(),
+            1,
+        )
+        .unwrap();
+    assert_eq!(store.held(&identities).unwrap().len(), 3);
+    store.delete_sessions(&deletes[0].1).unwrap();
+    drop(store);
+    let (store, _) = crate::links::store::LinkStore::open(&store_path).unwrap();
+    assert_eq!(
+        store.held(&identities).unwrap(),
+        [kept].into_iter().collect()
+    );
+
+    // The link worker's answer, then the writer's receipt, remove it.
+    let mut runtime = ending.runtime.lock().unwrap();
+    assert!(runtime.ingest_archive_record_deleted(oldest.as_str().to_owned(), Ok(())));
+    let archive = &runtime.snapshot.ui_state.session_archive;
+    assert!(!archive.records.contains_key(&oldest));
+    assert!(archive.records.contains_key(&newer));
+    assert!(
+        archive
+            .find(DEVICE, "codex", SESSION)
+            .is_some_and(|(id, _)| *id != newer),
+        "the ended conversation is archived"
+    );
+    assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS - 1);
+    assert!(
+        runtime
+            .snapshot
+            .navigator
+            .archived_sessions
+            .iter()
+            .all(|row| row.id != oldest.as_str())
+    );
+}
+
+/// A failed eviction enqueue leaves the prior archive intact and does not
+/// turn a worker failure into archive_full or let repeated ends grow it.
+#[test]
+fn an_unavailable_or_full_delete_worker_does_not_admit_past_the_archive_cap() {
+    use crate::session_archive::{
+        ArchiveId, MAX_ARCHIVED_SESSIONS, fixture_member, fixture_record,
+    };
+    for full in [false, true] {
+        let ending = ending();
+        let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+        if full {
+            for n in 0..64 {
+                client
+                    .delete_sessions(format!("other-{n}"), vec![])
+                    .unwrap();
+            }
+        }
+        let id = ArchiveId::new().unwrap();
+        {
+            let mut runtime = ending.runtime.lock().unwrap();
+            runtime.links_work.client = full.then(|| client.clone());
+            runtime.snapshot.ui_state.session_archive.records.insert(
+                id.clone(),
+                fixture_record(
+                    (0..MAX_ARCHIVED_SESSIONS)
+                        .map(|n| fixture_member(&format!("old-{n}"), (n > 0).then_some("old-0")))
+                        .collect(),
+                    1,
+                ),
+            );
+        }
+        let (answer, records) = crate::diagnostics::capture(|| ending.end(false));
+        assert_eq!(answer.unwrap()["conversation"], "none");
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "session_archive.eviction_failed")
+        );
+        let archive = ending.archive();
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive[0].members.len(), MAX_ARCHIVED_SESSIONS);
+        assert_eq!(client.deletes_for_test().len(), if full { 64 } else { 0 });
+    }
+}
+
+/// Only when every archived session is busy, here being resumed, does the
+/// archive keep nothing: the pane still closes, which is what the end is for,
+/// and the answer and the diagnostic log both say the conversation was not
+/// kept.
+#[test]
+fn an_archive_full_of_busy_sessions_closes_the_pane_and_says_the_conversation_was_not_kept() {
     let ending = ending();
     let members = (0..crate::session_archive::MAX_ARCHIVED_SESSIONS)
         .map(|n| {
             crate::session_archive::fixture_member(&format!("old-{n}"), (n > 0).then_some("old-0"))
         })
         .collect();
+    let mut resuming = crate::session_archive::fixture_record(members, 1);
+    resuming.members[0].resume = crate::session_archive::Resume::Queued { front: true };
     ending
         .runtime
         .lock()
@@ -557,7 +730,9 @@ fn a_full_archive_closes_the_pane_and_says_the_conversation_was_not_kept() {
         .session_archive
         .admit(
             crate::session_archive::ArchiveId::new().unwrap(),
-            crate::session_archive::fixture_record(members, 1),
+            resuming,
+            &|_| false,
+            &|_| false,
         )
         .unwrap();
     let (answer, records) = crate::diagnostics::capture(|| ending.end(false));
@@ -565,12 +740,17 @@ fn a_full_archive_closes_the_pane_and_says_the_conversation_was_not_kept() {
     assert_eq!(answer["pane"], "closed");
     assert_eq!(answer["conversation"], "archive_full");
     assert!(ending.open().is_empty());
-    assert_eq!(ending.archive().len(), 1, "nothing older was evicted");
+    assert_eq!(
+        ending.archive().len(),
+        1,
+        "nothing being resumed was evicted"
+    );
     assert!(
         records
             .iter()
             .any(|record| record["kind"] == "agent.end_not_archived"
                 && record["agent_id"] == "agent-2"
+                && record["reason"] == "archive_full"
                 && record["pane_id"] == DEVICE_PANE),
         "{records:?}"
     );

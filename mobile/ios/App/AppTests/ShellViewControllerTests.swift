@@ -116,6 +116,41 @@ final class ShellViewControllerTests: XCTestCase {
         XCTAssertEqual(shell.probe.calls.sorted(), ["main", "main-final"])
     }
 
+    /// The web view makes room for the keyboard once and gives it back: Capacitor makes the web view the controller's own
+    /// view, so a frame measured from the view's bounds shrank again on every layout pass and stayed small after the
+    /// keyboard hid, which left most of the screen black on a phone. Measure from the bounds again and this fails.
+    func testTheWebViewMakesRoomForTheKeyboardOnceAndGivesItBack() throws {
+        let shell = TestShell()
+        shell.folder = folder
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        window.rootViewController = shell
+        window.makeKeyAndVisible()
+        retained = [shell, window]
+        let keyboard = CGRect(x: 0, y: 280, width: 320, height: 200)
+        let post = { (name: Notification.Name, end: CGRect) in
+            NotificationCenter.default.post(name: name, object: nil, userInfo: [
+                UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: end), UIResponder.keyboardAnimationDurationUserInfoKey: 0.0,
+            ])
+        }
+        post(UIResponder.keyboardWillChangeFrameNotification, keyboard)
+        for _ in 0..<3 { shell.view.setNeedsLayout(); shell.view.layoutIfNeeded(); shell.viewDidLayoutSubviews() }
+        XCTAssertEqual(shell.view.frame, CGRect(x: 0, y: 0, width: 320, height: 280))
+        post(UIResponder.keyboardWillChangeFrameNotification, keyboard)
+        XCTAssertEqual(shell.view.frame.height, 280)
+        post(UIResponder.keyboardWillHideNotification, CGRect(x: 0, y: 480, width: 320, height: 200))
+        shell.viewDidLayoutSubviews()
+        XCTAssertEqual(shell.view.frame, CGRect(x: 0, y: 0, width: 320, height: 480))
+    }
+
+    func testTheWebFrameIsTheWindowLessWhatTheKeyboardCovers() {
+        let window = CGRect(x: 0, y: 0, width: 390, height: 844)
+        XCTAssertEqual(ShellViewController.webFrame(in: window, keyboard: nil), window)
+        XCTAssertEqual(ShellViewController.webFrame(in: window, keyboard: CGRect(x: 0, y: 508, width: 390, height: 336)).height, 508)
+        // A keyboard that ends below the screen, or a floating one off it, covers nothing; one above the top covers no more than all.
+        XCTAssertEqual(ShellViewController.webFrame(in: window, keyboard: CGRect(x: 0, y: 844, width: 390, height: 336)), window)
+        XCTAssertEqual(ShellViewController.webFrame(in: window, keyboard: CGRect(x: 0, y: -50, width: 390, height: 900)).height, 0)
+    }
+
     /// The phone's secret is only for the app's own main frame: a sandboxed frame, which is what agent-made HTML runs
     /// in, and a frame of the app's own origin both ask the Keychain plugin for an item and are never heard; the main
     /// frame is. Take the gate out of `ShellViewController` and the frames' calls arrive, and this fails.

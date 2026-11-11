@@ -352,7 +352,7 @@
                             "type": "string"
                         },
                         {
-                            "description": "Not kept: the archive already holds as many sessions as it keeps.",
+                            "description": "Not kept: the archive holds as many sessions as it keeps, and none of them is at rest to make room.",
                             "enum": [
                                 "archive_full"
                             ],
@@ -6665,7 +6665,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a418b93b401556dfb20b1f2d60f26a10ae46a5f46cda0c6cc9f4f40f0986dcf9",
+    "digest": "sha256:7dfbd043af1894f837b44595a6b6402b7afa7efffe61c48ae6b3d676dda2e83c",
     "envelopes": {
         "agent": {
             "answer": "value",

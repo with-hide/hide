@@ -641,7 +641,12 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
             .snapshot
             .ui_state
             .session_archive
-            .admit(id.clone(), fixture_record(vec![root, child], 1))
+            .admit(
+                id.clone(),
+                fixture_record(vec![root, child], 1),
+                &|_| false,
+                &|_| false,
+            )
             .unwrap();
         runtime.ingest_task_operation_result(
             task,
