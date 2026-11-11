@@ -43,7 +43,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 
 ## 1. Before the plan
 
-- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates and the verification strength (`default_strength`).
+- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether a merged worktree is cleaned up (`clean_merged`).
   Each candidate is an agent item: `item` is its name, and `profile` the `--profile` value that starts it (`default` for the built-in); a candidate with `profile_gone` names a profile this machine no longer has and starts no worker.
 - Run `hide agent catalog` for the agent items here: each agent's built-in default and each of its profiles a start can take, `profile` being the `--profile` value that starts it (`default` for the built-in), with its models, its efforts and its account's weekly usage.
   A model is named as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
@@ -148,6 +148,18 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
   Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
   The operator's changes in conversation change this mission only; the settings stay as they are.
+- With the plan, show the options this mission runs with, one line each and in this order, in the operator's language:
+  머지 (the scope and who merges, and any node the operator merges), 워크트리 (whether a merged worktree is cleaned up, and that one with changes or in use stays), 확인 (the verification strength), 동시에 (the cap), 내 폴더 (that your checkout is brought up to the destination when the mission closes, or `없음` when no node's result goes into the destination).
+  A value as Settings › Mission has it ends with `(설정)`; a value this mission changed says why in a few words.
+  The cleanup is Settings' for every mission, so its line is always `(설정)`.
+
+  ```text
+  머지 · 머지까지, 지휘자가 머지 (설정)
+  워크트리 · 머지되면 정리, 변경이 남은 곳은 남김 (설정)
+  확인 · 꼼꼼하게 · 결제 DB 저장 형식이 바뀜
+  동시에 · 4 (설정)
+  내 폴더 · 닫힐 때 feat/login 최신으로 당겨옴
+  ```
 - The plan shows on your pane's mission chip; nothing opens in the operator's lane, so tell them the plan is up in the conversation.
 
 ### Verification strength
@@ -293,7 +305,12 @@ Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a 
   Two things Hide does not notice: a force-push of the destination (a `direct` change read in it stays in while the local branch still holds its commit, and a pull request follows GitHub's merged state alone), and a destination deleted only on the remote, which reads as present while the local branch exists.
   Hide sends no letter for any of these, so look at the destination, here and on the remote (`git ls-remote origin <destination>`), when a start is refused, a node reads unread or a pull request's base is gone.
   It is a change of scope and the operator's to settle: ask with `hide mission decide --line <the branch and what happened> --option <a new destination> --option <stop the mission>`, then plan the destination they name (`"destination": "<branch>"`), or cancel.
-- While the operator's Settings › Mission keeps `머지되면 워크트리 정리` on (the default), Hide removes a done node's worktree and its build cache once GitHub says its pull request merged, when the tree is clean and no agent or running program is in it; the branch always stays, and a worktree with changes or in use stays for the operator. Off, Hide deletes no file.
+- While the operator's Settings › Mission keeps `머지되면 워크트리 정리` on (the default), Hide removes a done node's worktree and its build cache once GitHub says its pull request merged, or once it reads a `direct` change's branch in the destination, when the tree is clean and no agent or running program is in it; the branch always stays, and a worktree with changes or in use stays for the operator (one in use is tried again once it is free). Off, Hide deletes no file.
+- When the mission closes as done or `merge_wait`, and when a waiting one turns done, Hide fetches the project once, whatever its fetch setting, and brings the checkout you created the mission in up to the destination: only when that checkout has the destination out, tracks `origin/<destination>`, is behind it and has no commit of its own, and only as a fast-forward.
+  It never switches the branch, merges, rebases, stashes or resets: a checkout on another branch or detached, with commits of its own, or with changes the fast-forward would overwrite stays as it is.
+  This fast-forward is the one write to the operator's own checkout, and it is Hide's, never yours.
+  Hide then adds one line at the end of the report: `내 폴더도 최신으로 당겨왔어요 (N커밋)`, `내 폴더도 이미 최신이에요`, `내 폴더 N커밋 뒤 · git pull`, or `결과는 <destination>에 들어갔어요 · 내 폴더는 <branch>`; a later close replaces it, so write nothing about the operator's folder yourself.
+  A failed fetch, a `HEAD` that moved meanwhile, a branch that tracks nothing or another branch, and a project on a connected device leave the checkout as it is with no line, the reason only in Hide's log; a cancel, and a mission where no change reached the destination, fetch and pull nothing.
 
 What is not certain is raised on the node to you, with a letter naming the node and why: a pull request merged while a line is missing or failed, a worker that ended with the node not done, a pull request closed without its merge with no other open, a pull request the worker opened that no node holds, a worker Hide could not wake, and a close Hide could not make.
 A raise is yours to settle, never the operator's: record the line, skip it with its reason, restart the worker, wait on purpose with a `hide mission delay` or a node `--hold`, reorder the plan, attach the pull request with `--pr`, set the node's status or drop it.
@@ -366,8 +383,9 @@ The operator's words are the controls; there are no buttons.
   Then `hide mission close --as cancelled`. A cancelled mission is over: nothing reopens it.
 - The map's one control for this is `미션 종료` (End mission): it reaches you as an `end_asked` letter from Hide, which is the operator saying "cancel". A mission with no Conductor is cancelled by Hide at once, its pull requests, branches and workers left as they are, so the next one to take a mission finds nothing to undo.
 - A node dropped by a replan: close its pull request with a comment in the operator's language that says it was dropped from the mission and why (`Dropped from the mission: <reason>`) and keep the branch; commit what is not committed in its worktree and leave the worktree where it is, end its worker, and set `--status dropped`.
-- You never remove a worktree: Hide retires a merged node's clean worktree itself (above), and the operator removes the rest from the project's own `머지됨 N → 정리`.
+- You never remove a worktree: Hide retires a merged or joined node's clean worktree itself (above), and the operator removes the rest from the project's own `머지됨 N → 정리`.
 - Commit for a worker only in a worktree the mission made, never in a folder the operator made or in the main checkout.
+  The one exception is Hide's, not yours: the fast-forward of your checkout to the destination when the mission closes (above).
 
 ## 6. Merging
 
