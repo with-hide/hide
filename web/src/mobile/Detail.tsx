@@ -357,10 +357,10 @@ function Scrollback({ text, more, lines, loading, alternateScreen, conversation 
       {more ? <p className="pb-sm text-center text-body text-muted-foreground">{t("mobile.pullOlder")}</p> : null}
       {alternateScreen && !more ? (
         conversation ? (
-          <Button variant="text" size="inline" className="mb-sm min-h-(--size-touch-target) w-full whitespace-normal text-left text-body text-muted-foreground" data-phone-screen-history onClick={() => setTab("conversation")}>
+          <Button variant="text" size="inline" className="mb-sm min-h-(--size-touch-target) w-full whitespace-normal break-keep wrap-anywhere text-left text-body text-muted-foreground" data-phone-screen-history onClick={() => setTab("conversation")}>
             {t("mobile.screenHistory")}
           </Button>
-        ) : <p className="pb-sm text-body text-muted-foreground" data-phone-screen-history>{t("mobile.screenHistory")}</p>
+        ) : <p className="pb-sm break-keep wrap-anywhere text-body text-muted-foreground" data-phone-screen-history>{t("mobile.screenHistory")}</p>
       ) : null}
       {loading ? <p className="text-body text-muted-foreground">{t("mobile.loading")}</p> : null}
       <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-caption leading-normal text-foreground">
@@ -477,7 +477,7 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
       {keys ? (
-      <div className="grid grid-cols-5 gap-sm" role="group" aria-label={t("mobile.quickKeys")}>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(var(--size-touch-target),1fr))] gap-xs" role="group" aria-label={t("mobile.quickKeys")}>
         {QUICK_KEYS.map((quick) => (
           <Button
             key={quick.key}
@@ -485,7 +485,7 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
             aria-label={t(quick.name)}
             disabled={blocked}
             data-phone-key={quick.key}
-            className="h-(--size-touch-target) rounded-md font-mono text-body"
+            className="h-(--size-touch-target) min-w-0 rounded-md px-none font-mono text-body"
             onClick={() => sendKey(quick.key)}
           >
             {quick.label}

@@ -140,10 +140,11 @@ const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send, and what it reads beyond version 1's input
 /// ([`Capability::Keys`], [`Capability::MouseOutside`]).
-const SENDS: [Capability; 6] = [
+const SENDS: [Capability; 7] = [
     Capability::Screen,
     Capability::Notices,
     Capability::Keys,
+    Capability::PageKeys,
     Capability::Submit,
     Capability::Clipboard,
     Capability::MouseOutside,

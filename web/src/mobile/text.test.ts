@@ -14,8 +14,8 @@ describe("the phone's key tables", () => {
   });
 
   it("names the quick keys by what they press", () => {
-    expect(QUICK_KEYS.map((quick) => korean(quick.name))).toEqual(["Enter", "Escape", "위 화살표", "아래 화살표", "Ctrl-C"]);
-    expect(QUICK_KEYS.map((quick) => english(quick.name))).toEqual(["Enter", "Escape", "Up arrow", "Down arrow", "Ctrl-C"]);
+    expect(QUICK_KEYS.map((quick) => korean(quick.name))).toEqual(["Enter", "Escape", "위 화살표", "아래 화살표", "이전 페이지", "다음 페이지", "Ctrl-C"]);
+    expect(QUICK_KEYS.map((quick) => english(quick.name))).toEqual(["Enter", "Escape", "Up arrow", "Down arrow", "Page up", "Page down", "Ctrl-C"]);
   });
 
   it("carries the reply and start limits as formatted numbers", () => {

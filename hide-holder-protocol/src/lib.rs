@@ -222,6 +222,8 @@ pub enum Capability {
     /// holder whose welcome names this, since an older holder reads it as a
     /// message it does not know and closes the connection.
     Keys,
+    /// The holder reads PageUp and PageDown in a named key frame.
+    PageKeys,
     /// The holder says on a watch whether its terminal edits lines
     /// ([`Facts::line_editing`]); a node that does not accept it, as one
     /// built before it does not, is sent facts without it.
@@ -258,6 +260,7 @@ impl Capability {
             Self::Facts => "facts",
             Self::ProgramPackage => "program_package",
             Self::Keys => "keys",
+            Self::PageKeys => "page_keys",
             Self::LineEditing => "line_editing",
             Self::ForegroundUnread => "foreground_unread",
             Self::AlternateScreen => "alternate_screen",
@@ -275,6 +278,7 @@ impl Capability {
             "facts" => Self::Facts,
             "program_package" => Self::ProgramPackage,
             "keys" => Self::Keys,
+            "page_keys" => Self::PageKeys,
             "line_editing" => Self::LineEditing,
             "foreground_unread" => Self::ForegroundUnread,
             "alternate_screen" => Self::AlternateScreen,
@@ -1001,10 +1005,12 @@ pub enum Key {
     Right,
     Backspace,
     CtrlC,
+    PageUp,
+    PageDown,
 }
 
 impl Key {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 12] = [
         Self::Escape,
         Self::Enter,
         Self::Tab,
@@ -1015,6 +1021,8 @@ impl Key {
         Self::Right,
         Self::Backspace,
         Self::CtrlC,
+        Self::PageUp,
+        Self::PageDown,
     ];
 
     fn code(self) -> u8 {
@@ -1029,6 +1037,8 @@ impl Key {
             Self::Right => 7,
             Self::Backspace => 8,
             Self::CtrlC => 9,
+            Self::PageUp => 10,
+            Self::PageDown => 11,
         }
     }
 

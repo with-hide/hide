@@ -387,6 +387,8 @@ impl Pane {
                 Key::ShiftTab => (ffi::GhosttyKey_GHOSTTY_KEY_TAB, hide_vt::MOD_SHIFT, None),
                 Key::Up => (hide_vt::KEY_UP, 0, None),
                 Key::Down => (hide_vt::KEY_DOWN, 0, None),
+                Key::PageUp => (ffi::GhosttyKey_GHOSTTY_KEY_PAGE_UP, 0, None),
+                Key::PageDown => (ffi::GhosttyKey_GHOSTTY_KEY_PAGE_DOWN, 0, None),
                 Key::Left => (hide_vt::KEY_LEFT, 0, None),
                 Key::Right => (hide_vt::KEY_RIGHT, 0, None),
                 Key::Backspace => (ffi::GhosttyKey_GHOSTTY_KEY_BACKSPACE, 0, None),
@@ -839,16 +841,22 @@ mod tests {
             Key::Right,
             Key::Backspace,
             Key::CtrlC,
+            Key::PageUp,
+            Key::PageDown,
         ];
         assert_eq!(
             pane.keys(&every).unwrap(),
-            b"\x1b\r\t\x1b[Z\x1b[A\x1b[B\x1b[D\x1b[C\x7f\x03"
+            b"\x1b\r\t\x1b[Z\x1b[A\x1b[B\x1b[D\x1b[C\x7f\x03\x1b[5~\x1b[6~"
         );
         // Application cursor keys, then a keyboard protocol that reports
         // Escape and Ctrl+C unambiguously.
         answers(&mut pane, &[b"\x1b[?1h"]);
         assert_eq!(pane.keys(&[Key::Up, Key::Enter]).unwrap(), b"\x1bOA\r");
         answers(&mut pane, &[b"\x1b[>1u"]);
+        assert_eq!(
+            pane.keys(&[Key::PageUp, Key::PageDown]).unwrap(),
+            b"\x1b[5~\x1b[6~"
+        );
         assert_eq!(
             pane.keys(&[Key::Escape, Key::CtrlC]).unwrap(),
             b"\x1b[27u\x1b[99;5u"

@@ -77,6 +77,8 @@ pub fn engine_key(key: &str) -> Option<&'static str> {
         "escape" => Some("esc"),
         "up" => Some("up"),
         "down" => Some("down"),
+        "page_up" => Some("page-up"),
+        "page_down" => Some("page-down"),
         "ctrl_c" => Some("ctrl+c"),
         _ => None,
     }
@@ -111,9 +113,9 @@ pub fn wait_for_input(
         // Reserve payload plus Enter; the bracketed-paste wrapper is
         // protocol framing and is not part of this held payload budget.
         Input::Reply(text) => text.len() + 1,
-        // The supported quick keys encode as one byte or a three-byte
-        // cursor sequence (CSI/SS3), not the length of their logical name.
+        // Reserve their encoded bytes, not the length of the logical name.
         Input::Key("up" | "down") => 3,
+        Input::Key("page-up" | "page-down") => 4,
         Input::Key("enter" | "esc" | "ctrl+c") => 1,
         Input::Key(_) => return Err(PaneError::InputRefused),
     };
@@ -140,6 +142,8 @@ mod tests {
     fn only_the_quick_keys_map_to_engine_keys() {
         assert_eq!(engine_key("escape"), Some("esc"));
         assert_eq!(engine_key("ctrl_c"), Some("ctrl+c"));
+        assert_eq!(engine_key("page_up"), Some("page-up"));
+        assert_eq!(engine_key("page_down"), Some("page-down"));
         assert_eq!(engine_key("ctrl_d"), None);
         assert_eq!(engine_key("prefix+c"), None);
     }

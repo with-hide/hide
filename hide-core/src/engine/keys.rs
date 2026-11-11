@@ -17,6 +17,8 @@ pub enum PaneKey {
     ShiftTab,
     Up,
     Down,
+    PageUp,
+    PageDown,
     Left,
     Right,
     Backspace,
@@ -25,13 +27,15 @@ pub enum PaneKey {
 
 impl PaneKey {
     /// Every key, in the order `hide pane send --help` lists them.
-    pub const ALL: [PaneKey; 10] = [
+    pub const ALL: [PaneKey; 12] = [
         Self::Esc,
         Self::Enter,
         Self::Tab,
         Self::ShiftTab,
         Self::Up,
         Self::Down,
+        Self::PageUp,
+        Self::PageDown,
         Self::Left,
         Self::Right,
         Self::Backspace,
@@ -47,6 +51,8 @@ impl PaneKey {
             Self::ShiftTab => "shift-tab",
             Self::Up => "up",
             Self::Down => "down",
+            Self::PageUp => "page-up",
+            Self::PageDown => "page-down",
             Self::Left => "left",
             Self::Right => "right",
             Self::Backspace => "backspace",
@@ -55,8 +61,8 @@ impl PaneKey {
     }
 
     /// Every key's name, in the order of [`Self::ALL`].
-    pub const NAMES: [&'static str; 10] = {
-        let mut names = [""; 10];
+    pub const NAMES: [&'static str; 12] = {
+        let mut names = [""; 12];
         let mut index = 0;
         while index < Self::ALL.len() {
             names[index] = Self::ALL[index].name();
