@@ -248,7 +248,8 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
       ) : null}
       {/* Where the results go and what the mission applies (PRD mission-destination D-18, D-50): a tag only while a node lands in the destination, the options in grey. */}
       {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} /> : null}
-      <MissionOptionsLine options={options} className="shrink" />
+      {/* The head stays one line (B24): the options take what room is left and truncate, moving to a line of their own only when less than their least width is left. */}
+      <MissionOptionsLine options={options} className="min-w-(--size-mission-options-min) flex-1 basis-0" />
       {/* An end the Conductor was asked for says so until it closes the mission. */}
       {mission.end_asked && mission.conductor.present && missionOpen(mission) ? <span className="shrink-0 text-caption text-mission-hold" data-mission-end-asked="true">{t("mission.end.askedNote")}</span> : null}
       <span className="ml-auto flex shrink-0 items-center gap-xs">
