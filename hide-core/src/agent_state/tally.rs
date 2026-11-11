@@ -315,7 +315,7 @@ pub mod phone {
     pub const LIST_BUDGET: usize = FRAME_LIMIT - 4 * 1024;
 
     /// The bytes `value` takes as the JSON a frame carries.
-    fn wire_len<T: Serialize + ?Sized>(value: &T) -> usize {
+    pub fn wire_len<T: Serialize + ?Sized>(value: &T) -> usize {
         struct Count(usize);
         impl std::io::Write for Count {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

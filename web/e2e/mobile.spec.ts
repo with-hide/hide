@@ -452,8 +452,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(rows).not.toContainText("line 001");
     const scrollback = phone.locator("[data-phone-scrollback]");
     expect(await scrollback.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(48);
-    // B24: a row as wide as the desktop pane wraps at the phone's width; nothing scrolls sideways.
-    await expect(rows).toContainText("wide www");
+    // B24: a line wider than the desktop pane comes as one line, which wraps at the phone's width
+    // rather than at the pane's; nothing scrolls sideways.
+    await expect(rows.locator("span", { hasText: `wide ${"w".repeat(300)}` }).first()).toBeVisible();
     expect(await scrollback.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
     expect(await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
     // B25: pulling to the top brings the older rows, up to what the pane holds.

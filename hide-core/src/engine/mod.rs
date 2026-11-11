@@ -434,8 +434,9 @@ pub(crate) trait Engine: Send + Sync {
     fn read_pane(&self, wait: Wait, pane: &str, source: &str, lines: u32) -> Answer<PaneText>;
     /// The visible screen of a pane with its styling kept.
     fn read_screen(&self, wait: Wait, pane: &str) -> Answer<PaneText>;
-    /// The last `lines` rows of a pane as the terminal drew them, escape
-    /// sequences kept.
+    /// The last `lines` rows of a pane with soft wraps joined, escape
+    /// sequences kept (a holder built before that answers the rows as
+    /// drawn).
     fn read_rows(&self, wait: Wait, pane: &str, lines: u32) -> Answer<PaneText>;
     /// Types `text` into a pane as it is.
     fn send_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
