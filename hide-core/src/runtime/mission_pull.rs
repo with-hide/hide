@@ -13,6 +13,9 @@
 //! What to pull is chosen under the lock from memory (the book and the
 //! worktree catalog); the fetch, the read and the fast-forward run on one
 //! issue worker at a time, off the lock, so a close never waits for them.
+//! Which branch the checkout has out is the read's, made after the fetch,
+//! never the catalog's, and the fast-forward is refused when `HEAD` has
+//! another branch out by then.
 //! What came of it is one diagnostic (`mission.folder_pull`) and, when the
 //! operator has something to read, one line of the mission's report, which a
 //! later close replaces rather than adds to. Nothing else is shown: no
@@ -61,9 +64,6 @@ pub(super) struct Job {
     /// The checkout the mission was made in, the one that moves.
     pub(super) checkout: String,
     pub(super) destination: String,
-    /// The branch the checkout has out as the worktree catalog last read
-    /// it; none when it is detached.
-    pub(super) branch: Option<String>,
 }
 
 /// What came of a pull.
@@ -225,11 +225,6 @@ pub(super) fn pull(node: &dyn NodeLink, job: &Job) -> Pulled {
         }
         Err(error) => return Pulled::skipped_with(Skip::FetchFailed, error.to_string()),
     }
-    if job.branch.as_deref() != Some(job.destination.as_str()) {
-        return Pulled::Elsewhere {
-            branch: job.branch.clone(),
-        };
-    }
     let facts = match crate::node_access::call_as::<CheckoutGit>(
         node,
         Call::CheckoutGit {
@@ -240,9 +235,14 @@ pub(super) fn pull(node: &dyn NodeLink, job: &Job) -> Pulled {
         Ok(facts) => facts,
         Err(error) => return Pulled::skipped_with(Skip::Unread, error.to_string()),
     };
-    // The branch read now must still be the destination's own: the catalog
-    // may be older than a switch, and a branch that tracks another (such as
-    // one cut from `origin/main`) would be moved to that one.
+    // The branch read now, not the catalog's, which may be older than a
+    // switch: a branch of another name is left, whatever it tracks.
+    if facts.branch.as_deref() != Some(job.destination.as_str()) {
+        return Pulled::Elsewhere {
+            branch: facts.branch,
+        };
+    }
+    // The destination tracking another branch would be moved to that one.
     let tracked = format!("origin/{}", job.destination);
     if facts.upstream_state != "tracked" || facts.upstream.as_deref() != Some(tracked.as_str()) {
         return Pulled::skipped(Skip::NoUpstream);
@@ -265,6 +265,7 @@ pub(super) fn pull(node: &dyn NodeLink, job: &Job) -> Pulled {
         Call::BranchCatchUp {
             root: job.checkout.clone(),
             head,
+            branch: Some(job.destination.clone()),
         },
         CATCH_UP_WAIT,
     );
@@ -279,6 +280,8 @@ pub(super) fn pull(node: &dyn NodeLink, job: &Job) -> Pulled {
         Ok(CatchUpOutcome::Dirty { .. }) => held(Held::Changes),
         Ok(CatchUpOutcome::InProgress) => held(Held::InProgress),
         Ok(CatchUpOutcome::HeadMoved) => Pulled::skipped(Skip::HeadMoved),
+        // Switched to another branch at the same commit since the read.
+        Ok(CatchUpOutcome::OtherBranch { branch }) => Pulled::Elsewhere { branch },
         Ok(CatchUpOutcome::NoUpstream) => Pulled::skipped(Skip::NoUpstream),
         Err(error) => Pulled::skipped_with(Skip::Failed, error.to_string()),
     }
@@ -379,18 +382,17 @@ impl Runtime {
             .clone()
             .or_else(|| listed.base_branch.clone())
             .ok_or(Skip::Unlisted)?;
-        let branch = listed
+        if !listed
             .worktrees
             .iter()
-            .find(|worktree| worktree.path == checkout)
-            .ok_or(Skip::Unlisted)?
-            .branch
-            .clone();
+            .any(|worktree| worktree.path == checkout)
+        {
+            return Err(Skip::Unlisted);
+        }
         let job = Job {
             project: mission.project.clone(),
             checkout,
             destination,
-            branch,
         };
         let device = mission.device_id.clone();
         let node = self.node_link(&device).map_err(|_| Skip::Unreachable)?;
@@ -570,13 +572,16 @@ mod tests {
             git(&self.merges, &["push", "-q", "origin", "feat/login"]);
         }
 
-        fn job(&self, branch: Option<&str>) -> Job {
+        fn job(&self) -> Job {
             Job {
                 project: self.checkout.to_string_lossy().into_owned(),
                 checkout: self.checkout.to_string_lossy().into_owned(),
                 destination: "feat/login".into(),
-                branch: branch.map(str::to_owned),
             }
+        }
+
+        fn branch(&self) -> String {
+            git(&self.checkout, &["branch", "--show-current"])
         }
 
         fn head(&self) -> String {
@@ -596,7 +601,7 @@ mod tests {
     fn a_checkout_on_the_destination_only_behind_is_fast_forwarded_by_its_own_fetch() {
         let repos = Repos::new();
         repos.land(3);
-        let job = repos.job(Some("feat/login"));
+        let job = repos.job();
         assert_eq!(pull(&own_host(), &job), Pulled::Updated { commits: 3 });
         assert_eq!(repos.head(), repos.origin_head());
         assert_eq!(
@@ -614,7 +619,7 @@ mod tests {
     #[test]
     fn a_checkout_at_or_ahead_of_its_destination_on_origin_reads_current() {
         let repos = Repos::new();
-        let job = repos.job(Some("feat/login"));
+        let job = repos.job();
         assert_eq!(pull(&own_host(), &job), Pulled::Current);
         git(&repos.checkout, &["switch", "-q", "-c", "fix"]);
         commit(&repos.checkout, "fix", "fixed\n");
@@ -640,7 +645,7 @@ mod tests {
         let repos = Repos::new();
         git(&repos.checkout, &["remote", "remove", "origin"]);
         let head = repos.head();
-        let pulled = pull(&own_host(), &repos.job(Some("feat/login")));
+        let pulled = pull(&own_host(), &repos.job());
         assert_eq!(pulled, Pulled::skipped(Skip::NoOrigin));
         assert_eq!(pulled.line("feat/login"), None);
         assert_eq!(repos.head(), head);
@@ -655,7 +660,7 @@ mod tests {
         repos.land(2);
         commit(&repos.checkout, "mine", "mine\n");
         let head = repos.head();
-        let pulled = pull(&own_host(), &repos.job(Some("feat/login")));
+        let pulled = pull(&own_host(), &repos.job());
         assert_eq!(
             pulled,
             Pulled::Behind {
@@ -674,7 +679,7 @@ mod tests {
         std::fs::write(repos.checkout.join("landed-0"), "the operator's own\n").unwrap();
         let head = repos.head();
         assert_eq!(
-            pull(&own_host(), &repos.job(Some("feat/login"))),
+            pull(&own_host(), &repos.job()),
             Pulled::Behind {
                 commits: 1,
                 why: Held::Changes
@@ -695,7 +700,7 @@ mod tests {
         repos.land(1);
         git(&repos.checkout, &["switch", "-q", "main"]);
         let head = repos.head();
-        let pulled = pull(&own_host(), &repos.job(Some("main")));
+        let pulled = pull(&own_host(), &repos.job());
         assert_eq!(
             pulled,
             Pulled::Elsewhere {
@@ -710,7 +715,7 @@ mod tests {
         );
 
         git(&repos.checkout, &["switch", "-q", "--detach", "HEAD"]);
-        let pulled = pull(&own_host(), &repos.job(None));
+        let pulled = pull(&own_host(), &repos.job());
         assert_eq!(pulled, Pulled::Elsewhere { branch: None });
         assert_eq!(repos.head(), head);
         assert_eq!(
@@ -719,20 +724,65 @@ mod tests {
         );
     }
 
-    /// B36 with a catalog older than a switch: the checkout read now has
-    /// another branch out, which tracks another upstream, so nothing moves.
+    /// B36 with a catalog older than a switch: a branch cut from the
+    /// destination's own upstream (`git switch -c topic origin/main`) tracks
+    /// it and is behind it, yet is another branch, so nothing moves.
     #[test]
-    fn a_checkout_switched_after_the_catalog_read_is_not_moved() {
+    fn a_branch_cut_from_the_destinations_upstream_is_left_and_named() {
         let repos = Repos::new();
         repos.land(1);
-        git(&repos.checkout, &["switch", "-q", "main"]);
-        git(&repos.checkout, &["branch", "-q", "-u", "origin/main"]);
+        git(&repos.merges, &["push", "-q", "origin", "feat/login:main"]);
+        git(
+            &repos.checkout,
+            &["switch", "-q", "-c", "topic", "origin/main"],
+        );
         let head = repos.head();
+        let job = Job {
+            destination: "main".into(),
+            ..repos.job()
+        };
+        let pulled = pull(&own_host(), &job);
         assert_eq!(
-            pull(&own_host(), &repos.job(Some("feat/login"))),
-            Pulled::skipped(Skip::NoUpstream)
+            pulled,
+            Pulled::Elsewhere {
+                branch: Some("topic".into())
+            }
         );
         assert_eq!(repos.head(), head);
+        assert_eq!(repos.branch(), "topic");
+        assert_eq!(
+            pulled.line("main").as_deref(),
+            Some("결과는 main에 들어갔어요 · 내 폴더는 topic")
+        );
+    }
+
+    /// B36 between the read and the fast-forward: the operator switched to
+    /// another branch at the same commit that tracks the same upstream, so
+    /// only the branch the node is asked to keep tells them apart.
+    #[test]
+    fn a_switch_to_another_branch_after_the_read_is_not_fast_forwarded() {
+        let repos = Repos::new();
+        repos.land(1);
+        let head = repos.head();
+        let checkout = repos.checkout.clone();
+        let link = Between(own_host(), move || {
+            git(&checkout, &["switch", "-q", "-c", "other"]);
+            git(&checkout, &["branch", "-q", "-u", "origin/feat/login"]);
+        });
+        let pulled = pull(&link, &repos.job());
+        assert_eq!(
+            pulled,
+            Pulled::Elsewhere {
+                branch: Some("other".into())
+            }
+        );
+        assert_eq!(repos.head(), head);
+        assert_eq!(repos.branch(), "other");
+        assert_eq!(git(&repos.checkout, &["rev-parse", "feat/login"]), head);
+        assert_eq!(
+            pulled.line("feat/login").as_deref(),
+            Some("결과는 feat/login에 들어갔어요 · 내 폴더는 other")
+        );
     }
 
     /// B37: a fetch that fails leaves the checkout as it is and says nothing
@@ -747,7 +797,7 @@ mod tests {
             &["remote", "set-url", "origin", gone.to_str().unwrap()],
         );
         let head = repos.head();
-        let pulled = pull(&own_host(), &repos.job(Some("feat/login")));
+        let pulled = pull(&own_host(), &repos.job());
         assert!(
             matches!(
                 pulled,
@@ -770,7 +820,7 @@ mod tests {
         repos.land(1);
         let checkout = repos.checkout.clone();
         let link = Between(own_host(), move || commit(&checkout, "meanwhile", "x\n"));
-        let pulled = pull(&link, &repos.job(Some("feat/login")));
+        let pulled = pull(&link, &repos.job());
         assert_eq!(pulled, Pulled::skipped(Skip::HeadMoved));
         assert_eq!(pulled.line("feat/login"), None);
         assert_eq!(
@@ -786,7 +836,7 @@ mod tests {
         let repos = Repos::new();
         git(&repos.checkout, &["branch", "-q", "--unset-upstream"]);
         assert_eq!(
-            pull(&own_host(), &repos.job(Some("feat/login"))),
+            pull(&own_host(), &repos.job()),
             Pulled::skipped(Skip::NoUpstream)
         );
     }

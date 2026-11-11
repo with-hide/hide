@@ -1744,6 +1744,7 @@ impl crate::node_access::NodeLink for PullNode {
                 "read",
                 serde_json::to_value(hide_node_link::worktrees::CheckoutGit {
                     head_sha: Some(HEAD.into()),
+                    branch: Some("feat/login".into()),
                     upstream: Some("origin/feat/login".into()),
                     upstream_state: "tracked".into(),
                     ahead: Some(0),
