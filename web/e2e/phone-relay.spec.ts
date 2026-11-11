@@ -40,6 +40,65 @@ const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>
 });
 test.use({ viewport: { width: 390, height: 844 }, locale: "en-US" });
 
+test.describe("mission graph touch", () => {
+  test.use({ viewport: { width: 393, height: 852 }, hasTouch: true, isMobile: true });
+
+  // UI_BEHAVIOR.md: a finger pans from a card, two fingers pinch, a tap opens its worker.
+  // Native input matters: dispatching synthetic pointer events skips implicit capture transfer.
+  test("card touches keep panning and pinching across successive moves, then a tap opens the worker", async ({ page, relay }) => {
+    await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?demo=1`);
+    await page.locator('[data-phone-tab="missions"]').tap();
+    await page.locator('[data-phone-mission="mission-release"]').tap();
+    const canvas = page.locator("[data-mission-canvas]");
+    const card = page.locator('[data-mission-node="rehearse"]');
+    await expect(canvas.locator('[data-dependency-layout="layered"]')).toBeVisible();
+    await expect(card).toBeVisible();
+    for (let step = 0; step < 3; step++) await page.locator('[data-mission-zoom-step="in"]').tap();
+    await card.scrollIntoViewIfNeeded();
+    const bounds = await card.boundingBox();
+    expect(bounds).not.toBeNull();
+    const at = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
+    // Ensure the gesture really starts inside the card, rather than its surrounding canvas.
+    expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-mission-node]")?.dataset.missionNode, at)).toBe("rehearse");
+    const input = await page.context().newCDPSession(page);
+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", points: { x: number; y: number }[]) => input.send("Input.dispatchTouchEvent", {
+      type, touchPoints: points.map((point, id) => ({ ...point, id, radiusX: 4, radiusY: 4, force: 1 })),
+    });
+    try {
+      let top = await canvas.evaluate((element) => element.scrollTop);
+      const direction = top >= 45 ? 1 : -1;
+      await touch("touchStart", [at]);
+      for (const distance of [15, 30, 45]) {
+        await touch("touchMove", [{ x: at.x, y: at.y + direction * distance }]);
+        await expect.poll(async () => Math.abs(await canvas.evaluate((element) => element.scrollTop) - top)).toBeGreaterThan(10);
+        top = await canvas.evaluate((element) => element.scrollTop);
+      }
+      await touch("touchEnd", []);
+      await expect(page.locator("[data-phone-detail]")).toHaveCount(0);
+      await card.scrollIntoViewIfNeeded();
+      const next = await card.boundingBox();
+      expect(next).not.toBeNull();
+      const middle = { x: next!.x + next!.width / 2, y: next!.y + next!.height / 2 };
+      const fingers = (spread: number) => [{ x: middle.x - spread, y: middle.y }, { x: middle.x + spread, y: middle.y }];
+      for (const point of fingers(20)) {
+        expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-mission-node]")?.dataset.missionNode, point)).toBe("rehearse");
+      }
+      let scale = Number(await canvas.getAttribute("data-mission-scale"));
+      await touch("touchStart", fingers(20));
+      for (const spread of [25, 30, 35]) {
+        await touch("touchMove", fingers(spread));
+        await expect.poll(async () => Number(await canvas.getAttribute("data-mission-scale"))).toBeGreaterThan(scale + 0.05);
+        scale = Number(await canvas.getAttribute("data-mission-scale"));
+      }
+      await touch("touchEnd", []);
+      await expect(page.locator("[data-phone-detail]")).toHaveCount(0);
+      await page.locator('[data-mission-zoom-step="fit"]').tap();
+      await card.tap();
+      await expect(page.locator('[data-phone-detail="local|a3"]')).toBeVisible();
+    } finally { await input.detach(); }
+  });
+});
+
 async function pair(page: import("@playwright/test").Page, relay: Awaited<ReturnType<typeof startPhoneRelay>>) {
   await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
   await page.getByRole("button", { name: "Connect", exact: true }).click();

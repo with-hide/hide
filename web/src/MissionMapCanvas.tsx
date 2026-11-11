@@ -382,7 +382,11 @@ function useTouchMap(box: HTMLDivElement | null, enabled: boolean, zoom: (factor
     },
     onPointerUp: end,
     onPointerCancel: end,
-    onLostPointerCapture: end,
+    onLostPointerCapture: (event: PointerEvent<HTMLElement>) => {
+      // Moving implicit touch capture from a card to the canvas releases the
+      // card first. Its bubbling event does not end the canvas's gesture.
+      if (event.target === event.currentTarget) end(event);
+    },
     onClickCapture: (event: SyntheticEvent) => {
       if (!swallow.current) return;
       event.preventDefault();
