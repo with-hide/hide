@@ -1438,6 +1438,13 @@ pub struct Mission {
     pub conductor: Conductor,
     pub status: MissionStatus,
     pub scope: MissionScope,
+    /// The branch the mission's results go to (PRD mission-destination
+    /// D-02): its changes start from it, a `direct` change is merged into
+    /// it, and whether a change is in is asked of it. None for a mission
+    /// written before it, or made while the project's branches were not
+    /// read yet, which stands for the project's default branch (D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub cap: u8,
     /// Settings › Mission's worker candidates when the mission was
     /// created (D-34, B48); a book written before them has none, which
@@ -2380,6 +2387,10 @@ pub struct PlanInput {
     pub title: Option<String>,
     #[serde(default)]
     pub scope: Option<MissionScope>,
+    /// The branch the results go to (`Mission::destination`); left out, the
+    /// mission keeps the one it has.
+    #[serde(default)]
+    pub destination: Option<String>,
     #[serde(default)]
     pub cap: Option<u8>,
     #[serde(default)]
@@ -2667,6 +2678,13 @@ pub(crate) fn apply_plan(
     {
         return Err("mission_text_invalid".into());
     }
+    if input
+        .destination
+        .as_deref()
+        .is_some_and(|branch| !valid_destination(branch))
+    {
+        return Err("mission_destination_invalid".into());
+    }
     if input.cap.is_some_and(|cap| !(1..=CAP_LIMIT).contains(&cap)) {
         return Err("mission_cap_out_of_range".into());
     }
@@ -2885,8 +2903,29 @@ pub(crate) fn apply_plan(
     if input.github.is_some() {
         next.github.clone_from(&input.github);
     }
+    if input.destination.is_some() && input.destination != next.destination {
+        next.destination.clone_from(&input.destination);
+        // What Hide read of each branch was read against the destination
+        // before; the next read answers for this one.
+        for node in &mut next.nodes {
+            node.in_main = None;
+        }
+    }
     next.updated_at_unix_ms = now;
     Ok(next)
+}
+
+/// Whether `branch` can name a destination: one line that Git takes as a
+/// branch and never as an option, a range or a remote's copy, since Hide
+/// reads `<branch>` and `origin/<branch>` itself.
+fn valid_destination(branch: &str) -> bool {
+    valid_text(branch, TITLE_LIMIT)
+        && branch == branch.trim()
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && !branch.chars().any(char::is_whitespace)
+        && !branch.starts_with("origin/")
+        && branch != "HEAD"
 }
 
 /// A node's steps: at most `STEP_LIMIT`, each one line of text.
@@ -3363,6 +3402,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_checks_invalid" => {
             "Give --checks as <passed>/<total> with total above 0 and passed at most total"
         }
+        "mission_destination_invalid" => {
+            "Name the plan's destination as one branch name, such as feat/login, with no remote before it"
+        }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
         }
@@ -3822,6 +3864,7 @@ pub(crate) mod tests {
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
+            destination: None,
             cap: 4,
             candidates: Vec::new(),
             strength: None,
@@ -3920,6 +3963,7 @@ pub(crate) mod tests {
         PlanInput {
             title: None,
             scope: None,
+            destination: None,
             cap: None,
             github: None,
             check: None,

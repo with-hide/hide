@@ -5590,6 +5590,7 @@
                 "mission_steps_invalid",
                 "mission_checkers_invalid",
                 "mission_external_invalid",
+                "mission_destination_invalid",
                 "mission_machine_node_refused",
                 "mission_profile_unknown",
                 "mission_candidate_refused"
@@ -6669,7 +6670,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:3a7b5bbf10670d6490b3a306d4fc589062793cfef9edee6f81775c18595ec54d",
+    "digest": "sha256:83bdc978cb3bad423fb3c43fc3fe12b0dc10e654cb68946ad2e2e06fa8af476b",
     "envelopes": {
         "agent": {
             "answer": "value",

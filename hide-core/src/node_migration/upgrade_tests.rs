@@ -33,7 +33,7 @@ const NOT_USED: &[&str] = &[
     "dropped",
 ];
 
-fn fixtures() -> Vec<PathBuf> {
+pub(crate) fn fixtures() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/release-state");
     let mut folders: Vec<PathBuf> = std::fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("{}: {error}", root.display()))
@@ -62,6 +62,19 @@ fn copy_tree(from: &Path, to: &Path) {
                 .unwrap();
         }
     }
+}
+
+/// A copy of a released folder as this build's start leaves it before the
+/// core reads it (`convert`, then `name_devices`), for a test of what one
+/// store then reads as.
+pub(crate) fn started(fixture: &Path) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(fixture, dir.path());
+    let marker = json(dir.path(), MARKER_FILE);
+    let node = NodeId::parse(marker["node"].as_str().unwrap()).unwrap();
+    convert(dir.path(), &node).unwrap();
+    name_devices(dir.path(), &node).unwrap();
+    dir
 }
 
 fn json(state: &Path, name: &str) -> Value {

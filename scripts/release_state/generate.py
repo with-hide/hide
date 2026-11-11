@@ -190,7 +190,10 @@ def generate(tag, out, home_out):
             "tag": tag, "commit": manifest["commit"], "core_node": CORE_ID, "device": {"alias": "mini", "machine_id": DEVICE_ID},
             "steps": [{"step": step["step"], "ok": step["ok"],
                        **({} if step["ok"] else {"why": str(step["detail"])[:300]})}
-                      for step in report["steps"]]}, indent=1) + "\n")
+                      for step in report["steps"]],
+            # Each mission as the release published it, which the upgrade
+            # test holds a later build's reading of the same records to.
+            "missions": report.get("missions") or []}, indent=1) + "\n")
         print(f"wrote {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out}; the old core's log is {log}")
     finally:
         docker("cp", f"{core}:/home/me/hided.log", str(log), check=False, capture=True)

@@ -502,6 +502,8 @@ It copies each folder private to the account, as a core writes its files, becaus
 
 A change that stores a device or machine id, or changes how an agent's launch, sleep or archive record, the project settings or the kit's record are read, adds a step to the scenario that makes a release write it, and the release that ships the change adds the first folder that carries it; when released builds already write the field, the change regenerates their folders with the new step.
 A scenario step a release itself refuses is recorded as not done in `<tag>.json` beside the folder, with the release's answer.
+A change to how a stored mission is read is held to what the release itself showed: the scenario has the release store missions in each state it keeps (closed done, waiting for a branch, running with nodes at work, stacked, gated, waiting on an outside branch, verified) and keeps each as the release published it in `<tag>.json` (`missions`), cut to what the record alone decides, and `runtime::tests::missions::a_released_builds_missions_read_as_that_build_published_them` compares this build's reading of the same records with it and runs one evaluation, which may move nothing.
+A folder made before the scenario kept that view (v1.2.6 and earlier) names none, and its missions are only read and evaluated.
 The step `a Home started on the core and the device` makes each release write the old Home registration (flagged `home`) on both machines, and the upgrade test holds that this build loads it as the registration it was, with one pending retirement per device that follows the device's renaming (PRD retire-hide-home).
 
 ### Agent screen rules
