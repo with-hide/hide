@@ -356,14 +356,14 @@ impl Criterion {
         }
     }
 
-    /// Whether the line is one only the operator's answer goes past (D-13):
-    /// the check command and the CI on an answered decision, a human gate
-    /// only by the operator's answer itself (`Runtime::settle_gate`).
+    /// Whether the line, as it is shown now, is one only the operator's
+    /// answer goes past (D-13, narrowed by the principle of 2026-11-11): a
+    /// failed CI, on an answered decision. A check line and a CI line with
+    /// no failed answer are the Conductor's to skip with its reason; a human
+    /// gate is passed only by the operator's answer itself
+    /// (`Runtime::settle_gate`) and never skipped.
     pub(crate) fn protected(&self) -> bool {
-        matches!(
-            self.kind,
-            CriterionKind::Check | CriterionKind::Ci | CriterionKind::Human
-        )
+        self.kind == CriterionKind::Ci && self.state == CriterionState::Fail
     }
 
     /// The operator passes the node's human gate with `words` from `via`

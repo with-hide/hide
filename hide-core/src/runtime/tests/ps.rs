@@ -345,6 +345,8 @@ fn mission(
         delay: None,
         delay_until_unix_ms: None,
         report: None,
+        safety_net: None,
+        skipped_alone: Vec::new(),
         created_at_unix_ms: 0,
         started_at_unix_ms: None,
         closed_at_unix_ms: None,

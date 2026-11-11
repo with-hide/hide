@@ -104,6 +104,17 @@ pub struct MissionView {
     /// When the delay ends by itself (`Mission::delay_until_unix_ms`).
     pub delay_until_unix_ms: Option<u64>,
     pub report: Option<String>,
+    /// The mission's one card for the raises its Conductor has not settled
+    /// (`mission_health::safety_net`): none while nothing is held, with no
+    /// Conductor at once, and with one once the oldest held raise stood 20
+    /// minutes. The operator's turn for raised nodes is this and nothing
+    /// per node (hide-private docs/missions.md, the principle of
+    /// 2026-11-11).
+    pub safety_net: Option<SafetyNetView>,
+    /// The lines the Conductor skipped on its own, with no decision of the
+    /// operator's, oldest first: what the map's `Conductor가 정한 것` and the
+    /// close report list.
+    pub skipped_alone: Vec<SkippedAloneView>,
     pub created_at_unix_ms: u64,
     pub started_at_unix_ms: Option<u64>,
     pub closed_at_unix_ms: Option<u64>,
@@ -449,13 +460,87 @@ pub struct NodePrView {
     pub url: Option<String>,
 }
 
+/// The mission's safety net as its card draws it (`MissionView::safety_net`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SafetyNetView {
+    /// A Conductor holds the mission: the card leads to its terminal;
+    /// without one it offers 지휘 다시 열기.
+    pub conductor_present: bool,
+    /// What the card counts its minutes from: the oldest held raise, or the
+    /// Conductor's arrival when that is later.
+    pub since_unix_ms: u64,
+    /// The held nodes, oldest raise first.
+    pub nodes: Vec<HeldNodeView>,
+}
+
+/// One node the safety net holds: its raise's reason and since when it
+/// stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HeldNodeView {
+    pub key: String,
+    pub title: String,
+    pub reason: crate::missions::AttentionReason,
+    pub pr: Option<u32>,
+    pub since_unix_ms: u64,
+}
+
+/// A line the Conductor skipped on its own (no decision of the
+/// operator's): the node, the line, why, who and when.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SkippedAloneView {
+    pub node: String,
+    pub title: String,
+    pub line: String,
+    pub kind: CriterionKind,
+    /// The line's own words, for a line the plan wrote (`own`, `defect`);
+    /// a check, a CI, a review or a verification is named by its kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub reason: String,
+    pub by: String,
+    pub at_unix_ms: u64,
+}
+
+/// The lines of `mission` its Conductor skipped with no decision of the
+/// operator's, oldest first.
+pub(crate) fn skipped_alone(mission: &Mission) -> Vec<SkippedAloneView> {
+    let mut out: Vec<SkippedAloneView> = mission
+        .nodes
+        .iter()
+        .flat_map(|node| {
+            node.criteria.iter().filter_map(move |line| {
+                let skip = line.skip.as_ref().filter(|skip| skip.decision.is_none())?;
+                let by = line
+                    .by
+                    .as_ref()
+                    .filter(|by| by.role == crate::mission_criteria::Role::Conductor)?;
+                (line.state == CriterionState::Skipped).then(|| SkippedAloneView {
+                    node: node.key.clone(),
+                    title: node.title.clone(),
+                    line: line.key.clone(),
+                    kind: line.kind,
+                    text: line.text.clone(),
+                    reason: skip.reason.clone(),
+                    by: by.name.clone(),
+                    at_unix_ms: by.at_unix_ms,
+                })
+            })
+        })
+        .collect();
+    out.sort_by_key(|skip| skip.at_unix_ms);
+    out
+}
+
 /// The `!` a node's card carries and the line its hover says.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AttentionView {
     pub reason: crate::missions::AttentionReason,
     pub pr: Option<u32>,
+    /// The operator only for a reason only they settle
+    /// (`AttentionReason::operator_first`); every other raise is the
+    /// Conductor's, and the safety net is the mission's.
     pub to: AttentionTo,
-    /// When it reached whom it waits on now.
+    /// When it was raised, which names it in the operator's answer.
     pub since_unix_ms: u64,
     /// Waiting on the operator, a Needs You row carries it: its Conductor's
     /// or its worker's. Without one the mission itself is the Needs You
@@ -578,6 +663,12 @@ pub(crate) struct MissionRuntime {
     /// rested before it is raised at once; an entry goes once its stall
     /// stops standing, so it holds at most one per node standing.
     pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
+    /// Since when this daemon has seen each mission's Conductor present
+    /// (`Runtime::note_conductors_seen`), which the safety net counts a
+    /// Conductor's 20 minutes from when it came after the raise. Memory only,
+    /// at most one entry per mission of the book: a restart, a take or a
+    /// resume starts it again.
+    pub(super) conductor_seen: std::collections::HashMap<String, u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
@@ -2002,16 +2093,15 @@ impl Runtime {
                     .ok_or("mission_unknown")?;
                 target.conductor = conductor;
                 target.handover = None;
-                // What reached the operator because the Conductor taken
-                // over did not answer goes to the new one first (B15).
-                if present {
-                    super::mission_health::ask_new_conductor(target, now);
-                }
+                // The new Conductor is told each raise it now settles, and its
+                // safety-net time starts now.
+                super::mission_health::tell_new_conductor(target);
                 target.updated_at_unix_ms = now;
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.taken",
                     "mission": mission, "pane": pane, "handed": handed,
                 }));
+                self.note_conductor_arrived(&mission, now);
                 self.save_missions();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
@@ -2495,6 +2585,7 @@ impl Runtime {
             if let Some(mission) = self.missions.book.get_mut(&id) {
                 record_wake(mission, String::new(), None, WakeEvent::Resumed, None, None);
             }
+            self.note_conductor_arrived(&id, now);
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.conductor_resumed",
                 "mission": id, "pane": pane,
@@ -3677,7 +3768,7 @@ impl Runtime {
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(record)),
                     attention: node.attention.as_ref().map(|attention| {
-                        let operator = attention.operator_at_unix_ms.is_some();
+                        let operator = attention.reason.operator_first();
                         let on_row =
                             operator && self.mission_attention_has_row(ledger, mission, node);
                         AttentionView {
@@ -3688,9 +3779,7 @@ impl Runtime {
                             } else {
                                 AttentionTo::Conductor
                             },
-                            since_unix_ms: attention
-                                .operator_at_unix_ms
-                                .unwrap_or(attention.since_unix_ms),
+                            since_unix_ms: attention.since_unix_ms,
                             on_row,
                             // A cancelled mission and a dropped node keep
                             // their record but ask nothing now.
@@ -3830,6 +3919,28 @@ impl Runtime {
             delay: mission.delay.clone(),
             delay_until_unix_ms: mission.delay.as_ref().and(mission.delay_until_unix_ms),
             report: mission.report.clone(),
+            safety_net: self
+                .mission_safety_net(mission, crate::delivery::worker::now())
+                .map(|net| SafetyNetView {
+                    conductor_present: net.conductor_present,
+                    since_unix_ms: net.since_unix_ms,
+                    nodes: net
+                        .nodes
+                        .iter()
+                        .filter_map(|&at| {
+                            let node = &mission.nodes[at];
+                            let attention = node.attention.as_ref()?;
+                            Some(HeldNodeView {
+                                key: node.key.clone(),
+                                title: node.title.clone(),
+                                reason: attention.reason,
+                                pr: attention.pr,
+                                since_unix_ms: attention.since_unix_ms,
+                            })
+                        })
+                        .collect(),
+                }),
+            skipped_alone: skipped_alone(mission),
             created_at_unix_ms: mission.created_at_unix_ms,
             started_at_unix_ms: mission.started_at_unix_ms,
             closed_at_unix_ms: mission.closed_at_unix_ms,
@@ -3970,6 +4081,17 @@ impl Runtime {
             .filter_map(|mission| self.conductor_letters(mission, ledger.as_deref(), now).1)
             .min()
             .unwrap_or(u64::MAX);
+        // A safety net that comes up with nothing else moving is drawn when
+        // its 20 minutes pass.
+        let net_due = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter_map(|mission| self.mission_safety_net_due(mission, now))
+            .min()
+            .unwrap_or(u64::MAX);
+        let held_due = held_due.min(net_due);
         let until = ledger.as_deref().map_or(u64::MAX, |ledger| {
             crate::coordination::mission_reservations_end(ledger, now)
         });
@@ -3999,10 +4121,12 @@ impl Runtime {
 }
 
 impl Runtime {
-    /// Lays each device's missions that are their own Needs You item (no
-    /// Conductor or worker row carries what waits on the operator, B14) on
-    /// that device's scope, oldest first, so its Needs You number counts
-    /// them; run after the mission views, which decide `on_row`.
+    /// Lays each device's missions that are their own Needs You item on that
+    /// device's scope, oldest first, so its Needs You number counts them: a
+    /// mission whose safety net holds, and one with a raise only the
+    /// operator settles that no Conductor or worker row carries (B14). One
+    /// per mission, however many nodes it holds. Run after the mission
+    /// views, which decide `on_row` and the safety net.
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
@@ -4013,6 +4137,7 @@ impl Runtime {
                 .filter_map(|node| node.attention.as_ref())
                 .filter(|attention| attention.item)
                 .map(|attention| attention.since_unix_ms)
+                .chain(mission.safety_net.as_ref().map(|net| net.since_unix_ms))
                 .min();
             if let Some(since) = oldest {
                 waiting
@@ -4032,13 +4157,11 @@ impl Runtime {
     }
 }
 
-/// Whether a node of `mission` waits on the operator.
+/// Whether a node of a closed `mission` may wait on the operator: any raise
+/// it holds, since its Conductor has finished with it and the safety net
+/// holds it at once.
 fn operator_waits(mission: &Mission) -> bool {
-    mission.nodes.iter().any(|node| {
-        node.attention
-            .as_ref()
-            .is_some_and(|attention| attention.operator_at_unix_ms.is_some())
-    })
+    mission.nodes.iter().any(|node| node.attention.is_some())
 }
 
 /// The newest letters `node`'s worker sent or got, newest first, at most

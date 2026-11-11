@@ -1,7 +1,8 @@
 // One mission's page on the phone (PRD mobile-companion-ui B33-B36, B45,
 // D-14, doop final board F11): its title, its Conductor and the way to that
 // conversation, a cell per step, the decision the Conductor waits on with
-// its choices and a written answer, and every step on one rail, top down by
+// its choices and a written answer, the safety net and the folded skips,
+// and every step on one rail, top down by
 // what it waits on: steps that run side by side bracketed together, a step
 // not begun saying what it waits for, and the finished ones folded. Which
 // steps wait and the answer's state are the shared rules (`stepRail`,
@@ -10,7 +11,7 @@
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIcon, GitPullRequestIcon, Loader2Icon, ThumbsUpIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
-import { Elapsed, useMinuteClock } from "../components/elapsed";
+import { Elapsed, useElapsed, useMinuteClock } from "../components/elapsed";
 import { GatePlanList, GateStrip } from "../components/mission-gate";
 import { ProgressCells } from "../components/mission-tone";
 import { StatusMark } from "../components/status-mark";
@@ -23,12 +24,12 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, openAttention, skipWords, stageWord } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { progress, stepRail, workerOf, type RailStep, type StepKind } from "./missionModel";
-import type { PrState, RowMark } from "../snapshot";
-import { noticeText, type PhoneDecisionView, type PhoneMission } from "./protocol";
+import type { MissionHeldNode, MissionSafetyNet, MissionSkip, PrState, RowMark } from "../snapshot";
+import { noticeText, type AgentKey, type PhoneDecisionView, type PhoneMission } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
 export function MissionDetail() {
@@ -85,15 +86,99 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
       ) : null}
       <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain px-lg pb-lg", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {asking ? <DecisionCard mission={mission} connected={connected} /> : null}
+        {open && mission.safety_net ? <SafetyNet mission={mission} net={mission.safety_net} conductor={conductor} /> : null}
         {/* Where the operator will look, over a plan that waits for approval, as the desktop's map lists it (PRD mission-human-gate B1, B13). */}
         <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} className="pt-lg" />
         {stepsOmitted > 0 ? (
           <p className="pt-lg text-body text-muted-foreground" data-phone-mission-steps-omitted={stepsOmitted}>{t("mobile.mission.stepsOmitted", { count: stepsOmitted })}</p>
         ) : null}
         {rail.length > 0 ? <StepRail mission={mission} rail={rail} foldKey={foldKey} doneOpen={doneOpen} /> : null}
+        <Decided mission={mission} />
       </div>
       {asking ? <WrittenAnswer mission={mission} connected={connected} /> : null}
     </main>
+  );
+}
+
+/**
+ * The mission's one card for the raises its Conductor has not settled, as
+ * the desktop's 내 차례 draws it (the principle of 2026-11-11, hide-private
+ * docs/missions.md): how many stand and since when, or that no Conductor
+ * holds the mission, a row per held step with its reason and age, and the
+ * Conductor's conversation while it holds the mission. The phone starts no
+ * Conductor: 지휘 다시 열기 is the Mac's.
+ */
+function SafetyNet({ mission, net, conductor }: { mission: PhoneMission; net: MissionSafetyNet; conductor: AgentKey | null }) {
+  const { t } = useInterfaceTranslation();
+  const age = useElapsed(mission.stale ? null : net.since_unix_ms);
+  const count = net.nodes.length;
+  const head = !net.conductor_present ? t("mission.net.noConductor", { count }) : age ? t("mission.net.title", { count, age }) : t("mission.net.line", { count });
+  return (
+    <section className="mt-lg flex min-w-0 flex-col gap-sm rounded-lg border border-mission-hold/40 bg-card px-md py-md" data-phone-safety-net={net.conductor_present ? "present" : "absent"}>
+      <p className="flex min-w-0 items-center gap-sm text-body font-semibold text-mission-hold">
+        <StatusMark mark="turn" />
+        <span className="min-w-0 break-keep wrap-anywhere" data-phone-safety-net-head="true">{head}</span>
+      </p>
+      {net.conductor_present && age ? <p className="break-keep text-body text-muted-foreground wrap-anywhere">{t("mission.net.unsettled")}</p> : null}
+      <ul className="flex min-w-0 flex-col gap-xs">
+        {net.nodes.map((held) => <HeldStep key={held.key} mission={mission} held={held} />)}
+      </ul>
+      {net.conductor_present && conductor ? (
+        <Button variant="secondary" className="min-h-(--size-touch-target) self-start" data-phone-safety-net-chat="true" onClick={() => openDetail(conductor)}>
+          {t("mobile.mission.chat")}
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
+function HeldStep({ mission, held }: { mission: PhoneMission; held: MissionHeldNode }) {
+  const { t } = useInterfaceTranslation();
+  const age = useElapsed(mission.stale ? null : held.since_unix_ms);
+  return (
+    <li className="flex min-w-0 flex-col" data-phone-held-step={held.key}>
+      <span className="break-keep text-body text-foreground wrap-anywhere">{held.title}</span>
+      <span className="break-keep text-caption text-muted-foreground wrap-anywhere">
+        {attentionReasonText(held.reason, held.pr, t)}
+        {age ? ` · ${t("mission.net.age", { age })}` : null}
+      </span>
+    </li>
+  );
+}
+
+/** `Conductor가 정한 것 N`, folded: the lines the Conductor skipped on its own, each the step, `<line> 넘김`, why, who and how long ago. */
+function Decided({ mission }: { mission: PhoneMission }) {
+  const { t } = useInterfaceTranslation();
+  const key = `decided:${mission.id}`;
+  const unfolded = usePhone((s) => s.missionFolds[key] === true);
+  const skips = mission.skipped_alone ?? [];
+  if (skips.length === 0) return null;
+  return (
+    <section className="pt-lg" data-phone-mission-decided={unfolded ? "open" : "folded"}>
+      <h2 className="flex items-center justify-between gap-md pb-xs text-body text-muted-foreground">
+        <span>{t("mission.decided", { count: skips.length })}</span>
+        <Button variant="text" size="inline" aria-expanded={unfolded} className="min-h-(--size-touch-target)" data-phone-fold={key} onClick={() => setMissionFold(key, !unfolded)}>
+          {unfolded ? t("missionScreen.fewer") : t("mobile.mission.unfold")}
+        </Button>
+      </h2>
+      {unfolded ? (
+        <ul className="divide-y divide-border border-b border-border">
+          {skips.map((skip) => <SkipStep key={`${skip.node}:${skip.line}`} skip={skip} />)}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function SkipStep({ skip }: { skip: MissionSkip }) {
+  const { t } = useInterfaceTranslation();
+  const ago = useElapsed(skip.at_unix_ms);
+  return (
+    <li className="flex min-w-0 flex-col gap-xxs py-sm" data-phone-skip={`${skip.node}:${skip.line}`}>
+      <span className="break-keep text-body text-foreground wrap-anywhere">{skip.title}</span>
+      <span className="break-keep text-caption text-muted-foreground wrap-anywhere">{skipWords(skip, t)} · {skip.reason}</span>
+      <span className="text-caption text-subtle-foreground">{[skip.by, ago].filter(Boolean).join(" · ")}</span>
+    </li>
   );
 }
 
@@ -285,7 +370,8 @@ function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connecte
 function Step({ mission, step, first, last, together }: { mission: PhoneMission; step: RailStep; first: boolean; last: boolean; /** Where the step stands in a run of steps side by side: their bracket, and the word on the first one. */ together: "first" | "next" | null }) {
   const { t } = useInterfaceTranslation();
   const { node, kind } = step;
-  const mark = kind === "hold" ? "turn" : nodeMark(node, null);
+  // A raise the Conductor settles is waiting, not the operator's turn.
+  const mark = kind === "hold" ? (openAttention(mission, node)?.to === "conductor" ? "waiting" : "turn") : nodeMark(node, null);
   const detail = stepLine(mission, step, t);
   // The step's review gate, as the desktop's card draws it; reached past 24 hours it says so in grey (PRD mission-human-gate B13, B22).
   const minute = useMinuteClock();
@@ -425,8 +511,11 @@ function stepLine(mission: PhoneMission, { node, kind, waits }: RailStep, t: Ret
   if (kind === "hold") {
     const reason = holdReason(mission, node, workerOf);
     switch (reason?.kind) {
-      case "attention":
-        return attentionReasonText(reason.attention.reason, reason.attention.pr, t);
+      case "attention": {
+        // As the desktop's summary says it: who the raise waits on, then why.
+        const why = attentionReasonText(reason.attention.reason, reason.attention.pr, t);
+        return reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ${why}` : why;
+      }
       case "worker":
         return escalationWhy(reason.escalation, t);
       case "decision":

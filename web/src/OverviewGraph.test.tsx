@@ -135,7 +135,8 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
     expect(container.querySelector("[data-graph-welcome]")).not.toBeNull();
     const item = container.querySelector<HTMLElement>('[data-graph-mission-asks] [data-graph-mission-ask="mission-1"]');
     expect(item?.textContent).toContain("이슈 정리");
-    expect(item?.textContent).toContain("API 추가");
+    // No Conductor holds it, so its raise stands behind the safety net, which the item reads.
+    expect(item?.textContent).toContain("No Conductor conducts this mission · 1 stuck");
     expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Resume command", "Take a look"]);
     expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you 1");
   } finally { await act(async () => root.unmount()); }

@@ -890,24 +890,69 @@ it("puts the question the decision asks of a node and its choices in its panel, 
 });
 
 // Operator report on M41: a raise in 내 차례 said only a reason and the plan's long sentences; its card now says what happened, why it reached the operator, and on 자세히 the worker's one line on each failed finish line.
-it("draws a raise in 내 차례 as a card saying what happened, why it reached the operator, and each failed line's summary on 자세히", async () => {
-  const failed = (key: string, text: string, summary?: string) => ({ key, kind: "own", text, state: "fail", checkers: [], ...(summary ? { summary } : {}) });
-  const ended = node("together", { title: "Upgrade check", status: "working", criteria: [failed("c1", "Agents resume after the upgrade", "Pi wake failed, as it did before"), failed("c2", "The OS table matches")] as unknown as MissionNode["criteria"], attention: { reason: "worker_ended", pr: null, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } });
-  const map = await mount({ items: [mission({ nodes: [ended] })] });
+it("draws the raises its Conductor has not settled as one safety net card in 내 차례, a row per held node with its reason and age, and no card per node", async () => {
+  const now = Date.now();
+  const held = ["a", "b", "c", "d", "e"].map((key, index) => ({ key, title: `Node ${key}`, reason: "worker_ended" as const, pr: null, since_unix_ms: now - (25 - index) * 60_000 }));
+  const nodes = held.map((one) => node(one.key, { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: one.since_unix_ms, on_row: false, item: false, choices: ["leave", "drop"] } }));
+  const map = await mount({ items: [mission({ nodes, safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: held } })] });
   try {
-    const item = map.q('[data-mission-turn-item="attention"]')!;
-    expect(item.querySelector("[data-mission-turn-what]")?.textContent).toBe("Worker ended with work leftFinish lines failed: 2");
-    expect(item.querySelector("[data-mission-turn-why]")?.getAttribute("data-mission-turn-why")).toBe("waited");
-    expect(item.querySelector("[data-mission-turn-why]")?.textContent).toBe("The Conductor could not settle it in 10 minutes");
-    expect(item.querySelector("[data-mission-turn-details]")).toBeNull();
-    await act(async () => item.querySelector<HTMLButtonElement>("[data-mission-turn-details-toggle]")!.click());
-    expect([...item.querySelectorAll("[data-mission-turn-details] li")].map((li) => li.textContent)).toEqual(["Pi wake failed, as it did beforeAgents resume after the upgrade failed", "The OS table matches failed"]);
-    // 노드 보기 picks the node on the map.
-    await act(async () => item.querySelector<HTMLButtonElement>('[data-mission-turn-node="together"]')!.click());
-    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("together");
-    // The node's card wears the card's colour and its corner dot.
-    expect(card(map, "together").querySelector("[data-node-turn]")).not.toBeNull();
+    expect(map.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toBe("safety_net");
+    expect(map.q('[data-mission-turn-item="attention"]')).toBeNull();
+    const net = map.q('[data-mission-turn-item="safety_net"]')!;
+    expect(net.getAttribute("data-mission-safety-net")).toBe("present");
+    expect(net.querySelector("[data-mission-safety-net-head]")?.textContent).toBe("5 stuck items unchanged for 25m");
+    expect(net.textContent).toContain("The Conductor has not settled them yet");
+    expect([...net.querySelectorAll("[data-mission-held-node]")].map((row) => [row.getAttribute("data-mission-held-node"), row.textContent])).toEqual(
+      held.map((one, index) => [one.key, `${one.title}Worker ended with work leftfor ${25 - index}m`]),
+    );
+    // A held row's node chip picks the node on the map.
+    await act(async () => net.querySelector<HTMLButtonElement>('[data-mission-turn-node="c"]')!.click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("c");
+    // The one way out is the Conductor's pane.
+    await act(async () => net.querySelector<HTMLButtonElement>("[data-mission-conversation]")!.click());
+    expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
   } finally { await map.unmount(); }
+  // With no Conductor the card says so, holds 지휘 다시 열기, and the Conductor row steps aside so the screen says it once.
+  const gone = await mount({ items: [mission({ nodes, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: false, takes_answers: false }, safety_net: { conductor_present: false, since_unix_ms: now - 25 * 60_000, nodes: held } })] });
+  try {
+    expect(gone.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toBe("takeover");
+    const net = gone.q('[data-mission-turn-item="safety_net"]')!;
+    expect(net.querySelector("[data-mission-safety-net-head]")?.textContent).toBe("No Conductor conducts this mission · 5 stuck");
+    expect(net.querySelector("[data-mission-takeover]")?.textContent).toBe("Resume command");
+    expect(gone.q("[data-mission-conductor]")).toBeNull();
+    expect(gone.container.querySelectorAll("[data-mission-takeover]")).toHaveLength(1);
+  } finally { await gone.unmount(); }
+});
+
+it("lists beside the map what the Conductor decided on its own: each skipped line with its node, why, who and when, open or closed", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-11T00:00:00Z"));
+  const now = Date.now();
+  const skips = [
+    { node: "api", title: "Node api", line: "check", kind: "check" as const, reason: "no check command in this repo", by: "conductor", at_unix_ms: now - 5 * 60_000 },
+    { node: "api", title: "Node api", line: "c2", kind: "own" as const, text: "The OS table matches", reason: "covered by c1", by: "conductor", at_unix_ms: now - 3 * 60_000 },
+  ];
+  for (const status of ["running", "done"] as const) {
+    const map = await mount({ items: [mission({ status, closed_at_unix_ms: status === "done" ? now : null, nodes: [node("api", { status: "working" })], skipped_alone: skips })] });
+    try {
+      const row = map.q('[data-mission-summary-row="decided"]')!;
+      expect(row.querySelector("dt span")?.textContent).toBe("Decided by the Conductor 2");
+      const toggle = row.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(row.querySelectorAll("[data-mission-skip]")).toHaveLength(0);
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect([...row.querySelectorAll("[data-mission-skip]")].map((one) => one.textContent)).toEqual([
+        "Node apicheck skipped · no check command in this repoconductor · 5m",
+        "Node apiThe OS table matches skipped · covered by c1conductor · 3m",
+      ]);
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(row.querySelectorAll("[data-mission-skip]")).toHaveLength(0);
+      // Nothing it lists is the operator's turn.
+      expect(map.q("[data-mission-turn]")).toBeNull();
+    } finally { await map.unmount(); }
+  }
 });
 
 it("lists only what the operator can do in 내 차례: the decision whose node chip picks the node, a node raised to the operator with its reason's choices, a worker the core raised, the merge order (B18, B20, B25; PRD mission-node-simple B14-B16)", async () => {
