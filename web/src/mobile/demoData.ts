@@ -80,7 +80,7 @@ function agents(t: T, state: DemoState): Record<string, PhoneAgent> {
     agent(t, "a4", t("mobile.demo.a4.title"), 22, state, { place: "demo · main" }),
     agent(t, "a5", t("mobile.demo.a5.title"), 60, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · site" }),
     agent(t, "a6", t("mobile.demo.a6.title"), 35, state, { group: "done", mark: "done", status_code: "idle", line: { text: t("mobile.demo.a1c2.line"), mode: "news", tone: "news" }, place: "demo · main" }),
-    agent(t, "a7", t("mobile.demo.a7.title"), 180, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · notes" }),
+    agent(t, "a7", t("mobile.demo.a7.title"), 180, state, { group: "revisit", mark: "quiet", status_code: "idle", place: "demo · notes", starred: true }),
     agent(t, "a8", t("mobile.demo.a8.title"), 240, state, { group: "seen", mark: "quiet", status_code: "idle", place: "demo · notes" }),
     ...state.started.map((started, at) => agent(t, started.pane, started.title, at, state, { place: "demo · main" })),
   ];
@@ -98,7 +98,8 @@ export function agentGroups(t: T, state: DemoState): AgentGroup[] {
     { group: "needs_you", count: 2, rows: [row(by.a1!), row(by.a2!)] },
     { group: "working", count: working.length, rows: working },
     { group: "done", count: 1, rows: [row(by.a6!)] },
-    { group: "seen", count: 3, rows: [row(by.a5!)], more: [row(by.a7!), row(by.a8!)] },
+    { group: "revisit", count: 1, rows: [row(by.a7!)] },
+    { group: "seen", count: 2, rows: [row(by.a5!)], more: [row(by.a8!)] },
   ];
 }
 
@@ -231,6 +232,8 @@ function mission(t: T, id: string, title: string, state: DemoState, over: Partia
 export function missionsFrame(t: T, state: DemoState): ServerFrame {
   const asked = state.t0 - 6 * MINUTE;
   const release = mission(t, "mission-release", t("mobile.demo.m1.title"), state, {
+    // The list's first agent conducts it, so its row wears the mission chip as a Conductor's desktop row does.
+    conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: sampleKind(t), agent: { device_id: DEMO_DEVICE, pane_id: "a1" } },
     created_at_unix_ms: state.t0 - 134 * MINUTE,
     started_at_unix_ms: state.t0 - 134 * MINUTE,
     decision: state.answered ? null : t("mobile.demo.m1.decision"),

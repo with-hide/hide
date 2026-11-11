@@ -1,10 +1,9 @@
-import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { chipWords, conductedBy, missionTone, missionTurn, TURN_WORDS, type CellTone, type ConductorOwner } from "../missions";
 import { heldBy, useDelayWords, type MissionDelay } from "./mission-hold";
 import type { MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
-import { TONE_TEXT } from "./mission-tone";
+import { MissionChipFace, TONE_TEXT } from "./mission-tone";
 import { useShellStore } from "../store";
 import { Hint } from "./ui/tooltip";
 
@@ -49,7 +48,6 @@ export function MissionChipView({ id, title, words, counts, tone, turn, delay, s
   const { t } = useInterfaceTranslation();
   const held = useDelayWords(delay);
   const label = [t("mission.chip.open"), title, words, counts, turn ? t(TURN_WORDS[turn]) : null, held].filter(Boolean).join(" · ");
-  const Mark = status === "done" ? CheckIcon : WaypointsIcon;
   return (
     <Hint label={label}>
       <button
@@ -66,10 +64,7 @@ export function MissionChipView({ id, title, words, counts, tone, turn, delay, s
           onOpen(id);
         }}
       >
-        {turn ? <span aria-hidden="true" className="font-semibold">!</span> : null}
-        {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : null}
-        <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-        {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
+        <MissionChipFace turn={turn !== null} delay={delay !== null} status={status} counts={counts} />
       </button>
     </Hint>
   );

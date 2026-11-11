@@ -29,6 +29,8 @@ export type PhoneAgent = {
   background_left?: number;
   /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
   children_left?: number;
+  /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
+  starred?: true;
   agent_kind: string;
   title: string;
   place: string | null;

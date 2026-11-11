@@ -54,6 +54,21 @@ describe("the sample host's screens", () => {
     expect(network.calls).toEqual([]);
   });
 
+  it("mark a row as the desktop's row does: its pull request, the mission it conducts, and the operator's star", () => {
+    const rowOf = (pane: string) => document.querySelector(`[data-phone-agent="local|${pane}"]`)!;
+    // A Conductor's row wears its mission's chip with `!` while the mission waits on the operator; a step's worker gets none.
+    const chip = rowOf("a1").querySelector('[data-phone-row-mission="mission-release"]');
+    expect(chip?.textContent).toBe("!2/6");
+    expect(rowOf("a3").querySelector("[data-phone-row-mission]")).toBeNull();
+    expect(rowOf("a3").querySelector('[data-phone-row-pr="pending"]')?.textContent).toContain("2091");
+    // In 다시 볼 것 the star takes the mark's place, and the row's name says it.
+    const starred = rowOf("a7");
+    expect(starred.closest('[data-phone-group="revisit"]')).not.toBeNull();
+    expect(starred.querySelector('[data-phone-mark="star"]')).not.toBeNull();
+    expect(starred.getAttribute("aria-label")).toContain("Starred to revisit");
+    expect(rowOf("a5").querySelector("[data-revisit-star]")).toBeNull();
+  });
+
   it("list the agents by group, with a parent's children under it", () => {
     expect(document.querySelector('[data-phone-group="needs_you"]')).not.toBeNull();
     expect(document.querySelector('[data-phone-group="working"]')).not.toBeNull();

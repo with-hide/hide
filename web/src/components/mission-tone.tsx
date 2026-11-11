@@ -1,4 +1,4 @@
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CellTone, HeadCell, StepTone } from "../missions";
 import type { MissionStatus } from "../snapshot";
@@ -120,5 +120,18 @@ export function WorkPill({ tone, done, children, ...rest }: { tone: string; done
       {done ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
       {children}
     </span>
+  );
+}
+
+/** What a mission chip shows, wherever it stands: `!` for the operator's turn, a pause while a delay holds it, its mark, and `k/n`. */
+export function MissionChipFace({ turn, delay, status, counts, icon = "size-(--size-icon-sm)" }: { turn: boolean; delay: boolean; status?: string; counts: string | null; icon?: string }) {
+  const Mark = status === "done" ? CheckIcon : WaypointsIcon;
+  return (
+    <>
+      {turn ? <span aria-hidden="true" className="font-semibold">!</span> : null}
+      {delay ? <PauseIcon aria-hidden="true" className={cn(icon, "shrink-0 text-muted-foreground")} /> : null}
+      <Mark aria-hidden="true" className={cn(icon, "shrink-0")} />
+      {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
+    </>
   );
 }

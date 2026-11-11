@@ -263,6 +263,25 @@ test("the in-app camera decodes a QR inside its frame and releases its video tra
   expect(await page.evaluate(() => (window as unknown as { cameraTrack: MediaStreamTrack }).cameraTrack.readyState)).toBe("ended");
 });
 
+test("the detail keeps its newest line above the keyboard, unless the reader scrolled up", async ({ page, relay }) => {
+  relay.state.rows = Array.from({ length: 120 }, (_, index) => `row ${index + 1}`).join("\n");
+  await pair(page, relay);
+  await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+  await page.locator('[data-phone-view="terminal"]').click();
+  const newest = page.getByText("row 120", { exact: true });
+  await expect(newest).toBeInViewport();
+  // The keyboard takes the lower part of the screen, as the app's web view and a browser's visual viewport both shrink.
+  await page.setViewportSize({ width: 390, height: 480 });
+  await expect(newest).toBeInViewport();
+  await expect(page.locator("[data-phone-reply]")).toBeInViewport();
+  // Someone reading older rows keeps their place when the keyboard comes up.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator("[data-phone-scrollback]").evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+  await page.setViewportSize({ width: 390, height: 480 });
+  await expect(page.getByText("row 1", { exact: true })).toBeInViewport();
+  await expect(newest).not.toBeInViewport();
+});
+
 test("start and wake use the same encrypted command path", async ({ page, relay }) => {
   relay.state.sleeping = true;
   await pair(page, relay);

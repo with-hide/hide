@@ -308,7 +308,9 @@ function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey
 }
 
 /**
- * Keeps the newest line in view while the reader is at the bottom; when older
+ * Keeps the newest line in view while the reader is at the bottom, when lines
+ * arrive and when the view itself grows or shrinks (the keyboard coming up
+ * over the reply bar); a reader scrolled up stays where they were. When older
  * lines arrive on top (`top` changes), keeps the line they were on where it
  * was (B24, B25). A scroll near the top calls `onTop`.
  */
@@ -325,6 +327,16 @@ function usePinnedScroll(content: unknown, top: number, onTop: () => void) {
     heightBefore.current = element.scrollHeight;
     topBefore.current = top;
   }, [content, top]);
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) element.scrollTop = element.scrollHeight;
+      heightBefore.current = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
     pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < PULL_EDGE;
