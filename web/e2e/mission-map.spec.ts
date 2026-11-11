@@ -13,6 +13,8 @@
 // the screen's own detail, and Settings › Mission keeps the cap the next
 // `hide mission settings` reads.
 
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import type { HideAnswer } from "./agent-pane";
 import { startFixture, type AgentFixture } from "./engine-fixture";
@@ -260,5 +262,49 @@ test("a narrow window keeps every card's words inside it, a long title ending in
   } finally {
     daemon?.stop();
     fixture.stop();
+  }
+});
+
+// One restart gives the real CLI an older shelved id and an open caller's
+// node. Both positional forms must survive parser -> owner thread -> core.
+test("positional show reads a shelved mission and keeps node-key precedence", async ({ page }) => {
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, fixture, "mission-show-shelf");
+    daemon = opened.daemon;
+    const { conductor } = opened;
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    daemon = await daemon.restart((state) => {
+      // Extend a file actually written by this candidate, retaining identities
+      // and schema fields instead of hand-writing a partial mission shape.
+      const saved = JSON.parse(fs.readFileSync(path.join(state, "missions", "mission-1.json"), "utf8"));
+      const missions = Array.from({ length: 130 }, (_, at) => {
+        const record = structuredClone(saved.missions[0]);
+        record.id = `mission-${at + 1}`;
+        record.title = at === 0 ? "Shelved original" : `Work ${at + 1}`;
+        if (at < 129) {
+          record.status = "done";
+          record.closed_at_unix_ms = at + 1;
+          for (const node of record.nodes) node.status = "done";
+        }
+        return record;
+      });
+      fs.writeFileSync(path.join(state, "missions.json"), JSON.stringify({ schema_version: 4, next: 130, missions }));
+      fs.rmSync(path.join(state, "missions"), { recursive: true });
+    });
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    const shown = await mission(conductor, ["mission", "show", "mission-1", "--json"]);
+    expect(shown.result?.mission).toMatchObject({ id: "mission-1", title: "Shelved original" });
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ nodes: [
+      { key: "mission-1", title: "A node named like a mission", kind: "research", criteria: ["Read this node"] },
+    ] })]);
+    const node = await mission(conductor, ["mission", "show", "mission-1", "--json"]);
+    expect(node.result).toMatchObject({ mission_id: "mission-130", node: { key: "mission-1" } });
+  } finally {
+    try { daemon?.stop(); } finally { fixture.stop(); }
   }
 });
