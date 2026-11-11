@@ -31,6 +31,8 @@ function readable() {
     '--muted-foreground': color('#FFFFFF', '#000000'),
     '--subtle-foreground': {type: 'alias', value: '--muted-foreground'},
     '--status-seen': color('#FFFFFF', '#000000'),
+    '--terminal-letter-text': color('#FFFFFF', '#000000'),
+    '--terminal-letter-band': color('#000000', '#FFFFFF'),
   };
   for (const name of ANSI) {
     tokens[`--terminal-${name}`] = color('#FFFFFF', '#000000');
@@ -61,4 +63,13 @@ test('a secondary grey is checked on the background, the sidebar and a card', ()
   assert.equal(found.length, 6, found.join('\n'));
   assert.ok(found.some(line => line.includes('--status-seen')), found.join('\n'));
   assert.ok(found.every(line => line.includes('light') && line.includes('on --card')), found.join('\n'));
+});
+
+test('the doorbell letter words are checked on their band, per theme and mode', () => {
+  const tokens = readable();
+  assert.deepEqual(failures(tokens), []);
+  tokens['--terminal-letter-band'] = color('#000000', '#FFFFFF', {value: '#777777', light: '#FFFFFF'});
+  const found = failures(tokens);
+  assert.equal(found.length, 1, found.join('\n'));
+  assert.ok(found[0].startsWith('hide dark: --terminal-letter-text #FFFFFF on --terminal-letter-band #777777'), found[0]);
 });
