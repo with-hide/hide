@@ -438,22 +438,17 @@ pub const SETTLE_CAP: usize = 64;
 /// `SETTLE` and one follower pass. Nothing pending survives a restart: the
 /// ledger seeds silently and every root then waiting is standing, so a
 /// restart never sends a notice twice and still closes the ones it finds.
+/// Computer use also moves pending candidates to standing silently; ending
+/// that rest never replays them, while a later new declaration can notify.
 #[derive(Default)]
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
-    standing: BTreeMap<AgentKey, Settled>,
+    /// The last consumed observation per root, sent or deliberately discarded.
+    standing: BTreeMap<AgentKey, u64>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
-}
-
-/// The observation covered by the last settle, and where a phone first
-/// joining that notice starts. No declaration identities live per phone.
-#[derive(Clone, Copy)]
-pub(super) struct Settled {
-    pub before: u64,
-    pub through: u64,
 }
 
 struct Pending {
@@ -483,16 +478,7 @@ impl PhoneNotices {
                 .ledger
                 .waiting()
                 .cloned()
-                .map(|key| {
-                    let through = self.ledger.observation();
-                    (
-                        key,
-                        Settled {
-                            before: through,
-                            through,
-                        },
-                    )
-                })
+                .map(|key| (key, self.ledger.observation()))
                 .collect();
         }
         judged
@@ -586,34 +572,14 @@ impl PhoneNotices {
             .collect()
     }
 
-    pub(super) fn settled(&self, key: &AgentKey) -> Settled {
-        *self
-            .standing
-            .get(key)
-            .expect("a delivered notice passed settle")
-    }
-
-    pub(super) fn waiting_after(
-        &self,
-        key: &AgentKey,
-        after: u64,
-        projection: &Projection,
-    ) -> Option<(Notice, u64)> {
-        let through = self.standing.get(key)?.through;
-        self.ledger
-            .waiting_between(key, after, through, projection)
-            .map(|notice| (notice, through))
-    }
-
-    #[cfg(test)]
-    pub(super) fn stand(&mut self, key: AgentKey) {
-        self.standing.insert(
-            key,
-            Settled {
-                before: 0,
-                through: 1,
-            },
-        );
+    /// Computer use consumes these candidates without a phone send. Keep
+    /// their observation boundary so a later new declaration cannot replay
+    /// an older ask, and still close any notice when its root stops waiting.
+    pub(super) fn discard_pending(&mut self) {
+        for (key, pending) in std::mem::take(&mut self.pending) {
+            self.standing.insert(key, pending.observed);
+        }
+        self.capped = false;
     }
 
     /// When the next pending notice is due.
@@ -624,16 +590,11 @@ impl PhoneNotices {
     fn send(&mut self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
         let pending = self.pending.remove(key)?;
         projection.find(key)?;
-        let before = self.standing.get(key).map_or(0, |old| old.through);
-        // A cancelled newest declaration still settles this observed range.
-        // Earlier current declarations in it can remain owed to a phone.
-        self.standing.insert(
-            key.clone(),
-            Settled {
-                before,
-                through: pending.observed,
-            },
-        );
+        let before = self
+            .standing
+            .insert(key.clone(), pending.observed)
+            .unwrap_or(0);
+        // A cancelled declaration still consumes this observation range.
         self.ledger
             .waiting_between(key, before, pending.observed, projection)
     }

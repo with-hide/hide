@@ -35,9 +35,6 @@ fn notice(pane: &str) -> push::Notice {
 }
 
 fn deliver(mobile: &Arc<Mobile>, notices: Vec<push::Notice>, closed: &[&str]) {
-    for notice in &notices {
-        mobile.lock().phone_notices.stand(notice.key.clone());
-    }
     mobile.deliver(
         notices,
         closed.iter().map(|pane| key(pane)).collect(),
@@ -483,19 +480,21 @@ impl RestFixture {
     }
 
     fn queue(mobile: &Arc<Mobile>, projection: &Projection, at: std::time::Instant, changed: bool) {
+        let mut inner = mobile.lock();
+        let mode = inner.settings.push_mode;
         let judged = judge_pass(
-            &mut mobile.lock().phone_notices,
-            true,
+            &mut inner.phone_notices,
+            Some(mode),
             &mobile.config.desktop,
             projection,
             changed,
             true,
             at,
         );
+        drop(inner);
         if let Some((notices, closed)) = judged {
             mobile.deliver(notices, closed, projection);
         }
-        mobile.flush_rested(projection);
     }
 
     async fn pass(&self, projection: &Projection, at: std::time::Instant, changed: bool) {
@@ -553,75 +552,65 @@ fn topic(index: usize) -> String {
 }
 
 #[test]
-fn computer_use_rests_then_releases_all_nine_current_waits_once() {
+fn computer_use_discards_old_waits_and_only_new_away_waits_send() {
     with_runtime(async {
-        let mut fixture = RestFixture::new(1).await;
-        let t = std::time::Instant::now();
-        fixture
-            .pass(&roots(10, &(0..10).collect::<Vec<_>>(), &[]), t, true)
-            .await;
-        fixture.pass(&roots(10, &[], &[]), t, true).await;
-        fixture
-            .pass(&roots(10, &[], &[]), t + push::SETTLE, false)
-            .await;
-        assert!(fixture.take().is_empty(), "system input rests every root");
-        fixture
-            .pass(&roots(10, &[0], &[]), t + push::SETTLE, true)
-            .await;
-        fixture.mobile.config.desktop.activity(1, false);
-        fixture
-            .pass(&Projection::default(), t + push::SETTLE, true)
-            .await;
-        assert!(
-            fixture.take().is_empty(),
-            "a brief list absence preserves, but cannot word, the wait"
-        );
-        fixture
-            .pass(&roots(10, &[0], &[]), t + push::SETTLE, true)
-            .await;
-        let mut expected: Vec<_> = (1..10)
-            .map(|index| ("phone-0".to_owned(), topic(index)))
-            .collect();
-        expected.sort();
-        assert_eq!(
-            fixture.take(),
-            expected,
-            "nine still-current roots, no answered root"
-        );
-        fixture
-            .pass(&roots(10, &[0], &[]), t + push::SETTLE, false)
-            .await;
-        assert!(
-            fixture.take().is_empty(),
-            "an unchanged away pass never repeats"
-        );
+        for leave_before_settle in [false, true] {
+            let mut fixture = RestFixture::new(1).await;
+            let t = std::time::Instant::now();
+            fixture
+                .pass(&roots(11, &(0..11).collect::<Vec<_>>(), &[]), t, true)
+                .await;
+            fixture.pass(&roots(11, &[10], &[]), t, true).await;
+            let away = t + if leave_before_settle {
+                push::SETTLE / 2
+            } else {
+                push::SETTLE
+            };
+            fixture.pass(&roots(11, &[0, 10], &[]), away, true).await;
+            fixture.mobile.config.desktop.activity(1, false);
+            fixture.pass(&Projection::default(), away, true).await;
+            let current = roots(11, &[0, 10], &[]);
+            fixture.pass(&current, t + push::SETTLE, true).await;
+            assert!(
+                fixture.take().is_empty(),
+                "away sends no old wait, including one still settling"
+            );
+            fixture.pass(&current, t + push::SETTLE * 2, false).await;
+            assert!(
+                fixture.take().is_empty(),
+                "repeated away never replays an old wait"
+            );
+            let new_wait = roots(11, &[0], &[]);
+            fixture.pass(&new_wait, t + push::SETTLE * 2, true).await;
+            fixture
+                .pass(
+                    &new_wait,
+                    t + push::SETTLE * 3 - Duration::from_millis(1),
+                    false,
+                )
+                .await;
+            assert!(
+                fixture.take().is_empty(),
+                "new away wait keeps its settle window"
+            );
+            fixture.pass(&new_wait, t + push::SETTLE * 3, false).await;
+            assert_eq!(
+                fixture.take(),
+                [("phone-0".into(), topic(10))],
+                "only the new away wait sends"
+            );
+            fixture.pass(&new_wait, t + push::SETTLE * 4, false).await;
+            assert!(fixture.take().is_empty(), "new wait sends once");
+        }
     });
 }
 
 #[test]
-fn desktop_notice_off_rest_off_lock_and_disconnect_release_current_waits() {
+fn ending_rest_does_not_replay_and_always_still_sends_during_use() {
     with_runtime(async {
-        let mut fixture = RestFixture::new(1).await;
-        let t = std::time::Instant::now();
-        fixture.pass(&roots(1, &[0], &[]), t, true).await;
-        fixture.pass(&roots(1, &[], &[]), t, true).await;
-        fixture.mobile.config.desktop.activity(1, false); // The host's lock/suspend report.
-        fixture
-            .pass(&roots(1, &[], &[]), t + push::SETTLE / 2, false)
-            .await;
-        assert!(
-            fixture.take().is_empty(),
-            "away never bypasses the existing settle window"
-        );
-        fixture
-            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
-            .await;
-        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
         for release in 0..3 {
-            let t = t + push::SETTLE * (release * 2 + 2);
-            fixture.mobile.config.desktop.activity(1, true);
-            fixture.mobile.config.desktop.set_waiting(1, true);
-            fixture.mobile.lock().settings.push_mode = PushMode::AppClosed;
+            let mut fixture = RestFixture::new(1).await;
+            let t = std::time::Instant::now();
             fixture.pass(&roots(1, &[0], &[]), t, true).await;
             fixture.pass(&roots(1, &[], &[]), t, true).await;
             fixture
@@ -636,291 +625,119 @@ fn desktop_notice_off_rest_off_lock_and_disconnect_release_current_waits() {
             fixture
                 .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
                 .await;
-            assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
-        }
-    });
-}
-
-#[test]
-fn added_turn_withdrawal_preserves_only_the_unsent_root_responsibility() {
-    with_runtime(async {
-        for initial_rested in [false, true] {
-            let mut fixture = RestFixture::new(1).await;
-            let t = std::time::Instant::now();
-            fixture.mobile.config.desktop.activity(1, initial_rested);
-            fixture.pass(&roots(1, &[0], &[]), t, true).await;
-            fixture.pass(&roots(1, &[], &["A"]), t, true).await;
+            assert!(
+                fixture.take().is_empty(),
+                "ending rest never sends the old wait"
+            );
             fixture
-                .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
-                .await;
-            assert_eq!(fixture.take().len(), usize::from(!initial_rested));
-            fixture.mobile.config.desktop.activity(1, true);
-            fixture
-                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE, true)
+                .pass(&roots(1, &[0], &[]), t + push::SETTLE, true)
                 .await;
             fixture
-                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
+                .pass(&roots(1, &[], &[]), t + push::SETTLE, true)
                 .await;
-            assert!(fixture.take().is_empty());
             fixture
-                .pass(&roots(1, &[], &["A"]), t + push::SETTLE * 2, true)
-                .await;
-            fixture.mobile.config.desktop.activity(1, false);
-            fixture
-                .pass(&roots(1, &[], &["A"]), t + push::SETTLE * 2, false)
+                .pass(&roots(1, &[], &[]), t + push::SETTLE * 2, false)
                 .await;
             assert_eq!(
-                fixture.take().len(),
-                usize::from(initial_rested),
-                "A owed only when it was never sent; cancelled B never becomes A"
+                fixture.take(),
+                [("phone-0".into(), topic(0))],
+                "new wait sends, including Always with active input"
             );
         }
     });
 }
 
 #[test]
-fn added_declarations_leave_only_current_unsent_phone_responsibility() {
-    with_runtime(async {
-        for coalesced in [false, true] {
-            for (remaining, working, expected) in [
-                (vec!["A", "B"], false, Some("B")),
-                (vec!["A", "C"], false, Some("C")),
-                (vec![], true, None),
-                (vec!["A"], false, None),
-            ] {
-                let mut fixture = RestFixture::new(1).await;
-                let t = std::time::Instant::now();
-                fixture.mobile.config.desktop.activity(1, false);
-                fixture.pass(&roots(1, &[0], &[]), t, true).await;
-                fixture.pass(&roots(1, &[], &["A"]), t, true).await;
-                fixture
-                    .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
-                    .await;
-                assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
-                fixture.mobile.config.desktop.activity(1, true);
-                for (turns, step) in [(vec!["A", "B"], 1), (vec!["A", "B", "C"], 2)] {
-                    fixture
-                        .pass(
-                            &roots(1, &[], &turns),
-                            if coalesced {
-                                t + push::SETTLE + Duration::from_millis(step as u64 * 100)
-                            } else {
-                                t + push::SETTLE * step
-                            },
-                            true,
-                        )
-                        .await;
-                    if !coalesced {
-                        fixture
-                            .pass(&roots(1, &[], &turns), t + push::SETTLE * (step + 1), false)
-                            .await;
-                    }
-                    assert!(fixture.take().is_empty(), "input rests each added ask");
-                }
-                let current = roots(1, if working { &[0] } else { &[] }, &remaining);
-                fixture
-                    .pass(
-                        &current,
-                        if coalesced {
-                            t + push::SETTLE + Duration::from_millis(300)
-                        } else {
-                            t + push::SETTLE * 3
-                        },
-                        true,
-                    )
-                    .await;
-                fixture.pass(&current, t + push::SETTLE * 3, false).await;
-                fixture.mobile.config.desktop.activity(1, false);
-                fixture.pass(&current, t + push::SETTLE * 3, false).await;
-                if let Some(expected) = expected {
-                    let (phone, received_topic, body) = fixture.received.try_recv().unwrap();
-                    assert_eq!((phone, received_topic), ("phone-0".into(), topic(0)));
-                    let received: Value =
-                        serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body))
-                            .unwrap();
-                    assert_eq!(received["subject"]["id"], expected);
-                }
-                assert!(fixture.take().is_empty(), "no old A or extra phone push");
-                fixture.pass(&current, t + push::SETTLE * 3, false).await;
-                assert!(fixture.take().is_empty(), "an away wake never repeats");
-            }
-        }
-    });
-}
-
-#[test]
-fn away_sends_the_settled_ask_before_a_newer_pending_ask() {
-    with_runtime(async {
-        let mut fixture = RestFixture::new(1).await;
-        let t = std::time::Instant::now();
-        fixture.mobile.config.desktop.activity(1, false);
-        fixture.pass(&roots(1, &[0], &[]), t, true).await;
-        fixture.pass(&roots(1, &[], &["A"]), t, true).await;
-        fixture
-            .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
-            .await;
-        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
-        fixture.mobile.config.desktop.activity(1, true);
-        fixture
-            .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE, true)
-            .await;
-        fixture
-            .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
-            .await;
-        let current = roots(1, &[], &["A", "B", "C"]);
-        fixture.pass(&current, t + push::SETTLE * 2, true).await;
-        assert!(fixture.take().is_empty());
-        fixture.mobile.config.desktop.activity(1, false);
-        fixture.pass(&current, t + push::SETTLE * 2, false).await;
-        let (_, _, body) = fixture.received.try_recv().unwrap();
-        let received: Value =
-            serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body)).unwrap();
-        assert_eq!(received["subject"]["id"], "B", "C has not settled");
-        assert!(fixture.take().is_empty());
-        fixture.pass(&current, t + push::SETTLE * 3, false).await;
-        assert_eq!(
-            fixture.take(),
-            [("phone-0".into(), topic(0))],
-            "C sends only after its settle"
-        );
-        fixture.pass(&current, t + push::SETTLE * 3, false).await;
-        assert!(fixture.take().is_empty());
-    });
-}
-
-#[test]
-fn an_in_flight_older_ask_consumes_only_its_captured_boundary() {
+fn rested_declarations_never_replay_and_a_new_away_declaration_sends() {
     with_runtime(async {
         for cancel_newest in [false, true] {
             let mut fixture = RestFixture::new(1).await;
             let t = std::time::Instant::now();
-            fixture.mobile.config.desktop.activity(1, false);
             fixture.pass(&roots(1, &[0], &[]), t, true).await;
             fixture.pass(&roots(1, &[], &["A"]), t, true).await;
             fixture
                 .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
                 .await;
-            assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
-            fixture.mobile.config.desktop.activity(1, true);
             fixture
                 .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE, true)
                 .await;
+            let turns = if cancel_newest {
+                vec!["A"]
+            } else {
+                vec!["A", "B"]
+            };
             fixture
-                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
+                .pass(&roots(1, &[], &turns), t + push::SETTLE * 2, true)
                 .await;
-            let mobile = Arc::clone(&fixture.mobile);
-            *fixture.on_send.lock().unwrap() = Some(Box::new(move || {
-                // B has reached HTTP, but its response has not completed. Admit
-                // C on the follower before returning that older response.
-                mobile.config.desktop.activity(1, true);
-                let current = roots(1, &[], &["A", "B", "C"]);
-                RestFixture::queue(&mobile, &current, t + push::SETTLE * 2, true);
-                RestFixture::queue(&mobile, &current, t + push::SETTLE * 3, false);
-                if cancel_newest {
-                    RestFixture::queue(
-                        &mobile,
-                        &roots(1, &[], &["A", "B"]),
-                        t + push::SETTLE * 3,
-                        true,
-                    );
-                }
-            }));
+            assert!(fixture.take().is_empty());
             fixture.mobile.config.desktop.activity(1, false);
             fixture
-                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
+                .pass(&roots(1, &[], &turns), t + push::SETTLE * 2, false)
                 .await;
-            fence().await; // Orders the C job admitted by B's HTTP handler too.
-            assert_eq!(
-                fixture.take(),
-                [("phone-0".into(), topic(0))],
-                "B reaches HTTP once"
-            );
-            fixture.mobile.config.desktop.activity(1, false);
-            let current = roots(
-                1,
-                &[],
-                if cancel_newest {
-                    &["A", "B"]
-                } else {
-                    &["A", "B", "C"]
-                },
-            );
-            fixture.pass(&current, t + push::SETTLE * 3, false).await;
-            if !cancel_newest {
-                let (_, _, body) = fixture.received.try_recv().unwrap();
-                let received: Value =
-                    serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body))
-                        .unwrap();
-                assert_eq!(
-                    received["subject"]["id"], "C",
-                    "B's response never consumes C"
-                );
-            }
             assert!(
                 fixture.take().is_empty(),
-                "cancelled C never repeats already delivered B"
+                "neither a current nor a cancelled rested declaration replays"
+            );
+            let mut new_turns = turns;
+            new_turns.push("C");
+            let current = roots(1, &[], &new_turns);
+            fixture.pass(&current, t + push::SETTLE * 2, true).await;
+            assert!(
+                fixture.take().is_empty(),
+                "new declaration waits for settle"
             );
             fixture.pass(&current, t + push::SETTLE * 3, false).await;
-            assert!(fixture.take().is_empty());
+            let (phone, received_topic, body) = fixture.received.try_recv().unwrap();
+            assert_eq!((phone, received_topic), ("phone-0".into(), topic(0)));
+            let received: Value =
+                serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body)).unwrap();
+            assert_eq!(received["subject"]["id"], "C");
+            fixture.pass(&current, t + push::SETTLE * 4, false).await;
+            assert!(fixture.take().is_empty(), "new declaration sends once");
         }
     });
 }
 
 #[test]
-fn only_the_phone_whose_attempt_rested_is_resumed() {
+fn input_resuming_during_transport_discards_the_remaining_phone_attempt() {
     with_runtime(async {
-        for keep_b in [false, true] {
-            let mut fixture = RestFixture::new(2).await;
-            let t = std::time::Instant::now();
-            fixture.mobile.config.desktop.activity(1, false);
-            fixture.pass(&roots(1, &[0], &[]), t, true).await;
-            fixture.pass(&roots(1, &[], &["A"]), t, true).await;
-            let desktop = Arc::clone(&fixture.mobile.config.desktop);
-            *fixture.on_send.lock().unwrap() = Some(Box::new(move || desktop.activity(1, true)));
-            fixture
-                .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
-                .await;
-            assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
-            fixture
-                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE, true)
-                .await;
-            fixture
-                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
-                .await;
-            if keep_b {
-                fixture
-                    .pass(&roots(1, &[], &["A", "B", "C"]), t + push::SETTLE * 2, true)
-                    .await;
-                fixture
-                    .pass(
-                        &roots(1, &[], &["A", "B", "C"]),
-                        t + push::SETTLE * 3,
-                        false,
-                    )
-                    .await;
-            }
-            let current = roots(1, &[], if keep_b { &["A", "B"] } else { &["A"] });
-            fixture.pass(&current, t + push::SETTLE * 3, true).await;
-            fixture.mobile.config.desktop.activity(1, false);
-            fixture.pass(&current, t + push::SETTLE * 3, false).await;
-            let expected = if keep_b {
-                vec![("phone-0".into(), topic(0)), ("phone-1".into(), topic(0))]
-            } else {
-                vec![("phone-1".into(), topic(0))]
-            };
-            assert_eq!(
-                fixture.take(),
-                expected,
-                "each phone consumes its own A; a current unsent B survives cancelled C for both"
-            );
-            fixture.pass(&current, t + push::SETTLE * 3, false).await;
-            assert!(fixture.take().is_empty());
-        }
+        let mut fixture = RestFixture::new(2).await;
+        let t = std::time::Instant::now();
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture.pass(&roots(1, &[0], &[]), t, true).await;
+        fixture.pass(&roots(1, &[], &[]), t, true).await;
+        let desktop = Arc::clone(&fixture.mobile.config.desktop);
+        *fixture.on_send.lock().unwrap() = Some(Box::new(move || desktop.activity(1, true)));
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(
+            fixture.take().is_empty(),
+            "the second phone never receives a rested attempt later"
+        );
+        fixture
+            .pass(&roots(1, &[0], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE * 2, false)
+            .await;
+        assert_eq!(
+            fixture.take(),
+            [("phone-0".into(), topic(0)), ("phone-1".into(), topic(0))]
+        );
     });
 }
 
 #[test]
-fn a_queued_rested_wait_withdraws_before_transport_and_its_clear_survives() {
+fn a_discarded_wait_still_closes_with_the_next_away_notification() {
     with_runtime(async {
         let mut fixture = RestFixture::new(1).await;
         let t = std::time::Instant::now();
@@ -930,23 +747,22 @@ fn a_queued_rested_wait_withdraws_before_transport_and_its_clear_survives() {
             .pass(&roots(2, &[1], &[]), t + push::SETTLE, false)
             .await;
         assert!(fixture.take().is_empty());
-        let gate = block_jobs().await;
         fixture.mobile.config.desktop.activity(1, false);
-        fixture.queue_pass(&roots(2, &[1], &[]), t + push::SETTLE, false);
-        fixture.queue_pass(&roots(2, &[0, 1], &[]), t + push::SETTLE, true);
-        fixture.queue_pass(&roots(2, &[0], &[]), t + push::SETTLE, true);
-        fixture.queue_pass(&roots(2, &[0], &[]), t + push::SETTLE * 2, false);
-        drop(gate);
-        fence().await;
+        fixture
+            .pass(&roots(2, &[0, 1], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(2, &[0], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(2, &[0], &[]), t + push::SETTLE * 2, false)
+            .await;
         let (phone, received_topic, body) = fixture.received.try_recv().unwrap();
         assert_eq!((phone, received_topic), ("phone-0".into(), topic(1)));
         let received: Value =
             serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body)).unwrap();
         assert_eq!(received["clear"], json!(["node|root-0"]));
-        assert!(
-            fixture.take().is_empty(),
-            "withdrawn root never posts a request"
-        );
+        assert!(fixture.take().is_empty());
     });
 }
 
@@ -1002,7 +818,24 @@ fn a_relay_reconnect_rests_again_before_the_transport_handoff() {
         fixture
             .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
             .await;
-        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
+        assert!(
+            fixture.take().is_empty(),
+            "reconnect's rested attempt never replays on away"
+        );
+        fixture
+            .pass(&roots(1, &[0], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE * 2, false)
+            .await;
+        assert_eq!(
+            fixture.take(),
+            [("phone-0".into(), topic(0))],
+            "a new away wait still sends"
+        );
         fixture
             .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
             .await;

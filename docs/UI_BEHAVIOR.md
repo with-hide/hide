@@ -2728,7 +2728,9 @@ The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기
 Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
 On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, and at least one attached desktop window has Needs You notifications enabled (`app_closed`).
 Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
-A rested notice still waiting for the operator is sent once when resting ends; an answered or withdrawn notice is discarded.
+A wait that begins while phone pushes rest sends no phone notification, even when resting ends before its settle window closes.
+It remains in the phone app's list and badge count; only a new wait or declaration after resting ends can notify, after the existing settle window.
+An answered or withdrawn wait sends nothing, and turning the pause switch off does not replay discarded notices.
 Off always permits pushes (`always`), subject to the phone’s own receiving choice and viewing suppression.
 A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 
