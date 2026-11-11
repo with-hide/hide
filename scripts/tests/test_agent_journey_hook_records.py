@@ -9,6 +9,7 @@ that met it and that the agent's later starts keep the first outcome. No
 agent runs.
 """
 
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -60,6 +61,34 @@ class Records(unittest.TestCase):
             # The account's own state folder keeps the folder every build wrote.
             self.assertEqual(hook_records.folder(runtime(root, relocated=False)),
                              root / "daemon-home" / ".hide" / "agent-hooks")
+
+    def test_a_helpers_installation_is_composed_once_under_its_mark(self):
+        # A hook's failure record sits in its own installation's folder, the
+        # same rule `route::pane_records_at` applies: `<records>/installs/<mark>`
+        # for any installation but the app's, whose panes are the folder itself.
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            base = root / "state" / "agent-hooks"
+            self.assertEqual(hook_records.folder(runtime(root), "app"), base)
+            self.assertEqual(hook_records.folder(runtime(root), ""), base)
+            mark = hashlib.sha256(b"root:/helper").hexdigest()[:16]
+            self.assertEqual(hook_records.folder(runtime(root), "root:/helper"),
+                             base / "installs" / mark)
+
+    def test_a_record_under_a_helpers_mark_is_named_for_the_app_run(self):
+        # The journey starts the candidate as a package, whose panes name the
+        # app; a run whose helper wrote under its mark is read one level
+        # further rather than answered as absent (the reason the search exists).
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            folder = hook_records.folder(runtime(root), "root:/helper")
+            folder.mkdir(parents=True)
+            (folder / "last-report-failure.json").write_text(json.dumps(
+                {"pane_id": "h4:p2", "agent": "claude-code", "event": "SessionStart",
+                 "error": "denied", "at_unix_ms": 1, "kind": "record"}))
+            self.assertEqual(
+                hook_records.identity_cause(runtime(root), "h4:p2"),
+                "hook_record_refused (h4:p2, SessionStart): denied")
 
     def test_a_refused_record_write_is_a_named_cause(self):
         with tempfile.TemporaryDirectory() as root:

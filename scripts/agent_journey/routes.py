@@ -26,7 +26,8 @@ def allow_hook_records(sandbox, runtime):
 
     A pane's hook records (its counts, its turn, its plan and the record of a
     report that failed) sit beside the state folder of the daemon it asks
-    (`hide_agent_hooks::route::records_root`), which for this run's candidate
+    (`hide_agent_hooks::route::records_of_state`, composed with the pane's
+    installation by `hook_records.folder`), which for this run's candidate
     is `<state>/agent-hooks` and not the operator's `~/.hide`
     (`scripts/agent_journey/hook_records.py`). The profile hides the whole run
     from the agent, so without this a hook reports its session - which is what

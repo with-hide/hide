@@ -332,7 +332,7 @@ A move of the core carries the text the core reads through such a link as a regu
 ### Where the hooks keep their records
 
 The hooks' records are the pane counts and turns (`panes/`), the pane's plan (`plans/`), the failed reports (`last-report-failure.json`, `spawn-guard.log`) and what a hook could not deliver (`delivery-diagnostics.json`).
-They live in the folder of the daemon whose state folder the hook asks (`hide_agent_hooks::route::records_root`), so a daemon reads what its own hooks wrote and no other Hide's:
+They live in the folder of the daemon whose state folder the hook asks, so a daemon reads what its own hooks wrote and no other Hide's:
 
 | The daemon's state folder | Records folder |
 | --- | --- |
@@ -341,12 +341,18 @@ They live in the folder of the daemon whose state folder the hook asks (`hide_ag
 
 The choice is made by the folder and not by which variable named it: a daemon `hide connect` starts is handed its state folder through `HIDE_STATE_DIR`, and one naming the account's own moves nothing.
 A folder `XDG_STATE_HOME` chose counts as a move, and is judged from the resolved state folder, so a hook that lost Hide's environment and one that kept it agree.
-Hook, node, core and `doctor` all resolve it the same way, and the folder a daemon uses is the one its `hook-facts.json` first-run seed, its pane sweep and its diagnosis read (`route::records_in`, `route::records_root`).
+Hook, node, core and `doctor` all resolve it the same way, and the folder a daemon uses is the one its `hook-facts.json` first-run seed, its pane sweep and its diagnosis read (`route::records_in`).
 
 One rule composes that folder with an installation (`route::records_of_state`, `route::pane_records_at`): the desktop app's panes, and the panes that name none, keep them in the folder itself as every build so far did, and a pane another installation started keeps them under `installs/<mark>` inside it, a short sha256 of the installation's name (`app` for the desktop package, `root:<helper root>` for a device helper's or a build Hide placed there).
+Every record under that composition is the installation's, the failure record and the log too: a helper's refused pane record and its `spawn-guard.log` line sit beside the counts that helper wrote under its mark, so an installation's failure never overwrites another's current state, and the pane a start waits on is the pane `doctor`, its node and the journey find.
 A helper an earlier build installed wrote every installation's records under `installs/<mark>/panes`; this build composes the same folder, so an upgrade reads them and nothing is lost.
 A hook reads the installation from its pane (`HIDE_INSTALL`), a node from the installation whose panes it starts, and a core, the engine and the node's diagnosis are handed it by the process that owns the machine, never read from the environment they run in: a core, a node or `doctor` is told its daemon's state folder and its installation, so it reads the folder that daemon's panes' hooks wrote even where its own environment names another.
-That composition is `records_of_state(home, state, install)` for a caller handed a state folder and `pane_records_of(home, install)` for a hook or a node resolving the environment's, and both apply the same rule.
+That composition is `records_of_state(home, state, install)`, and it is the one place that decides where a record lives: a hook calls it through `pane_records`, a node, the core and `doctor` call it with the state folder and installation they own, and a function that is already handed a records folder (`owed::folder_in`) only decides the name below it, never applying the installation a second time.
+
+A record whose folder is not the one a reader resolves is read by no one, and a reader names the folder it read rather than the record it did not find.
+`doctor` and the node's diagnosis are the readers that name a failure: they read the folder of the daemon whose state folder and installation they serve, so a helper's record under another mark is not theirs to read, and the operator's `doctor` on the account's own state folder is the one that reads the app's.
+A helper whose installation the reader cannot know - a pane that named none but whose records an earlier build kept under a mark - is read by the pane's own hook and by no node: the pane record it writes next lands in the folder the reader resolves, and what the earlier helper wrote stays where it is, unread rather than guessed at.
+Falling back to the account's own folder when the records folder does not read is never done: a refusal is the reader's answer, since a record read past a refusal would be attributed to a daemon that never wrote it.
 
 A state folder that cannot be read is an answer of its own and never the account's folder: a folder that is missing, one this process may not read and one that is not a folder each keep their kind and a sentence that names the folder (`route::records_folder_of`), so every reader answers `io::Result` and none falls back to `~/.hide/agent-hooks`.
 A hook whose route does not read writes nothing at all there - no pane record, no failure record, no log line and no delivery diagnostic - and creates no folder of another daemon's; the failure reaches the agent on standard error, and `doctor` and the journey name the same folder through `Diagnosis.records_error`.
@@ -387,7 +393,7 @@ A producer that never closes stdin is released after the 500 ms payload wait.
 A hook that fails must never be what breaks the operator's agent.
 
 Exiting zero is not the same as saying nothing.
-The outcome of every report is recorded in the hooks' `last-report-failure.json`: a failure writes the pane, the agent, the event and the cause `hide` answered (the causes of [What a hook records when it fails](#what-a-hook-records-when-it-fails)), and the next success removes the file, so it describes the hook's current state rather than its history.
+The outcome of every report is recorded in the hooks' `last-report-failure.json`, in the records folder of the pane's daemon and installation ([Where the hooks keep their records](#where-the-hooks-keep-their-records)), so a helper's failure and the app's are two files in two folders rather than one overwriting the other: a failure writes the pane, the agent, the event and the cause `hide` answered (the causes of [What a hook records when it fails](#what-a-hook-records-when-it-fails)), and the next success removes the file, so it describes the hook's current state rather than its history.
 A report whose pane record could not be written is that same failure: the report still goes to the core with the session it names, and the refused write is the pane's recorded cause, so a start waiting for the session's identity is not left without both the identity and the reason.
 One event's two steps are kept apart in that record: `kind` names which failed (`record`, `report`, or `record_and_report`), and `record_error` and `report_error` hold each step's own sentence, so a reader names the cause from `kind` and never from the words.
 A record an earlier build wrote has no `kind`; it is an unknown kind with its original sentence kept, since the old plugin's turn path wrote refused records there too and guessing from the words would read one as a report.

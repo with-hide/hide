@@ -78,7 +78,7 @@ class HookRecords(unittest.TestCase):
         home.mkdir()
         state.mkdir()
         # The candidate's own state folder, so the records sit beside it
-        # (`hide_agent_hooks::route::records_root`).
+        # (`hide_agent_hooks::route::records_of_state`).
         (state / "hided.json").write_text("{}")
         profile = root / "guard.sb"
         sandbox = type("Sandbox", (), {"profile": profile,
