@@ -4,14 +4,16 @@
 // now, where its result goes with who merges it and its worker's worktree
 // branch, and the Conductor's last line. It holds nothing to press and
 // changes nothing: Escape or leaving the card closes it, a press on the card
-// picks the node as before. A part the core does not send is left out.
+// picks the node as before. A part the core does not send is left out. A
+// mark on the card with its own hint (`!`, `⚠`, Hide's mark) shows that hint
+// alone: the card's stays shut while the pointer is on it.
 
-import type { ReactNode } from "react";
+import type { PointerEvent, ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { agentProductName } from "../agentAdapters";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { stationWords, type Station } from "../missionStations";
+import { mergeOverridden, stationWords, type Station } from "../missionStations";
 import { planCount } from "../plans";
 import type { Mission, MissionNode } from "../snapshot";
 import { useElapsed } from "./elapsed";
@@ -27,9 +29,16 @@ export type NodeHoverFacts = {
 
 export function MissionNodeHover({ mission, node, facts, children }: { mission: Mission; node: MissionNode; facts: NodeHoverFacts; children: ReactNode }) {
   const { open, onOpenChange, triggerProps } = useHintOpen();
+  // On a mark with its own hint the move is not the card's: it closes the card's hover and is kept from opening it.
+  const onPointerMove = (event: PointerEvent<HTMLElement>) => {
+    const trigger = event.target instanceof Element ? event.target.closest('[data-slot="tooltip-trigger"]') : null;
+    if (trigger === null || trigger === event.currentTarget) return;
+    event.preventDefault();
+    if (open) onOpenChange(false);
+  };
   return (
     <Tooltip open={open} onOpenChange={onOpenChange}>
-      <TooltipTrigger asChild {...triggerProps}>
+      <TooltipTrigger asChild {...triggerProps} onPointerMove={onPointerMove}>
         {children}
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="w-(--size-mission-popover) max-w-(--radix-tooltip-content-available-width) text-left text-wrap rounded-md p-md" data-node-hover={node.key}>
@@ -45,7 +54,7 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
   const plan = node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : null;
   const now = [plan, facts.now, pushed ? t("mission.popover.pushed", { ago: pushed }) : null].filter(Boolean).join(" · ");
   const merge = mergeBy(mission, node);
-  const override = mission.scope === "merge" && node.merge?.by === "operator";
+  const override = mergeOverridden(mission.scope, node);
   return (
     <div className="flex min-w-0 flex-col gap-sm text-caption">
       <div className="flex min-w-0 flex-col gap-xxs">
@@ -53,7 +62,7 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
         {node.change ? <span className="break-words text-muted-foreground" data-node-hover-change="true">{node.change}</span> : null}
       </div>
       {facts.worker ? (
-        <Part label={t("mission.popover.worker")} data="worker">
+        <Part label={t("mission.role.worker")} data="worker">
           <span className="flex min-w-0 items-start gap-xs">
             {facts.worker.agent ? <span className="mt-xxs flex shrink-0"><AgentMark kind={facts.worker.agent} /></span> : null}
             <span className="min-w-0 break-words">{[agentProductName(facts.worker.agent), facts.worker.words, facts.worker.device].filter(Boolean).join(" · ")}</span>

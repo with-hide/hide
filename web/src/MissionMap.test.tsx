@@ -699,7 +699,7 @@ it("tethers each agent checking a node to its card's right side as a satellite, 
   } finally { await map.unmount(); }
 });
 
-it("names each role: a reviewer and a verifier satellite carry their role's name as hover and description, and the worker's mark on a card carries its own", async () => {
+it("names each role: a reviewer and a verifier satellite carry their role's name as hover and description, and the card's hover names its worker by the worker's role", async () => {
   const nodes = [
     node("core", { status: "working", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, criteria: [line("review", "review", { checkers: [checker("codex", "open", "agent-7")] }), line("verify", "verify", { checkers: [checker("claude", "open", "agent-8")] })] }),
   ];
@@ -712,7 +712,10 @@ it("names each role: a reviewer and a verifier satellite carry their role's name
     ]);
     await act(async () => marks[1]!.focus());
     expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain("Verification");
+    // The worker's mark is part of the card, whose hover names the worker's part by its role.
     expect(card(map, "core").querySelector("[data-node-worker-mark]")).not.toBeNull();
+    await act(async () => card(map, "core").focus());
+    expect(document.querySelector('[data-node-hover="core"] [data-node-hover-part="worker"] > span')?.textContent).toBe("Implementation");
   } finally { await map.unmount(); }
 });
 
