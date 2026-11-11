@@ -321,32 +321,27 @@ pub enum SendOutcome {
     Failed(String),
 }
 
-pub fn send(
+/// A fully encrypted and signed Web Push, ready for its one HTTP attempt.
+/// Separating preparation lets Mobile keep closes when no request can be made.
+pub struct Prepared {
+    endpoint: String,
+    body: Vec<u8>,
+    authorization: String,
+    topic: String,
+}
+
+pub fn prepare(
     vapid: &Vapid,
     subject: &str,
     push: &PushSubscription,
     payload: &Value,
     now_secs: u64,
-) -> SendOutcome {
+) -> Result<Prepared, String> {
     if !endpoint_allowed(&push.endpoint) {
-        return SendOutcome::Failed("the endpoint is not a known push service".to_owned());
+        return Err("the endpoint is not a known push service".to_owned());
     }
-    let body = match encrypt(push, payload.to_string().as_bytes()) {
-        Ok(body) => body,
-        Err(message) => return SendOutcome::Failed(message),
-    };
-    let authorization = match vapid.authorization(&origin_of(&push.endpoint), subject, now_secs) {
-        Ok(value) => value,
-        Err(message) => return SendOutcome::Failed(message),
-    };
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .http_status_as_error(false)
-        // The allowlisted service answers itself; a redirect could send the
-        // signed request anywhere.
-        .max_redirects(0)
-        .build()
-        .into();
+    let body = encrypt(push, payload.to_string().as_bytes())?;
+    let authorization = vapid.authorization(&origin_of(&push.endpoint), subject, now_secs)?;
     let topic = URL_SAFE_NO_PAD.encode(
         &ring::digest::digest(
             &ring::digest::SHA256,
@@ -358,22 +353,41 @@ pub fn send(
         )
         .as_ref()[..24],
     );
-    let result = agent
-        .post(&push.endpoint)
-        .header("Authorization", &authorization)
-        .header("Content-Encoding", "aes128gcm")
-        .header("Content-Type", "application/octet-stream")
-        .header("TTL", &TTL_SECS.to_string())
-        .header("Urgency", "high")
-        .header("Topic", &topic)
-        .send(&body[..]);
-    match result {
-        Ok(response) => match response.status().as_u16() {
-            200..=299 => SendOutcome::Delivered,
-            status @ (404 | 410) => SendOutcome::Gone(status),
-            status => SendOutcome::Failed(format!("the push service answered {status}")),
-        },
-        Err(error) => SendOutcome::Failed(error.to_string()),
+    Ok(Prepared {
+        endpoint: push.endpoint.clone(),
+        body,
+        authorization,
+        topic,
+    })
+}
+
+impl Prepared {
+    pub fn send(self) -> SendOutcome {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(HTTP_TIMEOUT))
+            .http_status_as_error(false)
+            // The allowlisted service answers itself; a redirect could send the
+            // signed request anywhere.
+            .max_redirects(0)
+            .build()
+            .into();
+        let result = agent
+            .post(&self.endpoint)
+            .header("Authorization", &self.authorization)
+            .header("Content-Encoding", "aes128gcm")
+            .header("Content-Type", "application/octet-stream")
+            .header("TTL", &TTL_SECS.to_string())
+            .header("Urgency", "high")
+            .header("Topic", &self.topic)
+            .send(&self.body[..]);
+        match result {
+            Ok(response) => match response.status().as_u16() {
+                200..=299 => SendOutcome::Delivered,
+                status @ (404 | 410) => SendOutcome::Gone(status),
+                status => SendOutcome::Failed(format!("the push service answered {status}")),
+            },
+            Err(error) => SendOutcome::Failed(error.to_string()),
+        }
     }
 }
 

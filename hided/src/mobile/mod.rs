@@ -226,7 +226,7 @@ struct Inner {
     relay_cleanup_failure: Option<String>,
     /// Renderer connections with Settings > Mobile open.
     observers: HashSet<u64>,
-    /// Tags of agents made Seen since each phone's last push (PRD D-21).
+    /// Closes owned by each phone until transport preparation succeeds (PRD D-21).
     pending_clear: HashMap<String, BTreeSet<AgentKey>>,
     /// Notices for an iOS app phone that found no relay link, kept until one is up (`Held`).
     held: HashMap<String, VecDeque<Held>>,
@@ -1386,7 +1386,7 @@ impl Mobile {
                 failed = true;
                 continue;
             };
-            match push::send(vapid, &subject, &subscription, &payload, now_ms() / 1000) {
+            match self.send_web(&phone_id, vapid, &subject, &subscription, &payload) {
                 push::SendOutcome::Delivered => delivered = true,
                 push::SendOutcome::Gone(_) => {
                     self.lock()
@@ -2034,6 +2034,63 @@ impl Mobile {
         true
     }
 
+    /// Reserve a phone's closes only while preparing a transport request. Jobs
+    /// and holds own no closes. Crypto/signing runs outside the lock; failure
+    /// restores this subset alongside closes recorded by concurrent senders.
+    fn prepare_with_clear<T, E>(
+        &self,
+        phone_id: &str,
+        payload: &Value,
+        prepare: impl FnOnce(&Value) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let clear = self
+            .lock()
+            .pending_clear
+            .remove(phone_id)
+            .unwrap_or_default();
+        if clear.is_empty() {
+            return prepare(payload);
+        }
+        let mut outgoing = payload.clone();
+        let mut tags = payload
+            .get("clear")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        tags.extend(clear.iter().map(|key| json!(key.tag())));
+        outgoing["clear"] = json!(tags);
+        let prepared = prepare(&outgoing);
+        if prepared.is_err() {
+            let mut inner = self.lock();
+            // Revocation owns removal of the phone's state, even if it raced
+            // preparation. Do not resurrect it on a later failure.
+            if inner.phones.get(phone_id).is_some() {
+                inner
+                    .pending_clear
+                    .entry(phone_id.to_owned())
+                    .or_default()
+                    .extend(clear);
+            }
+        }
+        prepared
+    }
+
+    fn send_web(
+        &self,
+        phone_id: &str,
+        vapid: &push::Vapid,
+        subject: &str,
+        subscription: &PushSubscription,
+        payload: &Value,
+    ) -> push::SendOutcome {
+        match self.prepare_with_clear(phone_id, payload, |payload| {
+            push::prepare(vapid, subject, subscription, payload, now_ms() / 1000)
+        }) {
+            Ok(request) => request.send(),
+            Err(message) => push::SendOutcome::Failed(message),
+        }
+    }
+
     /// Sends one notice to an iOS app phone: encrypted for the key it
     /// registered, handed to the relay over the running link, and answered by
     /// the relay with Apple's outcome. Blocking, on a thread where Web Push
@@ -2052,7 +2109,9 @@ impl Mobile {
             let link = inner.relay_link.clone().ok_or("relay_unavailable")?;
             (registration, link)
         };
-        let request = push::app_request(&registration, payload)?;
+        let request = self.prepare_with_clear(phone_id, payload, |payload| {
+            push::app_request(&registration, payload)
+        })?;
         match link.push(request)? {
             PushOutcome::Delivered => Ok(()),
             PushOutcome::TokenGone => {
@@ -2569,12 +2628,8 @@ impl Mobile {
             }
             let generation = self.lock().live.stamp(notice.key.tag());
             for (phone_id, route) in &targets {
-                let clear = self
-                    .lock()
-                    .pending_clear
-                    .remove(phone_id)
-                    .unwrap_or_default();
-                match self.push_payload(&notice, &clear) {
+                // A withdrawable job or held notice must never own a close.
+                match self.push_payload(&notice, &BTreeSet::new()) {
                     Ok(mut payload) => {
                         if let Some(agent) = projection.find(&notice.key) {
                             push::with_ask(&mut payload, agent);
@@ -2622,7 +2677,7 @@ impl Mobile {
                 }));
                 continue;
             };
-            match push::send(vapid, subject, &subscription, &payload, now_ms() / 1000) {
+            match self.send_web(&phone_id, vapid, subject, &subscription, &payload) {
                 push::SendOutcome::Delivered => hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
                     "tag": payload.get("tag"),
@@ -3004,3 +3059,6 @@ mod tests {
         assert_eq!((held("phone"), held("other")), (vec![], vec![None]));
     }
 }
+
+#[cfg(test)]
+mod clear_tests;

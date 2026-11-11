@@ -180,6 +180,11 @@ Agent notice sentences add one copy of the published `detail` (at most 80 charac
 No input handler, tick, timer, subprocess, I/O, extra snapshot read or new receiver is added; a changed sentence alone publishes no notice, and the existing follower and demand cleanup own the extra values.
 Phone fan-out stays per subscribed phone and desktop fan-out per requesting window; accepted encrypted push bodies are capped at 4,096 bytes, with an oversized JSON payload failing before POST through the existing delivery diagnostic.
 The transition/disappearance ledgers and pending `clear` tags still have no separate count cap; the desktop's 16-frame backlog and host's 16 kept notices remain their existing limits, not limits on those ledgers.
+Pending closes stay per phone, independently of jobs and held notices.
+At transport preparation a sender moves that phone's pending set under the Mobile lock, then copies its tags into one payload outside the lock; a preparation failure merges the reserved tags back with any newer closes under the lock.
+This adds one scan and one payload copy per send with pending tags, with work and temporary bytes proportional to that set; the existing pending tag set has neither a tag-count nor a byte hard cap.
+It adds no queue, timer, receiver or retry of a notice, and keeps the held limit of eight notices per phone and sixty seconds, the Web Push plaintext limit of 3,993 bytes and the app plaintext limit of 2,897 bytes.
+The app's existing size policy may trim trailing clear tags to fit, so a prepared app notice is not proof that every pending tag was encoded.
 
 Worktree, GitHub and disk readers also run on changed explicit requests; those requests are not extra permanent timers (`worktrees.rs`, `github.rs`, `disk.rs`).
 Their command, walk and storage bounds remain in the feature cost contracts below and must still be reviewed when changed.
