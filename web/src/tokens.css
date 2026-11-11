@@ -367,6 +367,8 @@
   --size-control-lg: 32px;
   --size-touch-target: 44px;
   --size-mobile-qr: 168px;
+  --size-mobile-scan-frame: 240px;
+  --size-mobile-scan-margin: 48px;
   --size-mobile-app-icon: 64px;
   --size-mobile-copy: 320px;
   --size-status-copy: 460px;

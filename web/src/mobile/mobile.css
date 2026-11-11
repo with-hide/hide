@@ -32,6 +32,19 @@ html[data-phone-demo] .phone-safe-top {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/*
+ * The browser scanner's frame, where the app's scanner draws it (HideScannerPlugin.swift): a square of the screen's width less
+ * 96 points, at most 240, centred at 44% of the height, with the camera around it dimmed.
+ */
+.phone-scan-frame {
+  --phone-scan-side: min(calc(100vw - 2 * var(--size-mobile-scan-margin)), var(--size-mobile-scan-frame));
+  left: calc(50% - var(--phone-scan-side) / 2);
+  top: calc(44% - var(--phone-scan-side) / 2);
+  width: var(--phone-scan-side);
+  height: var(--phone-scan-side);
+  box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--background) 55%, transparent);
+}
+
 .phone-ansi .ansi-black-fg { color: var(--terminal-black); }
 .phone-ansi .ansi-red-fg { color: var(--terminal-red); }
 .phone-ansi .ansi-green-fg { color: var(--terminal-green); }
