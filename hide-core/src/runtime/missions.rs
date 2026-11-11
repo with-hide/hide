@@ -1551,6 +1551,7 @@ impl Runtime {
             return;
         }
         let leaving = self.shelve_missions();
+        self.trim_shelved_missions();
         if let Some(store) = &self.missions.event_store {
             store.save_book(Arc::new(self.missions.book.clone()), leaving);
         }
@@ -1620,6 +1621,24 @@ impl Runtime {
             self.missions.shown = None;
         }
         leaving
+    }
+
+    /// Finished records are discarded oldest first, never new work refused
+    /// for a full shelf. The writer removes their body/history after index.
+    fn trim_shelved_missions(&mut self) {
+        let lines = &mut self.missions.book.shelved;
+        if lines.len() <= crate::mission_store::SHELVED_LIMIT {
+            return;
+        }
+        lines.sort_by_key(crate::missions::MissionLine::closed_order);
+        let gone: Vec<_> = lines
+            .drain(..lines.len() - crate::mission_store::SHELVED_LIMIT)
+            .collect();
+        for line in gone {
+            crate::diagnostic!(
+                json!({"component":"missions","kind":"missions.shelved_evicted","mission":line.id})
+            );
+        }
     }
 
     /// Runs a `hide mission` command from `caller`'s pane on `device`.

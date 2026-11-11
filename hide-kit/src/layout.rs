@@ -219,7 +219,15 @@ pub fn mission_events(state_dir: &Path) -> PathBuf {
 /// Histories owned by the folder book, isolated from a downgraded build's
 /// sweep and reused mission ids; the mission event store owns them.
 pub fn mission_histories(state_dir: &Path) -> PathBuf {
-    missions_dir(state_dir).join("events")
+    missions_dir(state_dir).join(MISSION_HISTORIES)
+}
+
+pub const MISSION_HISTORIES: &str = "events";
+
+pub fn mission_history(missions_dir: &Path, id: &str) -> PathBuf {
+    missions_dir
+        .join(MISSION_HISTORIES)
+        .join(format!("{id}.json"))
 }
 
 /// The last GitHub answer per project, restored when the daemon starts; its
