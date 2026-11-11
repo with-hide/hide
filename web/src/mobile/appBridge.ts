@@ -119,8 +119,8 @@ export const push = {
     const answer = await bridge().nativePromise("HidePush", "takeReply", { room, device_id: key.device_id, pane_id: key.pane_id }) as { found?: boolean; text?: unknown };
     return answer.found && typeof answer.text === "string" ? answer.text : null;
   },
-  /** The demo's sample notification: a local one, with no token, key or network. */
-  async demoSample(words: { title: string; body: string }): Promise<void> {
+  /** The demo's sample notification: a local one, with no token, key or network, worded by the app from a real notice's fields. */
+  async demoSample(words: { title: string; status_code: string; state: string; detail: string; place: string }): Promise<void> {
     await bridge().nativePromise("HidePush", "demoSample", { words });
   },
   /** iOS Settings for this app, where a refused permission is turned on again. */

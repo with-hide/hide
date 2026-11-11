@@ -10,6 +10,8 @@ Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-
 
 The iOS app's release build, its signing, checks and TestFlight upload: [the release build](BUILD.md#the-release-build); owners are `mobile/scripts/{build-ios,mini-release}.sh`, `mobile/scripts/check-release-app.sh`, `mobile/scripts/{bundle-manifest,release-version}.mjs`, `mobile/release-{env,expect}.json` and their tests in `mobile/scripts/`.
 
+The iOS app's App Store page, its text, review notes, age-rating answers and screenshots made from the demo mode: [the store page](BUILD.md#the-store-page); owners are `mobile/store/` (`metadata/`, `age-rating.md`, `shots.json`), `mobile/scripts/{store-shots,check-store-text,store-limits}.mjs`, the `store-shots` command of `mobile/scripts/{build-ios,mini-ios}.sh`, and the tests `mobile/scripts/{store-shots,check-store-text}.test.mjs`.
+
 Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.
 
 Relay deployment code: owners are `deploy/relay/`, `scripts/relay-deploy.py`, `.github/workflows/relay-artifact.yml` and `.github/workflows/relay-deploy-check.yml`.

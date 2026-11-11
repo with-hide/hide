@@ -1,0 +1,34 @@
+Hide for iPhone is the phone side of Hide, a free desktop program that people run on their own Mac, Windows or Linux computer (withhide.dev). The app has no account, so there is no demo account. Its built-in demo with sample data opens every screen and shows the full feature set; we ask that it be the way the app is reviewed (guideline 2.1(a)).
+
+HOW TO TRY THE APP WITHOUT A COMPUTER
+1. Open the app and tap "Try the demo" on the first screen ("체험해 보기" in Korean).
+2. A slim bar, "Demo · sample data", stays on top of every screen. Nothing goes to a computer and nothing from the demo is kept (only language, appearance and the iOS permission persist).
+3. Agents tab: the sample computer's agents, grouped Needs You, Working, Unread and Seen. Open one to read and reply; the demo answers with a sample reply. "Start agent" adds one.
+4. Missions tab: a mission with its steps, a pull request per step and one decision to answer.
+5. PRs tab: sample pull requests with status and reviews. "Merge" takes one off the list; "Assign to an agent" hands it to a sample agent.
+6. In the Agents tab open the second agent under Needs You, "Tidy the install guide", and its "To look at" tab: one page made by an agent ("Install guide") and one image, shown in the app.
+7. Settings tab: language, and Notifications. Turn the Notifications switch on and allow notifications when iOS asks (it asks only then). About 2 seconds later a sample notification arrives, worded like a real one: "Address review comments", "Question · Apply all 3 review comments? · demo · fix/review", with a Reply action. Lock the phone first to see it on the lock screen.
+8. "Leave demo" returns to the first screen. The host sheet (tap "Demo Mac" in the list's header) has "Connect a real computer", which leaves the demo for the QR scanner (camera permission); pairing needs a real computer.
+
+WHY THIS IS MORE THAN A WEB PAGE (4.2)
+- Encrypted push: a notification service extension in the app decrypts Apple's push on the device, so neither Apple nor our relay sees the text.
+- Reply from the notification: the action needs the phone unlocked (Face ID or passcode) and sends the reply end-to-end encrypted to the user's computer.
+- Pairing keys are kept in the iOS Keychain.
+- The app connects only to the relay and to Apple's push service, and has no analytics or ad tools.
+- A native QR scanner pairs the phone with a computer.
+- Universal links (app.withhide.dev) open a pairing link in the app.
+
+4.2.3 AND 4.2.7
+Commands and agents run on the user's computer, not on the phone. The app downloads no code that changes its features; it shows agents, conversations, missions, pull requests and results in its own interface and sends the user's typed input back. The one exception is a page the user's own agent made, which "To look at" draws (see below). The connection goes through a relay and is end-to-end encrypted (Noise). Hide on the computer is free, from withhide.dev.
+
+"TO LOOK AT" (agent-made HTML)
+The "To look at" tab can show a page that the user's own agent made on the user's own computer. The page, with its scripts, is drawn inside a sandboxed frame with its own origin, so it cannot reach the app, its storage or its connection. It is the user's own content, not third-party software, and does not change the app's features (2.5.2; 4.7 does not apply).
+
+THE STORE SCREENSHOTS
+They are the app in the iOS Simulator in demo mode, framed with a headline; the notification one shows the banner iOS draws for the sample notification.
+
+ENCRYPTION
+The app uses only standard encryption (Noise_NK with X25519, ChaCha20-Poly1305 and BLAKE2b for the connection; Ed25519 signatures; RFC 8291 with P-256, AES-128-GCM and HMAC-SHA-256 for notifications), for its own connection and notifications only, so it qualifies for the exemption. This release is not distributed in France or the European Union.
+
+CONTACT
+hello@withhide.dev. The account holder enters a phone number and address in App Store Connect.

@@ -96,9 +96,14 @@ describe("turning notifications on", () => {
   });
 
   it("posts only the local sample in the demo: no key, no registration, nothing sent", async () => {
+    let words: unknown;
+    install({ demoSample: (options) => { words = options?.words; return {}; } });
     patch({ demo: true });
     await turnOnAppPush();
     expect(calls).toEqual(["HidePush.demoSample"]);
+    // The sample carries a real notice's fields for the first sample agent (title, status, question, project); the phone words the body.
+    const { translate } = await import("../i18n/translator");
+    expect(words).toEqual({ title: translate("mobile.demo.a1.title"), status_code: "question", state: "needs_you", detail: translate("mobile.demo.a1.ask"), place: "demo · fix/review" });
     expect(sent).toEqual([]);
     expect(localStorage.getItem("hide.phone.app-push")).toBeNull();
     expect(useAppPush.getState().demo).toBe(true);

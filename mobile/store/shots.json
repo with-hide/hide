@@ -1,0 +1,191 @@
+{
+  "canvas": {
+    "width": 1206,
+    "height": 2622
+  },
+  "clock": "2026-11-09T09:41:00",
+  "appearance": "light",
+  "languages": {
+    "ko": {
+      "appleLanguage": "ko",
+      "appleLocale": "ko_KR"
+    },
+    "en": {
+      "appleLanguage": "en",
+      "appleLocale": "en_US"
+    }
+  },
+  "shots": [
+    {
+      "id": "agents",
+      "file": "01-agents",
+      "capture": "screen",
+      "steps": [
+        "[data-phone-demo-entry]"
+      ],
+      "settleSeconds": 9,
+      "text": {
+        "en": {
+          "headline": [
+            "Answer your agents.",
+            "Away from your desk."
+          ],
+          "accent": "Answer",
+          "support": "See who needs you and reply right there."
+        },
+        "ko": {
+          "headline": [
+            "자리를 비워도",
+            "에이전트에게 답하세요"
+          ],
+          "accent": "답하세요",
+          "support": "누가 내 답을 기다리는지 보고 바로 답해요."
+        }
+      }
+    },
+    {
+      "id": "conversation",
+      "file": "02-conversation",
+      "capture": "screen",
+      "steps": [
+        "[data-phone-demo-entry]",
+        "[data-phone-agent=\"local|a1\"]",
+        "[data-phone-reply]::={reply}",
+        "[data-phone-send]"
+      ],
+      "settleSeconds": 12,
+      "text": {
+        "en": {
+          "headline": [
+            "Read it. Reply in a line."
+          ],
+          "accent": "Reply",
+          "support": "The work keeps running on your computer.",
+          "reply": "Yes, apply all 3."
+        },
+        "ko": {
+          "headline": [
+            "대화를 읽고",
+            "한 줄로 답해요"
+          ],
+          "accent": "한 줄",
+          "support": "일은 내 컴퓨터에서 계속돼요.",
+          "reply": "네, 3건 모두 반영해 줘."
+        }
+      }
+    },
+    {
+      "id": "notification",
+      "file": "03-notification",
+      "capture": "notification",
+      "steps": [
+        "[data-phone-demo-entry]",
+        "[data-phone-tab=\"settings\"]",
+        "[data-phone-notifications=\"off\"] [role=\"switch\"]"
+      ],
+      "settleSeconds": 11,
+      "text": {
+        "en": {
+          "headline": [
+            "Know the moment",
+            "it needs you."
+          ],
+          "accent": "Know",
+          "support": "Encrypted notifications. Reply right from the notification."
+        },
+        "ko": {
+          "headline": [
+            "내 차례가 되면",
+            "바로 알려 줘요"
+          ],
+          "accent": "바로",
+          "support": "암호화된 알림이 오고, 알림에서 바로 답해요."
+        }
+      }
+    },
+    {
+      "id": "missions",
+      "file": "04-missions",
+      "capture": "screen",
+      "steps": [
+        "[data-phone-demo-entry]",
+        "[data-phone-tab=\"missions\"]",
+        "[data-phone-mission=\"mission-release\"]"
+      ],
+      "settleSeconds": 10,
+      "text": {
+        "en": {
+          "headline": [
+            "Missions at a glance."
+          ],
+          "accent": "glance",
+          "support": "Steps, pull requests, and the one decision waiting on you."
+        },
+        "ko": {
+          "headline": [
+            "미션은 한눈에"
+          ],
+          "accent": "한눈에",
+          "support": "단계와 PR, 내가 정할 일까지 보여 줘요."
+        }
+      }
+    },
+    {
+      "id": "pull-requests",
+      "file": "05-pull-requests",
+      "capture": "screen",
+      "steps": [
+        "[data-phone-demo-entry]",
+        "[data-phone-tab=\"prs\"]"
+      ],
+      "settleSeconds": 9,
+      "text": {
+        "en": {
+          "headline": [
+            "Check pull requests.",
+            "Merge them."
+          ],
+          "accent": "Merge",
+          "support": "See checks and reviews, then merge from your phone."
+        },
+        "ko": {
+          "headline": [
+            "PR을 확인하고 머지해요"
+          ],
+          "accent": "머지",
+          "support": "검사와 리뷰 상태를 보고 폰에서 머지해요."
+        }
+      }
+    },
+    {
+      "id": "looks",
+      "file": "06-looks",
+      "capture": "screen",
+      "steps": [
+        "[data-phone-demo-entry]",
+        "[data-phone-agent=\"local|a2\"]",
+        "[data-phone-view=\"looks\"]",
+        "[data-phone-look=\"v1\"]"
+      ],
+      "settleSeconds": 12,
+      "text": {
+        "en": {
+          "headline": [
+            "See what your",
+            "agent made."
+          ],
+          "accent": "made",
+          "support": "Pages and images from your computer, right here."
+        },
+        "ko": {
+          "headline": [
+            "에이전트가 만든",
+            "화면을 바로 봐요"
+          ],
+          "accent": "화면",
+          "support": "내 컴퓨터의 페이지와 이미지를 여기서 열어요."
+        }
+      }
+    }
+  ]
+}

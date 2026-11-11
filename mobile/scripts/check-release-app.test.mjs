@@ -84,6 +84,8 @@ describe('the release gate on the signed app', () => {
     'Capacitor taking the notification center': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', ios: { webContentsDebuggingEnabled: false, handleApplicationNotifications: true } }), 'notification center'],
     'an inspectable web view': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', ios: { webContentsDebuggingEnabled: true } }), 'inspected'],
     'the debug pairing hook in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_PAIR_LINK'), 'debug pairing hook'],
+    'the debug tapping hook (and its fill) in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_TAPS'), 'debug tapping hook'],
+    'the debug clock hook in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_NOW'), 'debug clock hook'],
     'no bridge gate in the binary': [(app) => write(join(app, 'App'), 'binary only'), 'bridge gate'],
     'no privacy manifest': [(app) => rmSync(join(app, 'PrivacyInfo.xcprivacy')), 'PrivacyInfo.xcprivacy'],
     'tracking in the privacy manifest': [(app) => edit('privacy.json', (v) => { v.NSPrivacyTracking = true; }), 'no tracking'],

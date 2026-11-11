@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Hide iOS app with the phone bundle inside it, on the Mac mini, and runs it in a simulator.
 #
-# Usage: build-ios.sh [build | release | status <delivery id> | uploads | run | allow | push | clean]
+# Usage: build-ios.sh [build | release | status <delivery id> | uploads | run | allow | push | store-shots | clean]
 #   release  everything `build` does, then on the mini: archive, sign with the App Store Connect API key, check the
 #          signed app against mobile/release-expect.json, validate and upload it to TestFlight; the build number is the
 #          UTC time of the run, the version the repository's own (mobile/scripts/release-version.mjs). The key never
@@ -22,6 +22,12 @@
 #   allow  press Allow on the system's notification question (HIDE_IOS_TAPS as for `run` makes the page ask it); the
 #          grant stays in the simulator, so captures of delivered notifications follow without anyone at it
 #   push   deliver the push body in the file HIDE_IOS_PUSH_BODY to the app, as Apple would, and capture the banner
+#   store-shots  the App Store screenshots in Korean and English: the same phone build and copy to the mini, then there the
+#          app in a simulator of its own runs each shot of mobile/store/shots.json in demo mode (fixed status bar and clock,
+#          the simulator in the shot's language), and the raw captures come back here to be framed with their headlines
+#          by mobile/scripts/store-shots.mjs into 1206x2622 PNGs without alpha: HIDE_STORE_SHOTS_OUT=<folder>, default
+#          agents/runs/ios-mission/store-assets/ (never committed). No tests run; HIDE_IOS_SKIP_PHONE_BUILD and
+#          HIDE_IOS_SKIP_RELAY_BUILD work as for `build`
 #   clean  delete that simulator and this branch's whole folder on the mini
 #
 # Every command ends what it started on the mini: its simulator is shut down and deleted, on any way out (the pairing
@@ -48,8 +54,14 @@ branch=$(git branch --show-current)
 slug=$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')
 remote=hide-ios-build/$slug
 
+# The shots to take, read (and checked) before anything runs on the mini.
+store_plan=
+if [[ "$command" == store-shots ]]; then
+    store_plan=$(node mobile/scripts/store-shots.mjs plan)
+fi
+
 case "$command" in
-    build | release)
+    build | release | store-shots)
         # A release is the committed source: the build that reaches TestFlight must be one a person can find again.
         if [[ "$command" == release && -n "$(git status --porcelain --untracked-files=no)" ]]; then
             printf 'release needs a clean working tree: commit or stash the tracked changes first\n' >&2
@@ -95,7 +107,7 @@ case "$command" in
         [[ -n "${2:-}" ]] || { printf 'usage: %s status <delivery id>\n' "$0" >&2; exit 2; }
         exec ssh "$host" bash -s -- status "$slug" "$2" < mobile/scripts/mini-release.sh
         ;;
-    *) printf 'usage: %s [build | release | status <delivery id> | uploads | run | allow | push | clean]\n' "$0" >&2; exit 2 ;;
+    *) printf 'usage: %s [build | release | status <delivery id> | uploads | run | allow | push | store-shots | clean]\n' "$0" >&2; exit 2 ;;
 esac
 
 # Debug builds only: a pairing link the simulator follows at launch (see ShellViewController). It travels in front of
@@ -104,6 +116,11 @@ esac
     if [[ "$command" == run && -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then printf 'HIDE_PAIR_LINK=%q\n' "$HIDE_IOS_PAIR_LINK"; fi
     if [[ "$command" == push ]]; then printf 'HIDE_PUSH_B64=%q\n' "$(base64 < "$HIDE_IOS_PUSH_BODY" | tr -d '\n')"; fi
     if [[ ( "$command" == run || "$command" == allow ) && -n "${HIDE_IOS_TAPS:-}" ]]; then printf 'HIDE_TAPS=%q\n' "$HIDE_IOS_TAPS"; fi
+    if [[ "$command" == store-shots ]]; then
+        printf 'HIDE_STORE_PLAN=%q\n' "$store_plan"
+        printf 'HIDE_STORE_CLOCK=%q\n' "$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('mobile/store/shots.json','utf8')).clock)")"
+        printf 'HIDE_STORE_APPEARANCE=%q\n' "$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('mobile/store/shots.json','utf8')).appearance)")"
+    fi
     cat mobile/scripts/mini-ios.sh
 } | ssh "$host" env HIDE_IOS_KEEP_SIMULATOR="${HIDE_IOS_KEEP_SIMULATOR:-}" HIDE_IOS_SETTLE="${HIDE_IOS_SETTLE:-15}" \
     HIDE_IOS_APPEARANCE="${HIDE_IOS_APPEARANCE:-}" HIDE_IOS_HOME="${HIDE_IOS_HOME:-}" HIDE_IOS_LAUNCH_SCREEN="${HIDE_IOS_LAUNCH_SCREEN:-}" \
@@ -128,6 +145,13 @@ if [[ "$command" == release ]]; then
         printf 'the connection to %s ended during the release: it may still be running there or have uploaded; read `%s uploads` before running again\n' "$host" "$0" >&2
     fi
     exit "$status"
+fi
+if [[ "$command" == store-shots ]]; then
+    out=${HIDE_STORE_SHOTS_OUT:-agents/runs/ios-mission/store-assets}
+    mkdir -p "$out/raw"
+    rm -f "$out/raw"/*.png
+    scp -q "$host:$remote/shots/store/*.png" "$out/raw/"
+    node mobile/scripts/store-shots.mjs compose "$out/raw" "$out"
 fi
 if [[ ( "$command" == run || "$command" == push ) && -n "${HIDE_IOS_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_IOS_CAPTURE"
