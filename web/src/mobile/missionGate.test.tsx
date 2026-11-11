@@ -143,7 +143,9 @@ it("keeps the later planned review visible after a two-step plan starts, without
     const later = container.querySelector('[data-phone-step="later"]');
     expect(later?.textContent).toContain("Step later");
     expect(later?.querySelector('[data-node-gate="ahead"]')?.textContent).toBe("the finished screen");
-    expect(container.querySelector('[data-phone-mission-now]')?.contains(later)).toBe(false);
+    // It is not begun: it says what it waits for, not where its work stands.
+    expect(later?.getAttribute("data-phone-step-kind")).toBe("planned");
+    expect(later?.querySelector('[data-phone-step-line="planned"]')?.textContent).toBe("waiting for Step first");
     await click('[data-phone-back="missions"]');
     expect(container.querySelector('[data-phone-tab="missions"]')!.getAttribute("data-phone-tab-count")).toBeNull();
     expect(container.querySelector('[data-phone-mission="m-start"] [data-mission-row-gates]')?.textContent).toBe("1");

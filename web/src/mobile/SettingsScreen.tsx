@@ -13,11 +13,11 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { appHost } from "./appHost";
 import { push } from "./appBridge";
 import { appPushRow, refreshAppPush, turnOffAppPush, turnOnAppPush, useAppPush } from "./appPush";
-import { DemoHostPanel } from "./Demo";
+import { DemoHostRows } from "./Demo";
 import { HostList } from "./HostList";
 import { notificationRow } from "./protocol";
 import { enableNotifications, permission, pushSupported } from "./push";
-import { AboutSection, DisplaySection, Section, ValueRow } from "./SettingsParts";
+import { AboutSection, DisplaySection, ROW_INSET, Section, ValueRow } from "./SettingsParts";
 import { usePhone } from "./store";
 import { TabBar } from "./TabBar";
 
@@ -34,7 +34,7 @@ function BrowserNotifications() {
       <RowButton
         disabled={asking}
         data-phone-notifications="enable"
-        className="min-h-(--size-touch-target) gap-md px-none py-sm text-title text-foreground"
+        className={`min-h-(--size-touch-target) gap-md rounded-none py-sm text-title text-foreground ${ROW_INSET}`}
         onClick={() => {
           setAsking(true);
           void enableNotifications().finally(() => setAsking(false));
@@ -47,7 +47,7 @@ function BrowserNotifications() {
     );
   }
   return (
-    <p className="flex items-start gap-md py-sm text-body leading-relaxed text-muted-foreground" data-phone-notifications={row}>
+    <p className={`flex items-start gap-md py-sm text-body leading-relaxed text-muted-foreground ${ROW_INSET}`} data-phone-notifications={row}>
       <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
       <span>{row === "denied" ? t("mobile.notifications.denied") : t("mobile.notifications.installFirst")}</span>
     </p>
@@ -76,7 +76,7 @@ function AppNotifications() {
     : row === "on" ? t(state.outdated ? "mobile.settings.notificationsOutdated" : "mobile.settings.notificationsOnHint")
     : t("mobile.settings.notificationsOffHint");
   return (
-    <div className="flex flex-col gap-xs py-sm" data-phone-notifications={row}>
+    <div className={`flex flex-col gap-xs py-sm ${ROW_INSET}`} data-phone-notifications={row}>
       <div className="flex min-h-(--size-touch-target) items-center gap-md">
         <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
         <span id="app-notifications-label" className="min-w-0 flex-1 text-title text-foreground">{t("mobile.settings.notifications")}</span>
@@ -105,8 +105,8 @@ export function SettingsScreen({ openSheet = null }: { /** The gallery's: the sh
       <header className="phone-safe-top px-xl">
         <h1 className="pt-lg text-headline font-semibold text-foreground">{t("mobile.settings.title")}</h1>
       </header>
-      <Section title={t("mobile.settings.computers")} data-phone-settings-section="computers">
-        {demo ? <DemoHostPanel /> : <HostList t={t} machines={devices} active={{ online: connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} />}
+      <Section title={t("mobile.settings.computers")} data-phone-settings-section="computers" note={demo ? t("mobile.demo.panelNote") : undefined}>
+        {demo ? <DemoHostRows /> : <HostList t={t} machines={devices} active={{ online: connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} />}
       </Section>
       <Section title={t("mobile.settings.notifications")} data-phone-settings-section="notifications">
         {inApp ? <AppNotifications /> : <BrowserNotifications />}
