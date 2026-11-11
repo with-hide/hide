@@ -6,12 +6,10 @@
 //! changed, so the record grows by files rather than by one file every
 //! change rewrites (engineering #15).
 //!
-//! The index admits creates, reopens and deletes before their bodies, but
-//! marks a mission at rest only after its closed body is saved. A stop
-//! between the two never shelves an open body. It may leave
-//! a line whose file is not there yet (a create the start drops, as
-//! a save not yet made) or a file no line names (a delete the start
-//! finishes). The one exception is the move: builds before the folder kept
+//! Every changed body is written before its index line, including a take,
+//! create or reopen. A failed body write leaves the previous index intact.
+//! A file no line names is a create or delete interrupted before its index
+//! was saved; startup removes it. Builds before the folder kept
 //! every mission in `missions.json`, which is read as before while no index
 //! exists, and the first save writes every mission's file and then the
 //! index, so a move cut short leaves no index and the next start reads the
@@ -342,8 +340,7 @@ impl MissionFiles {
 
     /// Writes what changed since the last save: `leaving`, the missions
     /// shelved since, and every loaded mission whose file differs. The index
-    /// admits live missions before their bodies and resting missions after;
-    /// the first migration admits everything last. Then delete files the
+    /// follows every changed body, including changes of Conductor. Then delete files the
     /// index no longer names. A failure is returned with what is not yet
     /// written kept for the next save, which writes it again.
     pub(crate) fn write(
@@ -359,30 +356,6 @@ impl MissionFiles {
             Some(before) if *before != index => removed_ids(before, book)?,
             _ => Vec::new(),
         };
-        if let Some(before) = &self.index
-            && *before != index
-        {
-            let mut admitted: Index = serde_json::from_slice(&index)
-                .map_err(|error| format!("the index could not be decoded: {error}"))?;
-            let before: Index = serde_json::from_slice(before)
-                .map_err(|error| format!("the index could not be decoded: {error}"))?;
-            for line in &mut admitted.missions {
-                if line.at_rest()
-                    && let Some(was) = before
-                        .missions
-                        .iter()
-                        .find(|was| was.id == line.id && !was.at_rest())
-                {
-                    *line = was.clone();
-                }
-            }
-            let admitted = serde_json::to_vec(&admitted)
-                .map_err(|error| format!("the index could not be encoded: {error}"))?;
-            if self.index.as_ref() != Some(&admitted) {
-                self.replace(hide_kit::layout::MISSION_INDEX, &admitted)?;
-                self.index = Some(admitted);
-            }
-        }
         while let Some(mission) = leaving.first() {
             let bytes = encode_mission(mission)?;
             if self.written.get(&mission.id) != Some(&digest(&bytes)) {
@@ -686,9 +659,8 @@ mod tests {
         );
     }
 
-    /// The index is written before the files it names: a start finishes a
-    /// delete stopped between the two and drops a create whose file was
-    /// never written.
+    /// A damaged index naming a missing body drops it; a delete interrupted
+    /// after the index was saved is finished at startup.
     #[test]
     fn a_start_finishes_a_delete_and_drops_a_create_a_stop_cut_short() {
         let state = tempfile::tempdir().unwrap();
