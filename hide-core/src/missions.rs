@@ -1513,6 +1513,12 @@ pub struct Mission {
     pub delay_until_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
+    /// The line about the operator's checkout Hide added to `report` when
+    /// the mission closed (`runtime/mission_pull.rs`, PRD
+    /// mission-destination D-28), so a later close replaces it rather than
+    /// adding a second. A build from before it ignores and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_line: Option<String>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     #[serde(default)]
@@ -3884,6 +3890,7 @@ pub(crate) mod tests {
             delay: None,
             delay_until_unix_ms: None,
             report: None,
+            folder_line: None,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
             started_at_unix_ms: None,
