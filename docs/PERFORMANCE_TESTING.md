@@ -1053,6 +1053,15 @@ The page indexes terminal identities once per changed catalog and readdresses an
 Unchanged input callbacks add no catalog scan, subprocess or notifier fan-out, and terminal retention still follows the existing attached-tab limit.
 Regression owners are `runtime::tests::pane_move`, delivery continuity tests, `web/e2e/pane-move.spec.ts` and `desktop/e2e/pane-move.spec.ts`; controlled measurement remains separate from these functional claims.
 
+### The doorbell's lines in a terminal
+
+`terminalBellLines.ts` reads a pane's screen after a frame to dim the rows that carry the doorbell's line.
+The contract: `afterFrame` and a theme change only ask (`queueBellLines`), and a pane's screen is read at most once per animation frame however many writes the frame brought; the read is the viewport's rows once and nothing else, with no scrollback and no subprocess; a screen with no owl in it makes no marker and no decoration; and decorations are replaced only when the rows that carry a line, the width or the color moved.
+The cost is one `translateToString` per viewport row, plus a cell scan only for a row that shows an owl or begins with two spaces.
+Measure it in a real xterm in the browser: write output at the rate a flooding pane delivers, count the reads per animation frame from `buffer.getLine` calls inside the frame callback, count the decorations made, and time the callback with the owl absent and present against a build with the read switched off; report the load.
+`web/src/terminalBellLines.test.ts` holds the counted parts (one read per frame, no decoration without an owl, no replacement when nothing moved) against a stand-in terminal.
+Observed 2026-11-11 in headless Chromium 153 on a machine at load 73, so a controlled-load run is still owed (a functional reference, not performance parity): 240 frames of four writes of 200 rows into a 120 x 50 screen (960 `afterFrame` calls) made 240 reads, never more than one per frame; a screen with no owl made 0 decorations; the read's callback took a p95 of 0.1 ms, the page's timer resolution, and at most 0.6 ms; and the median frame time over five alternating trials was 16.79 ms with the read off, 16.86 ms with it on and no owl, and 16.79 ms with owl rows on screen, a frame loop paced at 60 Hz that hides anything under a millisecond.
+
 ### Terminal path links
 
 `web/src/terminalLinks.ts` reads at most three rows on either side of the hovered row and retains the existing maximum of sixteen joined spellings per token.
