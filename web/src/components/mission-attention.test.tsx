@@ -45,7 +45,7 @@ it("says why the pull request stands where it does in the PRs list's words, and 
     expect(pr.textContent).not.toContain("머지 가능");
     // The CI line is the pull request's to say; the review is said by its kind alone.
     expect(container.querySelector("[data-attention-failed]")?.textContent).toBe("리뷰 실패");
-    expect([...container.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => button.textContent)).toEqual(["지휘 에이전트에게 넘기기", "이 단계 빼기"]);
+    expect([...container.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => button.textContent)).toEqual(["Conductor에게 다시 맡기기", "이 단계 빼기"]);
   } finally {
     await unmount();
     await clientI18n.changeLanguage("en");
@@ -84,7 +84,7 @@ it("sends 완료로 닫기 only on its second press, and a press away puts it ba
   const { container, sent, unmount } = await draw({ present: true, choices: ["done", "leave"], reason: "close_refused" });
   try {
     const choices = () => [...container.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => [button.dataset.attentionChoice, button.textContent]);
-    expect(choices()).toEqual([["done", "완료로 닫기"], ["leave", "지휘 에이전트에게 넘기기"]]);
+    expect(choices()).toEqual([["done", "완료로 닫기"], ["leave", "Conductor에게 다시 맡기기"]]);
     const done = () => container.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!;
     await act(async () => done().click());
     expect(sent).toEqual([]);

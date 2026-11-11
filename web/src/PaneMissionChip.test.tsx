@@ -134,6 +134,18 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
   } finally { await unreadable.unmount(); }
 });
 
+it("marks a mission delay with a grey pause and says its reason and how long it still holds in the chip's name, the time gone once its end has passed", async () => {
+  const held = await mount([mission({ delay: "disk low", delay_until_unix_ms: Date.now() + 40 * 60_000 })]);
+  try {
+    expect(held.chip()?.querySelector("[data-mission-chip-delay]")).not.toBeNull();
+    expect(held.chip()?.getAttribute("aria-label")).toMatch(/New work held · disk low · \S+ now api title$/);
+  } finally { await held.unmount(); }
+  const past = await mount([mission({ delay: "disk low", delay_until_unix_ms: Date.now() - 60_000 })]);
+  try {
+    expect(past.chip()?.getAttribute("aria-label")).toMatch(/New work held · disk low now api title$/);
+  } finally { await past.unmount(); }
+});
+
 it("shows its popover on focus or pointing without taking the keyboard, and a press opens the mission on the mission screen instead of pinning (B3; PRD mission-screen B12, B14)", async () => {
   const view = await mount([mission()]);
   try {

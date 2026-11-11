@@ -392,7 +392,7 @@ it("offers Take over on the Conductor row when no Conductor holds an open missio
   } finally { await done.unmount(); }
 });
 
-// Operator report on M41: 지휘 다시 열기 beside a Conductor at rest started a second Conductor; a raise for a live Conductor is handed back with 지휘 에이전트에게 넘기기 in 내 차례.
+// Operator report on M41: 지휘 다시 열기 beside a Conductor at rest started a second Conductor; a raise for a live Conductor is handed back with Conductor에게 다시 맡기기 in 내 차례.
 it("offers no 지휘 다시 열기 while a Conductor holds the mission, even once a raise it was asked first reached the operator", async () => {
   const conductor = [{ pane_id: "p1", mark: "quiet" } as AgentRow];
   const late = mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to: "operator", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } })] });
@@ -943,7 +943,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(item.querySelector("[data-attention-pr]")?.getAttribute("data-attention-pr")).toBe("1232");
     // Its choices say what they do, handing it to the Conductor first; 이 단계 빼기 never goes on one press.
     expect([...item.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => button.dataset.attentionChoice)).toEqual(["leave", "drop"]);
-    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Hand to the conducting agent");
+    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Hand back to the Conductor");
     const drop = item.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
     expect(drop.textContent).toBe("Remove this step");
     await act(async () => drop.click());
