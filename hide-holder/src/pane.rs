@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Answer, Appearance, Key, MAX_READ_BYTES, Modifiers, Mouse, MouseAction, MouseButton, Scroll,
-    Size, Theme,
+    Size, Theme, styled,
 };
 use hide_vt::{ActiveScreen, DefaultColor, RgbColor, Terminal};
 
@@ -656,8 +656,9 @@ impl Pane {
 
     /// The rows [`Pane::read`] reads with soft wraps joined, so a reader
     /// narrower than the pane wraps each line at its own width, with their
-    /// styling as escape sequences, cut as a read is. The first line may be
-    /// the end of one that began above the rows read.
+    /// styling as escape sequences, cut to [`MAX_READ_BYTES`] by
+    /// [`newest_rows`]. The first line may be the end of one that began
+    /// above the rows read.
     pub fn read_rows(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
         let cols = self.terminal.cols()?;
         let Some((start, end)) = self.recent_range(usize::from(lines))? else {
@@ -669,7 +670,7 @@ impl Pane {
             false,
             true,
         )?;
-        Ok(styled(text, start > 0))
+        Ok(newest_rows(text, start > 0))
     }
 
     /// [`Pane::read`]'s text, and whether rows were left out.
@@ -735,8 +736,8 @@ impl Pane {
     }
 }
 
-/// A styled read cut to [`MAX_READ_BYTES`] from the oldest side, at a row's
-/// start, so no escape sequence is cut in two.
+/// A styled read of the screen cut to [`MAX_READ_BYTES`] from the oldest
+/// side, at a row's start, so no escape sequence is cut in two.
 fn styled(mut text: String, mut truncated: bool) -> Answer {
     if text.len() > MAX_READ_BYTES {
         let cut = text.len() - MAX_READ_BYTES;
@@ -747,6 +748,21 @@ fn styled(mut text: String, mut truncated: bool) -> Answer {
         truncated = true;
     }
     Answer::Text { text, truncated }
+}
+
+/// The last rows' styled read cut to [`MAX_READ_BYTES`] from the oldest side
+/// ([`styled::newest_bytes`]): its lines are joined, so one may be longer
+/// than the bound and a cut at a line's start could leave nothing; this one
+/// keeps the newest bytes, from a character or a whole sequence, with the
+/// style in effect there opened again, and at least `MAX_READ_BYTES -
+/// CUT_SLACK` of them, so a reader whose own bound is smaller always cuts
+/// too.
+fn newest_rows(text: String, truncated: bool) -> Answer {
+    let (text, cut) = styled::newest_bytes(&text, MAX_READ_BYTES, &str::len);
+    Answer::Text {
+        text,
+        truncated: truncated || cut,
+    }
 }
 
 fn mods(modifiers: Modifiers) -> u16 {
@@ -1157,6 +1173,89 @@ mod tests {
             first.contains("\x1b[31m") || first.contains("\x1b[38;5;1m"),
             "the color was lost: {text:?}"
         );
+    }
+
+    /// One soft-wrapped line over a 200-row by 300-column screen whose every
+    /// character changes between two 24-bit colors, which the formatter
+    /// writes as about 1.2 MiB: past the read's bound with no line break to
+    /// cut at.
+    fn one_wide_colored_line() -> String {
+        (0..60_000)
+            .map(|cell| {
+                if cell % 2 == 0 {
+                    "\x1b[38;2;255;0;0mx"
+                } else {
+                    "\x1b[38;2;0;0;255my"
+                }
+            })
+            .collect()
+    }
+
+    /// What a cut read of the last rows must be: within the bound and short
+    /// of it by less than the slack, ending with `newest`, and opening with
+    /// a whole style, the color its first character was drawn in.
+    fn assert_cut_keeps_the_newest(pane: &Pane, newest: &str) {
+        let Answer::Text { text, truncated } = pane.read_rows(2000).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(truncated);
+        assert!(text.len() <= MAX_READ_BYTES, "{}", text.len());
+        assert!(
+            text.len() + styled::CUT_SLACK > MAX_READ_BYTES,
+            "a cut read kept only {} bytes",
+            text.len()
+        );
+        assert!(
+            strip_escapes(&text).trim_end().ends_with(newest),
+            "{:?}",
+            &text[text.len() - 64..]
+        );
+        let first = text.find(['x', 'y']).unwrap();
+        let opened = &text[..first];
+        assert!(opened.starts_with('\x1b'), "{opened:?}");
+        let color = if text[first..].starts_with('x') {
+            "38;2;255;0;0m"
+        } else {
+            "38;2;0;0;255m"
+        };
+        assert!(opened.contains(color), "{opened:?}");
+    }
+
+    #[test]
+    fn a_read_of_one_line_past_the_bound_keeps_its_newest_part_in_its_color() {
+        let mut pane = Pane::new(
+            Size {
+                rows: 200,
+                cols: 300,
+            },
+            None,
+        )
+        .unwrap();
+        answers(
+            &mut pane,
+            &[format!("{}END", one_wide_colored_line()).as_bytes()],
+        );
+        assert_cut_keeps_the_newest(&pane, "END");
+    }
+
+    /// A line past the bound above a short newest one: the cut keeps the
+    /// newest line and fills the bound from the long one, so a reader
+    /// whose own bound is smaller sees that it was cut.
+    #[test]
+    fn a_read_of_a_long_old_line_and_a_short_newest_one_keeps_both() {
+        let mut pane = Pane::new(
+            Size {
+                rows: 200,
+                cols: 300,
+            },
+            None,
+        )
+        .unwrap();
+        answers(
+            &mut pane,
+            &[format!("{}\x1b[0m\r\nEND", one_wide_colored_line()).as_bytes()],
+        );
+        assert_cut_keeps_the_newest(&pane, "\nEND");
     }
 
     /// `text` without its escape sequences (CSI and the line's `\r`).

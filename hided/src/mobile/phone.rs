@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use hide_core::agent_state::phone::{DormantPhase, FRAME_LIMIT, SleepId, wire_len};
+use hide_holder_protocol::{MAX_COLS, MAX_READ_BYTES, styled};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -640,10 +641,14 @@ impl RowsReader {
 
 /// The `rows` frame of a read, within [`FRAME_LIMIT`]: what the text takes
 /// as JSON (an escape byte takes six) is measured against what the frame's
-/// other fields leave, and the oldest lines go first. `more` offers older
-/// rows only when the engine cut some (`truncated`), the cap is not reached
-/// and nothing was left out here, so a phone that reached the budget or the
-/// cap asks for nothing more (engineering #15).
+/// other fields leave, and whole lines are kept newest first
+/// ([`styled::newest_lines`]); only a line that alone takes more than all of
+/// it keeps its newest part. `more` offers older rows only when the engine
+/// cut some (`truncated`), the cap is not reached and nothing was left out
+/// here, so a phone at the budget or the cap asks for nothing more
+/// (engineering #15). A holder that cut its read to its own byte bound
+/// answers more than this frame holds (`HOLDER_CUT_KEEPS`), so that read is
+/// always cut here too and offers nothing more.
 fn rows_frame(key: &AgentKey, text: &str, truncated: bool, asked: u32) -> Value {
     // Measured with `false`, the longer of the two values `more` takes.
     let mut frame = json!({
@@ -651,68 +656,28 @@ fn rows_frame(key: &AgentKey, text: &str, truncated: bool, asked: u32) -> Value 
         "state": "ok", "text": "", "lines": asked, "more": false,
     });
     let room = FRAME_LIMIT.saturating_sub(wire_len(&frame));
-    let (kept, cut) = newest_within(text, room);
+    // A string's JSON is its escaped bytes between two quotes; escaping is
+    // per character, so the pieces' lengths add up.
+    let (kept, cut) = styled::newest_lines(text, room, &|piece| wire_len(piece) - 2);
     frame["text"] = Value::String(kept);
     frame["more"] = Value::Bool(!cut && truncated && asked < pane::MAX_LINES);
     frame
 }
 
-/// The newest whole lines of `text` whose JSON takes at most `room` bytes,
-/// and whether any were left out. When the newest line alone is longer (a
-/// minified file is one line), its start is kept up to `room`, without an
-/// escape sequence the cut would leave open.
-fn newest_within(text: &str, room: usize) -> (String, bool) {
-    // A string's JSON is its escaped bytes between two quotes; escaping is
-    // per character, so the pieces' lengths add up.
-    let json = |piece: &str| wire_len(piece) - 2;
-    if json(text) <= room {
-        return (text.to_owned(), false);
-    }
-    let bytes = text.as_bytes();
-    let (mut start, mut used) = (text.len(), 0);
-    while start > 0 {
-        let line = bytes[..start - 1]
-            .iter()
-            .rposition(|&byte| byte == b'\n')
-            .map_or(0, |newline| newline + 1);
-        let len = json(&text[line..start]);
-        if used + len > room {
-            break;
-        }
-        used += len;
-        start = line;
-    }
-    if start < text.len() {
-        return (text[start..].to_owned(), true);
-    }
-    let newest = &text[bytes[..text.len() - 1]
-        .iter()
-        .rposition(|&byte| byte == b'\n')
-        .map_or(0, |newline| newline + 1)..];
-    let mut head = String::new();
-    let mut used = 0;
-    let mut buffer = [0; 4];
-    for ch in newest.chars() {
-        let len = json(ch.encode_utf8(&mut buffer));
-        if used + len > room {
-            break;
-        }
-        used += len;
-        head.push(ch);
-    }
-    if let Some(escape) = head.rfind('\x1b') {
-        let rest = &head.as_bytes()[escape + 1..];
-        let closed = match rest.first() {
-            Some(b'[') => rest[1..].iter().any(|byte| (0x40..=0x7e).contains(byte)),
-            Some(b'\\') => true,
-            _ => false,
-        };
-        if !closed {
-            head.truncate(escape);
-        }
-    }
-    (head, true)
-}
+/// The fewest bytes a holder's read of the last rows keeps when it cut them
+/// to its bound: this build's holder keeps the newest bytes, less than
+/// `CUT_SLACK` short of the bound; a holder built before it cut at a row's
+/// start, giving up at most one row, 1024 columns of a 65-code-point cell
+/// (260 bytes) in its longest style (`STYLE_MAX`) and the row's end.
+const HOLDER_CUT_KEEPS: usize = {
+    let older =
+        MAX_READ_BYTES - (MAX_COLS as usize * (260 + styled::STYLE_MAX) + styled::STYLE_MAX + 2);
+    let current = MAX_READ_BYTES - styled::CUT_SLACK;
+    if older < current { older } else { current }
+};
+// JSON takes at least the text's bytes, so a holder's cut read never fits a
+// phone frame.
+const _: () = assert!(HOLDER_CUT_KEEPS > FRAME_LIMIT);
 
 fn key_of(message: &Value) -> Option<AgentKey> {
     let device_id = message.get("device_id").and_then(Value::as_str)?;
@@ -2457,23 +2422,60 @@ mod tests {
     }
 
     #[test]
-    fn a_newest_line_longer_than_the_frame_keeps_its_start_without_an_open_escape() {
+    fn a_newest_line_longer_than_the_frame_keeps_its_newest_part_in_its_color() {
         // A minified file is one line once soft wraps are joined.
-        let line = "\x1b[32mx\x1b[0m".repeat(40_000);
+        let line = format!("{}END", "\x1b[0m\x1b[32mx".repeat(40_000));
         let frame = rows_frame(&terminal_key(), &format!("older\r\n{line}"), true, 200);
         assert!(frame.to_string().len() <= FRAME_LIMIT);
         let sent = frame["text"].as_str().unwrap();
-        assert!(sent.starts_with("\x1b[32mx"), "{:?}", &sent[..20]);
+        assert!(sent.ends_with("xEND"), "the newest characters were dropped");
         assert!(!sent.contains("older"));
         assert!(sent.len() > FRAME_LIMIT / 8, "{} bytes kept", sent.len());
-        let open = sent.rfind('\x1b').unwrap();
-        // The last sequence is whole (`\x1b[32m` or `\x1b[0m`), whatever text follows it.
-        let last = &sent[open..];
+        // It starts with a whole sequence, the green the first `x` was drawn
+        // in, never with what is left of one.
         assert!(
-            last.starts_with("\x1b[32m") || last.starts_with("\x1b[0m"),
-            "{last:?}"
+            sent.starts_with("\x1b[32mx") || sent.starts_with("\x1b[0m\x1b[32mx"),
+            "{:?}",
+            &sent[..12]
         );
         assert_eq!(frame["more"], false);
+    }
+
+    /// A line that would fit the whole frame is never cut to fill what the
+    /// newer lines left: it goes whole.
+    #[test]
+    fn an_older_line_that_does_not_fit_what_is_left_goes_whole() {
+        let newer = "n".repeat(FRAME_LIMIT / 2);
+        let older = format!("OLD{}", "o".repeat(FRAME_LIMIT / 2));
+        let frame = rows_frame(&terminal_key(), &format!("{older}\r\n{newer}"), false, 200);
+        assert_eq!(frame["text"], newer);
+        assert_eq!(frame["more"], false);
+    }
+
+    /// A holder that cut its read to its bound (a line longer than a MiB
+    /// above a short newest one) answers what its cut keeps; the phone is
+    /// told there is nothing more above, however many rows it asked for,
+    /// and the newest line is there.
+    #[test]
+    fn a_read_the_holder_cut_offers_no_more_rows() {
+        let old = "\x1b[0m\x1b[38;2;255;0;0mx\x1b[0m\x1b[38;2;0;0;255my".repeat(40_000);
+        let read = format!("{old}\r\n\x1b[0mEND");
+        assert!(read.len() > MAX_READ_BYTES);
+        let (held, cut) = styled::newest_bytes(&read, MAX_READ_BYTES, &str::len);
+        assert!(cut && held.len() >= HOLDER_CUT_KEEPS);
+        for asked in [200, 400, 600] {
+            let frame = rows_frame(&terminal_key(), &held, true, asked);
+            let sent = frame["text"].as_str().unwrap();
+            assert!(sent.ends_with("\r\n\x1b[0mEND"), "{asked}");
+            assert_eq!(
+                frame["more"], false,
+                "{asked}: the phone would ask again for the same rows"
+            );
+        }
+        // A read the holder did not cut, with rows above it, still offers
+        // them.
+        let frame = rows_frame(&terminal_key(), "\x1b[0mEND", true, 200);
+        assert_eq!(frame["more"], true);
     }
 
     /// A frame past the relay's message is never handed to the relay, which
