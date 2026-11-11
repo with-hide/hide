@@ -160,9 +160,9 @@ export async function spawnChild(
   fixture: AgentFixture,
   daemon: Pick<Daemon, "origin" | "token">,
   parent: string,
-  { name, repo, branch = "main", session }: { name: string; repo: string; branch?: string; session?: string },
+  { name, repo, branch = "main", session, intent = name, brief }: { name: string; repo: string; branch?: string; session?: string; intent?: string; brief?: string },
 ): Promise<string> {
-  const args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(session ? ["--", "--resume", session] : [])];
+  const args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", intent, "--kind", "claude", "--repo", repo, "--branch", branch, ...(brief ? ["--brief", brief] : []), ...(session ? ["--", "--resume", session] : [])];
   type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
   const deadline = Date.now() + 30_000;
   let pane: string | undefined;

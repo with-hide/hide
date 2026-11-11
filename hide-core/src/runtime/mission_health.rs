@@ -1290,6 +1290,12 @@ impl Runtime {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
+        // A destination the last read could not find is a scope question
+        // for the operator (PRD mission-destination D-33): nothing is
+        // closed against it until a read finds it or the plan names another.
+        if self.missions.outside.destination_lost(id) {
+            return false;
+        }
         let report = mission.report.is_none().then(|| closing_report(mission));
         let key = close_key(mission);
         let wake_key = key.clone();

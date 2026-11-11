@@ -30,7 +30,7 @@ pub mod copy;
 mod devices;
 mod reown;
 #[cfg(test)]
-mod upgrade_tests;
+pub(crate) mod upgrade_tests;
 pub use devices::{DeviceNames, name_devices};
 
 /// The first place in `value`, a core state as it is saved or sent, that

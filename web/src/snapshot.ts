@@ -1706,6 +1706,8 @@ export type Mission = {
   device_id: string;
   status: MissionStatus;
   scope: MissionScope;
+  /** The branch the mission's results go to (`Mission::destination`); absent for a mission that records none, whose destination is the project's default branch, and from a core before destinations. */
+  destination?: string;
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
   exempt: boolean;
