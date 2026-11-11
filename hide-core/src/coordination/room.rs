@@ -288,9 +288,7 @@ mod tests {
     /// every other registration, `agent-2` the oldest, has ended.
     fn full_of_agents() -> Ledger {
         Ledger {
-            agents: (1..=AGENT_LIMIT as u64)
-                .map(|n| agent(n, n != 1))
-                .collect(),
+            agents: (1..=AGENT_LIMIT as u64).map(|n| agent(n, n != 1)).collect(),
             next_id: 100_000,
             ..Ledger::default()
         }
@@ -331,6 +329,7 @@ mod tests {
         );
         if result.is_ok() {
             ledger.check().unwrap();
+            assert_eq!(reloaded(ledger), *ledger);
         }
         result
     }
@@ -349,6 +348,7 @@ mod tests {
         );
         if result.is_ok() {
             ledger.check().unwrap();
+            assert_eq!(reloaded(ledger), *ledger);
         }
         result
     }
@@ -380,13 +380,34 @@ mod tests {
     }
 
     #[test]
+    fn both_full_collections_take_a_spawn_and_registration_without_dangling_references() {
+        let mut ledger = full_of_agents();
+        ledger.agents[1].parent = Some("agent-1".into());
+        ledger.spawns = (3000..3000 + SPAWN_LIMIT as u64)
+            .map(|n| spawn(n, 1, Some(2)))
+            .collect();
+        reserve(&mut ledger, &Held::default()).unwrap();
+        assert_eq!(ledger.spawns.len(), SPAWN_LIMIT);
+        assert!(!holds_spawn(&ledger, 3000));
+        assert!(holds_agent(&ledger, 2));
+        register(&mut ledger, &Held::default()).unwrap();
+        assert_eq!(ledger.agents.len(), AGENT_LIMIT);
+        assert!(!holds_agent(&ledger, 2));
+        assert_eq!(ledger.spawns.len(), 1);
+        assert_eq!(ledger.spawns[0].id, "spawn-100000");
+    }
+
+    #[test]
     fn a_full_ledger_of_live_registrations_refuses_a_new_one_with_capacity() {
         let mut ledger = full_of_agents();
         for agent in &mut ledger.agents {
             agent.ended = false;
         }
         let before = ledger.clone();
-        assert_eq!(register(&mut ledger, &Held::default()).unwrap_err(), "capacity");
+        assert_eq!(
+            register(&mut ledger, &Held::default()).unwrap_err(),
+            "capacity"
+        );
         assert_eq!(ledger, before);
     }
 
@@ -394,6 +415,8 @@ mod tests {
     fn an_ended_registration_another_names_as_parent_or_origin_stays() {
         let mut ledger = full_of_agents();
         // agent-10 was delegated by agent-2; agent-11 was forked from agent-3.
+        ledger.agents[9].ended = false;
+        ledger.agents[10].ended = false;
         ledger.agents[9].parent = Some("agent-2".into());
         ledger.agents[10].origin = Some("agent-3".into());
         ledger.agents[10].forked = true;
@@ -608,7 +631,10 @@ mod tests {
         register(&mut after, &Held::default()).unwrap();
         let (agents, spawns) = dropped(&before, &after);
         assert_eq!(
-            agents.iter().map(|agent| agent.id.as_str()).collect::<Vec<_>>(),
+            agents
+                .iter()
+                .map(|agent| agent.id.as_str())
+                .collect::<Vec<_>>(),
             ["agent-2"]
         );
         assert!(spawns.is_empty());

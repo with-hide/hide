@@ -664,7 +664,14 @@ mod tests {
         let (mut ledger, wait) = forked();
         let mut record = registration("", "w2:p1", "fork");
         record.name = Some("another-name".into());
-        let answer = apply(&mut ledger, &wait.id, &Settle::Bind(Box::new(record)), 1, &Held::default()).unwrap();
+        let answer = apply(
+            &mut ledger,
+            &wait.id,
+            &Settle::Bind(Box::new(record)),
+            1,
+            &Held::default(),
+        )
+        .unwrap();
         assert_eq!(answer, json!({"ended": "child_identity_changed"}));
         assert!(ledger.identity_waits.is_empty());
         assert_eq!(ledger.agents.len(), 1);

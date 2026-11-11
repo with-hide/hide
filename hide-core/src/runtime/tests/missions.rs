@@ -10843,6 +10843,10 @@ fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped(
         forked: false,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
+    // Until the book is read, even a registration with no mission spawn
+    // can be its Conductor or a directly bound worker.
+    assert!(runtime.missions.store.is_none());
+    assert!(runtime.delivery_held().agents.contains("agent-2"));
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission
         .nodes
@@ -10858,6 +10862,9 @@ fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped(
     assert!(runtime.delivery_held().agents.contains("agent-2"));
     runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Done;
     assert!(!runtime.delivery_held().agents.contains("agent-2"));
+    runtime.missions.unreadable = Some("read_failed".into());
+    assert!(runtime.delivery_held().agents.contains("agent-2"));
+    runtime.missions.unreadable = None;
     runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
     let view = runtime
         .mission_view_of("mission-1")
@@ -10871,4 +10878,44 @@ fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped(
         ),
         (Some("agent-2"), None, None)
     );
+}
+
+#[test]
+fn an_open_mission_holds_its_conductor_worker_reviewer_and_verifier() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.missions.store = Some(crate::missions::MissionStore::new(
+        fixture._root.path().join("missions.json"),
+    ));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.conductor.agent_id = Some("agent-conductor".into());
+    let node = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
+    node.agent_id = Some("agent-worker".into());
+    for (kind, agent) in [("review", "agent-reviewer"), ("verify", "agent-verifier")] {
+        node.criteria.push(
+            serde_json::from_value(json!({
+                "key": kind, "kind": kind, "text": kind,
+                "checkers": [{"worker": {"agent": "codex"}, "agent_id": agent}],
+            }))
+            .unwrap(),
+        );
+    }
+    assert_eq!(
+        runtime.delivery_held().agents,
+        [
+            "agent-conductor",
+            "agent-worker",
+            "agent-reviewer",
+            "agent-verifier"
+        ]
+        .map(str::to_owned)
+        .into(),
+    );
+    runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Done;
+    assert!(runtime.delivery_held().agents.is_empty());
 }

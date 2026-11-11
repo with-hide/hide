@@ -1532,8 +1532,8 @@ mod tests {
             1 + super::super::DELIVERY_EXPIRY_MS,
             &none,
         )
-            .unwrap()
-            .0;
+        .unwrap()
+        .0;
         assert_eq!(notices[0]["id"], letter.id);
         assert_eq!(ledger.letters.len(), 1);
         let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();

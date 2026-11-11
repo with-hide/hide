@@ -4088,14 +4088,20 @@ impl Runtime {
     /// What the open missions still need from the delivery ledger: their
     /// Conductors, and their nodes' workers and bound checkers, whose
     /// health and letters are read from their registrations. Before the
-    /// book is read, or while it cannot be, every spawn a mission started
-    /// is held with its child instead.
+    /// book is read, or while it cannot be, every registration is held:
+    /// a Conductor or a directly bound worker need not have a mission spawn.
     pub(super) fn mission_holds(
         &self,
         ledger: Option<&crate::delivery::ledger::Ledger>,
         held: &mut crate::coordination::Held,
     ) {
         if self.missions.store.is_none() || self.missions.unreadable.is_some() {
+            held.agents.extend(
+                ledger
+                    .into_iter()
+                    .flat_map(|ledger| &ledger.agents)
+                    .map(|agent| agent.id.clone()),
+            );
             for spawn in ledger
                 .into_iter()
                 .flat_map(|ledger| &ledger.spawns)

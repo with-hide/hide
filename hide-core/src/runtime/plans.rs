@@ -1935,7 +1935,10 @@ mod tests {
                 "requested_path": null, "args": [], "path": null, "pane": null,
                 "child": format!("agent-{}", n + 1),
             });
-            value.as_object_mut().unwrap().extend(link.as_object().unwrap().clone());
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(link.as_object().unwrap().clone());
             serde_json::from_value(value).unwrap()
         };
         let mut ledger = crate::delivery::ledger::Ledger::default();
