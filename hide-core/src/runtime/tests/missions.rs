@@ -1691,7 +1691,7 @@ fn a_mission_book_that_cannot_be_read_is_never_written_over() {
     std::fs::write(&path, b"not a mission book").unwrap();
     {
         let mut guard = fixture.runtime.lock().unwrap();
-        let store = crate::missions::MissionStore::new(path.clone());
+        let store = crate::mission_store::MissionStore::new(fixture._root.path());
         let restored = store.restore();
         guard.install_mission_store(store, restored);
         assert_eq!(
@@ -3030,8 +3030,10 @@ fn an_answer_the_engine_may_have_typed_is_typed_again_only_when_the_operator_sen
 #[test]
 fn a_book_holding_a_typed_answer_settles_its_decision_when_read() {
     let fixture = conducting();
-    // Its own file: the fixture's store saves its book in the background.
-    let path = fixture._root.path().join("older-missions.json");
+    // Its own folder: the fixture's store saves its book in the background.
+    let older = fixture._root.path().join("older");
+    std::fs::create_dir(&older).unwrap();
+    let path = older.join("missions.json");
     let mut guard = fixture.runtime.lock().unwrap();
     running(&mut guard);
     command(
@@ -3041,8 +3043,7 @@ fn a_book_holding_a_typed_answer_settles_its_decision_when_read() {
     )
     .unwrap();
     assert!(guard.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
-    let encoded =
-        crate::missions::encode(&std::sync::Arc::new(guard.missions.book.clone())).unwrap();
+    let encoded = crate::missions::encode_mission(&guard.missions.book.missions[0]).unwrap();
     let mut written: Value = serde_json::from_slice(&encoded).unwrap();
     assert!(
         written["missions"][0]["answer"].get("delivered").is_none(),
@@ -3050,9 +3051,9 @@ fn a_book_holding_a_typed_answer_settles_its_decision_when_read() {
     );
     written["missions"][0]["answer"]["delivered"] = json!(true);
     std::fs::write(&path, serde_json::to_vec(&written).unwrap()).unwrap();
-    let store = crate::missions::MissionStore::new(path);
+    let store = crate::mission_store::MissionStore::new(&older);
     let restored = store.restore();
-    assert!(matches!(restored, crate::missions::Restored::Read(_)));
+    assert!(matches!(restored, crate::mission_store::Restored::Moving(_)));
     guard.install_mission_store(store, restored);
     let mission = &guard.missions.book.missions[0];
     assert_eq!(
@@ -7224,16 +7225,19 @@ fn the_same_facts_evaluated_twice_write_one_event_and_one_letter() {
 #[test]
 fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a_restart() {
     use crate::mission_events::{EventKind, MissionEventStore};
-    use crate::missions::{AttentionReason, MissionStore, Restored};
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    use crate::missions::AttentionReason;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
     let before = runtime.missions.book.clone();
     let dir = tempfile::tempdir().unwrap();
     let history = dir.path().join("mission-events");
-    let book = dir.path().join("state/missions.json");
+    let state = dir.path().join("state");
+    let book = state.join("missions");
     let start = |runtime: &mut Runtime| {
-        let store = MissionEventStore::with_book(history.clone(), book.clone());
+        let store =
+            MissionEventStore::with_book(history.clone(), MissionFiles::new(book.clone(), None));
         let logs = store.restore(["mission-1"].into_iter());
         runtime.install_mission_events(store, logs);
     };
@@ -7261,7 +7265,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
         };
         (count(EventKind::Raised), count(EventKind::RaisedToOperator))
     };
-    let saved_book = || match MissionStore::new(book.clone()).restore() {
+    let saved_book = || match MissionStore::new(&state).restore() {
         Restored::Read(book) => Some(book),
         _ => None,
     };
@@ -7295,7 +7299,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
     // The other order: the history cannot be written, so the book waits
     // and the restart finds neither.
     std::fs::remove_dir_all(&history).unwrap();
-    std::fs::remove_file(&book).unwrap();
+    std::fs::remove_dir_all(&book).unwrap();
     std::fs::write(&history, "a file").unwrap();
     runtime.missions.book = before.clone();
     runtime.missions.events.clear();

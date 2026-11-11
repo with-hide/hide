@@ -153,10 +153,36 @@ pub fn composer_checks(state_dir: &Path) -> PathBuf {
     state_dir.join("composer-checks.json")
 }
 
-/// Each Conductor's mission: its plan, nodes, reasons and report, kept
-/// across a restart; its owner is the core's mission store.
+/// Every Conductor's missions in one book, as builds before the mission
+/// folder kept them: read once to move them into [`missions_dir`], never
+/// written again, and left for a downgrade; its owner is the core's mission
+/// store.
 pub fn missions(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.json")
+}
+
+/// The folder of each Conductor's mission, one file per mission (its plan,
+/// nodes, reasons and report) beside [`mission_index`]; its owner is the
+/// core's mission store.
+pub const MISSIONS_DIR: &str = "missions";
+
+pub fn missions_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(MISSIONS_DIR)
+}
+
+/// The mission folder's index: the next mission id and one line per
+/// mission, written last when the folder is first filled, so a folder
+/// without it is a move that did not finish.
+pub fn mission_index(missions_dir: &Path) -> PathBuf {
+    missions_dir.join(MISSION_INDEX)
+}
+
+pub const MISSION_INDEX: &str = "index.json";
+
+/// One mission's file in the mission folder. A mission id is a key
+/// (`hide_core::missions::valid_key`), so it names one file there.
+pub fn mission_file(missions_dir: &Path, id: &str) -> PathBuf {
+    missions_dir.join(format!("{id}.json"))
 }
 
 /// The schema 1 mission book as it was before its first conversion to

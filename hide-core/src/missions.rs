@@ -24,21 +24,18 @@
 //! has none and reads as it was.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::delivery::Actor;
-use crate::latest_file::read_capped;
 use crate::mission_criteria::{CheckInput, Criterion};
 
-const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 /// The schema before node criteria, read and converted (D-19).
-const SCHEMA_BEFORE_CRITERIA: u32 = 1;
+pub(crate) const SCHEMA_BEFORE_CRITERIA: u32 = 1;
 /// The schema before a node's three states and its pull request list (PRD
 /// mission-node-simple D-16).
-const SCHEMA_BEFORE_SIMPLE: u32 = 2;
+pub(crate) const SCHEMA_BEFORE_SIMPLE: u32 = 2;
 /// The schema before a node's human gate (PRD mission-human-gate D-02): a
 /// book of it has no `human` line and reads unchanged, but a build that knows
 /// only it cannot read a gate, so it reads no schema 4 book.
@@ -46,9 +43,6 @@ const SCHEMA_BEFORE_GATES: u32 = 3;
 /// Answered decisions a mission keeps for a skip of a protected line; past
 /// this the oldest goes and is logged.
 pub const DECIDED_LIMIT: usize = 32;
-/// Missions kept at once, closed ones included. A mission is deleted with
-/// its Conductor's session (D-22), so a full book is refused, never evicted.
-pub const MISSION_LIMIT: usize = 128;
 /// Nodes in one mission's plan, the cap every dependency graph shares.
 pub use crate::dag::NODE_LIMIT;
 /// The highest concurrency cap a mission or the settings may name.
@@ -90,9 +84,12 @@ pub fn answer_text(text: &str) -> Option<String> {
         && !text.chars().any(char::is_control))
     .then(|| text.to_owned())
 }
-const READ_CAP: u64 = 8 * 1024 * 1024;
-/// The size a change may bring the saved book to: under the read cap with
-/// room for the file's own framing, so what is written is always read back.
+/// What a start reads of one mission's file, or of the book builds before
+/// the mission folder kept (`mission_store`).
+pub(crate) const READ_CAP: u64 = 8 * 1024 * 1024;
+/// The size a change may bring one mission's saved file to: under the read
+/// cap with room for the file's own framing, so what is written is always
+/// read back.
 const WRITE_BUDGET: usize = 7 * 1024 * 1024;
 
 /// Where a mission stands. A cancelled mission is an end that nothing
@@ -1917,16 +1914,88 @@ pub(crate) fn check_worker(
     Ok(())
 }
 
-/// Every mission the core keeps, and the next id to give.
+/// Every mission the core keeps, and the next id to give: the missions it
+/// holds whole, and the closed ones it keeps on disk only (`shelved`,
+/// `mission_store`), each by its index line.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MissionBook {
     #[serde(default)]
     pub missions: Vec<Mission>,
     #[serde(default)]
     pub next: u64,
+    /// The closed missions past `mission_store::LOADED_CLOSED_LIMIT`,
+    /// oldest gone first: their files stay, and `hide mission show` and
+    /// `reopen` read one back. Never in a file's book.
+    #[serde(skip)]
+    pub shelved: Vec<MissionLine>,
+}
+
+/// What the mission folder's index says of one mission without its body:
+/// whether it may be shelved, how old its close is, and the Conductor
+/// session it is deleted with (D-22). A line changes only with a create, a
+/// status, a close, a take, an ask on a closed mission and a delete, so a
+/// node's change rewrites the mission's file alone.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MissionLine {
+    pub id: String,
+    pub status: MissionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at_unix_ms: Option<u64>,
+    /// A done mission whose node or decision still asks someone: it stays
+    /// loaded, so what it asks keeps reaching the operator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asks: bool,
+    /// Its Conductor's native session id. The archive names a session by
+    /// its machine and id; a line keeps only the id, which no machine
+    /// rename or core move rewrites, and a session id names one
+    /// conversation on every machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+impl MissionLine {
+    pub(crate) fn of(mission: &Mission) -> Self {
+        Self {
+            id: mission.id.clone(),
+            status: mission.status,
+            closed_at_unix_ms: mission.closed_at_unix_ms,
+            asks: mission.status == MissionStatus::Done
+                && (mission.decision.is_some()
+                    || mission.nodes.iter().any(|node| node.attention.is_some())),
+            session: mission
+                .conductor
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone()),
+        }
+    }
+
+    /// Finished and asking no one: what may be shelved (engineering #15).
+    pub(crate) fn at_rest(&self) -> bool {
+        !self.status.open() && !self.asks
+    }
+
+    /// When it closed, for shelving the oldest first; a closed mission
+    /// recorded without the time is the oldest.
+    pub(crate) fn closed_order(&self) -> (u64, u64) {
+        (self.closed_at_unix_ms.unwrap_or(0), mission_number(&self.id))
+    }
+}
+
+/// The number in a mission's id (`MissionBook::allocate`), 0 for an id of
+/// another form.
+pub(crate) fn mission_number(id: &str) -> u64 {
+    id.strip_prefix("mission-")
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
 }
 
 impl MissionBook {
+    /// The line of a shelved mission `id`.
+    pub(crate) fn shelf(&self, id: &str) -> Option<&MissionLine> {
+        self.shelved.iter().find(|line| line.id == id)
+    }
+
     pub(crate) fn get(&self, id: &str) -> Option<&Mission> {
         self.missions.iter().find(|mission| mission.id == id)
     }
@@ -3383,21 +3452,31 @@ struct Stored {
     book: MissionBook,
 }
 
-pub(crate) fn encode(book: &Arc<MissionBook>) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&Stored {
+/// One mission's file: a book of that one mission in the book's schema, so
+/// it is read, and an older schema converted, as a book is, and every key a
+/// core move or a device rename rewrites in a book (`node_migration`'s
+/// `/missions/*/…` rows) is where it is in the book.
+#[derive(Serialize)]
+struct StoredMission<'a> {
+    schema_version: u32,
+    missions: [&'a Mission; 1],
+}
+
+pub(crate) fn encode_mission(mission: &Mission) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&StoredMission {
         schema_version: SCHEMA_VERSION,
-        book: MissionBook::clone(book),
+        missions: [mission],
     })
     .map_err(|error| format!("could not be encoded: {error}"))
 }
 
 /// A book read back, and the schema it was written in.
-struct Decoded {
-    book: MissionBook,
-    from: u32,
+pub(crate) struct Decoded {
+    pub(crate) book: MissionBook,
+    pub(crate) from: u32,
 }
 
-fn decode(bytes: &[u8]) -> Result<Decoded, String> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     let decoded = |error: serde_json::Error| format!("could not be decoded: {error}");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(decoded)?;
     let from = value
@@ -3431,14 +3510,13 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         line.carry_spent_rerun();
         line.count_tally();
     }
-    if stored.book.missions.len() > MISSION_LIMIT
-        || stored
-            .book
-            .missions
-            .iter()
-            .any(|mission| mission.nodes.len() > NODE_LIMIT)
+    if stored
+        .book
+        .missions
+        .iter()
+        .any(|mission| mission.nodes.len() > NODE_LIMIT)
     {
-        return Err("holds more missions or nodes than the limits allow".to_owned());
+        return Err("holds a mission with more nodes than the limit allows".to_owned());
     }
     Ok(Decoded {
         book: stored.book,
@@ -3590,10 +3668,10 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-/// The size of the book as it would be saved, counted without keeping the
-/// bytes and stopped just past `limit`, so a check costs at most that much
-/// encoding.
-fn saved_size(book: &MissionBook, limit: usize) -> usize {
+/// The size of one mission as its file would be saved, counted without
+/// keeping the bytes and stopped just past `limit`, so a check costs at most
+/// that much encoding.
+fn saved_size(mission: &Mission, limit: usize) -> usize {
     struct Counter(usize, usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -3608,103 +3686,38 @@ fn saved_size(book: &MissionBook, limit: usize) -> usize {
         }
     }
     let mut counter = Counter(0, limit);
-    let _ = serde_json::to_writer(&mut counter, book);
+    let _ = serde_json::to_writer(&mut counter, mission);
     counter.0
 }
 
-/// Whether the book, as it would be saved, stays within what a start reads
-/// back.
-pub(crate) fn fits(book: &MissionBook) -> bool {
-    saved_size(book, WRITE_BUDGET) <= WRITE_BUDGET
+/// Whether one mission, as its file would be saved, stays within what a
+/// start reads back.
+pub(crate) fn fits(mission: &Mission) -> bool {
+    saved_size(mission, WRITE_BUDGET) <= WRITE_BUDGET
 }
 
-/// Whether a change from `before` to `after` may be kept: one that stays in
-/// the budget, or one that makes a book already past it smaller, so a
-/// close or a smaller plan is never refused.
+/// Whether a change from `before` to `after` may be kept: each mission it
+/// changed stays in its file's budget, or is made smaller when it was
+/// already past it, so a close or a smaller plan is never refused. Other
+/// missions are not counted: each has a file of its own.
 pub(crate) fn may_keep(before: &MissionBook, after: &MissionBook) -> bool {
-    // A book past the budget came from a file the read cap let in, so both
-    // are counted to just past that cap.
+    // A mission past the budget came from a file the read cap let in, so
+    // both are counted to just past that cap.
     let limit = READ_CAP as usize;
-    fits(after) || saved_size(after, limit) < saved_size(before, limit)
-}
-
-/// Where a restored book came from: a file this build cannot use is kept
-/// aside rather than replaced, so a downgrade does not erase missions.
-pub(crate) enum Restored {
-    Fresh,
-    Read(MissionBook),
-    Unreadable(String),
-}
-
-/// Where the book lives and how it is read at launch; it is written by the
-/// missions' one writer, after the histories it goes with
-/// (`mission_events::MissionEventStore`).
-pub(crate) struct MissionStore {
-    path: PathBuf,
-}
-
-impl MissionStore {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    /// Reads the book at launch, before the runtime lock is taken. An older
-    /// schema's book is converted, and the file it came from is copied aside
-    /// once before anything writes the current schema over it.
-    pub(crate) fn restore(&self) -> Restored {
-        match read_capped(&self.path, READ_CAP) {
-            Ok(None) => Restored::Fresh,
-            Ok(Some(bytes)) => match decode(&bytes) {
-                Ok(Decoded { book, from }) => {
-                    // With no copy kept the converted book is not written
-                    // over the old one: it is read as unreadable, which
-                    // keeps the file as it is.
-                    if from != SCHEMA_VERSION
-                        && let Err(reason) = self.keep_before_conversion(&bytes, from)
-                    {
-                        return Restored::Unreadable(reason);
-                    }
-                    Restored::Read(book)
-                }
-                Err(reason) => Restored::Unreadable(reason),
-            },
-            Err(reason) => Restored::Unreadable(reason),
+    after.missions.iter().all(|mission| {
+        match before.get(&mission.id) {
+            Some(was) if was == mission => true,
+            Some(was) => {
+                fits(mission) || saved_size(mission, limit) < saved_size(was, limit)
+            }
+            None => fits(mission),
         }
-    }
-
-    /// The copy a downgrade is restored from; an existing copy is the
-    /// earliest one and is kept.
-    fn keep_before_conversion(&self, bytes: &[u8], from: u32) -> Result<(), String> {
-        let Some(directory) = self.path.parent() else {
-            return Err("has no folder to keep its copy before conversion in".to_owned());
-        };
-        let backup = match from {
-            SCHEMA_BEFORE_CRITERIA => hide_kit::layout::missions_before_criteria(directory),
-            SCHEMA_BEFORE_SIMPLE => hide_kit::layout::missions_before_simple(directory),
-            _ => hide_kit::layout::missions_before_gates(directory),
-        };
-        let outcome = crate::latest_file::keep_first_copy(&backup, bytes);
-        crate::diagnostic!(serde_json::json!({
-            "component": "missions",
-            "kind": "missions.converted",
-            "from": from,
-            "to": SCHEMA_VERSION,
-            "backup": backup.to_string_lossy(),
-            "written": outcome.as_ref().ok(),
-            "message": outcome.as_ref().err().map(ToString::to_string),
-        }));
-        outcome
-            .map(|_| ())
-            .map_err(|error| format!("could not keep its copy before conversion: {error}"))
-    }
-
-    pub(crate) fn path(&self) -> &std::path::Path {
-        &self.path
-    }
+    })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::mission_store::{MissionStore, Restored};
 
     /// B15, B16 (with-hide/hide#2227): `leave` comes first while a Conductor
     /// holds the mission, and for an unplanned pull request also without
@@ -3806,26 +3819,33 @@ pub(crate) mod tests {
         }
     }
 
-    /// A book is only kept when its save stays under what a start reads
-    /// back, so the file Hide writes never comes back unreadable.
+    /// A change is only kept when the file of each mission it changed stays
+    /// under what a start reads back, so a file Hide writes never comes back
+    /// unreadable; the other missions' files are not counted.
     #[test]
-    fn a_book_past_what_a_start_reads_back_does_not_fit() {
+    fn a_mission_past_what_a_start_reads_back_does_not_fit() {
         let mut large = mission();
         large.report = Some("x".repeat(WRITE_BUDGET / 2));
+        assert!(fits(&large));
         let mut book = MissionBook::default();
         book.missions.push(large.clone());
-        assert!(fits(&book));
+        // Another mission as large has a file of its own.
+        let mut other = large.clone();
+        other.id = "mission-2".into();
         let before = book.clone();
-        book.missions.push(large);
-        assert!(!fits(&book));
-        assert!(!may_keep(&before, &book));
-        // A change that makes a book already past the budget smaller is kept.
-        let mut over = book.clone();
-        over.missions.push(over.missions[0].clone());
-        let mut smaller = over.clone();
-        smaller.missions[2].report = Some("x".into());
-        assert!(!fits(&smaller));
-        assert!(may_keep(&over, &smaller));
+        book.missions.push(other);
+        assert!(may_keep(&before, &book));
+        // One mission past the budget is not kept.
+        let mut grown = book.clone();
+        grown.missions[0].title = "y".repeat(WRITE_BUDGET / 2 + 1);
+        assert!(!fits(&grown.missions[0]));
+        assert!(!may_keep(&book, &grown));
+        // A change that makes a mission already past the budget smaller is
+        // kept.
+        let mut smaller = grown.clone();
+        smaller.missions[0].report = Some("x".into());
+        assert!(fits(&smaller.missions[0]) || saved_size(&smaller.missions[0], READ_CAP as usize) < saved_size(&grown.missions[0], READ_CAP as usize));
+        assert!(may_keep(&grown, &smaller));
         // A move that finds a mission's registration gone writes null.
         let mut stored = serde_json::to_value(&book.missions[0]).unwrap();
         stored["workspace_id"] = serde_json::Value::Null;
@@ -4092,20 +4112,44 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_book_past_its_limits_or_of_another_version_is_not_used() {
-        let book = MissionBook {
-            missions: vec![mission(); MISSION_LIMIT + 1],
-            next: 1,
-        };
-        let bytes = encode(&Arc::new(book)).unwrap();
-        assert!(decode(&bytes).is_err());
+    fn a_mission_past_its_node_limit_or_of_another_version_is_not_used() {
+        let mut over = mission();
+        over.nodes = (0..=NODE_LIMIT)
+            .map(|index| {
+                apply_plan(
+                    &mission(),
+                    &plan(vec![node(&format!("n{index}"), NodeKind::Change, &[])]),
+                    2,
+                )
+                .unwrap()
+                .nodes
+                .remove(0)
+            })
+            .collect();
+        assert!(decode(&encode_mission(&over).unwrap()).is_err());
         let other = serde_json::to_vec(
             &serde_json::json!({"schema_version": 99, "missions": [], "next": 0}),
         )
         .unwrap();
         assert!(decode(&other).is_err());
-        let ok = encode(&Arc::new(MissionBook::default())).unwrap();
-        assert_eq!(decode(&ok).unwrap().book, MissionBook::default());
+        assert_eq!(saved_again(&MissionBook {
+            missions: vec![mission()],
+            ..MissionBook::default()
+        }), vec![mission()]);
+    }
+
+    /// What the mission folder writes of `book` reads back as it: each
+    /// mission's file in the current schema.
+    fn saved_again(book: &MissionBook) -> Vec<Mission> {
+        book.missions
+            .iter()
+            .map(|mission| {
+                let again = decode(&encode_mission(mission).unwrap()).unwrap();
+                assert_eq!(again.from, SCHEMA_VERSION);
+                let [one]: [Mission; 1] = again.book.missions.try_into().unwrap();
+                one
+            })
+            .collect()
     }
 
     #[test]
@@ -4243,6 +4287,7 @@ pub(crate) mod tests {
             book: MissionBook {
                 missions: vec![planned],
                 next: 2,
+                shelved: Vec::new(),
             },
         })
         .unwrap();
@@ -4255,7 +4300,7 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let Restored::Read(mut book) = MissionStore::new(path).restore() else {
+        let Restored::Moving(mut book) = MissionStore::new(folder.path()).restore() else {
             panic!("the book reads");
         };
         let line = book.missions[0].nodes[0]
@@ -4295,8 +4340,8 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, &bytes).unwrap();
-        let store = MissionStore::new(path.clone());
-        let Restored::Read(book) = store.restore() else {
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
             panic!("a schema 1 book reads");
         };
         let read = &book.missions[0];
@@ -4311,12 +4356,10 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         // The first copy is the one kept.
         std::fs::write(&path, b"{\"schema_version\": 1, \"missions\": []}").unwrap();
-        assert!(matches!(store.restore(), Restored::Read(_)));
+        assert!(matches!(store.restore(), Restored::Moving(_)));
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         // What is saved is the current schema and reads back the same.
-        let saved = encode(&Arc::new(book.clone())).unwrap();
-        let again = decode(&saved).unwrap();
-        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+        assert_eq!(saved_again(&book), book.missions);
     }
 
     /// PRD mission-node-simple D-16, B26: a schema 2 book reads in the
@@ -4352,8 +4395,8 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, &bytes).unwrap();
-        let store = MissionStore::new(path);
-        let Restored::Read(book) = store.restore() else {
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
             panic!("a schema 2 book reads");
         };
         let read = &book.missions[0];
@@ -4389,9 +4432,7 @@ pub(crate) mod tests {
         let backup = hide_kit::layout::missions_before_simple(folder.path());
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         // Saved again it is schema 3, and it is not moved a second time.
-        let saved = encode(&Arc::new(book.clone())).unwrap();
-        let again = decode(&saved).unwrap();
-        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+        assert_eq!(saved_again(&book), book.missions);
     }
 
     /// PRD mission-human-gate D-02, B12: a schema 3 book, written before a
@@ -4411,8 +4452,8 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, &bytes).unwrap();
-        let store = MissionStore::new(path.clone());
-        let Restored::Read(book) = store.restore() else {
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
             panic!("a schema 3 book reads");
         };
         let node = &book.missions[0].nodes[0];
@@ -4428,15 +4469,13 @@ pub(crate) mod tests {
         let backup = hide_kit::layout::missions_before_gates(folder.path());
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         std::fs::write(&path, b"{\"schema_version\": 3, \"missions\": []}").unwrap();
-        assert!(matches!(store.restore(), Restored::Read(_)));
+        assert!(matches!(store.restore(), Restored::Moving(_)));
         assert_eq!(
             std::fs::read(&backup).unwrap(),
             bytes,
             "the first copy is kept"
         );
-        let saved = encode(&Arc::new(book.clone())).unwrap();
-        let again = decode(&saved).unwrap();
-        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+        assert_eq!(saved_again(&book), book.missions);
     }
 
     /// PRD mission-human-gate D-13, D-15, B3: a plan names at most one gate
@@ -4562,7 +4601,7 @@ pub(crate) mod tests {
                 .unwrap();
             return;
         }
-        let restored = MissionStore::new(path.clone()).restore();
+        let restored = MissionStore::new(folder.path()).restore();
         std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(matches!(restored, Restored::Unreadable(_)));
         assert_eq!(std::fs::read(&path).unwrap(), bytes);

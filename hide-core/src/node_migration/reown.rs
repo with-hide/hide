@@ -22,7 +22,8 @@ use serde_json::{Map, Value};
 
 use super::{
     CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
-    MISSIONS, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
+    MISSIONS, MISSIONS_DIR, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH,
+    WORKSPACE_VIEWS, mission_files, read_json,
     read_marker, write,
 };
 use crate::node::NodeId;
@@ -225,15 +226,22 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         renumbered: &renumbered,
         pruned: 0,
     };
-    for file in [
+    let stores = [
         CORE_STATE,
         WORKSPACE_VIEWS,
         LABELS,
         DELIVERY_LEDGER,
         LOCAL_ISSUES,
         MISSIONS,
-    ] {
-        let path = staging.join(file);
+    ]
+    .into_iter()
+    .map(|file| (file, file.to_owned(), staging.join(file)));
+    // Each mission's file is keyed as the book it is one mission of.
+    let missions = mission_files(staging)
+        .map_err(|reason| refuse(&staging.join(MISSIONS_DIR), reason))?
+        .into_iter()
+        .map(|(name, path)| (MISSIONS, name, path));
+    for (file, name, path) in stores.chain(missions) {
         let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
             continue;
         };
@@ -259,7 +267,7 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
             let bytes =
                 serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
             write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
-            outcome.files.push(file.to_owned());
+            outcome.files.push(name);
         }
     }
 

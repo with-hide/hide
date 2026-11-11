@@ -464,25 +464,48 @@ impl Core {
             );
             let restored = checks.restore();
             lock_recover(&runtime).install_composer_checks(checks, restored);
-            let missions =
-                crate::missions::MissionStore::new(hide_kit::layout::missions(directory));
+            use crate::mission_store::{MissionFiles, MissionStore, Restored};
+            let missions = MissionStore::new(directory);
             let restored = missions.restore();
+            let files = MissionFiles::new(
+                missions.dir().to_path_buf(),
+                match &restored {
+                    Restored::Read(book) => Some(book),
+                    _ => None,
+                },
+            );
             let events = crate::mission_events::MissionEventStore::with_book(
                 hide_kit::layout::mission_events(directory),
-                missions.path().to_path_buf(),
+                files,
             );
             let logs = match &restored {
-                crate::missions::Restored::Read(book) => {
-                    events.sweep(book.missions.iter().map(|mission| mission.id.as_str()));
+                Restored::Read(book) | Restored::Moving(book) => {
+                    if let Restored::Read(book) = &restored {
+                        missions.sweep(book);
+                    }
+                    // A shelved mission keeps its history on disk; only the
+                    // missions held whole read theirs.
+                    events.sweep(
+                        book.missions
+                            .iter()
+                            .map(|mission| mission.id.as_str())
+                            .chain(book.shelved.iter().map(|line| line.id.as_str())),
+                    );
                     events.restore(book.missions.iter().map(|mission| mission.id.as_str()))
                 }
                 _ => std::collections::HashMap::new(),
             };
+            let moving = matches!(restored, Restored::Moving(_));
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
+            // The book read from the file of builds before the folder is
+            // moved into it now, not at its first change.
+            if moving {
+                guard.save_missions();
+            }
             guard.install_desk_store(desk, desk_restored);
             drop(guard);
         }
@@ -699,8 +722,14 @@ impl Core {
         if !check_owner_thread(self, "mission.command") {
             return Err("mission_unavailable".into());
         }
-        let (answer, changed) =
-            lock_recover(&self.runtime).mission_command(device, caller, expected, command)?;
+        // A shelved mission's file, and for a reopen its history, is read
+        // here, off the lock (`mission_store`).
+        let shelved = lock_recover(&self.runtime).shelved_files(&command);
+        let visiting = shelved.map(|(id, dir, events)| {
+            crate::mission_store::read_shelved(&dir, events.as_deref(), &id)
+        });
+        let (answer, changed) = lock_recover(&self.runtime)
+            .mission_command_with(device, caller, expected, command, visiting)?;
         if changed {
             notify_change(self);
         }

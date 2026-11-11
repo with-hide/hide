@@ -19,11 +19,12 @@ use super::mission_landing::{
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionKind, CriterionState};
 use crate::mission_events::History;
+use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
-    ConductorSettings, Delivery, External, MISSION_LIMIT, Mission, MissionBook, MissionCommand,
+    ConductorSettings, Delivery, External, Mission, MissionBook, MissionCommand,
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
-    PendingWake, PrSeen, Question, Restored, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
+    PendingWake, PrSeen, Question, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -514,7 +515,7 @@ struct Wake {
 #[derive(Default)]
 pub(crate) struct MissionRuntime {
     pub(crate) book: MissionBook,
-    pub(crate) store: Option<crate::missions::MissionStore>,
+    pub(crate) store: Option<crate::mission_store::MissionStore>,
     /// Why the stored record was not used; commands are refused while it
     /// stands so the file is not replaced by an empty book.
     pub(crate) unreadable: Option<String>,
@@ -1187,12 +1188,12 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
 impl Runtime {
     pub(crate) fn install_mission_store(
         &mut self,
-        store: crate::missions::MissionStore,
+        store: crate::mission_store::MissionStore,
         restored: Restored,
     ) {
         match restored {
             Restored::Fresh => {}
-            Restored::Read(mut book) => {
+            Restored::Read(mut book) | Restored::Moving(mut book) => {
                 settle_typed_answers(&mut book);
                 self.missions.book = book;
             }
@@ -1437,7 +1438,7 @@ impl Runtime {
         }
     }
 
-    pub(super) fn save_missions(&mut self) {
+    pub(crate) fn save_missions(&mut self) {
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         // A reopened mission is held open until a node moves (B18); the
         // move is seen here, where every change is saved, so a node that
@@ -1458,19 +1459,95 @@ impl Runtime {
         if self.missions.unreadable.is_some() {
             return;
         }
+        let leaving = self.shelve_missions();
         if let Some(store) = &self.missions.event_store {
-            store.save_book(Arc::new(self.missions.book.clone()));
+            store.save_book(Arc::new(self.missions.book.clone()), leaving);
         }
+    }
+
+    /// Shelves the oldest closed missions that ask no one past
+    /// `LOADED_CLOSED_LIMIT` (engineering #15): their lines stay in the
+    /// book and their files on disk, and their bodies go to the writer
+    /// once, for the last state their files take, with their histories
+    /// let go from memory. Returns those bodies.
+    fn shelve_missions(&mut self) -> Vec<Mission> {
+        let book = &mut self.missions.book;
+        let resting = book
+            .missions
+            .iter()
+            .filter(|mission| crate::missions::MissionLine::of(mission).at_rest())
+            .count();
+        let Some(over) = resting.checked_sub(crate::mission_store::LOADED_CLOSED_LIMIT) else {
+            return Vec::new();
+        };
+        if over == 0 {
+            return Vec::new();
+        }
+        let mut oldest: Vec<(u64, u64)> = book
+            .missions
+            .iter()
+            .map(crate::missions::MissionLine::of)
+            .filter(crate::missions::MissionLine::at_rest)
+            .map(|line| line.closed_order())
+            .collect();
+        oldest.sort_unstable();
+        let cut = oldest[over - 1];
+        let (leaving, kept): (Vec<Mission>, Vec<Mission>) =
+            std::mem::take(&mut book.missions).into_iter().partition(|mission| {
+                let line = crate::missions::MissionLine::of(mission);
+                line.at_rest() && line.closed_order() <= cut
+            });
+        book.missions = kept;
+        for mission in &leaving {
+            book.shelved.push(crate::missions::MissionLine::of(mission));
+            self.missions.events.remove(&mission.id);
+            if let Some(store) = &self.missions.event_store {
+                store.release(&mission.id);
+            }
+        }
+        self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "missions.shelved",
+            "missions": leaving.iter().map(|mission| mission.id.as_str()).collect::<Vec<_>>(),
+        }));
+        let known: Vec<String> = book.missions.iter().map(|mission| mission.id.clone()).collect();
+        self.drop_detail_items(|item| match item {
+            DetailItem::Mission { mission } => known.contains(mission),
+            _ => true,
+        });
+        if self
+            .missions
+            .shown
+            .as_ref()
+            .is_some_and(|shown| !known.contains(shown))
+        {
+            self.missions.shown = None;
+        }
+        leaving
     }
 
     /// Runs a `hide mission` command from `caller`'s pane on `device`.
     /// Returns the answer and whether anything changed.
+    #[cfg(test)]
     pub(crate) fn mission_command(
         &mut self,
         device: &str,
         caller: &str,
         expected: &Context,
         command: MissionCommand,
+    ) -> Result<(Value, bool), String> {
+        self.mission_command_with(device, caller, expected, command, None)
+    }
+
+    /// `mission_command`, with the shelved mission the command names read
+    /// back off the lock (`Core::mission_command`), or why it could not be.
+    pub(crate) fn mission_command_with(
+        &mut self,
+        device: &str,
+        caller: &str,
+        expected: &Context,
+        command: MissionCommand,
+        visiting: Option<Result<Visiting, String>>,
     ) -> Result<(Value, bool), String> {
         // Only a command that can change the record is measured, and only
         // it pays for the copy a refusal puts back.
@@ -1479,7 +1556,7 @@ impl Runtime {
             MissionCommand::Take { mission, .. } => Some(mission.clone()),
             _ => None,
         };
-        let answer = self.apply_mission_command(device, caller, expected, command)?;
+        let answer = self.apply_mission_command(device, caller, expected, command, visiting)?;
         let Some(before) = before.filter(|_| answer.1) else {
             return Ok(answer);
         };
@@ -1523,6 +1600,7 @@ impl Runtime {
         caller: &str,
         expected: &Context,
         command: MissionCommand,
+        visiting: Option<Result<Visiting, String>>,
     ) -> Result<(Value, bool), String> {
         if !command.valid() {
             return Err("mission_text_invalid".into());
@@ -1561,9 +1639,6 @@ impl Runtime {
             } => {
                 if self.missions.book.conducted_open(&actor).is_some() {
                     return Err("mission_already_conducting".into());
-                }
-                if self.missions.book.missions.len() >= MISSION_LIMIT {
-                    return Err("mission_full".into());
                 }
                 let project = match project {
                     Some(project) => project,
@@ -1899,6 +1974,9 @@ impl Runtime {
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Reopen { mission } => {
+                if let Some(id) = mission.as_deref() {
+                    self.unshelve_mission(id, &actor, visiting)?;
+                }
                 let id = self.conducted_mission(&actor, mission.as_deref(), false)?;
                 let changed = self.reopen_mission(&id, now)?;
                 if changed {
@@ -2007,11 +2085,19 @@ impl Runtime {
             }
             MissionCommand::Show { mission, node } => {
                 let ledger = self.delivery_state().ok();
+                // A shelved mission is shown from its file, as it was read.
+                let shelved = match (&mission, visiting) {
+                    (Some(id), Some(read)) if self.missions.book.shelf(id).is_some() => {
+                        Some(read.map_err(|reason| self.shelved_unreadable(id, &reason))?.mission)
+                    }
+                    _ => None,
+                };
                 let (id, node, caller) = match mission {
                     Some(id) => (
                         self.missions
                             .book
                             .get(&id)
+                            .or(shelved.as_ref())
                             .map(|mission| mission.id.clone())
                             .ok_or("mission_unknown")?,
                         node,
@@ -2030,7 +2116,12 @@ impl Runtime {
                 // One pass over the ledger's agents serves the view and both
                 // letter lists: the one that found the caller's mission, else
                 // one for the mission's workers and checkers.
-                let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+                let mission = self
+                    .missions
+                    .book
+                    .get(&id)
+                    .or(shelved.as_ref())
+                    .ok_or("mission_unknown")?;
                 let agents = match &caller {
                     Some(caller) => caller.records_of(mission),
                     None => worker_records(ledger.as_deref(), std::iter::once(mission)),
@@ -2191,6 +2282,87 @@ impl Runtime {
     /// it must conduct, or the one it conducts. `changing` refuses a mission
     /// that is closed, since a plan or a node of one moves only once it is
     /// reopened.
+    /// The shelved mission a command needs read back, if it names one:
+    /// where its file and, for a reopen, its history are, read off the lock
+    /// (`Core::mission_command`).
+    pub(crate) fn shelved_files(
+        &self,
+        command: &MissionCommand,
+    ) -> Option<(String, std::path::PathBuf, Option<std::path::PathBuf>)> {
+        let (id, history) = match command {
+            MissionCommand::Show {
+                mission: Some(id), ..
+            } => (id, false),
+            MissionCommand::Reopen { mission: Some(id) } => (id, true),
+            _ => return None,
+        };
+        self.missions.book.shelf(id)?;
+        let dir = self.missions.store.as_ref()?.dir().to_path_buf();
+        let events = history
+            .then(|| self.missions.event_store.as_ref().map(|store| store.dir().to_path_buf()))
+            .flatten();
+        Some((id.clone(), dir, events))
+    }
+
+    fn shelved_unreadable(&self, id: &str, reason: &str) -> String {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "missions.shelved_unreadable",
+            "mission": id, "message": reason,
+        }));
+        "mission_unavailable".into()
+    }
+
+    /// Takes shelved mission `id` back into the book for its Conductor's
+    /// reopen, with its history, so the reopen and every later change go on
+    /// from what its file held. Refused as the reopen would refuse the
+    /// mission, so a refusal leaves it shelved.
+    fn unshelve_mission(
+        &mut self,
+        id: &str,
+        actor: &Actor,
+        visiting: Option<Result<Visiting, String>>,
+    ) -> Result<(), String> {
+        if self.missions.book.shelf(id).is_none() {
+            return Ok(());
+        }
+        let Some(read) = visiting else {
+            return Err("mission_closed".into());
+        };
+        let Visiting { mission, history } =
+            read.map_err(|reason| self.shelved_unreadable(id, &reason))?;
+        if mission.id != id {
+            return Err(self.shelved_unreadable(id, "holds another mission"));
+        }
+        if !mission.conductor.actor.same_identity(actor) {
+            return Err("mission_not_conductor".into());
+        }
+        if mission.status == MissionStatus::Cancelled {
+            return Err("mission_cancelled".into());
+        }
+        if self.missions.book.conducted_open(actor).is_some() {
+            return Err("mission_already_conducting".into());
+        }
+        let book = &mut self.missions.book;
+        book.shelved.retain(|line| line.id != id);
+        let at = book
+            .missions
+            .partition_point(|kept| crate::missions::mission_number(&kept.id) < crate::missions::mission_number(id));
+        book.missions.insert(at, mission);
+        if let Some(log) = history {
+            self.missions
+                .events
+                .insert(id.to_owned(), History::from(log.clone()));
+            if let Some(store) = &self.missions.event_store {
+                store.adopt(id, log);
+            }
+            self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "missions.unshelved", "mission": id,
+        }));
+        Ok(())
+    }
+
     fn conducted_mission(
         &self,
         actor: &Actor,
@@ -2198,7 +2370,19 @@ impl Runtime {
         changing: bool,
     ) -> Result<String, String> {
         let mission = match named {
-            Some(id) => self.missions.book.get(id).ok_or("mission_unknown")?,
+            Some(id) => match self.missions.book.get(id) {
+                Some(mission) => mission,
+                // Only `show` and `reopen` read a shelved mission back.
+                None => {
+                    return Err(match self.missions.book.shelf(id) {
+                        Some(line) if line.status == MissionStatus::Cancelled => {
+                            "mission_cancelled".into()
+                        }
+                        Some(_) => "mission_closed".into(),
+                        None => "mission_unknown".into(),
+                    });
+                }
+            },
             None => self.missions.book.conducted(actor).ok_or("mission_none")?,
         };
         if !mission.conductor.actor.same_identity(actor) {
@@ -2949,7 +3133,21 @@ impl Runtime {
             }
             keep
         });
-        let dropped = before - self.missions.book.missions.len();
+        // A shelved mission's line keeps its Conductor's session id alone
+        // (`MissionLine::session`).
+        let shelved = self.missions.book.shelved.len();
+        self.missions.book.shelved.retain(|line| {
+            let keep = !line
+                .session
+                .as_ref()
+                .is_some_and(|session| sessions.iter().any(|(_, id)| id == session));
+            if !keep {
+                gone.push(line.id.clone());
+            }
+            keep
+        });
+        let dropped = before - self.missions.book.missions.len() + shelved
+            - self.missions.book.shelved.len();
         if dropped == 0 {
             return false;
         }

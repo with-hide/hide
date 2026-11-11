@@ -310,6 +310,9 @@ fn simple_statuses(value: &mut serde_json::Value) {
 #[derive(Default)]
 struct Work {
     removed: bool,
+    /// Its mission was shelved: the thread lets go of its copy of the log
+    /// and leaves the file.
+    released: bool,
     added: Vec<Arc<MissionEvent>>,
 }
 
@@ -320,11 +323,15 @@ struct Pending {
     restored: HashMap<String, EventLog>,
     work: BTreeMap<String, Work>,
     book: Option<Arc<crate::missions::MissionBook>>,
+    /// The missions shelved since the last book written, whose files take
+    /// their last state before the book's memory lets go of them.
+    leaving: Vec<crate::missions::Mission>,
     stop: bool,
 }
 
 /// The one writer of the missions' files: each mission's history, and,
-/// when it is given the book's path, the book after them (B27). A history
+/// when it is given the mission folder (`mission_store::MissionFiles`), the
+/// missions after them (B27). A history
 /// is written before the book that a change of it went with, and the book
 /// waits while a history write fails, so a stop between the two leaves a
 /// book that does not yet know the act, which its next evaluation makes
@@ -342,19 +349,19 @@ impl MissionEventStore {
         Self::start(dir, None)
     }
 
-    /// The writer of the histories in `dir` and of the book at `book`.
-    pub(crate) fn with_book(dir: PathBuf, book: PathBuf) -> Self {
-        Self::start(dir, Some(book))
+    /// The writer of the histories in `dir` and of the missions' `files`.
+    pub(crate) fn with_book(dir: PathBuf, files: crate::mission_store::MissionFiles) -> Self {
+        Self::start(dir, Some(files))
     }
 
-    fn start(dir: PathBuf, book: Option<PathBuf>) -> Self {
+    fn start(dir: PathBuf, book: Option<crate::mission_store::MissionFiles>) -> Self {
         let shared = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = {
             let shared = Arc::clone(&shared);
             let dir = dir.clone();
             std::thread::Builder::new()
                 .name("hide-mission-events".to_owned())
-                .spawn(move || run(&shared, &dir, book.as_deref()))
+                .spawn(move || run(&shared, &dir, book))
                 .inspect_err(|error| {
                     crate::diagnostic!(json!({
                         "component": "missions", "kind": "mission_events.worker_failed",
@@ -380,10 +387,7 @@ impl MissionEventStore {
     ) -> HashMap<String, History> {
         let mut out = HashMap::new();
         for id in missions {
-            let path = file(&self.dir, id);
-            match read_capped(&path, READ_CAP)
-                .and_then(|bytes| bytes.map(|b| decode(&b)).transpose())
-            {
+            match read_log(&self.dir, id) {
                 Ok(Some(log)) => {
                     out.insert(id.to_owned(), log);
                 }
@@ -441,11 +445,37 @@ impl MissionEventStore {
     }
 
     /// Hands the save thread the book to write once the histories handed
-    /// over before it are written; a newer book replaces one still waiting.
-    pub(crate) fn save_book(&self, book: Arc<crate::missions::MissionBook>) {
+    /// over before it are written, with the missions it shelved since
+    /// (`leaving`); a newer book replaces one still waiting, and the
+    /// missions leaving are kept until written.
+    pub(crate) fn save_book(
+        &self,
+        book: Arc<crate::missions::MissionBook>,
+        leaving: Vec<crate::missions::Mission>,
+    ) {
         let (lock, wake) = &*self.shared;
-        lock.lock().unwrap_or_else(PoisonError::into_inner).book = Some(book);
+        let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        pending.book = Some(book);
+        pending.leaving.extend(leaving);
+        drop(pending);
         wake.notify_one();
+    }
+
+    /// Lets the save thread drop its copy of a shelved mission's log; the
+    /// file stays.
+    pub(crate) fn release(&self, mission: &str) {
+        self.post(mission, |work| work.released = true);
+    }
+
+    /// Gives the save thread the log of a mission read back from its shelf
+    /// (`mission_store::read_shelved`), which its next events extend.
+    pub(crate) fn adopt(&self, mission: &str, log: EventLog) {
+        self.shared
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .restored
+            .insert(mission.to_owned(), log);
     }
 
     /// Deletes the mission's file with the mission (D-22).
@@ -490,6 +520,20 @@ fn file(dir: &Path, mission: &str) -> PathBuf {
     dir.join(format!("{mission}.json"))
 }
 
+/// `mission`'s history as its file in `dir` holds it; `None` with no file.
+pub(crate) fn read_log(dir: &Path, mission: &str) -> Result<Option<EventLog>, String> {
+    read_capped(&file(dir, mission), READ_CAP)?
+        .map(|bytes| decode(&bytes))
+        .transpose()
+}
+
+impl MissionEventStore {
+    /// The folder of the histories, which a shelved mission's is read from.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
 /// How long a history or book whose write failed waits before it is
 /// written again, while nothing new arrives for it.
 const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
@@ -503,11 +547,16 @@ const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// nothing; the book is not written while a history is failing. Each
 /// failure is logged once until a write succeeds. What it holds is one log
 /// per mission and one book, so a failing disk grows nothing.
-fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>) {
+fn run(
+    shared: &(Mutex<Pending>, Condvar),
+    dir: &Path,
+    mut files: Option<crate::mission_store::MissionFiles>,
+) {
     let (lock, wake) = shared;
     let mut logs: HashMap<String, EventLog> = HashMap::new();
     let mut failing: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut book: Option<Arc<crate::missions::MissionBook>> = None;
+    let mut leaving: Vec<crate::missions::Mission> = Vec::new();
     let mut book_failing = false;
     let mut book_held = false;
     loop {
@@ -532,6 +581,7 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
             if let Some(newer) = pending.book.take() {
                 book = Some(newer);
             }
+            leaving.append(&mut pending.leaving);
             (std::mem::take(&mut pending.work), pending.stop)
         };
         // A log whose write failed is written again with this pass.
@@ -541,7 +591,9 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
         for (mission, work) in work {
             let path = file(dir, &mission);
             let mut result = Ok(());
-            if work.removed {
+            if work.released {
+                logs.remove(&mission);
+            } else if work.removed {
                 logs.remove(&mission);
                 result = match std::fs::remove_file(&path) {
                     Ok(()) => Ok(()),
@@ -583,8 +635,11 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
                 }
             }
         }
-        match (&book, book_path) {
-            (Some(_), None) => book = None,
+        match (&book, files.as_mut()) {
+            (Some(_), None) => {
+                book = None;
+                leaving.clear();
+            }
             (Some(_), Some(_)) if !failing.is_empty() => {
                 if !book_held {
                     book_held = true;
@@ -594,9 +649,9 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
                     }));
                 }
             }
-            (Some(waiting), Some(path)) => {
+            (Some(waiting), Some(files)) => {
                 book_held = false;
-                match write_book(path, waiting) {
+                match files.write(waiting, &mut leaving) {
                     Ok(()) => {
                         book = None;
                         book_failing = false;
@@ -606,7 +661,7 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
                             book_failing = true;
                             crate::diagnostic!(json!({
                                 "component": "missions", "kind": "missions.save_failed",
-                                "path": path.to_string_lossy(), "message": reason,
+                                "message": reason,
                             }));
                         }
                     }
@@ -620,17 +675,12 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
     }
 }
 
-fn write_book(path: &Path, book: &Arc<crate::missions::MissionBook>) -> Result<(), String> {
-    let folder = path.parent().ok_or_else(|| "has no folder".to_owned())?;
-    replace(folder, path, &crate::missions::encode(book)?)
-}
-
 fn write(dir: &Path, path: &Path, log: &EventLog) -> Result<(), String> {
     replace(dir, path, &encode(log)?)
 }
 
 /// Replaces the file at `path` in `folder`, making the folder first: the
-/// one place the writer puts a history or the book on disk.
+/// one place the writer puts a history on disk.
 fn replace(folder: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
     hide_platform::fs::private::create_dir_all(folder)
         .map_err(|error| format!("folder could not be prepared: {error}"))?;
@@ -726,20 +776,22 @@ mod tests {
     fn the_book_waits_for_a_failing_history_and_both_are_written_once_the_disk_takes_them() {
         let dir = tempfile::tempdir().unwrap();
         let history = dir.path().join("mission-events");
-        let book_path = dir.path().join("missions.json");
+        let folder = dir.path().join("missions");
+        let files = || crate::mission_store::MissionFiles::new(folder.clone(), None);
+        let index = hide_kit::layout::mission_index(&folder);
         let book = Arc::new(crate::missions::MissionBook::default());
         std::fs::write(&history, "a file").unwrap();
-        let store = MissionEventStore::with_book(history.clone(), book_path.clone());
+        let store = MissionEventStore::with_book(history.clone(), files());
         store.append("mission-1", &[Arc::new(event(1))]);
-        store.save_book(Arc::clone(&book));
+        store.save_book(Arc::clone(&book), Vec::new());
         drop(store);
-        assert!(!book_path.exists(), "the book waits for its history");
+        assert!(!index.exists(), "the book waits for its history");
         std::fs::remove_file(&history).unwrap();
-        let store = MissionEventStore::with_book(history.clone(), book_path.clone());
+        let store = MissionEventStore::with_book(history.clone(), files());
         store.append("mission-1", &[Arc::new(event(1))]);
-        store.save_book(book);
+        store.save_book(book, Vec::new());
         drop(store);
-        assert!(book_path.exists());
+        assert!(index.exists());
         let restored = MissionEventStore::new(history).restore(["mission-1"].into_iter());
         assert_eq!(restored["mission-1"].events.len(), 1);
     }
