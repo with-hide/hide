@@ -654,8 +654,10 @@ impl Pane {
         Ok(styled(text, false))
     }
 
-    /// The rows [`Pane::read`] reads, as the terminal drew them, soft wraps
-    /// kept, with their styling as escape sequences, cut as a read is.
+    /// The rows [`Pane::read`] reads with soft wraps joined, so a reader
+    /// narrower than the pane wraps each line at its own width, with their
+    /// styling as escape sequences, cut as a read is. The first line may be
+    /// the end of one that began above the rows read.
     pub fn read_rows(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
         let cols = self.terminal.cols()?;
         let Some((start, end)) = self.recent_range(usize::from(lines))? else {
@@ -665,7 +667,7 @@ impl Pane {
             (0, start as u32),
             (cols.saturating_sub(1), end as u32),
             false,
-            false,
+            true,
         )?;
         Ok(styled(text, start > 0))
     }
@@ -1132,6 +1134,51 @@ mod tests {
             panic!("not a text");
         };
         assert_eq!((text.as_str(), truncated), ("two", true));
+    }
+
+    #[test]
+    fn a_styled_read_of_the_last_rows_joins_soft_wraps_and_keeps_the_color() {
+        let mut pane = Pane::new(Size { rows: 6, cols: 20 }, None).unwrap();
+        // 50 colored characters fold over three 20-column rows; the short
+        // line after it ended with a line break of its own.
+        let long = format!("{}{}", "a".repeat(25), "b".repeat(25));
+        answers(
+            &mut pane,
+            &[format!("\x1b[31m{long}\x1b[0m\r\nshort").as_bytes()],
+        );
+        let Answer::Text { text, truncated } = pane.read_rows(6).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(!truncated, "{text:?}");
+        let plain: Vec<String> = text.lines().map(strip_escapes).collect();
+        assert_eq!(plain, vec![long.clone(), "short".to_owned()], "{text:?}");
+        let first = text.lines().next().unwrap();
+        assert!(
+            first.contains("\x1b[31m") || first.contains("\x1b[38;5;1m"),
+            "the color was lost: {text:?}"
+        );
+    }
+
+    /// `text` without its escape sequences (CSI and the line's `\r`).
+    fn strip_escapes(text: &str) -> String {
+        let mut plain = String::new();
+        let mut chars = text.chars();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\x1b' => {
+                    if chars.next() == Some('[') {
+                        for end in chars.by_ref() {
+                            if ('@'..='~').contains(&end) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                '\r' => {}
+                other => plain.push(other),
+            }
+        }
+        plain
     }
 
     /// The rows a read gives as line numbers, in order: each row of
