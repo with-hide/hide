@@ -348,14 +348,19 @@ impl Runtime {
                 .and_then(|mark| mark.starred_at_unix_ms),
             deleting: false,
         };
-        self.snapshot
+        let sent = &self.archive_deletes_sent;
+        let pinned = archive_pins(&self.missions.book, &self.plans.book, &self.delivery_ledger);
+        let evicted = self
+            .snapshot
             .ui_state
             .session_archive
-            .admit(id.clone(), record)
+            .admit(id.clone(), record, &|held| sent.contains(held), &pinned)
             .map_err(|refusal| match refusal {
                 AdmitRefusal::Full => ("archive.full", ARCHIVE_FULL.to_owned()),
                 AdmitRefusal::Fault(reason) => ("archive.save_failed", reason.to_owned()),
             })?;
+        drop(pinned);
+        self.evict_archived(&id, evicted);
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.saving",
             "archive_id": id.as_str(), "pane_id": pane_id, "members": tree.len(),
@@ -459,6 +464,8 @@ impl Runtime {
             starred_at_unix_ms,
         } = ended;
         member.closed = self.pane_left(&member.machine, &member.pane_id);
+        let sent = &self.archive_deletes_sent;
+        let pinned = archive_pins(&self.missions.book, &self.plans.book, &self.delivery_ledger);
         let archive = &mut self.snapshot.ui_state.session_archive;
         if archive
             .find(&member.machine, &member.kind, &member.native_session_id)
@@ -468,7 +475,7 @@ impl Runtime {
         }
         let pane_id = member.pane_id.clone();
         let id = ArchiveId::new().map_err(AdmitRefusal::Fault)?;
-        archive.admit(
+        let evicted = archive.admit(
             id.clone(),
             ArchiveRecord {
                 phase: ArchivePhase::Archived,
@@ -481,11 +488,15 @@ impl Runtime {
                 starred_at_unix_ms,
                 deleting: false,
             },
+            &|held| sent.contains(held),
+            &pinned,
         )?;
+        drop(pinned);
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.agent_ended",
             "archive_id": id.as_str(), "pane_id": pane_id,
         }));
+        self.evict_archived(&id, evicted);
         self.archive_ended_changed();
         Ok(Some(id))
     }
@@ -1102,6 +1113,35 @@ impl Runtime {
             );
             return true;
         }
+        if let Err(code) = self.send_archive_delete(id) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "session_archive", "kind": "session_archive.delete_failed",
+                "archive_id": payload.archive_id, "code": code,
+            }));
+            self.set_error(
+                "archive.delete_failed",
+                "Hide's record of this session could not be deleted; it stays in the archive",
+                true,
+            );
+            return true;
+        }
+        self.refresh_archived_rows();
+        true
+    }
+
+    /// Starts the delete of record `id`, the one way a record leaves the
+    /// archive on purpose: the link worker removes its sessions' lines, its
+    /// answer (`ingest_archive_record_deleted`) marks it deleting, and the
+    /// writer's receipt removes it and releases what it held
+    /// (`ingest_archive_saved`).
+    fn send_archive_delete(&mut self, id: ArchiveId) -> Result<(), String> {
+        let record = self
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .get(&id)
+            .ok_or("archive_record_unknown")?;
         let sessions = record
             .held()
             .filter(|member| member.closed)
@@ -1113,25 +1153,35 @@ impl Runtime {
                 session_id: member.native_session_id.clone(),
             })
             .collect::<Vec<_>>();
-        let sent = match self.links_work.client.as_ref() {
-            Some(client) => client.delete_sessions(id.as_str().to_owned(), sessions),
-            None => Err("links_store_unavailable".to_owned()),
-        };
-        if let Err(code) = sent {
-            crate::diagnostic!(serde_json::json!({
-                "component": "session_archive", "kind": "session_archive.delete_failed",
-                "archive_id": id.as_str(), "code": code,
-            }));
-            self.set_error(
-                "archive.delete_failed",
-                "Hide's record of this session could not be deleted; it stays in the archive",
-                true,
-            );
-            return true;
+        match self.links_work.client.as_ref() {
+            Some(client) => client.delete_sessions(id.as_str().to_owned(), sessions)?,
+            None => return Err("links_store_unavailable".to_owned()),
         }
         self.archive_deletes_sent.insert(id);
-        self.refresh_archived_rows();
-        true
+        Ok(())
+    }
+
+    /// Deletes the oldest records at rest that admitting `admitted` made
+    /// room from (operator principle: at a cap, drop what is finished,
+    /// oldest first). A delete that cannot start leaves the record, and the
+    /// archive past its cap until the next admission picks it again; the
+    /// operator did not ask for it, so only the log says so.
+    fn evict_archived(&mut self, admitted: &ArchiveId, evicted: Vec<ArchiveId>) {
+        for id in evicted {
+            let sessions = self
+                .snapshot
+                .ui_state
+                .session_archive
+                .records
+                .get(&id)
+                .map_or(0, |record| record.members.len());
+            let sent = self.send_archive_delete(id.clone());
+            crate::diagnostic!(serde_json::json!({
+                "component": "session_archive", "kind": "session_archive.evicted",
+                "archive_id": id.as_str(), "for_archive_id": admitted.as_str(),
+                "sessions": sessions, "code": sent.err(),
+            }));
+        }
     }
 
     /// The link worker's answer to a delete.
@@ -1823,6 +1873,68 @@ impl Runtime {
     }
 }
 
+/// Whether an archived record holds a session something else still needs:
+/// the Conductor or a node's worker of a mission that is open, or a plan
+/// whose steps are not all finished. Deleting the record would take the
+/// mission or the plan with it (`drop_missions_of`, `drop_plans_of`), which
+/// only the operator's own delete may do, so such a record never makes room
+/// for a newer one. Read once, on the first record asked about.
+fn archive_pins<'a>(
+    missions: &'a crate::missions::MissionBook,
+    plans: &'a BTreeMap<crate::links::ledger::SessionIdentity, crate::plans::Plan>,
+    ledger: &'a Result<Arc<crate::delivery::ledger::Ledger>, String>,
+) -> impl Fn(&ArchiveRecord) -> bool + 'a {
+    let needed = std::cell::OnceCell::new();
+    move |record: &ArchiveRecord| {
+        // (machine, native session) of Conductors and plans, the worker
+        // registrations, and (machine, session digest) of those workers.
+        let (sessions, workers, digests) = needed.get_or_init(|| {
+            let open = missions
+                .missions
+                .iter()
+                .filter(|mission| mission.status.open());
+            let sessions = open
+                .clone()
+                .filter_map(|mission| mission.conductor.session.as_ref())
+                .chain(
+                    plans
+                        .values()
+                        .filter(|plan| !crate::plans::finished(plan))
+                        .map(|plan| &plan.session),
+                )
+                .map(|session| (session.device_id.clone(), session.session_id.clone()))
+                .collect::<HashSet<_>>();
+            let workers = open
+                .flat_map(|mission| &mission.nodes)
+                .filter_map(|node| node.agent_id.clone())
+                .collect::<HashSet<_>>();
+            let digests = ledger
+                .as_ref()
+                .map(|ledger| {
+                    ledger
+                        .agents
+                        .iter()
+                        .filter(|agent| workers.contains(&agent.id))
+                        .filter_map(|agent| {
+                            Some((agent.actor.device_id.clone(), agent.actor.session.clone()?))
+                        })
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
+            (sessions, workers, digests)
+        });
+        record.members.iter().any(|member| {
+            sessions.contains(&(member.machine.clone(), member.native_session_id.clone()))
+                || member
+                    .registration
+                    .as_ref()
+                    .is_some_and(|registration| workers.contains(&registration.id))
+                || crate::engine::tokens::session_digest(&member.native_session_id)
+                    .is_some_and(|digest| digests.contains(&(member.machine.clone(), digest)))
+        })
+    }
+}
+
 /// What `hide agent end` does with the pane a registration ran in.
 pub(crate) enum EndPlan {
     /// The pane shows the registration's conversation: it closes, and the
@@ -1877,4 +1989,136 @@ fn archived_pulls(agent: &SidebarAgentSnapshot) -> Vec<ArchivedPull> {
             state: pull.state,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::links::ledger::SessionIdentity;
+    use crate::missions::{MissionBook, MissionStatus};
+    use crate::session_archive::{fixture_member, fixture_record};
+
+    fn identity(session: &str) -> SessionIdentity {
+        SessionIdentity {
+            device_id: "node-a".into(),
+            agent: "claude".into(),
+            session_id: session.into(),
+        }
+    }
+
+    fn actor(session: &str) -> crate::delivery::Actor {
+        crate::delivery::Actor {
+            pane_id: format!("w1:{session}"),
+            name: session.into(),
+            kind: "claude".into(),
+            device_id: "node-a".into(),
+            session: crate::engine::tokens::session_digest(session),
+        }
+    }
+
+    fn plan(session: &str, status: &str) -> crate::plans::Plan {
+        serde_json::from_value(serde_json::json!({
+            "session": identity(session),
+            "steps": [{"key": "a", "title": "A", "status": status}],
+            "created_at_unix_ms": 1, "updated_at_unix_ms": 1,
+        }))
+        .unwrap()
+    }
+
+    fn worker(agent: &str) -> crate::missions::MissionNode {
+        serde_json::from_value(serde_json::json!({
+            "key": agent, "title": agent, "kind": "change", "status": "working",
+            "agent_id": agent,
+        }))
+        .unwrap()
+    }
+
+    fn registration_of(agent: &str, session: &str) -> crate::coordination::AgentRecord {
+        crate::coordination::AgentRecord {
+            id: agent.into(),
+            name: None,
+            machine: "node-a".into(),
+            host_scope: "node-a".into(),
+            native_machine: "node-a".into(),
+            session: session.into(),
+            instance: "i".into(),
+            terminal_id: None,
+            pane: format!("w1:{session}"),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: actor(session),
+            ended: true,
+            forked: false,
+        }
+    }
+
+    /// The parent's guard: an eviction is automatic, and the delete it
+    /// rides takes a Conductor's mission and a session's plan with it, so a
+    /// record holding a session an open mission or a waiting plan still
+    /// needs never makes room; once the mission closes or the plan finishes
+    /// it may.
+    #[test]
+    fn a_session_of_an_open_mission_or_a_waiting_plan_pins_its_archived_record() {
+        let mut open = crate::missions::tests::mission();
+        open.status = MissionStatus::Running;
+        open.conductor.session = Some(identity("conductor"));
+        open.nodes = vec![worker("agent-held"), worker("agent-ended")];
+        let mut closed = open.clone();
+        closed.id = "mission-2".into();
+        closed.status = MissionStatus::Done;
+        closed.conductor.session = Some(identity("closed-conductor"));
+        closed.nodes = vec![worker("agent-of-done")];
+        let missions = MissionBook {
+            missions: vec![open, closed],
+            next: 3,
+        };
+        let plans = [
+            ("planning", "working"),
+            ("planned", "done"),
+            ("dropped", "dropped"),
+        ]
+        .into_iter()
+        .map(|(session, status)| (identity(session), plan(session, status)))
+        .collect();
+        let ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
+            agents: vec![
+                registration_of("agent-ended", "worker-ended"),
+                registration_of("agent-of-done", "done-worker"),
+            ],
+            ..Default::default()
+        }));
+        let pinned = archive_pins(&missions, &plans, &ledger);
+        let single = |session: &str| fixture_record(vec![fixture_member(session, None)], 1);
+        // A worker archived with its registration held, as 세션 보관 keeps it.
+        let mut held = single("worker-held");
+        held.members[0].registration = Some(crate::agent_sleep::DormantRegistration {
+            id: "agent-held".into(),
+            actor: actor("worker-held"),
+        });
+        assert!(pinned(&single("conductor")), "an open mission's Conductor");
+        assert!(pinned(&held), "an open mission's worker, held");
+        assert!(
+            pinned(&single("worker-ended")),
+            "an open mission's worker, ended by hide agent end"
+        );
+        assert!(pinned(&single("planning")), "a plan that waits");
+        // A descendant pins its whole record.
+        assert!(pinned(&fixture_record(
+            vec![
+                fixture_member("root", None),
+                fixture_member("planning", Some("root"))
+            ],
+            1,
+        )));
+        for free in [
+            "closed-conductor",
+            "done-worker",
+            "planned",
+            "dropped",
+            "other",
+        ] {
+            assert!(!pinned(&single(free)), "{free} pins nothing");
+        }
+    }
 }

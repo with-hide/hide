@@ -343,23 +343,59 @@ fn an_archive_that_cannot_be_saved_closes_nothing() {
     assert!(error_kind(&runtime).is_some_and(|kind| kind.ends_with("save_failed")));
 }
 
-#[test]
-fn an_archive_past_the_cap_is_refused_before_anything_closes() {
-    let mut runtime = archive_runtime(&[]);
+/// The archive with one record of all but two sessions, archived before
+/// anything else, which `busy` may change.
+fn nearly_full(runtime: &mut Runtime, busy: fn(&mut crate::session_archive::ArchiveRecord)) {
     let members = (0..crate::session_archive::MAX_ARCHIVED_SESSIONS - 2)
         .map(|n| {
             crate::session_archive::fixture_member(&format!("old-{n}"), (n > 0).then_some("old-0"))
         })
         .collect();
+    let mut old = crate::session_archive::fixture_record(members, 1);
+    busy(&mut old);
     runtime
         .snapshot
         .ui_state
         .session_archive
         .admit(
             crate::session_archive::ArchiveId::new().unwrap(),
-            crate::session_archive::fixture_record(members, 1),
+            old,
+            &|_| false,
+            &|_| false,
         )
         .unwrap();
+}
+
+#[test]
+fn an_archive_past_the_cap_deletes_the_oldest_archived_session_to_make_room() {
+    let mut runtime = archive_runtime(&[]);
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    runtime.links_work.client = Some(client.clone());
+    nearly_full(&mut runtime, |_| {});
+    archive(&mut runtime, "w1:p1", false);
+    assert_eq!(error_kind(&runtime), None);
+    let deletes = client.deletes_for_test();
+    assert_eq!(deletes.len(), 1, "the old record's delete is out");
+    assert_eq!(
+        runtime.snapshot.ui_state.session_archive.records
+            [&crate::session_archive::ArchiveId::parse(&deletes[0].0).unwrap()]
+            .root()
+            .native_session_id,
+        "old-0"
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.session_archive.records.len(),
+        2,
+        "the new archive is saving beside the old record until its delete lands"
+    );
+}
+
+#[test]
+fn an_archive_past_the_cap_with_every_session_busy_is_refused_before_anything_closes() {
+    let mut runtime = archive_runtime(&[]);
+    nearly_full(&mut runtime, |old| {
+        old.members[0].resume = crate::session_archive::Resume::Queued { front: true };
+    });
     archive(&mut runtime, "w1:p1", false);
     assert_eq!(error_kind(&runtime).as_deref(), Some("archive.full"));
     assert!(started(&runtime).is_empty());

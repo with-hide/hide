@@ -193,6 +193,11 @@ impl LinkClient {
     pub(crate) fn ledger_updates_for_test(&self) -> Vec<LedgerUpdate> {
         self.0.0.lock().unwrap().ledger.iter().cloned().collect()
     }
+    /// The deletes waiting for the worker, each its request and sessions.
+    #[cfg(test)]
+    pub(crate) fn deletes_for_test(&self) -> Vec<(String, Vec<SessionIdentity>)> {
+        self.0.0.lock().unwrap().deletes.iter().cloned().collect()
+    }
     #[cfg(test)]
     pub(crate) fn full_mailbox_for_test() -> Self {
         Self(
