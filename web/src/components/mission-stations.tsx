@@ -67,7 +67,7 @@ export function StationLine({ stations, className }: { stations: readonly Statio
               <span className={cn("flex size-(--size-mission-station) shrink-0 items-center justify-center rounded-full border", quiet ? cn(LAND_TODO, station.state === "current" && "ring-2 ring-mission-land/20") : DISC[station.state])}>
                 <Icon className="size-(--size-agent-mark)" strokeWidth={2.25} />
               </span>
-              <span className={cn("text-micro whitespace-nowrap", last && "max-w-full truncate", quiet ? "text-mission-land" : WORD[station.state], elsewhere && "font-bold text-foreground")} title={last ? label : undefined} data-station-label="true">
+              <span className={cn("text-micro whitespace-nowrap", last && "max-w-full truncate", quiet ? "text-mission-land" : WORD[station.state], elsewhere && "font-bold text-foreground")} title={last ? label : undefined} data-station-label="true" data-node-outside={(station.kind === "pr" && station.outside) || undefined}>
                 {label}
               </span>
             </span>

@@ -68,6 +68,10 @@ describe("nodeStations", () => {
 
   it("leaves out a last station whose branch it cannot name: an unknown destination, an outside node's base (B17)", () => {
     expect(line(node({ pr: 31, pr_state: "pending" }), null)).toBe("work:done pr:current approve:todo");
+    // GitHub's base still names where a pull request lands, plainly, since there is no destination it differs from.
+    expect(nodeStations(node({ pr: 31, pr_state: "pending", pr_base: "main" }), null, true)?.at(-1)).toMatchObject({ kind: "land", place: { kind: "destination", branch: "main" } });
+    // A direct change with no branch to name would be `작업` alone, a line that says nothing: none is drawn.
+    expect(line(node({ delivery: "direct", status: "done" }), null)).toBeNull();
     expect(line(node({ kind: "external", delivery: null, status: "planned", external: { pr: 1232 } }))).toBe("work:done pr:current approve:todo");
     // An outside pull request's state is not read: its node done is its pull request merged.
     expect(line(node({ kind: "external", delivery: null, status: "done", external: { pr: 1232 } }))).toBe("work:done pr:done approve:done");

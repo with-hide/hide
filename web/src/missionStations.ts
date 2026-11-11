@@ -44,7 +44,7 @@ export type LandPlace = { kind: "destination"; branch: string } | { kind: "branc
 
 export type Station =
   | { kind: "work"; state: StationState }
-  | { kind: "pr"; state: StationState; number: number | null; more: number }
+  | { kind: "pr"; state: StationState; number: number | null; more: number; outside: boolean }
   | { kind: "approve"; state: StationState }
   | { kind: "gate"; state: StationState }
   | { kind: "land"; state: StationState; place: LandPlace; person: boolean };
@@ -55,7 +55,8 @@ export function changesCode(node: Pick<MissionNodeBrief, "kind">): boolean {
 }
 
 /**
- * A node's stations, or null for a node that changes no code (D-13, D-17).
+ * A node's stations, or null for a node that changes no code (D-13, D-17)
+ * or whose line would be `작업` alone.
  * `destination` is the mission's destination branch as the core sends it,
  * null when the core could not read it. A last station whose branch is not
  * known is left out rather than named (B17): an outside node's, whose base
@@ -79,7 +80,7 @@ export function nodeStations(node: StationNode, destination: string | null, open
   if (byPr) {
     const approved = pull === "mergeable" || pull === "merged" || done;
     const prState: StationState = pull === "failed" ? "failed" : pull === "closed" ? "closed" : approved ? "done" : pr != null && worked ? "current" : "todo";
-    stations.push({ kind: "pr", state: prState, number: pr, more: node.pr_more ?? 0 }, { kind: "approve", state: approved ? "done" : "todo" });
+    stations.push({ kind: "pr", state: prState, number: pr, more: node.pr_more ?? 0, outside: node.kind === "external" }, { kind: "approve", state: approved ? "done" : "todo" });
     reached = approved;
   }
   if (node.gate) {
@@ -94,6 +95,8 @@ export function nodeStations(node: StationNode, destination: string | null, open
     const state: StationState = landed ? "landed" : person ? (node.merge?.state === "due" ? "due" : "ahead") : reached ? "current" : "todo";
     stations.push({ kind: "land", state, place, person });
   }
+  // A line of `작업` alone says nothing the card's mark does not (D-17 dropped a one-station line): a direct change whose destination the core cannot read draws none.
+  if (stations.length < 2) return null;
   return open ? stations : stations.map((station) => (station.state === "current" ? { ...station, state: "todo" } : station));
 }
 
@@ -102,7 +105,8 @@ function landPlace(node: StationNode, destination: string | null): LandPlace | n
   // A pull request lands in the base GitHub answered for it, a mission's own change in the destination; an outside node's base is not sent.
   const branch = node.pr_base ?? (node.kind === "external" ? null : destination);
   if (!branch) return null;
-  return branch === destination ? { kind: "destination", branch } : { kind: "branch", branch };
+  // Bold "another branch" needs a destination to differ from: with none read, GitHub's base is drawn plainly.
+  return destination == null || branch === destination ? { kind: "destination", branch } : { kind: "branch", branch };
 }
 
 /**
@@ -121,7 +125,8 @@ export function stationLabel(station: Station, t: TFunction<"translation">): str
     case "work":
       return t("mission.station.work");
     case "pr":
-      return station.number == null ? t("mission.station.pr") : `#${station.number}${station.more > 0 ? ` +${station.more}` : ""}`;
+      // An outside node's pull request carries `↗` in every state, its kind (B19).
+      return station.number == null ? t("mission.station.pr") : `${station.outside ? "↗" : ""}#${station.number}${station.more > 0 ? ` +${station.more}` : ""}`;
     case "approve":
       return t("mission.station.approve");
     case "gate":
