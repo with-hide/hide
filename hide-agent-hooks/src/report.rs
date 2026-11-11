@@ -70,6 +70,71 @@ pub struct HookStatusReport {
     /// predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<Vec<(String, String)>>,
+    /// Why the provider refused the turn this event ended (Claude Code's
+    /// `StopFailure`); absent on every other event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<HookRefusal>,
+}
+
+/// The longest refusal line a report carries, in bytes: one line of a
+/// letter, never the agent's whole message.
+pub const REFUSAL_LINE_LIMIT: usize = 200;
+
+/// Why the provider refused a turn, as the agent said it: a usage limit or
+/// another API error, and the first line it showed for it.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookRefusal {
+    pub kind: RefusalKind,
+    pub line: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalKind {
+    /// The account's usage limit (`rate_limit`).
+    Limit,
+    /// Any other refusal: the provider failed, was overloaded or refused
+    /// the request.
+    Error,
+}
+
+impl HookRefusal {
+    /// The refusal a Claude Code `StopFailure` input names, read whole:
+    /// `error`, one of its kinds (`rate_limit`, `server_error`,
+    /// `overloaded`, ...), and the first line of `last_assistant_message`,
+    /// cut to [`REFUSAL_LINE_LIMIT`]. None for an input cut short or that
+    /// names no `error`.
+    pub fn read(payload: &[u8], truncated: bool) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Input {
+            error: Option<String>,
+            last_assistant_message: Option<String>,
+        }
+        if truncated {
+            return None;
+        }
+        let input = serde_json::from_slice::<Input>(payload).ok()?;
+        let error = input.error?;
+        let kind = if error == "rate_limit" {
+            RefusalKind::Limit
+        } else {
+            RefusalKind::Error
+        };
+        let shown = input
+            .last_assistant_message
+            .as_deref()
+            .and_then(|message| message.lines().map(str::trim).find(|line| !line.is_empty()))
+            .unwrap_or(error.as_str());
+        let mut end = shown.len().min(REFUSAL_LINE_LIMIT);
+        while !shown.is_char_boundary(end) {
+            end -= 1;
+        }
+        Some(Self {
+            kind,
+            line: shown[..end].to_owned(),
+        })
+    }
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -354,6 +419,40 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn a_refusal_is_a_limit_only_for_rate_limit_and_keeps_one_cut_line() {
+        let read =
+            |input: serde_json::Value| HookRefusal::read(input.to_string().as_bytes(), false);
+        assert_eq!(
+            read(json!({"error": "server_error",
+                        "last_assistant_message": "\nAPI Error: 500 Internal server error.\nmore"})),
+            Some(HookRefusal {
+                kind: RefusalKind::Error,
+                line: "API Error: 500 Internal server error.".to_owned()
+            })
+        );
+        assert_eq!(
+            read(json!({"error": "overloaded"})),
+            Some(HookRefusal {
+                kind: RefusalKind::Error,
+                line: "overloaded".to_owned()
+            })
+        );
+        let long = read(json!({"error": "rate_limit", "last_assistant_message": "한".repeat(100)}))
+            .unwrap();
+        assert_eq!(long.kind, RefusalKind::Limit);
+        assert_eq!(
+            long.line,
+            "한".repeat(66),
+            "cut on a character inside the limit"
+        );
+        assert_eq!(
+            read(json!({"last_assistant_message": "no error named"})),
+            None
+        );
+        assert_eq!(HookRefusal::read(br#"{"error":"rate_limit"}"#, true), None);
+    }
+
     fn scratch(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "hide-agent-hooks-report-{name}-{}",
@@ -378,6 +477,7 @@ mod tests {
             session_start: false,
             waiting: None,
             account: None,
+            refused: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),

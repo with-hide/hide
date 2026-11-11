@@ -55,7 +55,7 @@ impl Runtime {
             .hook_facts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .record(&pane, report)?;
+            .record(&pane, report, crate::observed::now_unix_ms())?;
         // A session's start says which account its agent runs in; the rows
         // and the profile lists follow it (D-03, D-35).
         let account_moved =

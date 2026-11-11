@@ -416,7 +416,11 @@ use crate::error::HostError;
 /// 95: `HerdrStop` is gone. Hide no longer stops an earlier Hide's Herdr on a
 /// device; the import only reads its save (`HerdrSave`). A helper on 94
 /// would still offer the call, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 95;
+/// 96: a hook's report of a turn the provider refused carries why
+/// (`panes::HookStatusReport::refused`, Claude Code's `StopFailure`), which a
+/// core on 95 refuses as a field it does not know, so a helper upgrades with
+/// its core.
+pub const PROTOCOL_VERSION: u32 = 96;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

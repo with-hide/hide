@@ -15,7 +15,7 @@
 
 use crate::missions::{
     AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionScope,
-    MissionStatus, NodeKind, NodeStatus, WarningKind, cause_key,
+    MissionStatus, NodeKind, NodeStatus, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
     CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
@@ -38,6 +38,21 @@ pub(crate) struct NodeFacts {
     pub own_prs: Vec<u32>,
     /// The lines that keep the node from done now (`gate_node_done`).
     pub unmet: Vec<String>,
+    /// The worker's row reads stopped with nothing of its own to wait on
+    /// (`Runtime::worker_stopped`); none while it works, waits or cannot be
+    /// read.
+    pub stopped: Option<WorkerStopped>,
+}
+
+/// A worker whose row reads stopped with nothing of its own to wait on: no
+/// question or approval of the operator's, no person's turn, no child,
+/// background task, reply or checks it waits on, no letter it waits an
+/// answer to, and no report to its Conductor as its last word. Since when,
+/// and why when its hook said (`StopCause`).
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct WorkerStopped {
+    pub since_unix_ms: u64,
+    pub cause: Option<StopCause>,
 }
 
 pub(crate) struct Facts<'a> {
@@ -552,15 +567,59 @@ fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
 pub(crate) const REVIEW_FAILS_THAT_WARN: u32 = 2;
 /// How long a node at work goes with no push before its Conductor is warned.
 pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
+/// How long a node's worker stands stopped (`stopped_worker`) before its
+/// Conductor is told (hide-private docs/missions.md, A stopped worker).
+pub(crate) const STOPPED_THAT_WARNS_MS: u64 = 5 * 60_000;
+
+/// Whether `node`'s worker stands stopped with no one else to move first
+/// (hide-private docs/missions.md, A stopped worker): the node at work in a
+/// running mission, its worker's program running, its row stopped with
+/// nothing of its own to wait on (`NodeFacts::stopped`), and the node
+/// waiting on no one: no delay, hold, decision or gate (`stall_excused`),
+/// no raise, no question about it, and no pull request that waits on CI, a
+/// review or the merge (`owed_elsewhere`), which a stale answer leaves
+/// unknown, so nothing is said. A raise a told warning became
+/// (`WarningStood`) is the Conductor's move still owed on the same stop,
+/// not someone else's wait, so it never ends the warning that raised it.
+/// The one rule the warning's raise, its keeping and the map's stopped node
+/// read; how the turn ended is its cause, never its condition.
+pub(crate) fn stopped_worker<'a>(
+    mission: &Mission,
+    node: &MissionNode,
+    fact: &'a NodeFacts,
+    pulls: Option<&GithubProjectSnapshot>,
+    operator_waits: bool,
+) -> Option<&'a WorkerStopped> {
+    let raised = node
+        .attention
+        .as_ref()
+        .is_some_and(|raise| raise.reason != AttentionReason::WarningStood);
+    let stands = node_works(mission, node)
+        && fact.worker == Some(WorkerLife::Running)
+        && !stall_excused(mission, node, operator_waits)
+        && !raised
+        && owed_elsewhere(mission, node, pulls) == Some(false);
+    fact.stopped.as_ref().filter(|_| stands)
+}
+
+/// A node at work in a running mission, the mission's own.
+fn node_works(mission: &Mission, node: &MissionNode) -> bool {
+    matches!(
+        mission.status,
+        MissionStatus::Running | MissionStatus::MergeWait
+    ) && node.status == NodeStatus::Working
+        && node.kind != NodeKind::External
+}
 
 /// A change to the warnings a node carries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WarnAct {
     /// The node warns of `kind` from now, standing on the fact at `from`.
     Raise {
         node: usize,
         kind: WarningKind,
         from: u64,
+        cause: Option<StopCause>,
     },
     /// What the warning stood on went.
     Clear { node: usize, kind: WarningKind },
@@ -576,19 +635,47 @@ pub(crate) enum WarnAct {
 /// is no longer at work. A pull request GitHub's answer does not hold now
 /// decides nothing, so a stale answer raises no quiet warning on a node
 /// with one; a node that has none yet is judged without it.
+/// A node whose worker stood stopped `STOPPED_THAT_WARNS_MS`
+/// (`stopped_worker`) warns once with its cause, and the warning goes once
+/// that rule no longer holds: the worker works, waits or ends, or the node
+/// waits on someone. While the rule holds the worker, the quiet warning
+/// goes and none rises, since the stop's letter is the one that asks the
+/// Conductor to move; once it lets go, the quiet is judged again. `facts`
+/// and `operator_waits` hold one entry per node, in the record's order.
 pub(crate) fn warn_acts(
     mission: &Mission,
     pulls: Option<&GithubProjectSnapshot>,
+    facts: &[NodeFacts],
+    operator_waits: &[bool],
     now: u64,
 ) -> Vec<WarnAct> {
-    let runs = matches!(
-        mission.status,
-        MissionStatus::Running | MissionStatus::MergeWait
-    );
     let mut acts = Vec::new();
     for (at, node) in mission.nodes.iter().enumerate() {
-        let works = runs && node.status == NodeStatus::Working && node.kind != NodeKind::External;
+        let works = node_works(mission, node);
         let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
+        let fact = facts.get(at);
+        let stopped = fact
+            .zip(operator_waits.get(at))
+            .and_then(|(fact, waits)| stopped_worker(mission, node, fact, pulls, *waits));
+        match standing(WarningKind::Stopped) {
+            Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
+                node: at,
+                kind: WarningKind::Stopped,
+            }),
+            None if stopped.is_some_and(|stop| {
+                now.saturating_sub(stop.since_unix_ms) >= STOPPED_THAT_WARNS_MS
+            }) =>
+            {
+                let stop = stopped.expect("checked above");
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::Stopped,
+                    from: stop.since_unix_ms,
+                    cause: stop.cause.clone(),
+                });
+            }
+            _ => {}
+        }
         let fails = works && node.review_fails() >= REVIEW_FAILS_THAT_WARN;
         match standing(WarningKind::ReviewFails) {
             Some(_) if !fails => acts.push(WarnAct::Clear {
@@ -599,18 +686,24 @@ pub(crate) fn warn_acts(
                 node: at,
                 kind: WarningKind::ReviewFails,
                 from: last_review_at(node).unwrap_or(now),
+                cause: None,
             }),
             _ => {}
         }
         let quiet = node.quiet_since();
         match standing(WarningKind::NoPush) {
-            Some(warning) if !works || quiet.is_some_and(|since| since > warning.from_unix_ms) => {
+            Some(warning)
+                if !works
+                    || stopped.is_some()
+                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
+            {
                 acts.push(WarnAct::Clear {
                     node: at,
                     kind: WarningKind::NoPush,
                 });
             }
             None if works
+                && stopped.is_none()
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && quiet_waits(mission, node, pulls) == Some(false) =>
@@ -619,6 +712,7 @@ pub(crate) fn warn_acts(
                     node: at,
                     kind: WarningKind::NoPush,
                     from: quiet.unwrap_or(now),
+                    cause: None,
                 });
             }
             _ => {}
@@ -889,7 +983,22 @@ pub(crate) fn quiet_waits(
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
 ) -> Option<bool> {
-    if node.attention.is_some() || mission.deciding_on(&node.key) {
+    if node.attention.is_some() {
+        return Some(true);
+    }
+    owed_elsewhere(mission, node, pulls)
+}
+
+/// Whether the next move on `node` is someone else's besides a raise on
+/// it: the Conductor's question about it, or a pull request that waits on
+/// CI, a review or the merge (`worker_waits`); unknown while GitHub's
+/// answer does not hold the pull request.
+fn owed_elsewhere(
+    mission: &Mission,
+    node: &MissionNode,
+    pulls: Option<&GithubProjectSnapshot>,
+) -> Option<bool> {
+    if mission.deciding_on(&node.key) {
         return Some(true);
     }
     worker_waits(node, pulls)
@@ -1444,6 +1553,7 @@ mod tests {
             from_unix_ms: from,
             since_unix_ms: from,
             told_unix_ms: Some(from),
+            cause: None,
         }
     }
 
@@ -1453,23 +1563,24 @@ mod tests {
     fn a_review_failed_twice_in_a_row_warns_until_it_passes() {
         let mut m = reviewed();
         m.nodes[0].criteria[1].fails_in_a_row = 1;
-        assert!(warn_acts(&m, None, 10).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
         m.nodes[0].criteria[1].fails_in_a_row = 2;
         assert_eq!(
-            warn_acts(&m, None, 10),
+            warn_acts(&m, None, &[], &[], 10),
             [WarnAct::Raise {
                 node: 0,
                 kind: WarningKind::ReviewFails,
                 from: 5,
+                cause: None,
             }]
         );
         // Standing, a third failure raises nothing more.
         m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
         m.nodes[0].criteria[1].fails_in_a_row = 3;
-        assert!(warn_acts(&m, None, 10).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
         m.nodes[0].criteria[1].fails_in_a_row = 0;
         assert_eq!(
-            warn_acts(&m, None, 10),
+            warn_acts(&m, None, &[], &[], 10),
             [WarnAct::Clear {
                 node: 0,
                 kind: WarningKind::ReviewFails,
@@ -1482,20 +1593,21 @@ mod tests {
     #[test]
     fn a_change_ninety_minutes_without_a_push_warns_until_the_next_push() {
         let mut m = reviewed();
-        assert!(warn_acts(&m, None, 90 * MINUTE - 1).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 90 * MINUTE - 1).is_empty());
         assert_eq!(
-            warn_acts(&m, None, 90 * MINUTE),
+            warn_acts(&m, None, &[], &[], 90 * MINUTE),
             [WarnAct::Raise {
                 node: 0,
                 kind: WarningKind::NoPush,
                 from: 0,
+                cause: None,
             }]
         );
         m.nodes[0].warnings.push(warn(WarningKind::NoPush, 0));
-        assert!(warn_acts(&m, None, 200 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 200 * MINUTE).is_empty());
         m.nodes[0].pushed_at_unix_ms = Some(100 * MINUTE);
         assert_eq!(
-            warn_acts(&m, None, 101 * MINUTE),
+            warn_acts(&m, None, &[], &[], 101 * MINUTE),
             [WarnAct::Clear {
                 node: 0,
                 kind: WarningKind::NoPush,
@@ -1503,8 +1615,8 @@ mod tests {
         );
         // Counted again from that push.
         m.nodes[0].warnings.clear();
-        assert!(warn_acts(&m, None, 189 * MINUTE).is_empty());
-        assert_eq!(warn_acts(&m, None, 190 * MINUTE).len(), 1);
+        assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
+        assert_eq!(warn_acts(&m, None, &[], &[], 190 * MINUTE).len(), 1);
     }
 
     /// with-hide/hide-private#552: a pull request that only waits on CI, a
@@ -1518,13 +1630,13 @@ mod tests {
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
         let late = 120 * MINUTE;
         let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
-        assert!(warn_acts(&m, Some(&waiting), late).is_empty());
-        assert!(warn_acts(&m, None, late).is_empty());
+        assert!(warn_acts(&m, Some(&waiting), &[], &[], late).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], late).is_empty());
         let mut failing = waiting.clone();
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
-        assert_eq!(warn_acts(&m, Some(&waiting), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&waiting), &[], &[], late).len(), 1);
     }
 
     /// with-hide/hide#2300: a node that waits on the operator's answer, to
@@ -1539,7 +1651,7 @@ mod tests {
         let late = 120 * MINUTE;
         let mut failing = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
         m.decision = Some("첫 줄 캡처가 괜찮나요?".into());
         m.question = Some(crate::missions::Question {
             key: 1,
@@ -1552,14 +1664,14 @@ mod tests {
             views: Vec::new(),
             material_asked: false,
         });
-        assert!(warn_acts(&m, Some(&failing), late).is_empty());
+        assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
         // A question about another node, or about none, leaves it its worker's.
         m.question.as_mut().unwrap().node = None;
-        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
         m.decision = None;
         m.question = None;
         m.nodes[0].attention = Some(attention(AttentionReason::PrClosed, Some(7)));
-        assert!(warn_acts(&m, Some(&failing), late).is_empty());
+        assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
     }
 
     /// with-hide/hide-private#552: only a node at work in a running mission
@@ -1575,7 +1687,7 @@ mod tests {
         ];
         m.nodes[0].status = NodeStatus::Done;
         assert_eq!(
-            warn_acts(&m, None, 100 * MINUTE),
+            warn_acts(&m, None, &[], &[], 100 * MINUTE),
             [
                 WarnAct::Clear {
                     node: 0,
@@ -1591,13 +1703,13 @@ mod tests {
         m.nodes[0].criteria[1].fails_in_a_row = 0;
         m.nodes[0].status = NodeStatus::Working;
         m.nodes[0].back_to_work(100 * MINUTE);
-        assert!(warn_acts(&m, None, 189 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
         m.status = MissionStatus::Cancelled;
-        assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
         m.status = MissionStatus::Running;
         m.nodes[0].kind = NodeKind::Research;
         m.nodes[0].delivery = None;
-        assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
     }
 
     fn stall(node: usize, reason: AttentionReason, pr: Option<u32>) -> Stall {

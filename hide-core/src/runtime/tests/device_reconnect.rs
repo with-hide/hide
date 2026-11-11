@@ -99,6 +99,7 @@ fn hook(runtime: &mut Runtime, turn: HookTurn) {
                 session_start: false,
                 waiting: None,
                 account: None,
+                refused: None,
             },
         )
         .unwrap();

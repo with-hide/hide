@@ -136,6 +136,35 @@ fn push_words(node: &Value, now: u64) -> Option<String> {
     Some(marked(quiet.is_some(), words))
 }
 
+/// Why a stopped worker stopped (`StopCause`): a usage limit or an API
+/// error with the agent's own line, or no report.
+fn cause_words(cause: &Value) -> String {
+    let line = cause["line"].as_str().unwrap_or_default();
+    match cause["kind"].as_str() {
+        Some("limit") => format!("사용 한도 · {line}"),
+        Some("error") => format!("API 오류 · {line}"),
+        _ => "보고 없음".to_owned(),
+    }
+}
+
+/// A node whose worker stopped with nothing to wait on (`work` `stopped`):
+/// since when and why, marked when its warning stands.
+fn stop_words(node: &Value, now: u64) -> Option<String> {
+    let work = &node["work"];
+    if work["state"] != "stopped" {
+        return None;
+    }
+    let since = work["since_unix_ms"].as_u64()?;
+    Some(marked(
+        warning(node, "stopped").is_some(),
+        format!(
+            "멈춤 {} · {}",
+            minutes_ago(now, since),
+            cause_words(&work["cause"])
+        ),
+    ))
+}
+
 /// How long ago `at` was in minutes up to a day, so the quiet that warns
 /// at ninety minutes reads as such.
 fn minutes_ago(now: u64, at: u64) -> String {
@@ -264,6 +293,7 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         let mut fields = vec![text(node, "key").to_owned(), node_status(node)];
         fields.extend(review_words(node));
         fields.extend(push_words(node, now));
+        fields.extend(stop_words(node, now));
         fields.extend(pr_words(node));
         fields.extend(waits_on(node)?);
         let mark = if warning_count(node) > 0 { WARN } else { " " };
@@ -432,6 +462,9 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(push) = push_words(node, now) {
         let _ = writeln!(out, "{push}");
     }
+    if let Some(stop) = stop_words(node, now) {
+        let _ = writeln!(out, "{stop}");
+    }
     for warning in node["warnings"].as_array().into_iter().flatten() {
         let what = match warning["kind"].as_str() {
             Some("review_fails") => format!(
@@ -441,6 +474,11 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
             Some("no_push") => format!(
                 "push 없이 {}분",
                 now.saturating_sub(warning["from_unix_ms"].as_u64().unwrap_or(now)) / 60_000
+            ),
+            Some("stopped") => format!(
+                "멈춘 지 {}분 · {}",
+                now.saturating_sub(warning["from_unix_ms"].as_u64().unwrap_or(now)) / 60_000,
+                cause_words(&warning["cause"])
             ),
             _ => "확인 필요".to_owned(),
         };
@@ -664,6 +702,45 @@ mod tests {
             draw(&value, NOW)
                 .unwrap()
                 .contains("  ci · 작업 중 · 기다림 운영자 결정\n")
+        );
+    }
+
+    /// mission-56: a worker stopped with nothing to wait on reads on its
+    /// node's line and in full as since when and why, marked once it warns,
+    /// and its warning says how long and why.
+    #[test]
+    fn a_stopped_worker_reads_as_since_when_and_why() {
+        let mut value = mission();
+        let cause = json!({"kind": "limit", "line": "resets 4pm"});
+        let node = &mut value["mission"]["nodes"][1];
+        node["work"] =
+            json!({"state": "stopped", "since_unix_ms": NOW - 6 * MINUTE, "cause": cause});
+        node["warnings"] = json!([{"kind": "stopped", "from_unix_ms": NOW - 6 * MINUTE,
+            "since_unix_ms": NOW - MINUTE, "told_unix_ms": NOW - MINUTE, "cause": cause}]);
+        let drawn = draw(&value, NOW).unwrap();
+        assert!(
+            drawn.contains(
+                "⚠ ci · 작업 중 · push 12분 전 · ⚠멈춤 6분 전 · 사용 한도 · resets 4pm · #8 대기"
+            ),
+            "{drawn}"
+        );
+        let answer = json!({"mission_id": "mission-33", "node": value["mission"]["nodes"][1].clone(),
+            "letters": [], "checker_letters": []});
+        let full = draw(&answer, NOW).unwrap();
+        assert!(
+            full.contains("\n⚠멈춤 6분 전 · 사용 한도 · resets 4pm\n"),
+            "{full}"
+        );
+        assert!(
+            full.contains("경고 ⚠ 멈춘 지 6분 · 사용 한도 · resets 4pm · 지휘자에게 알림 1분 전"),
+            "{full}"
+        );
+        value["mission"]["nodes"][1]["work"]["cause"] = json!(null);
+        value["mission"]["nodes"][1]["warnings"] = json!([]);
+        assert!(
+            draw(&value, NOW)
+                .unwrap()
+                .contains(" ci · 작업 중 · push 12분 전 · 멈춤 6분 전 · 보고 없음 · #8")
         );
     }
 
