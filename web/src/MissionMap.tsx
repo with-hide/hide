@@ -410,8 +410,6 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const work = nodeSteps(node);
   // Where its result goes (D-13): stations for a node that changes code, else once done its conclusion or verdict (D-17).
   const stations = useMemo(() => nodeStations(stationNode(node), mission.destination ?? null, missionOpen(mission)), [node, mission]);
-  // An outside node that watches a branch has no stations to carry its `↗`, so its row names the branch (B19).
-  const outsideBranch = !stations && node.kind === "external" && node.external && "branch" in node.external ? node.external.branch : null;
   const finished = stations ? null : nodeResult(node);
   const result = finished && (finished.kind === "conclusion" || finished.kind === "verdict" || finished.kind === "verify") ? finished : null;
   const titleText = (
@@ -516,15 +514,10 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       ) : null}
       {/* What the operator will look at, and a merge its plan gives them, are a strip of the card itself, read without a hover (PRD mission-human-gate D-06; PRD mission-destination D-45). */}
       <HumanStrip gate={gate} merge={merging} node={node} />
-      {stations || result || outsideBranch || attention || warning || gate?.state === "open" ? (
+      {stations || result || attention || warning || gate?.state === "open" ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
           {/* The stations take the row and their last name truncates; `⚠` and `!` keep their place at the right end (B30). */}
-          {stations ? <StationLine stations={stations} className="flex-1" /> : <span className="flex min-w-0 flex-1 items-center">{result ? <ResultTail result={result} stale={mission.github_stale} /> : outsideBranch ? (
-            <span className="flex min-w-0 items-center gap-xxs font-mono" data-node-outside="true">
-              <span aria-hidden="true" className="shrink-0">↗</span>
-              <span className="truncate" title={outsideBranch} data-node-branch={outsideBranch}>{outsideBranch}</span>
-            </span>
-          ) : null}</span>}
+          {stations ? <StationLine stations={stations} className="flex-1" /> : <span className="flex min-w-0 flex-1 items-center">{result ? <ResultTail result={result} stale={mission.github_stale} /> : null}</span>}
           {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
           {gate?.state === "open" && !attention ? (
             <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">

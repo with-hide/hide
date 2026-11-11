@@ -475,10 +475,10 @@ it("draws each card as its mark, its title with its worker at the row's right, i
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
     node("on-branch", { status: "working", branch: "feat/engine-own-layout", worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false } }),
-    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 } }),
-    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
-    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
-    node("branch-out", { kind: "external", delivery: null, external: { branch: "feat/outside-work" } }),
+    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }),
+    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, outside: { base: "release/1.2", state: "closed" }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
+    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, outside: { base: "main", state: "merged" }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
+    node("branch-out", { kind: "external", delivery: null, external: { branch: "feat/outside-work" }, outside: { base: "develop" }, status: "working" }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
     // Finished: one whose launch the core kept (its pane long gone), one with no launch kept and only the plan left.
@@ -512,16 +512,23 @@ it("draws each card as its mark, its title with its worker at the row's right, i
     expect(card(map, "core").querySelector("[data-node-run]")?.parentElement).toBe(card(map, "core").querySelector("[data-node-mark]")?.parentElement);
     // A finished node with no launch kept, or a node with no worker, names no model and no mark.
     expect(["ran-unknown", "asked", "next", "outside"].map(worker)).toEqual([null, null, null, null]);
-    // The last row is the station line: work, the pull request (the newest with +N), approval, and the branch it lands in; an outside node's base is not sent, so it ends at approval (B24, B28).
+    // The last row is the station line: work, the pull request (the newest with +N), approval, and the branch it lands in (B24, B28).
+    // An outside node has no work of the mission's: its pull request lit by the state GitHub answered, closed lighting nothing after it,
+    // or its branch, then where that goes (D-14).
     const stations = (key: string) => card(map, key).querySelector<HTMLElement>("[data-node-row] [data-node-stations]")?.dataset.nodeStations ?? null;
-    expect(Object.fromEntries(["core", "asked", "api", "branch", "outside", "merged-out"].map((key) => [key, stations(key)]))).toEqual({
+    expect(Object.fromEntries(["core", "asked", "api", "branch", "outside", "closed-out", "merged-out", "branch-out"].map((key) => [key, stations(key)]))).toEqual({
       core: "work:done pr:current approve:todo land:todo",
       asked: "work:current pr:todo approve:todo land:todo",
       api: "work:done pr:done approve:done land:landed",
       branch: "work:done land:current",
-      outside: "work:done pr:current approve:todo",
-      "merged-out": "work:done pr:done approve:done",
+      outside: "pr:current approve:todo land:todo",
+      "closed-out": "pr:closed approve:todo land:todo",
+      "merged-out": "pr:done approve:done land:landed",
+      "branch-out": "branch:current land:todo",
     });
+    // A base other than the destination ends in bold; the destination itself plainly.
+    const last = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-station-label]")].at(-1)!;
+    expect(["outside", "closed-out", "branch-out"].map((key) => [last(key).textContent, last(key).className.includes("font-bold")])).toEqual([["main", false], ["release/1.2", true], ["develop", true]]);
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-station-label]")].map((one) => one.textContent)).toEqual(["Work", `${"#"}1704 +1`, "Approval", "main"]);
     // `!` keeps the row's right end after the stations.
     expect((card(map, "asked").querySelector("[data-node-row]")!.lastElementChild as HTMLElement).dataset.nodeAttentionTag).toBe("worker_ended");
@@ -555,10 +562,10 @@ it("draws each card as its mark, its title with its worker at the row's right, i
     expect(card(map, "api").className).not.toMatch(/border-mission-done/);
     // Outside is the node's kind: a dotted border and `↗` on its pull request in every state; one closed unmerged waits on the Conductor (B12, B19).
     expect(["outside", "closed-out", "merged-out"].map((key) => [card(map, key).className.includes("border-dotted"), card(map, key).querySelector("[data-node-outside]")?.textContent])).toEqual([[true, `↗${"#"}1232`], [true, `↗${"#"}1605`], [true, `↗${"#"}1702`]]);
-    // One that watches a branch has no stations; its row names the branch after `↗`.
-    expect([card(map, "branch-out").querySelector("[data-node-stations]"), card(map, "branch-out").querySelector("[data-node-outside]")?.textContent]).toEqual([null, "↗feat/outside-work"]);
+    // One that watches a branch starts at it, after `↗`.
+    expect(card(map, "branch-out").querySelector("[data-node-outside]")?.textContent).toBe("↗ feat/outside-work");
     expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
-    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Outside the mission · Where it goes: Work (done) → ↗${"#"}1702 (done) → Approval (done)`);
+    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Outside the mission · Where it goes: ↗${"#"}1702 (done) → Approval (done) → main (in)`);
   } finally { await map.unmount(); }
 });
 

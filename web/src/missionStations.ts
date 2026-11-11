@@ -3,15 +3,18 @@
 // desktop's map card, its hover and the phone's card read, from fields both
 // carry, so the two screens draw one line.
 //
-// A node that changes code (`change`, `external`) has a line: `작업` first,
-// then for a pull request `PR` (`#n` once it exists, the newest with `+N`)
-// and `승인`, then `볼 것` when its plan has the operator look, and last the
-// branch its result lands in. A node that changes no code (`research`,
-// `verify`) has none. Every station's state comes from the core's values; the
-// screen decides nothing the core did not say.
+// A node that changes code (`change`, `external`) has a line. A mission's own
+// change starts at `작업`, then for a pull request `PR` (`#n` once it exists,
+// the newest with `+N`) and `승인`, then `볼 것` when its plan has the
+// operator look, and last the branch its result lands in. An outside node has
+// no work in the mission, so its line starts at what it watches: `↗#n → 승인`
+// for a pull request, `↗ <branch>` for a branch, then where that goes. A node
+// that changes no code (`research`, `verify`) has none. Every station's state
+// comes from the core's values; the screen decides nothing the core did not
+// say.
 
 import type { TFunction } from "i18next";
-import type { MissionDelivery, MissionExternal, MissionNode, MissionNodeBrief } from "./snapshot";
+import type { MissionDelivery, MissionExternal, MissionNode, MissionNodeBrief, MissionOutside } from "./snapshot";
 
 /** What the station line reads of a node: the shared rules' fields, and the pull request's base and count the line names. */
 export type StationNode = Pick<MissionNodeBrief, "kind" | "status" | "pr" | "pr_state" | "landing" | "gate" | "merge"> & {
@@ -22,6 +25,8 @@ export type StationNode = Pick<MissionNodeBrief, "kind" | "status" | "pr" | "pr_
   pr_base?: string | null;
   /** How many pull requests the node holds besides its current one (`+N`, D-37). */
   pr_more?: number;
+  /** Where an outside node's work goes and how its pull request stands (D-14); absent from a core before it. */
+  outside?: MissionOutside | null;
 };
 
 /** The desktop's node as the station line reads it: the base and count from its pull request list, the current one last. */
@@ -44,6 +49,7 @@ export type LandPlace = { kind: "destination"; branch: string } | { kind: "branc
 
 export type Station =
   | { kind: "work"; state: StationState }
+  | { kind: "branch"; state: StationState; branch: string }
   | { kind: "pr"; state: StationState; number: number | null; more: number; outside: boolean }
   | { kind: "approve"; state: StationState }
   | { kind: "gate"; state: StationState }
@@ -59,19 +65,22 @@ export function changesCode(node: Pick<MissionNodeBrief, "kind">): boolean {
  * or whose line would be `작업` alone.
  * `destination` is the mission's destination branch as the core sends it,
  * null when the core could not read it. A last station whose branch is not
- * known is left out rather than named (B17): an outside node's, whose base
- * the core does not send, and any while the destination is unknown. A
- * closed mission's work stopped, so no station of it is lit as current, as
- * no edge of its map is.
+ * known is left out rather than named (B17). A closed mission's work
+ * stopped, so no station of it is lit as current, as no edge of its map is.
  */
 export function nodeStations(node: StationNode, destination: string | null, open: boolean): Station[] | null {
   if (!changesCode(node)) return null;
-  const outsidePr = node.external && "pr" in node.external ? node.external.pr : null;
-  const pr = node.pr ?? outsidePr;
-  const byPr = node.kind === "external" ? outsidePr != null : node.delivery !== "direct" || node.pr != null;
+  const stations = node.kind === "external" ? outsideStations(node, destination) : ownStations(node, destination);
+  if (!stations) return null;
+  return open ? stations : stations.map((station) => (station.state === "current" ? { ...station, state: "todo" } : station));
+}
+
+/** A mission's own change: its work, its pull request when it has one, the operator's look, and the branch it lands in. */
+function ownStations(node: StationNode, destination: string | null): Station[] | null {
+  const pr = node.pr;
+  const byPr = node.delivery !== "direct" || pr != null;
   const done = node.status === "done";
-  // An outside pull request's state is not read; its node is done once it merged (D-07).
-  const pull = node.pr_state ?? (outsidePr != null && done ? "merged" : null);
+  const pull = node.pr_state;
   // The work goes on while there is no pull request, or while its checks failed, it is a draft or it was closed unmerged.
   const fixing = pull === "failed" || pull === "draft" || pull === "closed";
   const worked = done || (byPr && pr != null && !fixing);
@@ -80,7 +89,7 @@ export function nodeStations(node: StationNode, destination: string | null, open
   if (byPr) {
     const approved = pull === "mergeable" || pull === "merged" || done;
     const prState: StationState = pull === "failed" ? "failed" : pull === "closed" ? "closed" : approved ? "done" : pr != null && worked ? "current" : "todo";
-    stations.push({ kind: "pr", state: prState, number: pr, more: node.pr_more ?? 0, outside: node.kind === "external" }, { kind: "approve", state: approved ? "done" : "todo" });
+    stations.push({ kind: "pr", state: prState, number: pr, more: node.pr_more ?? 0, outside: false }, { kind: "approve", state: approved ? "done" : "todo" });
     reached = approved;
   }
   if (node.gate) {
@@ -88,7 +97,7 @@ export function nodeStations(node: StationNode, destination: string | null, open
     stations.push({ kind: "gate", state: passed ? "done" : node.gate.state === "open" ? "due" : "ahead" });
     reached = reached && passed;
   }
-  const place = landPlace(node, destination);
+  const place = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr } : branchPlace(node.pr_base ?? destination, destination);
   if (place) {
     const person = node.merge?.by === "operator";
     const landed = node.landing?.state === "landed" || pull === "merged" || node.merge?.state === "merged";
@@ -96,16 +105,38 @@ export function nodeStations(node: StationNode, destination: string | null, open
     stations.push({ kind: "land", state, place, person });
   }
   // A line of `작업` alone says nothing the card's mark does not (D-17 dropped a one-station line): a direct change whose destination the core cannot read draws none.
-  if (stations.length < 2) return null;
-  return open ? stations : stations.map((station) => (station.state === "current" ? { ...station, state: "todo" } : station));
+  return stations.length < 2 ? null : stations;
 }
 
-function landPlace(node: StationNode, destination: string | null): LandPlace | null {
-  if (node.base_pr != null) return { kind: "stack", pr: node.base_pr };
-  // A pull request lands in the base GitHub answered for it, a mission's own change in the destination; an outside node's base is not sent.
-  const branch = node.pr_base ?? (node.kind === "external" ? null : destination);
+/**
+ * An outside node (D-07, D-14): no `작업`, since none of its work is the
+ * mission's. A pull request is `↗#n → 승인 → <its base>` lit by the state
+ * GitHub last answered; one closed unmerged lights nothing after it, and one
+ * not read yet lights nothing. A branch is `↗ <branch> → <the default
+ * branch it is judged against>`. Its node done is the result in, whatever
+ * else was read.
+ */
+function outsideStations(node: StationNode, destination: string | null): Station[] | null {
+  const external = node.external;
+  if (!external) return null;
+  const done = node.status === "done";
+  const place = branchPlace(node.outside?.base ?? null, destination);
+  if ("branch" in external) {
+    const stations: Station[] = [{ kind: "branch", state: done ? "done" : node.status === "working" ? "current" : "todo", branch: external.branch }];
+    if (place) stations.push({ kind: "land", state: done ? "landed" : "todo", place, person: false });
+    return stations;
+  }
+  const pull = done ? "merged" : (node.outside?.state ?? null);
+  const approved = pull === "mergeable" || pull === "merged";
+  const prState: StationState = pull === "failed" ? "failed" : pull === "closed" ? "closed" : approved ? "done" : pull === "pending" || pull === "draft" ? "current" : "todo";
+  const stations: Station[] = [{ kind: "pr", state: prState, number: external.pr, more: 0, outside: true }, { kind: "approve", state: approved ? "done" : "todo" }];
+  if (place) stations.push({ kind: "land", state: pull === "merged" ? "landed" : pull === "mergeable" ? "current" : "todo", place, person: false });
+  return stations;
+}
+
+/** The last station's branch: the destination drawn plainly, another branch bold; bold needs a destination to differ from, so with none read the branch is drawn plainly. */
+function branchPlace(branch: string | null, destination: string | null): LandPlace | null {
   if (!branch) return null;
-  // Bold "another branch" needs a destination to differ from: with none read, GitHub's base is drawn plainly.
   return destination == null || branch === destination ? { kind: "destination", branch } : { kind: "branch", branch };
 }
 
@@ -124,6 +155,8 @@ export function stationLabel(station: Station, t: TFunction<"translation">): str
   switch (station.kind) {
     case "work":
       return t("mission.station.work");
+    case "branch":
+      return `↗ ${station.branch}`;
     case "pr":
       // An outside node's pull request carries `↗` in every state, its kind (B19).
       return station.number == null ? t("mission.station.pr") : `${station.outside ? "↗" : ""}#${station.number}${station.more > 0 ? ` +${station.more}` : ""}`;

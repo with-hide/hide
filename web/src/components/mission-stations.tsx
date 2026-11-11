@@ -6,13 +6,13 @@
 // is drawn from `nodeStations` (`web/src/missionStations.ts`), which the
 // desktop and the phone share; the card's accessible name says its words.
 
-import { ArrowDownToLineIcon, CheckIcon, EyeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, HammerIcon, ThumbsUpIcon, UserRoundIcon, XIcon, type LucideIcon } from "lucide-react";
+import { ArrowDownToLineIcon, CheckIcon, EyeIcon, GitBranchIcon, GitPullRequestClosedIcon, GitPullRequestIcon, HammerIcon, ThumbsUpIcon, UserRoundIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment } from "react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { stationLabel, type Station, type StationState } from "../missionStations";
 
-const ICON: Record<Station["kind"], LucideIcon> = { work: HammerIcon, pr: GitPullRequestIcon, approve: ThumbsUpIcon, gate: EyeIcon, land: ArrowDownToLineIcon };
+const ICON: Record<Station["kind"], LucideIcon> = { work: HammerIcon, branch: GitBranchIcon, pr: GitPullRequestIcon, approve: ThumbsUpIcon, gate: EyeIcon, land: ArrowDownToLineIcon };
 
 /** A station's mark: a check once passed or landed, a cross on failed checks, a closed pull request's mark, `👤` on a last station the operator merges. */
 function iconOf(station: Station): LucideIcon {
@@ -60,14 +60,17 @@ export function StationLine({ stations, className }: { stations: readonly Statio
         // A result going somewhere other than the mission's destination ends in bold, so it reads without a hover (D-14).
         const elsewhere = land && station.place.kind !== "destination";
         const quiet = land && !station.person && (station.state === "todo" || station.state === "current");
+        // A branch's name may be long: the last station's, and an outside branch's first, truncate within half the line, so the stations between keep their words (B30).
+        const named = last || station.kind === "branch";
+        const outside = (station.kind === "pr" && station.outside) || station.kind === "branch";
         return (
           <Fragment key={station.kind}>
             {index > 0 ? <span className="mt-[calc(var(--size-mission-station)/2)] h-(--size-mission-edge) min-w-xs flex-1 bg-border" /> : null}
-            <span className={cn("flex flex-col items-center gap-xxs", last ? "min-w-0 shrink" : "shrink-0")} data-station={station.kind} data-station-state={station.state} data-station-place={land ? station.place.kind : undefined}>
+            <span className={cn("flex flex-col items-center gap-xxs", named ? "min-w-0 max-w-1/2 shrink" : "shrink-0")} data-station={station.kind} data-station-state={station.state} data-station-place={land ? station.place.kind : undefined}>
               <span className={cn("flex size-(--size-mission-station) shrink-0 items-center justify-center rounded-full border", quiet ? cn(LAND_TODO, station.state === "current" && "ring-2 ring-mission-land/20") : DISC[station.state])}>
                 <Icon className="size-(--size-agent-mark)" strokeWidth={2.25} />
               </span>
-              <span className={cn("text-micro whitespace-nowrap", last && "max-w-full truncate", quiet ? "text-mission-land" : WORD[station.state], elsewhere && "font-bold text-foreground")} title={last ? label : undefined} data-station-label="true" data-node-outside={(station.kind === "pr" && station.outside) || undefined}>
+              <span className={cn("text-micro whitespace-nowrap", named && "max-w-full truncate", quiet ? "text-mission-land" : WORD[station.state], elsewhere && "font-bold text-foreground")} title={named ? label : undefined} data-station-label="true" data-node-outside={outside || undefined}>
                 {label}
               </span>
             </span>

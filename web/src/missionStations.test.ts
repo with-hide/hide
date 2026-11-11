@@ -9,7 +9,7 @@ function node(extra: Partial<StationNode> = {}): StationNode {
 }
 
 const line = (one: StationNode, destination: string | null = "main", open = true) =>
-  nodeStations(one, destination, open)?.map((station) => `${station.kind}:${station.state}${station.kind === "land" ? `@${station.place.kind === "stack" ? `#${station.place.pr}` : station.place.branch}${station.person ? "+person" : ""}` : ""}`).join(" ") ?? null;
+  nodeStations(one, destination, open)?.map((station) => `${station.kind}:${station.state}${station.kind === "land" ? `@${station.place.kind === "stack" ? `#${station.place.pr}` : station.place.kind === "branch" ? `*${station.place.branch}` : station.place.branch}${station.person ? "+person" : ""}` : ""}`).join(" ") ?? null;
 
 describe("nodeStations", () => {
   it("draws no line for a node that changes no code (D-17)", () => {
@@ -46,7 +46,7 @@ describe("nodeStations", () => {
 
   it("ends a stacked pull request on the one it sits on, and one based elsewhere on that branch (D-14)", () => {
     expect(line(node({ pr: 32, pr_state: "pending", base_pr: 31 }))).toBe("work:done pr:current approve:todo land:todo@#31");
-    expect(line(node({ pr: 32, pr_state: "pending", pr_base: "release/1.2" }))).toBe("work:done pr:current approve:todo land:todo@release/1.2");
+    expect(line(node({ pr: 32, pr_state: "pending", pr_base: "release/1.2" }))).toBe("work:done pr:current approve:todo land:todo@*release/1.2");
     // A base GitHub answered as the destination is the destination.
     expect(nodeStations(node({ pr: 32, pr_state: "pending", pr_base: "main" }), "main", true)?.at(-1)).toMatchObject({ kind: "land", place: { kind: "destination", branch: "main" } });
   });
@@ -66,15 +66,39 @@ describe("nodeStations", () => {
     ]);
   });
 
-  it("leaves out a last station whose branch it cannot name: an unknown destination, an outside node's base (B17)", () => {
+  it("leaves out a last station whose branch it cannot name (B17)", () => {
     expect(line(node({ pr: 31, pr_state: "pending" }), null)).toBe("work:done pr:current approve:todo");
     // GitHub's base still names where a pull request lands, plainly, since there is no destination it differs from.
     expect(nodeStations(node({ pr: 31, pr_state: "pending", pr_base: "main" }), null, true)?.at(-1)).toMatchObject({ kind: "land", place: { kind: "destination", branch: "main" } });
     // A direct change with no branch to name would be `작업` alone, a line that says nothing: none is drawn.
     expect(line(node({ delivery: "direct", status: "done" }), null)).toBeNull();
-    expect(line(node({ kind: "external", delivery: null, status: "planned", external: { pr: 1232 } }))).toBe("work:done pr:current approve:todo");
-    // An outside pull request's state is not read: its node done is its pull request merged.
-    expect(line(node({ kind: "external", delivery: null, status: "done", external: { pr: 1232 } }))).toBe("work:done pr:done approve:done");
+  });
+
+  it("starts an outside node at what it watches, with no work of the mission's, and ends it where that goes (D-07, D-14)", () => {
+    const pull = (state: "pending" | "mergeable" | "merged" | "closed" | null, extra: Partial<StationNode> = {}) =>
+      line(node({ kind: "external", delivery: null, status: "working", external: { pr: 1232 }, outside: { base: "release/1.2", ...(state ? { state } : {}) }, ...extra }));
+    expect([pull("pending"), pull("mergeable"), pull("merged"), pull("closed"), pull(null)]).toEqual([
+      "pr:current approve:todo land:todo@*release/1.2",
+      "pr:done approve:done land:current@*release/1.2",
+      "pr:done approve:done land:landed@*release/1.2",
+      // Closed unmerged, nothing after it is lit: the Conductor decides what comes next.
+      "pr:closed approve:todo land:todo@*release/1.2",
+      // Not read yet: nothing is lit rather than guessed.
+      "pr:todo approve:todo land:todo@*release/1.2",
+    ]);
+    // Its node done is its pull request merged, whatever was read last (D-07); a base that is the destination is drawn plainly.
+    expect(pull("pending", { status: "done", outside: { base: "main", state: "pending" } })).toBe("pr:done approve:done land:landed@main");
+    // A base not read yet is no station.
+    expect(pull(null, { outside: undefined })).toBe("pr:todo approve:todo");
+    const branch = (extra: Partial<StationNode>) => nodeStations(node({ kind: "external", delivery: null, status: "working", external: { branch: "work/direct" }, outside: { base: "develop" }, ...extra }), "release/target", true);
+    // A branch goes to the default branch it is judged against, which may not be the mission's destination.
+    expect(branch({})).toEqual([
+      { kind: "branch", state: "current", branch: "work/direct" },
+      { kind: "land", state: "todo", place: { kind: "branch", branch: "develop" }, person: false },
+    ]);
+    expect(branch({ status: "done" })?.map((station) => station.state)).toEqual(["done", "landed"]);
+    // The branch alone still says what the node watches.
+    expect(branch({ outside: undefined })).toEqual([{ kind: "branch", state: "current", branch: "work/direct" }]);
   });
 
   it("lights nothing as current once the mission closed", () => {
