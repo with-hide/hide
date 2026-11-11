@@ -6,9 +6,10 @@
 //! changed, so the record grows by files rather than by one file every
 //! change rewrites (engineering #15).
 //!
-//! The index is written before the files it names: it is what says a
-//! mission exists and whether it is closed, so a stop between the two
-//! leaves a line whose file is not there yet (a create the start drops, as
+//! The index admits creates, reopens and deletes before their bodies, but
+//! marks a mission at rest only after its closed body is saved. A stop
+//! between the two never shelves an open body. It may leave
+//! a line whose file is not there yet (a create the start drops, as
 //! a save not yet made) or a file no line names (a delete the start
 //! finishes). The one exception is the move: builds before the folder kept
 //! every mission in `missions.json`, which is read as before while no index
@@ -42,8 +43,6 @@ use crate::missions::{
 /// the closed ones that still ask, are live and never shelved.
 pub(crate) const LOADED_CLOSED_LIMIT: usize = 128;
 const INDEX_SCHEMA: u32 = 1;
-/// A line is under 200 bytes, so this reads tens of thousands of missions.
-const INDEX_READ_CAP: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Index {
@@ -86,15 +85,19 @@ impl MissionStore {
     /// The file a start that could not read the record names in its log.
     pub(crate) fn path(&self) -> PathBuf {
         let index = hide_kit::layout::mission_index(&self.dir);
-        if index.exists() { index } else { self.old.clone() }
+        if index.exists() {
+            index
+        } else {
+            self.old.clone()
+        }
     }
 
     pub(crate) fn restore(&self) -> Restored {
         let index = hide_kit::layout::mission_index(&self.dir);
-        match read_capped(&index, INDEX_READ_CAP) {
-            Ok(Some(bytes)) => self.read_folder(&bytes),
-            Ok(None) => self.read_old(),
-            Err(reason) => Restored::Unreadable(format!("its index {reason}")),
+        match std::fs::read(&index) {
+            Ok(bytes) => self.read_folder(&bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.read_old(),
+            Err(error) => Restored::Unreadable(format!("its index could not be read: {error}")),
         }
     }
 
@@ -114,6 +117,9 @@ impl MissionStore {
                 "its index has schema version {}, expected {INDEX_SCHEMA}",
                 index.schema_version
             ));
+        }
+        if let Err(reason) = validate_lines(&index.missions) {
+            return Restored::Unreadable(reason);
         }
         let loaded = loaded_ids(&index.missions);
         let mut book = MissionBook {
@@ -140,7 +146,8 @@ impl MissionStore {
                 }
             }
         }
-        book.missions.sort_by_key(|mission| mission_number(&mission.id));
+        book.missions
+            .sort_by_key(|mission| mission_number(&mission.id));
         Restored::Read(book)
     }
 
@@ -249,6 +256,9 @@ fn loaded_ids(lines: &[MissionLine]) -> BTreeSet<String> {
 /// Mission `id`'s file, read and checked to hold that one mission; `None`
 /// when there is no file.
 pub(crate) fn read_mission(dir: &Path, id: &str) -> Result<Option<Mission>, String> {
+    if !valid_id(id) {
+        return Err("has an invalid mission id".into());
+    }
     let Some(bytes) = read_capped(&hide_kit::layout::mission_file(dir, id), READ_CAP)? else {
         return Ok(None);
     };
@@ -265,6 +275,22 @@ pub(crate) fn read_mission(dir: &Path, id: &str) -> Result<Option<Mission>, Stri
 pub(crate) struct Visiting {
     pub(crate) mission: Mission,
     pub(crate) history: Option<crate::mission_events::EventLog>,
+}
+
+pub(crate) struct ShelfRead {
+    pub(crate) id: String,
+    pub(crate) dir: PathBuf,
+    pub(crate) events: Option<PathBuf>,
+    pub(crate) barrier: Option<crate::mission_events::ReadBarrier>,
+}
+
+impl ShelfRead {
+    pub(crate) fn read(self) -> Result<Visiting, String> {
+        if let Some(barrier) = self.barrier {
+            barrier.wait()?;
+        }
+        read_shelved(&self.dir, self.events.as_deref(), &self.id)
+    }
 }
 
 /// Reads shelved mission `id` from `dir`, with its history from `events`
@@ -315,9 +341,9 @@ impl MissionFiles {
     }
 
     /// Writes what changed since the last save: `leaving`, the missions
-    /// shelved since, and every loaded mission whose file differs; the index
-    /// before them once the folder is the record, after them while this
-    /// save moves the book into it; then deletes the files of missions the
+    /// shelved since, and every loaded mission whose file differs. The index
+    /// admits live missions before their bodies and resting missions after;
+    /// the first migration admits everything last. Then delete files the
     /// index no longer names. A failure is returned with what is not yet
     /// written kept for the next save, which writes it again.
     pub(crate) fn write(
@@ -333,9 +359,29 @@ impl MissionFiles {
             Some(before) if *before != index => removed_ids(before, book)?,
             _ => Vec::new(),
         };
-        if !moving && self.index.as_ref() != Some(&index) {
-            self.replace(hide_kit::layout::MISSION_INDEX, &index)?;
-            self.index = Some(index.clone());
+        if let Some(before) = &self.index
+            && *before != index
+        {
+            let mut admitted: Index = serde_json::from_slice(&index)
+                .map_err(|error| format!("the index could not be decoded: {error}"))?;
+            let before: Index = serde_json::from_slice(before)
+                .map_err(|error| format!("the index could not be decoded: {error}"))?;
+            for line in &mut admitted.missions {
+                if line.at_rest()
+                    && let Some(was) = before
+                        .missions
+                        .iter()
+                        .find(|was| was.id == line.id && !was.at_rest())
+                {
+                    *line = was.clone();
+                }
+            }
+            let admitted = serde_json::to_vec(&admitted)
+                .map_err(|error| format!("the index could not be encoded: {error}"))?;
+            if self.index.as_ref() != Some(&admitted) {
+                self.replace(hide_kit::layout::MISSION_INDEX, &admitted)?;
+                self.index = Some(admitted);
+            }
         }
         while let Some(mission) = leaving.first() {
             let bytes = encode_mission(mission)?;
@@ -353,9 +399,11 @@ impl MissionFiles {
                 self.written.insert(mission.id.clone(), hash);
             }
         }
-        if moving {
+        if self.index.as_ref() != Some(&index) {
             self.replace(hide_kit::layout::MISSION_INDEX, &index)?;
             self.index = Some(index);
+        }
+        if moving {
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "missions.moved",
                 "missions": book.missions.len(),
@@ -388,6 +436,22 @@ impl MissionFiles {
     }
 }
 
+// Only canonical allocated ids may name a file on any supported system.
+fn valid_id(id: &str) -> bool {
+    let n = mission_number(id);
+    n > 0 && id == format!("mission-{n}")
+}
+
+fn validate_lines(lines: &[MissionLine]) -> Result<(), String> {
+    let mut ids = BTreeSet::new();
+    for line in lines {
+        if !valid_id(&line.id) || !ids.insert(&line.id) {
+            return Err("its index holds an invalid or repeated mission id".into());
+        }
+    }
+    Ok(())
+}
+
 /// The index of `book`, its lines in id order so a reorder of the book
 /// writes nothing.
 fn encode_index(book: &MissionBook) -> Result<Vec<u8>, String> {
@@ -397,6 +461,7 @@ fn encode_index(book: &MissionBook) -> Result<Vec<u8>, String> {
         .map(MissionLine::of)
         .chain(book.shelved.iter().cloned())
         .collect();
+    validate_lines(&missions)?;
     missions.sort_by_key(|line| mission_number(&line.id));
     serde_json::to_vec(&Index {
         schema_version: INDEX_SCHEMA,
@@ -414,9 +479,7 @@ fn removed_ids(before: &[u8], book: &MissionBook) -> Result<Vec<String>, String>
         .missions
         .into_iter()
         .map(|line| line.id)
-        .filter(|id| {
-            book.get(id).is_none() && book.shelf(id).is_none()
-        })
+        .filter(|id| book.get(id).is_none() && book.shelf(id).is_none())
         .collect())
 }
 
@@ -424,4 +487,346 @@ fn digest(bytes: &[u8]) -> u64 {
     let mut hasher = std::hash::DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::missions::tests::{mission, node, plan};
+    use crate::missions::{MissionStatus, NodeKind, NodeStatus, apply_plan};
+
+    /// A synthetic schema-4 book matching the live file shape and the
+    /// reported 50-mission / 42-closed mix (2026-11-11), each with a three-node plan and its finish lines, a
+    /// pull request per change node and its Conductor's session; and that
+    /// book as `missions.json` holds it.
+    fn real_shape() -> (MissionBook, Vec<u8>) {
+        let mut book = MissionBook {
+            next: 50,
+            ..MissionBook::default()
+        };
+        for n in 1..=50u64 {
+            let nodes = vec![
+                node("research", NodeKind::Research, &[]),
+                node("fix", NodeKind::Change, &["research"]),
+                node("docs", NodeKind::Change, &["fix"]),
+            ];
+            let mut planned = apply_plan(&mission(), &plan(nodes), n).unwrap();
+            planned.id = format!("mission-{n}");
+            planned.title = format!("mission {n}");
+            planned.created_at_unix_ms = n * 1_000;
+            planned.conductor.session = Some(crate::links::ledger::SessionIdentity {
+                device_id: "node-a".into(),
+                agent: "claude".into(),
+                session_id: format!("session-{n}"),
+            });
+            planned.status = match n {
+                1..=40 => MissionStatus::Done,
+                41..=42 => MissionStatus::Cancelled,
+                43..=49 => MissionStatus::Running,
+                _ => MissionStatus::Planning,
+            };
+            if !planned.status.open() {
+                planned.closed_at_unix_ms = Some(n * 1_000 + 500);
+            }
+            for (index, node) in planned.nodes.iter_mut().enumerate() {
+                if planned.status == MissionStatus::Done {
+                    node.status = NodeStatus::Done;
+                }
+                if node.kind == NodeKind::Change {
+                    node.prs = vec![(n * 10 + index as u64) as u32];
+                }
+            }
+            book.missions.push(planned);
+        }
+        let bytes = serde_json::to_vec(&json!({
+            "schema_version": SCHEMA_VERSION,
+            "next": book.next,
+            "missions": book.missions,
+        }))
+        .unwrap();
+        (book, bytes)
+    }
+
+    fn read(state: &Path) -> Restored {
+        MissionStore::new(state).restore()
+    }
+
+    fn moved(state: &Path) -> MissionBook {
+        match read(state) {
+            Restored::Read(book) => book,
+            _ => panic!("the folder is read"),
+        }
+    }
+
+    /// c2: a schema 4 `missions.json` of the real shape moves on the first
+    /// start with every mission as it was, the folder is read after, and the
+    /// old file stays as it was for a downgrade.
+    #[test]
+    fn fifty_missions_move_into_the_folder_with_none_lost_and_the_old_file_kept() {
+        let state = tempfile::tempdir().unwrap();
+        let (written, bytes) = real_shape();
+        std::fs::write(hide_kit::layout::missions(state.path()), &bytes).unwrap();
+        let Restored::Moving(book) = read(state.path()) else {
+            panic!("the old file is read while no index exists");
+        };
+        assert_eq!(book.missions, written.missions);
+        let dir = hide_kit::layout::missions_dir(state.path());
+        MissionFiles::new(dir.clone(), None)
+            .write(&book, &mut Vec::new())
+            .unwrap();
+        let after = moved(state.path());
+        assert_eq!((after.missions, after.next), (written.missions, 50));
+        assert!(after.shelved.is_empty());
+        assert_eq!(
+            std::fs::read(hide_kit::layout::missions(state.path())).unwrap(),
+            bytes
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 51);
+    }
+
+    /// c2: a move that fails partway writes no index, so the next start
+    /// reads the old file as before, and the move is made again whole once
+    /// the disk takes it.
+    #[test]
+    fn a_move_cut_short_leaves_the_old_file_read_as_before() {
+        let state = tempfile::tempdir().unwrap();
+        let (written, bytes) = real_shape();
+        std::fs::write(hide_kit::layout::missions(state.path()), &bytes).unwrap();
+        let dir = hide_kit::layout::missions_dir(state.path());
+        // A folder where mission 25's file goes stops the move there.
+        let blocker = hide_kit::layout::mission_file(&dir, "mission-25");
+        std::fs::create_dir_all(&blocker).unwrap();
+        std::fs::write(blocker.join("in-the-way"), b"").unwrap();
+        let Restored::Moving(book) = read(state.path()) else {
+            panic!("the old file is read");
+        };
+        let mut files = MissionFiles::new(dir.clone(), None);
+        assert!(files.write(&book, &mut Vec::new()).is_err());
+        assert!(hide_kit::layout::mission_file(&dir, "mission-1").exists());
+        assert!(!hide_kit::layout::mission_index(&dir).exists());
+        let Restored::Moving(again) = read(state.path()) else {
+            panic!("a move cut short leaves the old file read as before");
+        };
+        assert_eq!(again.missions, written.missions);
+        std::fs::remove_dir_all(&blocker).unwrap();
+        files.write(&book, &mut Vec::new()).unwrap();
+        assert_eq!(moved(state.path()).missions, written.missions);
+    }
+
+    /// Breaking change: once the folder holds the missions, a build from
+    /// before that writes `missions.json` again (a downgrade) is not read
+    /// back by the next start of this build, and its file is left as it
+    /// wrote it.
+    #[test]
+    fn once_the_folder_is_the_record_the_old_file_is_neither_read_nor_written() {
+        let state = tempfile::tempdir().unwrap();
+        let (written, bytes) = real_shape();
+        let old = hide_kit::layout::missions(state.path());
+        std::fs::write(&old, &bytes).unwrap();
+        let Restored::Moving(book) = read(state.path()) else {
+            panic!("the old file is read");
+        };
+        let dir = hide_kit::layout::missions_dir(state.path());
+        let mut files = MissionFiles::new(dir, None);
+        files.write(&book, &mut Vec::new()).unwrap();
+        // The downgraded build adds mission 51 to its file.
+        let mut downgraded = written.clone();
+        let mut added = written.missions[49].clone();
+        added.id = "mission-51".into();
+        downgraded.missions.push(added);
+        let downgraded = serde_json::to_vec(&json!({
+            "schema_version": SCHEMA_VERSION, "next": 51, "missions": downgraded.missions,
+        }))
+        .unwrap();
+        std::fs::write(&old, &downgraded).unwrap();
+        let mut book = moved(state.path());
+        assert_eq!((book.missions.len(), book.next), (50, 50));
+        book.missions[0].title = "changed".into();
+        files.write(&book, &mut Vec::new()).unwrap();
+        assert_eq!(std::fs::read(&old).unwrap(), downgraded);
+    }
+
+    /// c1: a change to one mission rewrites its file alone; the other
+    /// missions' files and the index are not written again.
+    #[test]
+    fn a_change_to_one_mission_rewrites_its_file_alone() {
+        let state = tempfile::tempdir().unwrap();
+        let (mut book, _) = real_shape();
+        let dir = hide_kit::layout::missions_dir(state.path());
+        let mut files = MissionFiles::new(dir.clone(), None);
+        files.write(&book, &mut Vec::new()).unwrap();
+        // A file the writer would replace if it wrote it again.
+        let marked = |id: &str| {
+            let path = if id == "index" {
+                hide_kit::layout::mission_index(&dir)
+            } else {
+                hide_kit::layout::mission_file(&dir, id)
+            };
+            std::fs::write(&path, b"not written again").unwrap();
+            path
+        };
+        let others: Vec<PathBuf> = ["mission-1", "mission-49", "index"]
+            .into_iter()
+            .map(marked)
+            .collect();
+        let running = book.get_mut("mission-48").unwrap();
+        running.nodes[0].status = NodeStatus::Done;
+        running.updated_at_unix_ms += 1;
+        files.write(&book, &mut Vec::new()).unwrap();
+        for path in others {
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                b"not written again",
+                "{path:?}"
+            );
+        }
+        assert_eq!(
+            read_mission(&dir, "mission-48").unwrap().as_ref(),
+            book.get("mission-48")
+        );
+    }
+
+    /// The index is written before the files it names: a start finishes a
+    /// delete stopped between the two and drops a create whose file was
+    /// never written.
+    #[test]
+    fn a_start_finishes_a_delete_and_drops_a_create_a_stop_cut_short() {
+        let state = tempfile::tempdir().unwrap();
+        let (mut book, _) = real_shape();
+        let dir = hide_kit::layout::missions_dir(state.path());
+        MissionFiles::new(dir.clone(), None)
+            .write(&book, &mut Vec::new())
+            .unwrap();
+        // The index after a delete of mission 2 and a create of mission 51,
+        // with neither file changed yet.
+        let deleted = book.missions.remove(1);
+        let mut created = book.missions[0].clone();
+        created.id = "mission-51".into();
+        book.missions.push(created);
+        book.next = 51;
+        std::fs::write(
+            hide_kit::layout::mission_index(&dir),
+            encode_index(&book).unwrap(),
+        )
+        .unwrap();
+        let store = MissionStore::new(state.path());
+        let Restored::Read(read) = store.restore() else {
+            panic!("the folder is read");
+        };
+        store.sweep(&read);
+        assert!(read.get(&deleted.id).is_none() && read.get("mission-51").is_none());
+        assert!(!hide_kit::layout::mission_file(&dir, &deleted.id).exists());
+        assert_eq!((read.missions.len(), read.next), (49, 51));
+    }
+
+    /// Engineering #15: a start reads every open mission and every closed
+    /// one that still asks someone, and the newest `LOADED_CLOSED_LIMIT` of
+    /// the rest; the older ones are shelved by their lines, files kept.
+    #[test]
+    fn a_start_shelves_the_oldest_closed_missions_past_the_limit() {
+        let state = tempfile::tempdir().unwrap();
+        let (template, _) = real_shape();
+        let mut book = MissionBook {
+            next: 132,
+            ..MissionBook::default()
+        };
+        for n in 1..=132u64 {
+            let mut one = template.missions[0].clone();
+            one.id = format!("mission-{n}");
+            one.closed_at_unix_ms = Some(n);
+            book.missions.push(one);
+        }
+        // The oldest still asks the operator; the newest is open.
+        book.missions[0].decision = Some("Which base?".into());
+        book.missions[131].status = MissionStatus::Running;
+        book.missions[131].closed_at_unix_ms = None;
+        let dir = hide_kit::layout::missions_dir(state.path());
+        MissionFiles::new(dir.clone(), None)
+            .write(&book, &mut Vec::new())
+            .unwrap();
+        let read = moved(state.path());
+        assert_eq!(
+            read.shelved
+                .iter()
+                .map(|line| line.id.as_str())
+                .collect::<Vec<_>>(),
+            ["mission-2", "mission-3"]
+        );
+        assert_eq!(read.missions.len(), 2 + LOADED_CLOSED_LIMIT);
+        assert!(read.get("mission-1").is_some() && read.get("mission-132").is_some());
+        let shelved = read_shelved(&dir, None, "mission-2").unwrap();
+        assert_eq!(Some(&shelved.mission), book.get("mission-2"));
+    }
+    /// A failed close must not mark an older, still-open on-disk body as
+    /// resting: startup would otherwise shelve live work behind 128 closes.
+    #[test]
+    fn a_close_whose_body_write_fails_is_still_loaded_as_open_on_restart() {
+        let state = tempfile::tempdir().unwrap();
+        let (template, _) = real_shape();
+        let mut book = MissionBook {
+            next: 129,
+            ..Default::default()
+        };
+        for n in 1..=129 {
+            let mut mission = template.missions[0].clone();
+            mission.id = format!("mission-{n}");
+            mission.closed_at_unix_ms = Some(n);
+            book.missions.push(mission);
+        }
+        book.missions[0].status = MissionStatus::Running;
+        book.missions[0].closed_at_unix_ms = None;
+        let dir = hide_kit::layout::missions_dir(state.path());
+        let mut files = MissionFiles::new(dir.clone(), None);
+        files.write(&book, &mut Vec::new()).unwrap();
+        let body = hide_kit::layout::mission_file(&dir, "mission-1");
+        let saved = std::fs::read(&body).unwrap();
+        std::fs::remove_file(&body).unwrap();
+        std::fs::create_dir(&body).unwrap();
+        std::fs::write(body.join("block"), b"").unwrap();
+        let mut closed = book.missions.remove(0);
+        closed.status = MissionStatus::Done;
+        closed.closed_at_unix_ms = Some(0);
+        book.shelved.push(MissionLine::of(&closed));
+        assert!(files.write(&book, &mut vec![closed]).is_err());
+        std::fs::remove_dir_all(&body).unwrap();
+        std::fs::write(&body, saved).unwrap();
+        let restarted = moved(state.path());
+        assert_eq!(
+            restarted.get("mission-1").unwrap().status,
+            MissionStatus::Running
+        );
+        assert!(restarted.shelf("mission-1").is_none());
+    }
+
+    /// The index never turns an arbitrary stored id into a path traversal
+    /// or a reserved Windows filename; corruption stays unread and intact.
+    #[test]
+    fn an_invalid_or_repeated_id_leaves_the_index_unread_without_writing_outside_the_folder() {
+        let state = tempfile::tempdir().unwrap();
+        let dir = hide_kit::layout::missions_dir(state.path());
+        let (mut book, _) = real_shape();
+        let mut files = MissionFiles::new(dir.clone(), None);
+        for id in ["../outside", "index", "mission-01", "mission-2"] {
+            book.missions[0].id = id.into();
+            assert!(files.write(&book, &mut Vec::new()).is_err());
+            let mut line = MissionLine::of(&book.missions[0]);
+            line.id = id.into();
+            let lines = if id == "mission-2" {
+                vec![line.clone(), line]
+            } else {
+                vec![line]
+            };
+            let bytes = serde_json::to_vec(&Index {
+                schema_version: INDEX_SCHEMA,
+                next: 50,
+                missions: lines,
+            })
+            .unwrap();
+            let path = hide_kit::layout::mission_index(&dir);
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(matches!(read(state.path()), Restored::Unreadable(_)));
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        assert!(!state.path().join("outside.json").exists());
+    }
 }

@@ -1426,6 +1426,40 @@ mod tests {
         assert!(backups[0].join(LINKS).is_file());
     }
 
+    /// The folder store, including shelved missions' index identity, moves
+    /// under the same machine-id rewrite as the legacy book.
+    #[test]
+    fn mission_files_and_their_index_follow_a_device_rename() {
+        let dir = folder();
+        let state = dir.path();
+        let mission = mission(ALIAS, &project(ALIAS));
+        let folder = hide_kit::layout::missions_dir(state);
+        std::fs::create_dir(&folder).unwrap();
+        write_json(
+            &folder,
+            "mission-1.json",
+            json!({"schema_version": 4, "missions": [mission.clone()]}),
+        );
+        let line = crate::missions::MissionLine::of(&serde_json::from_value(mission).unwrap());
+        write_json(
+            &folder,
+            "index.json",
+            json!({"schema_version": 1, "next": 1, "missions": [line]}),
+        );
+        name_devices(state, &node()).unwrap();
+        for name in ["mission-1.json", "index.json"] {
+            let value = read(&folder, name);
+            let mission = &value["missions"][0];
+            assert_eq!(mission["device_id"], MACHINE);
+            assert_eq!(mission["conductor"]["actor"]["device_id"], MACHINE);
+            assert_eq!(mission["conductor"]["session"]["device_id"], MACHINE);
+        }
+        assert_eq!(
+            name_devices(state, &node()).unwrap(),
+            DeviceNames::default()
+        );
+    }
+
     #[test]
     fn a_second_start_writes_nothing() {
         let dir = folder();

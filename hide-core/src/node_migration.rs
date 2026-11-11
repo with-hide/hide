@@ -69,7 +69,7 @@ pub(crate) const MISSIONS: &str = "missions.json";
 /// The mission folder (`hide_kit::layout::missions_dir`): each mission's
 /// file in it is a book of that one mission, so the `MISSIONS` rows place
 /// its keys, and every pass that rewrites `MISSIONS` rewrites each of them
-/// the same way (`mission_files`). Its index names no machine.
+/// the same way (`mission_files`), including the index metadata identities.
 pub(crate) const MISSIONS_DIR: &str = hide_kit::layout::MISSIONS_DIR;
 const FACTORY: &str = "factory.sqlite3";
 /// Where a move keeps its staging copies (`reown::staging_dir`); the
@@ -1452,7 +1452,7 @@ pub(crate) fn mission_files(state_dir: &Path) -> Result<Vec<(String, PathBuf)>, 
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".json") && name != hide_kit::layout::MISSION_INDEX {
+        if name.ends_with(".json") {
             files.push((format!("{MISSIONS_DIR}/{name}"), entry.path()));
         }
     }

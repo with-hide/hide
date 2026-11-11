@@ -725,9 +725,7 @@ impl Core {
         // A shelved mission's file, and for a reopen its history, is read
         // here, off the lock (`mission_store`).
         let shelved = lock_recover(&self.runtime).shelved_files(&command);
-        let visiting = shelved.map(|(id, dir, events)| {
-            crate::mission_store::read_shelved(&dir, events.as_deref(), &id)
-        });
+        let visiting = shelved.map(crate::mission_store::ShelfRead::read);
         let (answer, changed) = lock_recover(&self.runtime)
             .mission_command_with(device, caller, expected, command, visiting)?;
         if changed {

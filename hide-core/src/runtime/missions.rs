@@ -22,8 +22,8 @@ use crate::mission_events::History;
 use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
-    ConductorSettings, Delivery, External, Mission, MissionBook, MissionCommand,
-    MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
+    ConductorSettings, Delivery, External, Mission, MissionBook, MissionCommand, MissionEnd,
+    MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
@@ -1492,8 +1492,9 @@ impl Runtime {
             .collect();
         oldest.sort_unstable();
         let cut = oldest[over - 1];
-        let (leaving, kept): (Vec<Mission>, Vec<Mission>) =
-            std::mem::take(&mut book.missions).into_iter().partition(|mission| {
+        let (leaving, kept): (Vec<Mission>, Vec<Mission>) = std::mem::take(&mut book.missions)
+            .into_iter()
+            .partition(|mission| {
                 let line = crate::missions::MissionLine::of(mission);
                 line.at_rest() && line.closed_order() <= cut
             });
@@ -1510,7 +1511,11 @@ impl Runtime {
             "component": "missions", "kind": "missions.shelved",
             "missions": leaving.iter().map(|mission| mission.id.as_str()).collect::<Vec<_>>(),
         }));
-        let known: Vec<String> = book.missions.iter().map(|mission| mission.id.clone()).collect();
+        let known: Vec<String> = book
+            .missions
+            .iter()
+            .map(|mission| mission.id.clone())
+            .collect();
         self.drop_detail_items(|item| match item {
             DetailItem::Mission { mission } => known.contains(mission),
             _ => true,
@@ -2087,9 +2092,10 @@ impl Runtime {
                 let ledger = self.delivery_state().ok();
                 // A shelved mission is shown from its file, as it was read.
                 let shelved = match (&mission, visiting) {
-                    (Some(id), Some(read)) if self.missions.book.shelf(id).is_some() => {
-                        Some(read.map_err(|reason| self.shelved_unreadable(id, &reason))?.mission)
-                    }
+                    (Some(id), Some(read)) if self.missions.book.shelf(id).is_some() => Some(
+                        read.map_err(|reason| self.shelved_unreadable(id, &reason))?
+                            .mission,
+                    ),
                     _ => None,
                 };
                 let (id, node, caller) = match mission {
@@ -2161,22 +2167,37 @@ impl Runtime {
                 ))
             }
             MissionCommand::List => {
-                let items: Vec<Value> = self
+                let mut lines: Vec<_> = self
                     .missions
                     .book
                     .missions
                     .iter()
-                    .filter(|mission| {
-                        mission.device_id == device && Some(&mission.project) == project.as_ref()
+                    .map(|mission| (crate::missions::MissionLine::of(mission), false))
+                    .chain(
+                        self.missions
+                            .book
+                            .shelved
+                            .iter()
+                            .cloned()
+                            .map(|line| (line, true)),
+                    )
+                    .filter(|(line, _)| {
+                        line.device_id == device && Some(&line.project) == project.as_ref()
                     })
-                    .map(|mission| {
+                    .collect();
+                lines.sort_by_key(|(line, _)| crate::missions::mission_number(&line.id));
+                let items: Vec<Value> = lines
+                    .iter()
+                    .map(|(line, shelved)| {
                         json!({
-                            "id": mission.id,
-                            "title": mission.title,
-                            "status": mission.status,
-                            "conductor": mission.conductor.actor.name,
-                            "present": self.conductor_present(&mission.conductor.actor),
-                            "yours": mission.conductor.actor.same_identity(&actor),
+                            "id": line.id,
+                            "title": line.title,
+                            "project": line.project,
+                            "status": line.status,
+                            "conductor": line.conductor.actor.name,
+                            "present": self.conductor_present(&line.conductor.actor),
+                            "yours": line.conductor.actor.same_identity(&actor),
+                            "shelved": shelved,
                         })
                     })
                     .collect();
@@ -2288,7 +2309,7 @@ impl Runtime {
     pub(crate) fn shelved_files(
         &self,
         command: &MissionCommand,
-    ) -> Option<(String, std::path::PathBuf, Option<std::path::PathBuf>)> {
+    ) -> Option<crate::mission_store::ShelfRead> {
         let (id, history) = match command {
             MissionCommand::Show {
                 mission: Some(id), ..
@@ -2299,9 +2320,23 @@ impl Runtime {
         self.missions.book.shelf(id)?;
         let dir = self.missions.store.as_ref()?.dir().to_path_buf();
         let events = history
-            .then(|| self.missions.event_store.as_ref().map(|store| store.dir().to_path_buf()))
+            .then(|| {
+                self.missions
+                    .event_store
+                    .as_ref()
+                    .map(|store| store.dir().to_path_buf())
+            })
             .flatten();
-        Some((id.clone(), dir, events))
+        Some(crate::mission_store::ShelfRead {
+            id: id.clone(),
+            dir,
+            events,
+            barrier: self
+                .missions
+                .event_store
+                .as_ref()
+                .map(|store| store.read_barrier()),
+        })
     }
 
     fn shelved_unreadable(&self, id: &str, reason: &str) -> String {
@@ -2344,9 +2379,9 @@ impl Runtime {
         }
         let book = &mut self.missions.book;
         book.shelved.retain(|line| line.id != id);
-        let at = book
-            .missions
-            .partition_point(|kept| crate::missions::mission_number(&kept.id) < crate::missions::mission_number(id));
+        let at = book.missions.partition_point(|kept| {
+            crate::missions::mission_number(&kept.id) < crate::missions::mission_number(id)
+        });
         book.missions.insert(at, mission);
         if let Some(log) = history {
             self.missions
@@ -3133,21 +3168,21 @@ impl Runtime {
             }
             keep
         });
-        // A shelved mission's line keeps its Conductor's session id alone
-        // (`MissionLine::session`).
+        // Shelved missions keep the same machine/session identity in the index.
         let shelved = self.missions.book.shelved.len();
         self.missions.book.shelved.retain(|line| {
-            let keep = !line
-                .session
-                .as_ref()
-                .is_some_and(|session| sessions.iter().any(|(_, id)| id == session));
+            let keep = !line.conductor.session.as_ref().is_some_and(|session| {
+                sessions
+                    .iter()
+                    .any(|(machine, id)| session.device_id == *machine && session.session_id == *id)
+            });
             if !keep {
                 gone.push(line.id.clone());
             }
             keep
         });
-        let dropped = before - self.missions.book.missions.len() + shelved
-            - self.missions.book.shelved.len();
+        let dropped =
+            before - self.missions.book.missions.len() + shelved - self.missions.book.shelved.len();
         if dropped == 0 {
             return false;
         }

@@ -1931,13 +1931,17 @@ pub struct MissionBook {
 }
 
 /// What the mission folder's index says of one mission without its body:
-/// whether it may be shelved, how old its close is, and the Conductor
-/// session it is deleted with (D-22). A line changes only with a create, a
+/// its CLI list fields, whether it may be shelved, how old its close is,
+/// and the Conductor session it is deleted with (D-22). A line changes with a create, a
 /// status, a close, a take, an ask on a closed mission and a delete, so a
 /// node's change rewrites the mission's file alone.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MissionLine {
     pub id: String,
+    pub title: String,
+    pub project: String,
+    pub device_id: String,
+    pub conductor: Conductor,
     pub status: MissionStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at_unix_ms: Option<u64>,
@@ -1945,28 +1949,21 @@ pub struct MissionLine {
     /// loaded, so what it asks keeps reaching the operator.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub asks: bool,
-    /// Its Conductor's native session id. The archive names a session by
-    /// its machine and id; a line keeps only the id, which no machine
-    /// rename or core move rewrites, and a session id names one
-    /// conversation on every machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
 }
 
 impl MissionLine {
     pub(crate) fn of(mission: &Mission) -> Self {
         Self {
             id: mission.id.clone(),
+            title: mission.title.clone(),
+            project: mission.project.clone(),
+            device_id: mission.device_id.clone(),
+            conductor: mission.conductor.clone(),
             status: mission.status,
             closed_at_unix_ms: mission.closed_at_unix_ms,
             asks: mission.status == MissionStatus::Done
                 && (mission.decision.is_some()
                     || mission.nodes.iter().any(|node| node.attention.is_some())),
-            session: mission
-                .conductor
-                .session
-                .as_ref()
-                .map(|session| session.session_id.clone()),
         }
     }
 
@@ -1978,7 +1975,10 @@ impl MissionLine {
     /// When it closed, for shelving the oldest first; a closed mission
     /// recorded without the time is the oldest.
     pub(crate) fn closed_order(&self) -> (u64, u64) {
-        (self.closed_at_unix_ms.unwrap_or(0), mission_number(&self.id))
+        (
+            self.closed_at_unix_ms.unwrap_or(0),
+            mission_number(&self.id),
+        )
     }
 }
 
@@ -3282,7 +3282,9 @@ pub fn next_action(code: &str) -> &'static str {
             "Show the plan to the operator and run hide mission start after they approve it"
         }
         "mission_no_nodes" => "Set a plan with hide mission plan before starting",
-        "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
+        "mission_full" => {
+            "Shorten this mission plan or its recorded text; a mission file must fit its save budget"
+        }
         "mission_show_unknown" => {
             "Name a View of your own checkout from hide view list, or give --show a path to open"
         }
@@ -3704,15 +3706,14 @@ pub(crate) fn may_keep(before: &MissionBook, after: &MissionBook) -> bool {
     // A mission past the budget came from a file the read cap let in, so
     // both are counted to just past that cap.
     let limit = READ_CAP as usize;
-    after.missions.iter().all(|mission| {
-        match before.get(&mission.id) {
+    after
+        .missions
+        .iter()
+        .all(|mission| match before.get(&mission.id) {
             Some(was) if was == mission => true,
-            Some(was) => {
-                fits(mission) || saved_size(mission, limit) < saved_size(was, limit)
-            }
+            Some(was) => fits(mission) || saved_size(mission, limit) < saved_size(was, limit),
             None => fits(mission),
-        }
-    })
+        })
 }
 
 #[cfg(test)]
@@ -3844,7 +3845,11 @@ pub(crate) mod tests {
         // kept.
         let mut smaller = grown.clone();
         smaller.missions[0].report = Some("x".into());
-        assert!(fits(&smaller.missions[0]) || saved_size(&smaller.missions[0], READ_CAP as usize) < saved_size(&grown.missions[0], READ_CAP as usize));
+        assert!(
+            fits(&smaller.missions[0])
+                || saved_size(&smaller.missions[0], READ_CAP as usize)
+                    < saved_size(&grown.missions[0], READ_CAP as usize)
+        );
         assert!(may_keep(&grown, &smaller));
         // A move that finds a mission's registration gone writes null.
         let mut stored = serde_json::to_value(&book.missions[0]).unwrap();
@@ -4132,10 +4137,13 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(decode(&other).is_err());
-        assert_eq!(saved_again(&MissionBook {
-            missions: vec![mission()],
-            ..MissionBook::default()
-        }), vec![mission()]);
+        assert_eq!(
+            saved_again(&MissionBook {
+                missions: vec![mission()],
+                ..MissionBook::default()
+            }),
+            vec![mission()]
+        );
     }
 
     /// What the mission folder writes of `book` reads back as it: each

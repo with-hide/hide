@@ -326,7 +326,28 @@ struct Pending {
     /// The missions shelved since the last book written, whose files take
     /// their last state before the book's memory lets go of them.
     leaving: Vec<crate::missions::Mission>,
+    barrier: Option<std::sync::mpsc::SyncSender<Result<(), String>>>,
     stop: bool,
+}
+
+/// An explicit read waits off the runtime lock for the save it follows.
+/// Without this, show/reopen just after shelving could read the old body.
+pub(crate) struct ReadBarrier(Arc<(Mutex<Pending>, Condvar)>);
+
+impl ReadBarrier {
+    pub(crate) fn wait(self) -> Result<(), String> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        {
+            let mut pending = self.0.0.lock().unwrap_or_else(PoisonError::into_inner);
+            // Core commands run on one owner thread: at most one explicit
+            // shelved read can wait. A timed-out read must not grow a queue.
+            pending.barrier = Some(sender);
+        }
+        self.0.1.notify_one();
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| "mission save did not answer".to_owned())?
+    }
 }
 
 /// The one writer of the missions' files: each mission's history, and,
@@ -467,6 +488,10 @@ impl MissionEventStore {
         self.post(mission, |work| work.released = true);
     }
 
+    pub(crate) fn read_barrier(&self) -> ReadBarrier {
+        ReadBarrier(Arc::clone(&self.shared))
+    }
+
     /// Gives the save thread the log of a mission read back from its shelf
     /// (`mission_store::read_shelved`), which its next events extend.
     pub(crate) fn adopt(&self, mission: &str, log: EventLog) {
@@ -559,10 +584,15 @@ fn run(
     let mut leaving: Vec<crate::missions::Mission> = Vec::new();
     let mut book_failing = false;
     let mut book_held = false;
+    let mut releasing = std::collections::BTreeSet::new();
     loop {
-        let (mut work, stop) = {
+        let (mut work, barrier, stop) = {
             let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            while pending.work.is_empty() && pending.book.is_none() && !pending.stop {
+            while pending.work.is_empty()
+                && pending.book.is_none()
+                && pending.barrier.is_none()
+                && !pending.stop
+            {
                 if failing.is_empty() && book.is_none() {
                     pending = wake.wait(pending).unwrap_or_else(PoisonError::into_inner);
                 } else {
@@ -576,13 +606,18 @@ fn run(
                 }
             }
             for (id, log) in std::mem::take(&mut pending.restored) {
+                releasing.remove(&id);
                 logs.entry(id).or_insert(log);
             }
             if let Some(newer) = pending.book.take() {
                 book = Some(newer);
             }
             leaving.append(&mut pending.leaving);
-            (std::mem::take(&mut pending.work), pending.stop)
+            (
+                std::mem::take(&mut pending.work),
+                pending.barrier.take(),
+                pending.stop,
+            )
         };
         // A log whose write failed is written again with this pass.
         for mission in &failing {
@@ -591,9 +626,8 @@ fn run(
         for (mission, work) in work {
             let path = file(dir, &mission);
             let mut result = Ok(());
-            if work.released {
-                logs.remove(&mission);
-            } else if work.removed {
+            if work.removed {
+                releasing.remove(&mission);
                 logs.remove(&mission);
                 result = match std::fs::remove_file(&path) {
                     Ok(()) => Ok(()),
@@ -601,6 +635,9 @@ fn run(
                     Err(error) => Err(format!("could not be deleted: {error}")),
                 };
             } else {
+                if work.released {
+                    releasing.insert(mission.clone());
+                }
                 let log = logs.entry(mission.clone()).or_default();
                 let mut added = false;
                 for event in work.added {
@@ -619,6 +656,9 @@ fn run(
             match result {
                 Ok(()) => {
                     failing.remove(&mission);
+                    if releasing.remove(&mission) {
+                        logs.remove(&mission);
+                    }
                 }
                 Err(reason) => {
                     if failing.insert(mission.clone()) {
@@ -668,6 +708,14 @@ fn run(
                 }
             }
             (None, _) => {}
+        }
+        if let Some(barrier) = barrier {
+            let outcome = if failing.is_empty() && book.is_none() {
+                Ok(())
+            } else {
+                Err("mission save failed; its files are kept for retry".into())
+            };
+            let _ = barrier.send(outcome);
         }
         if stop {
             return;
@@ -840,5 +888,32 @@ mod tests {
         drop(store);
         let restored = MissionEventStore::new(blocked).restore(["mission-1"].into_iter());
         assert_eq!(restored["mission-1"].events.len(), 2);
+    }
+    /// Mission-55: closing and shelving can share one batch. The close is
+    /// saved before the writer releases its log, including a failed write.
+    #[test]
+    fn a_close_and_shelve_in_one_batch_keep_the_last_event_after_a_failed_save() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("mission-events");
+        std::fs::write(&dir, b"blocks the folder").unwrap();
+        let store = MissionEventStore::new(dir.clone());
+        {
+            let mut pending = store.shared.0.lock().unwrap();
+            pending.work.insert(
+                "mission-1".into(),
+                Work {
+                    released: true,
+                    added: vec![Arc::new(MissionEvent::new(7, EventKind::Reported))],
+                    ..Default::default()
+                },
+            );
+        }
+        assert!(store.read_barrier().wait().is_err());
+        std::fs::remove_file(&dir).unwrap();
+        store.read_barrier().wait().unwrap();
+        drop(store);
+        let log = read_log(&dir, "mission-1").unwrap().unwrap();
+        assert_eq!(log.events.len(), 1);
+        assert_eq!(log.events[0].kind, EventKind::Reported);
     }
 }
