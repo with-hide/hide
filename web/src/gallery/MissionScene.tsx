@@ -19,7 +19,7 @@
 // none for no-conductor, which offers 이어받기 there), the summary beside the
 // map while no node is picked, and the checkers as satellites beside their
 // cards; done leads with its result tiles and pull requests (PRD mission-tool
-// B12-B21). `pick=<node>` opens that node's panel, `width` narrows the slot
+// B12-B21). `hint=role` keeps the first checker beside a card focused so its role hint stays open. `pick=<node>` opens that node's panel, `width` narrows the slot
 // and `scale` sets the text size. The
 // Conductor pane's head with its mission chip and pinned popover (PRD
 // mission-pane-chip, mission-plan-visibility) is `pane-running`,
@@ -513,6 +513,17 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     frame = requestAnimationFrame(press);
     return () => cancelAnimationFrame(frame);
   }, [pick, fixture]);
+  // `hint=role`: the first checker beside a card takes focus, which opens its hover, the role's name under the agent and its state.
+  const roleHint = params.get("hint") === "role";
+  useEffect(() => {
+    if (!roleHint) return;
+    // The map redraws while it settles and a redrawn mark loses focus, so the focus is kept, not given once.
+    const keep = window.setInterval(() => {
+      if (document.activeElement?.hasAttribute("data-node-satellite")) return;
+      document.querySelector<HTMLElement>("[data-node-satellite]")?.focus();
+    }, 100);
+    return () => window.clearInterval(keep);
+  }, [roleHint, fixture]);
   const width = Number(params.get("width") ?? (state === "settings" ? 900 : 1080));
   return (
     <TooltipProvider>

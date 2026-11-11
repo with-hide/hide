@@ -46,18 +46,22 @@ export function Satellites({ mission, lines, dimmed, onSelect, actions }: { miss
 }
 
 function Satellite({ mission, line, onSelect, actions }: { mission: Mission; line: SatelliteLine; onSelect: () => void; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
   const { checker, kind } = line;
   const state = checkerState(checker);
   const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker, checker.worker.agent);
   const status = useCheckerStatus(kind, checker);
   const device = useMissionDeviceName(checker.machine);
   const label = [agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent, run?.text, device, status].filter(Boolean).join(" · ");
+  // The hover names the role under the agent and its state; a reader of the name hears the same name as its description.
+  const role = t(`mission.role.${kind}`);
   return (
-    <CheckerPopover mission={mission} kind={kind} checker={checker} actions={actions} hint={label} onNode={onSelect}>
+    <CheckerPopover mission={mission} kind={kind} checker={checker} actions={actions} hint={`${label}\n${role}`} onNode={onSelect}>
       <Button
         variant="ghost"
         size="icon-xs"
         aria-label={label}
+        aria-description={role}
         className={cn("relative size-(--size-icon-lg) rounded-full border-2 bg-card p-0", RING[state])}
         data-node-satellite={checker.worker.agent}
         data-checker-state={state}

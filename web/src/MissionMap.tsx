@@ -462,7 +462,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", device && "flex-wrap")} data-node-run={run?.from ?? "none"}>
           {run || device ? (
             <span className="flex min-w-0 max-w-full items-center gap-xxs">
-              {worker?.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}
+              {/* What the worker does, on its mark's hover; the card is the one tab stop, so the mark takes no focus of its own (as the Hide mark). */}
+              {worker?.agent ? <Hint label={t("mission.role.worker")}><span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={worker.agent} profile={worker.run.profile} /></span></Hint> : null}
               {run ? <RunText run={run} /> : null}
               {device ? <>{run ? <span aria-hidden="true">·</span> : null}<MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /></> : null}
             </span>
