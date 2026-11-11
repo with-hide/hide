@@ -440,9 +440,8 @@ struct PaneState {
     /// hands starts it over.
     context_wait: Option<(u64, Instant)>,
     /// The stop whose turn's answer its session file did not hold yet when
-    /// it was read, as the stop's `state_change_seq` and the reads spent on
-    /// it against `READ_RETRY_BACKOFF`; see [`LabelWorker::await_answer`].
-    answer_unwritten: Option<(u64, u8)>,
+    /// it was read; see [`LabelWorker::await_answer`].
+    answer_unwritten: Option<AnswerWait>,
     /// The skip reasons already logged, so a cap that holds on every read
     /// (more subagent files than one read takes) is logged once.
     skip_reasons_logged: std::collections::BTreeSet<String>,
@@ -452,6 +451,22 @@ struct PaneState {
     /// The session whose waits were handed on as suggestion records, and
     /// which kinds, so a wait is sent once a session.
     waits_sent: Option<(String, Vec<&'static str>)>,
+}
+
+/// A stop read before its turn's answer was written, and the reads again it
+/// owns. The budget belongs to one session's one stop: another session or
+/// another stop starts its own, and the read it scheduled ends with it.
+#[derive(Debug)]
+struct AnswerWait {
+    /// The session the stop was read in (`PaneRecord::owner`).
+    owner: String,
+    /// The engine's `state_change_seq` of the stop.
+    stop: u64,
+    /// The reads made for it so far, counted against `FOLLOW_UP_READ` and
+    /// then `READ_RETRY_BACKOFF`.
+    spent: u8,
+    /// When its next read is due; `None` once the schedule is spent.
+    due: Option<Instant>,
 }
 
 impl PaneState {
@@ -774,6 +789,7 @@ impl LabelWorker {
                         pane.events_loaded = false;
                         pane.next_analysis_at = None;
                         pane.follow_up_at = None;
+                        pane.answer_unwritten = None;
                         pane.read_retries = 0;
                         pane.refused = None;
                         pane.needs_read = true;
@@ -809,6 +825,13 @@ impl LabelWorker {
                     // for its context afresh.
                     if status == "working" {
                         pane.context_wait = None;
+                    }
+                    // A stop waiting for its answer ends when the agent works
+                    // again or another stop comes, and its read with it.
+                    if pane.answer_unwritten.as_ref().is_some_and(|wait| {
+                        status == "working" || wait.stop != observed.state_change_seq
+                    }) {
+                        pane.answer_unwritten = None;
                     }
                     pane.agent = agent;
                     pane.status = status;
@@ -1003,6 +1026,12 @@ impl LabelWorker {
             let pane = self.panes.get_mut(&id).expect("listed above");
             if pane.follow_up_at.is_some_and(|at| now >= at) {
                 pane.follow_up_at = None;
+                pane.needs_read = true;
+            }
+            if let Some(wait) = pane.answer_unwritten.as_mut()
+                && wait.due.is_some_and(|at| now >= at)
+            {
+                wait.due = None;
                 pane.needs_read = true;
             }
             if pane.next_analysis_at.is_some_and(|at| now >= at) {
@@ -1550,6 +1579,7 @@ impl LabelWorker {
             pane.events.clear();
             pane.events_loaded = false;
             pane.next_analysis_at = None;
+            pane.answer_unwritten = None;
             pane.metadata_saved = None;
             pane.metadata_observed = None;
             pane.metadata_loaded = false;
@@ -2115,10 +2145,12 @@ impl LabelWorker {
     /// message still last, the turn's answer not yet in the file, and with
     /// nothing else moving no read would come again, so the turn's end would
     /// never be judged. Such a stop reads its session again after
-    /// `FOLLOW_UP_READ` and then on `READ_RETRY_BACKOFF`, until a read finds the answer, the agent works
-    /// again or another stop comes; past the backoff it waits for the
-    /// agent's next state change and says so once. An agent whose session is
-    /// read on a cadence of its own (`requires_native_file_proof`) needs none.
+    /// `FOLLOW_UP_READ` and then on `READ_RETRY_BACKOFF`, on a deadline of
+    /// its own ([`AnswerWait`]), until a read finds the answer, the agent
+    /// works again, another stop comes or the pane reads another session;
+    /// past the backoff it waits for the agent's next state change and says
+    /// so once. An agent whose session is read on a cadence of its own
+    /// (`requires_native_file_proof`) needs none.
     fn await_answer(&mut self, pane_id: &str, now: Instant) {
         let (Some(pane), Some(record)) = (self.panes.get_mut(pane_id), self.records.get(pane_id))
         else {
@@ -2126,17 +2158,19 @@ impl LabelWorker {
         };
         // The newest event being the operator's message is a turn whose end
         // `decide` has not judged: only an answer or an interruption ends it.
-        let unwritten = self.summaries
-            && !pane.agent.requires_native_file_proof()
-            && matches!(pane.status.as_str(), "idle" | "done")
-            && newest_user_is_last(pane.events.make_contiguous());
-        if !unwritten {
+        let owner = record.owner.as_ref().filter(|_| {
+            self.summaries
+                && !pane.agent.requires_native_file_proof()
+                && matches!(pane.status.as_str(), "idle" | "done")
+                && newest_user_is_last(pane.events.make_contiguous())
+        });
+        let Some(owner) = owner else {
             pane.answer_unwritten = None;
             return;
-        }
+        };
         let seq = record.state_change_seq;
-        let spent = match pane.answer_unwritten {
-            Some((stop, spent)) if stop == seq => spent,
+        let spent = match &pane.answer_unwritten {
+            Some(wait) if wait.owner == *owner && wait.stop == seq => wait.spent,
             _ => 0,
         };
         // The answer usually lands within a second of the stop, so the first
@@ -2145,10 +2179,7 @@ impl LabelWorker {
             0 => Some(FOLLOW_UP_READ),
             spent => READ_RETRY_BACKOFF.get(spent - 1).copied(),
         };
-        if let Some(wait) = wait {
-            let due = now + wait;
-            pane.follow_up_at = Some(pane.follow_up_at.map_or(due, |at| at.min(due)));
-        } else if usize::from(spent) == READ_RETRY_BACKOFF.len() + 1 {
+        if wait.is_none() && usize::from(spent) == READ_RETRY_BACKOFF.len() + 1 {
             crate::diagnostic!(json!({
                 "component": "labels",
                 "kind": "turn_end.unwritten",
@@ -2159,7 +2190,12 @@ impl LabelWorker {
                 "message": "A stopped turn's answer never reached its session file; its end waits for the agent's next state change",
             }));
         }
-        pane.answer_unwritten = Some((seq, spent.saturating_add(1)));
+        pane.answer_unwritten = Some(AnswerWait {
+            owner: owner.clone(),
+            stop: seq,
+            spent: spent.saturating_add(1),
+            due: wait.map(|wait| now + wait),
+        });
     }
 
     /// A failed reread cannot certify the previous native wait for this state.
@@ -2229,6 +2265,7 @@ impl LabelWorker {
                 pane.events.clear();
                 pane.events_loaded = false;
                 pane.claimed_submit = None;
+                pane.answer_unwritten = None;
             }
             self.waiting.retain(|id| id != pane_id);
             self.dirty |= changed;

@@ -5359,6 +5359,45 @@ fn stopped_before_its_answer(
     (path, done)
 }
 
+/// The agent writes the turn's answer to its session file.
+fn write_answer(path: &Path, session_id: &str, text: &str) {
+    let answer = json!({"type":"assistant","sessionId":session_id,
+        "timestamp":"2026-10-01T00:00:09Z",
+        "message":{"role":"assistant","content":[{"type":"text","text":text}]}});
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    use std::io::Write;
+    writeln!(file, "{answer}").unwrap();
+}
+
+/// The row once the turn's end is judged a question. The end waits for its
+/// ledger context, which is asked again a quarter second on, so the clock is
+/// moved on until the question is shown.
+fn judged_question(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    agent: &ObservedAgent,
+) -> AgentLabel {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(label) = shown(worker, agent).filter(|label| label.question) {
+            return label;
+        }
+        assert!(Instant::now() < deadline, "the turn's end was not judged");
+        let _ = woken.recv_timeout(Duration::from_millis(200));
+        worker.drain(Instant::now(), unix_now_ms());
+        worker.tick(Instant::now() + Duration::from_secs(1));
+    }
+}
+
+/// Moves the clock past every read the stop scheduled, one at a time.
+fn spend_answer_reads(worker: &mut LabelWorker, woken: &Receiver<()>) {
+    let backoff = super::worker::READ_RETRY_BACKOFF;
+    for _ in 0..backoff.len() + 3 {
+        worker.tick(Instant::now() + backoff[backoff.len() - 1]);
+        settle(worker, woken);
+    }
+}
+
 /// 2026-11-11: a stop read before the agent wrote its answer found the
 /// operator's message last, and nothing read the session again, so the
 /// question the turn ended on never reached the operator.
@@ -5369,15 +5408,7 @@ fn a_stop_read_before_the_answer_is_written_reads_again_and_judges_the_end() {
     let (path, done) = stopped_before_its_answer(&harness, &mut worker, &woken, "late");
     let reads = source.reads.load(Ordering::SeqCst);
 
-    let answer = json!({"type":"assistant","sessionId":"native-late",
-        "timestamp":"2026-10-01T00:00:09Z",
-        "message":{"role":"assistant","content":[{"type":"text","text":"A와 B 중 고르세요"}]}});
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap();
-    use std::io::Write;
-    writeln!(file, "{answer}").unwrap();
+    write_answer(&path, "native-late", "A와 B 중 고르세요");
     harness
         .backend
         .answer("배포 방식 결정 작업", "question", "A/B 선택");
@@ -5385,15 +5416,7 @@ fn a_stop_read_before_the_answer_is_written_reads_again_and_judges_the_end() {
     settle(&mut worker, &woken);
     assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
 
-    // The end waits for its ledger context, asked again a quarter second on.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !shown(&worker, &done).is_some_and(|label| label.question) {
-        assert!(Instant::now() < deadline, "the turn's end was not judged");
-        let _ = woken.recv_timeout(Duration::from_millis(200));
-        worker.drain(Instant::now(), unix_now_ms());
-        worker.tick(Instant::now() + Duration::from_secs(1));
-    }
-    let label = shown(&worker, &done).unwrap();
+    let label = judged_question(&mut worker, &woken, &done);
     assert_eq!(label.expected_reply.as_deref(), Some("A/B 선택"));
     assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
 }
@@ -5410,12 +5433,7 @@ fn a_stop_whose_answer_never_lands_stops_reading_at_the_cap() {
     let reads = source.reads.load(Ordering::SeqCst);
     let backoff = super::worker::READ_RETRY_BACKOFF;
 
-    let ((), diagnostics) = crate::diagnostics::capture(|| {
-        for _ in 0..backoff.len() + 3 {
-            worker.tick(Instant::now() + backoff[backoff.len() - 1]);
-            settle(&mut worker, &woken);
-        }
-    });
+    let ((), diagnostics) = crate::diagnostics::capture(|| spend_answer_reads(&mut worker, &woken));
 
     assert_eq!(
         source.reads.load(Ordering::SeqCst),
@@ -5430,6 +5448,132 @@ fn a_stop_whose_answer_never_lands_stops_reading_at_the_cap() {
     assert_eq!(unwritten[0]["pane_id"], "w1:p1");
     assert_eq!(unwritten[0]["session_id"], "native-late");
     assert_eq!(unwritten[0]["state_change_seq"], 5);
+}
+
+/// The reads a stop is owed belong to its session: a pane that now reads
+/// another session at the same engine state starts that session's own
+/// budget, and a read of the old session that lands late changes nothing.
+#[test]
+fn another_session_in_the_pane_gets_its_own_answer_reads() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    let _ = stopped_before_its_answer(&harness, &mut worker, &woken, "first");
+    spend_answer_reads(&mut worker, &woken);
+
+    // A read of the first session is still in flight when the pane moves on.
+    source.hold();
+    let held = source.reads.load(Ordering::SeqCst);
+    worker.read_again(&["w1:p1".to_owned()]);
+    worker.tick(Instant::now());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while source.reads.load(Ordering::SeqCst) == held {
+        assert!(
+            Instant::now() < deadline,
+            "the first session's read did not start"
+        );
+        std::thread::yield_now();
+    }
+    let path = harness.session("second", "native-second", &[("user", "어디에 올릴까?")]);
+    let done = agent(&path, "done", 5);
+    harness.backend.begin("업로드 위치 결정 작업");
+    observe(&mut worker, &done);
+    source.release();
+    settle(&mut worker, &woken);
+    let reads = source.reads.load(Ordering::SeqCst);
+    assert_eq!(
+        reads,
+        held + 2,
+        "the late read, then the second session's own"
+    );
+
+    write_answer(&path, "native-second", "S3와 GCS 중 고르세요");
+    harness
+        .backend
+        .answer("업로드 위치 결정 작업", "question", "S3/GCS 선택");
+    worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
+    settle(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+    let label = judged_question(&mut worker, &woken, &done);
+    assert_eq!(label.expected_reply.as_deref(), Some("S3/GCS 선택"));
+}
+
+/// The read a stop scheduled ends with the stop: the answer found by another
+/// read, the agent working again, or another stop leaves no read behind it.
+#[test]
+fn a_stop_s_read_ends_when_the_stop_does() {
+    let mut extra = Vec::new();
+    for case in ["answer read", "working again", "another stop"] {
+        let harness = Harness::new();
+        let (mut worker, woken, source, _links) = harness.linked_worker();
+        let (path, done) = stopped_before_its_answer(&harness, &mut worker, &woken, "ends");
+        let reads = source.reads.load(Ordering::SeqCst);
+        match case {
+            "answer read" => {
+                write_answer(&path, "native-late", "A와 B 중 고르세요");
+                harness
+                    .backend
+                    .answer("배포 방식 결정 작업", "question", "A/B 선택");
+                worker.read_again(&["w1:p1".to_owned()]);
+                worker.tick(Instant::now());
+                settle(&mut worker, &woken);
+            }
+            "working again" => {
+                write_answer(&path, "native-late", "A와 B 중 고르세요");
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap();
+                use std::io::Write;
+                let next = json!({"type":"user","sessionId":"native-late",
+                    "timestamp":"2026-10-01T00:00:10Z","origin":{"kind":"human"},
+                    "message":{"role":"user","content":"A로 해줘"}});
+                writeln!(file, "{next}").unwrap();
+                harness.backend.begin("배포 방식 결정 작업");
+                observe(
+                    &mut worker,
+                    &ObservedAgent {
+                        status: Some("working".to_owned()),
+                        state_change_seq: 6,
+                        ..done.clone()
+                    },
+                );
+                settle(&mut worker, &woken);
+            }
+            _ => {
+                write_answer(&path, "native-late", "A와 B 중 고르세요");
+                harness
+                    .backend
+                    .answer("배포 방식 결정 작업", "question", "A/B 선택");
+                observe(
+                    &mut worker,
+                    &ObservedAgent {
+                        state_change_seq: 7,
+                        ..done.clone()
+                    },
+                );
+                settle(&mut worker, &woken);
+            }
+        }
+        assert_eq!(
+            source.reads.load(Ordering::SeqCst),
+            reads + 1,
+            "{case}: its own read"
+        );
+        // Reads past the stop's own, by the time its schedule would have
+        // read again.
+        worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ + Duration::from_secs(1));
+        settle(&mut worker, &woken);
+        extra.push((case, source.reads.load(Ordering::SeqCst) - reads - 1));
+    }
+    assert_eq!(
+        extra,
+        [
+            ("answer read", 0),
+            ("working again", 0),
+            ("another stop", 0)
+        ],
+        "a stop's scheduled read ended with it"
+    );
 }
 
 /// Takes the worker's results until it settles and says whether any of them
