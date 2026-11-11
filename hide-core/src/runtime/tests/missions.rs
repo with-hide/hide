@@ -10812,3 +10812,63 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
     .unwrap_err();
     assert!(refused.contains("mission_external_invalid"), "{refused}");
 }
+
+/// A full delivery ledger keeps an open mission's ended worker and may drop
+/// it once the mission is closed (`coordination::room`): the closed
+/// mission's map still draws, the node keeping its worker's id with no
+/// registration behind it, as a node never bound reads.
+#[test]
+fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let mut actor = runtime.delivery_observations["sender"].actor.clone();
+    actor.pane_id = "worker".into();
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-2".into(),
+        name: Some("worker".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: "worker-session".into(),
+        instance: "worker".into(),
+        pane: "worker".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor,
+        ended: true,
+        terminal_id: None,
+        forked: false,
+    });
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .agent_id = Some("agent-2".into());
+    // Read from the book itself once it is installed, as a core reads it
+    // at launch.
+    runtime.missions.store = Some(crate::missions::MissionStore::new(
+        fixture._root.path().join("missions.json"),
+    ));
+    assert!(runtime.delivery_held().agents.contains("agent-2"));
+    runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Done;
+    assert!(!runtime.delivery_held().agents.contains("agent-2"));
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    let view = runtime
+        .mission_view_of("mission-1")
+        .expect("the closed mission's map draws");
+    let fix = view.nodes.iter().find(|node| node.key == "fix").unwrap();
+    assert_eq!(
+        (
+            fix.agent_id.as_deref(),
+            fix.agent_runtime,
+            fix.pane_id.as_deref()
+        ),
+        (Some("agent-2"), None, None)
+    );
+}
