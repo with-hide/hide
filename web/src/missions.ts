@@ -554,9 +554,9 @@ export function criterionName(line: MissionCriterion, t: TFunction<"translation"
   }
 }
 
-/** A line the Conductor skipped on its own as `Conductor가 정한 것` names it (`<line> 넘김`): a line the plan wrote by its words, the rest by kind. */
+/** A line the Conductor skipped on its own as `Conductor가 정한 것` names it (`<line> 넘김`): a line the plan wrote by its words, the rest by its kind's short name (`검사 넘김`). */
 export function skipWords(skip: MissionSkip, t: TFunction<"translation">): string {
-  const line = skip.kind === "own" || skip.kind === "defect" || skip.kind === "human" ? (skip.text ?? skip.line) : t(`mission.line.${skip.kind}`);
+  const line = skip.kind === "own" || skip.kind === "defect" || skip.kind === "human" ? (skip.text ?? skip.line) : t(`mission.line.short.${skip.kind}`);
   return t("mission.decided.skip", { line });
 }
 

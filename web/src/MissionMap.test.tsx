@@ -936,7 +936,7 @@ it("lists beside the map what the Conductor decided on its own: each skipped lin
       const row = map.q('[data-mission-summary-row="decided"]')!;
       expect(row.querySelector("dt")?.textContent).toBe("Decided by the Conductor 2");
       expect([...row.querySelectorAll("[data-mission-skip]")].map((one) => one.textContent)).toEqual([
-        "Node apiCheck command passes skipped · no check command in this repoconductor · 5m",
+        "Node apicheck skipped · no check command in this repoconductor · 5m",
         "Node apiThe OS table matches skipped · covered by c1conductor · 3m",
       ]);
       // Nothing it lists is the operator's turn.

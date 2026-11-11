@@ -224,7 +224,7 @@ it("draws the raises its Conductor has not settled as one safety net card with a
     expect([...net.querySelectorAll("[data-phone-held-step]")].map((row) => row.textContent)).toEqual(held.map((one) => `${one.title}Worker ended with work left · for 25m`));
     expect(container.querySelector('[data-phone-mission-decided="folded"]')?.textContent).toContain("Decided by the Conductor 1");
     await click('[data-phone-fold="decided:m-net"]');
-    expect(container.querySelector('[data-phone-skip="a:check"]')?.textContent).toBe("Step aCheck command passes skipped · no check command in this repoconductor · 5m");
+    expect(container.querySelector('[data-phone-skip="a:check"]')?.textContent).toBe("Step acheck skipped · no check command in this repoconductor · 5m");
     await click('[data-phone-back="missions"]');
     await click('[data-phone-mission="m-gone"]');
     expect(container.querySelector('[data-phone-safety-net="absent"] [data-phone-safety-net-head]')?.textContent).toBe("No Conductor conducts this mission · 5 stuck");
