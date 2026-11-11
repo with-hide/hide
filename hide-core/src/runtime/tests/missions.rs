@@ -11312,7 +11312,10 @@ fn a_mission_saved_with_raises_at_the_operator_restores_them_at_the_conductor() 
         let mut runtime = fixture.runtime.lock().unwrap();
         let store = MissionStore::new(fixture._root.path());
         let restored = store.restore();
-        assert!(matches!(restored, Restored::Moving(_)), "the old book reads");
+        assert!(
+            matches!(restored, Restored::Moving(_)),
+            "the old book reads"
+        );
         runtime.install_mission_store(store, restored);
         runtime.snapshot.navigator.agents = vec![conductor_row()];
         if !present {
