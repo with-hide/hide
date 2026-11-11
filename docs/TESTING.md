@@ -76,6 +76,8 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   The check does not see a wait spelled another way (a hand-written `setTimeout` promise, `Atomics.wait`), which is the same mistake and is not allowed either.
 - Wait for the readiness the next step actually depends on.
   A healthy HTTP answer is not a subscribed socket, a delivered first snapshot, or a terminal that accepts input.
+  The native `session-workflow.spec.ts` waits for the parent's raised ask carrying the child's label after the blocked-child grace introduced by #2443.
+  Its snapshot guard allows that 60-second policy interval plus the existing 30-second label budget, and its test guard adds the same interval to the existing 90-second native workflow budget; neither is a fixed delay or a grace-boundary assertion.
 - A row the snapshot shows is not a state the core has acted on.
   A pane is drawn before the engine confirms its split or close, so `splitPane` and `closePane` return once the tab's geometry line is empty (`tabGeometrySettled`), or an operation sent next starts beside it and is never answered (with-hide/hide-private#537).
   An agent's row names its session before a session pass has laid the delivery observation that lets the pane call `hide agent spawn`, so the family fixture polls the read-only `hide agent show here`, which resolves its caller the same way, before the parent spawns its child (#130).
