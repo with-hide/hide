@@ -25,7 +25,7 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, skipWords, stageWord } from "../missions";
+import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, openAttention, skipWords, stageWord } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
@@ -407,7 +407,8 @@ function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connecte
  */
 function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissionNode; kind: "hold" | "working" | "done" | "ahead" }) {
   const { t } = useInterfaceTranslation();
-  const mark = kind === "hold" ? "turn" : nodeMark(node, null);
+  // A step held by a raise its Conductor settles waits; only what the operator settles is their turn.
+  const mark = kind === "hold" ? (openAttention(mission, node)?.to === "conductor" ? "waiting" : "turn") : nodeMark(node, null);
   const detail = stepLine(mission, node, kind, t);
   // The step's review gate, as the desktop's card draws it; reached past 24 hours it says so in grey (PRD mission-human-gate B13, B22).
   const minute = useMinuteClock();
@@ -474,8 +475,11 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
   if (kind === "hold") {
     const reason = holdReason(mission, node, workerOf);
     switch (reason?.kind) {
-      case "attention":
-        return attentionReasonText(reason.attention.reason, reason.attention.pr, t);
+      case "attention": {
+        // As the desktop's summary says it: who the raise waits on, then why.
+        const why = attentionReasonText(reason.attention.reason, reason.attention.pr, t);
+        return reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ${why}` : why;
+      }
       case "worker":
         return escalationWhy(reason.escalation, t);
       case "decision":

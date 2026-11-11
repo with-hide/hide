@@ -222,6 +222,9 @@ it("draws the raises its Conductor has not settled as one safety net card with a
     const net = container.querySelector('[data-phone-safety-net="present"]')!;
     expect(net.querySelector("[data-phone-safety-net-head]")?.textContent).toBe("5 stuck items unchanged for 25m");
     expect([...net.querySelectorAll("[data-phone-held-step]")].map((row) => row.textContent)).toEqual(held.map((one) => `${one.title}Worker ended with work left · for 25m`));
+    // Under 지금 each held step waits on its Conductor, in the waiting mark, never the operator's turn.
+    expect(container.querySelector('[data-phone-step="a"] [data-phone-step-line="hold"]')?.textContent).toBe("Conductor · Worker ended with work left");
+    expect(container.querySelector('[data-phone-step="a"] [data-mark]')?.getAttribute("data-mark")).toBe("waiting");
     expect(container.querySelector('[data-phone-mission-decided="folded"]')?.textContent).toContain("Decided by the Conductor 1");
     await click('[data-phone-fold="decided:m-net"]');
     expect(container.querySelector('[data-phone-skip="a:check"]')?.textContent).toBe("Step acheck skipped · no check command in this repoconductor · 5m");
