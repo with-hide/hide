@@ -88,15 +88,22 @@ STORES = {
     "hide-core/src/local_issues.rs": (5, "the core's local issue store"),
     "hide-core/src/mission_events.rs": (
         4,
-        "the core's per-mission event logs beside missions.json, which a core move "
-        "copies; its folder is made, each log written, and an ended mission's log "
-        "deleted or swept; the same writer then writes missions.json itself, after "
-        "the logs it goes with",
+        "the core's per-mission event logs, which a core move copies; its folder "
+        "is made, each log written, and an ended mission's log deleted or swept; "
+        "the same writer then asks mission_store to write the mission files "
+        "after the logs they go with",
+    ),
+    "hide-core/src/mission_store.rs": (
+        8,
+        "the core's mission bodies and index, split from missions.json: reads "
+        "the index, sweeps orphan bodies, creates the mission folder and "
+        "atomically replaces its private files; all move with the core, "
+        "and explicit shelf reads run outside the runtime lock",
     ),
     "hide-core/src/latest_file.rs": (
         6,
         "the write and read of a core store that keeps only its latest value "
-        "(the saved GitHub answers, the panes held as a draft, the missions), "
+        "(the saved GitHub answers and the panes held as a draft), "
         "and the one copy a store keeps of the file a schema conversion read",
     ),
     "hide-core/src/diagnostics.rs": (7, "the core's own log file"),
@@ -127,9 +134,10 @@ STORES = {
         "core's state file (`hide_ai::settings`)",
     ),
     "hide-core/src/node_migration.rs": (
-        15,
+        16,
         "converts the core's own stores to node ids once, where they were "
-        "written, before any link exists (PRD core-host-node D-10)",
+        "written, before any link exists (PRD core-host-node D-10), including "
+        "listing the split mission folder's bodies and index for rewriting",
     ),
     "hide-core/src/node_migration/copy.rs": (
         61,
