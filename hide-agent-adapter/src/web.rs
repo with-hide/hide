@@ -33,6 +33,18 @@ pub struct WebAdapter {
     /// profile form's account field follows (PRD agent-profiles D-14, B3):
     /// absent for an agent Hide keeps no profiles for (D-25).
     pub account_by: Option<super::definition::By>,
+    /// How the agent's transcript shows the doorbell's line, which the shell
+    /// dims; absent for an agent that does not type the line.
+    pub bell_echo: Option<WebBellEcho>,
+}
+
+/// The echo of the doorbell's line: `prompt` is what the agent's composer
+/// begins with, which the echo repeats before the owl, and `chrome` what its
+/// own output rows begin with.
+#[derive(serde::Serialize)]
+pub struct WebBellEcho {
+    pub prompt: &'static [&'static str],
+    pub chrome: &'static [char],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -76,5 +88,12 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
             .start
             .and(super::definition::builtin_account(row.id))
             .map(|rule| rule.by),
+        bell_echo: row.bell_echo.map(|echo| WebBellEcho {
+            prompt: row
+                .composer
+                .supported()
+                .map_or(&[], |composer| composer.marker),
+            chrome: echo.chrome,
+        }),
     })
 }

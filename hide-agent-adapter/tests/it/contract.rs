@@ -57,6 +57,29 @@ fn declarations_match_independent_support_samples() {
             "{}: a bell turn must receive letters even without a tool",
             row.id
         );
+        assert_eq!(
+            row.bell_echo.is_some(),
+            row.bell,
+            "{}: an agent whose bell types the owl line declares how its transcript echoes it (`bell_echo`), and an agent with no bell declares none",
+            row.id
+        );
+        if let Some(echo) = row.bell_echo {
+            let prompt = row.composer.supported().map_or(&[][..], |c| c.marker);
+            assert!(
+                !prompt.is_empty() && prompt.iter().all(|glyph| glyph.chars().count() == 1),
+                "{}: the echo repeats the composer's prompt glyph, so the composer declares one single-character marker",
+                row.id
+            );
+            assert!(
+                !echo.chrome.is_empty()
+                    && echo
+                        .chrome
+                        .iter()
+                        .all(|c| !c.is_whitespace() && !prompt.iter().any(|g| g.starts_with(*c))),
+                "{}: chrome names the agent's own output glyphs, never a space or a prompt glyph",
+                row.id
+            );
+        }
         assert!(
             row.tool_letters.is_none() || !matches!(row.hook, HookInstall::None),
             "{}: tool letters need a hook to hand them over",

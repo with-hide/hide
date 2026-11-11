@@ -1,3 +1,4 @@
+import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
@@ -37,6 +38,12 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // The WebGL addon's own CellColorResolver is imported from source in one
+    // test (src/terminalBellLines.selection.test.ts), and it names xterm's
+    // internal modules by these two roots.
+    alias: [
+      { find: /^(browser|common)\//, replacement: `${path.resolve("node_modules/@xterm/xterm/src")}/$1/` },
+    ],
     reporters: ["default", "./e2e/unit-failure-reporter.ts"],
     globalSetup: ["./e2e/unit-node-binary.ts"],
     include: ["src/**/*.test.{ts,tsx}", "e2e/windows-sockets.unit.ts", "e2e/platform-program.unit.ts", "e2e/bounded-child.unit.ts", "e2e/close-order.unit.ts", "e2e/browser-launch.unit.ts"],

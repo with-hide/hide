@@ -116,6 +116,8 @@
   --color-terminal-magenta: var(--terminal-magenta);
   --color-terminal-cyan: var(--terminal-cyan);
   --color-terminal-white: var(--terminal-white);
+  --color-terminal-letter-text: var(--terminal-letter-text);
+  --color-terminal-letter-band: var(--terminal-letter-band);
   --color-terminal-bright-black: var(--terminal-bright-black);
   --color-terminal-bright-red: var(--terminal-bright-red);
   --color-terminal-bright-green: var(--terminal-bright-green);
@@ -516,6 +518,8 @@
   --terminal-magenta: #8a4cc2;
   --terminal-cyan: #0e7576;
   --terminal-white: #8c959f;
+  --terminal-letter-text: #2f5f78;
+  --terminal-letter-band: #e3edf1;
   --terminal-bright-black: #62686f;
   --terminal-bright-red: #a3212a;
   --terminal-bright-green: #1d6630;
@@ -622,6 +626,8 @@
   --terminal-magenta: #c99cf0;
   --terminal-cyan: #5fd0c8;
   --terminal-white: #c9cbcf;
+  --terminal-letter-text: #8fb4c8;
+  --terminal-letter-band: #1a252a;
   --terminal-bright-black: #7c7f85;
   --terminal-bright-red: #ff9da0;
   --terminal-bright-green: #a6e9ae;
@@ -668,6 +674,7 @@
   --lineage-rail: #a7b8bc;
   --terminal-black: #16262a;
   --terminal-white: #8a9ea2;
+  --terminal-letter-band: #dbe7ec;
   --terminal-bright-black: #5b6f73;
   --terminal-bright-white: #b4c4c7;
   --terminal-selection: #c9dade;
@@ -692,6 +699,7 @@
   --lineage-rail: #4a6266;
   --terminal-black: #1f3337;
   --terminal-white: #c4d3d4;
+  --terminal-letter-band: #182b32;
   --terminal-bright-black: #7b9497;
   --terminal-bright-white: #f1f6f5;
   --terminal-selection: #26444a;

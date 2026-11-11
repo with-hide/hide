@@ -369,6 +369,10 @@ The doorbell submits one line through the engine's prompt operation: `🦉 <writ
 🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
 
+A pane shows the line, and the rows the agent wraps it onto, as blue-grey words on a pale band ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#the-doorbells-lines-in-a-terminal)).
+How the agent echoes it is the adapter's declaration: the glyph its composer begins with (`composer.marker`) comes before the owl, and `BellEcho::chrome` names the marks its own output rows begin with, which end a wrapped line.
+Every agent whose `bell` types the line declares a `bell_echo` and no other does, which `hide-agent-adapter`'s contract test holds, so a new bell target that has not said how it echoes the line fails there rather than showing a bright letter; the web shell reads the projection in `contracts/agent-adapters.json`.
+
 The kind and the count are worded in the operator's interface language, the one Hide AI writes in (`Runtime::interface_language`: the language chosen in Settings, else this machine's primary language read once at launch, else English), which the doorbell reads with the recipient's connector under the runtime's lock from state the runtime holds, with no I/O.
 
 | Kind | en | ko | zh-CN | ja |

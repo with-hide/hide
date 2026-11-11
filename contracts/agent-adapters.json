@@ -80,7 +80,16 @@
       ]
     ],
     "hook_kind": "hook",
-    "account_by": "folder"
+    "account_by": "folder",
+    "bell_echo": {
+      "prompt": [
+        "❯"
+      ],
+      "chrome": [
+        "⏺",
+        "⎿"
+      ]
+    }
   },
   {
     "usage": {
@@ -166,7 +175,18 @@
       ]
     ],
     "hook_kind": "hook",
-    "account_by": "folder"
+    "account_by": "folder",
+    "bell_echo": {
+      "prompt": [
+        "›"
+      ],
+      "chrome": [
+        "•",
+        "└",
+        "├",
+        "│"
+      ]
+    }
   },
   {
     "usage": {
@@ -255,7 +275,18 @@
       ]
     ],
     "hook_kind": "hook",
-    "account_by": "folder"
+    "account_by": "folder",
+    "bell_echo": {
+      "prompt": [
+        "❯",
+        ">"
+      ],
+      "chrome": [
+        "◆",
+        "◈",
+        "┃"
+      ]
+    }
   },
   {
     "usage": {
@@ -343,7 +374,8 @@
       ]
     ],
     "hook_kind": "plugin",
-    "account_by": "folder"
+    "account_by": "folder",
+    "bell_echo": null
   },
   {
     "usage": {
@@ -427,7 +459,8 @@
     "program": "pi",
     "full_access": [],
     "hook_kind": "extension",
-    "account_by": "folder"
+    "account_by": "folder",
+    "bell_echo": null
   },
   {
     "usage": {
@@ -515,7 +548,8 @@
       ]
     ],
     "hook_kind": "extension",
-    "account_by": "name"
+    "account_by": "name",
+    "bell_echo": null
   },
   {
     "usage": {
@@ -607,6 +641,7 @@
       ]
     ],
     "hook_kind": "hook",
-    "account_by": "none"
+    "account_by": "none",
+    "bell_echo": null
   }
 ]
