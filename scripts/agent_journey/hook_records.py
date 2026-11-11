@@ -7,10 +7,10 @@ hands it `HIDE_STATE_DIR`), keeps them in `<state>/agent-hooks`, and the
 helper that wrote them composes the installation that started its pane into
 that folder, so a helper's records sit under `<state>/agent-hooks/installs/
 <mark>`. The candidate is an app package (`cli.py::package`), whose panes
-name the app installation, so its record is in the folder itself; a run that
-used a build placed under a helper root would find it under the mark instead,
-and the folder is searched one level further for that case rather than read
-as absent.
+name the app installation, so its record is in the folder itself. A reader
+that asks for another installation reads that installation's own mark and
+never another one's: a pane id is reused across installations, so a name
+match under some other mark is not this run's cause.
 
 The run reads them there in local and in CI mode alike, so a hook whose
 records folder refuses a write is a sentence in the cell that needed it
@@ -63,21 +63,21 @@ def last_failure(runtime, install=None):
     """The hook's last report outcome for `install`'s panes, as the hook
     itself recorded it.
 
+    Only that installation's own folder is read, by the same rule the Rust
+    route applies (`route::pane_records_at`): the folder itself for the app or
+    a pane that names no installation, `installs/<mark>` below it for any
+    other. A pane id is reused across installations, so a name match cannot
+    tell whose record it is that way, and another installation's failure is
+    not this run's cause: the Rust reader answers absence in that case too
+    (`records_route::another_installations_failure_record_is_not_this_daemons`).
+    Nothing there is absence.
+
     The file holds the current state, not the history: the next report that
     gets through removes it. A file that cannot be read back is reported as
-    an outcome of its own rather than read as "nothing failed". A record the
-    app's folder does not hold is looked for under each installation's own
-    folder, so a run whose helper wrote under its mark is read rather than
-    answered as absent.
+    an outcome of its own rather than read as "nothing failed".
     """
-    candidates = [folder(runtime, install)]
-    if install in (None, "", APP_INSTALL):
-        candidates += [path for path in (root(runtime) / "installs").glob("*") if path.is_dir()]
-    for directory in candidates:
-        answer = _read(directory / "last-report-failure.json")
-        if answer is not _ABSENT:
-            return answer
-    return None
+    answer = _read(folder(runtime, install) / "last-report-failure.json")
+    return None if answer is _ABSENT else answer
 
 
 _ABSENT = object()

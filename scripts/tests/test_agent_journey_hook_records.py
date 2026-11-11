@@ -75,20 +75,30 @@ class Records(unittest.TestCase):
             self.assertEqual(hook_records.folder(runtime(root), "root:/helper"),
                              base / "installs" / mark)
 
-    def test_a_record_under_a_helpers_mark_is_named_for_the_app_run(self):
-        # The journey starts the candidate as a package, whose panes name the
-        # app; a run whose helper wrote under its mark is read one level
-        # further rather than answered as absent (the reason the search exists).
+    def test_another_installations_record_is_never_read_as_the_app_runs_cause(self):
+        # A pane id is reused across installations, so the presence of a record
+        # under some other mark says nothing about the app's panes. Only the
+        # candidate's own folder is read (`route::pane_records_at`), and the
+        # Rust reader answers absence in this case too
+        # (`records_route::another_installations_failure_record_is_not_this_daemons`).
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            folder = hook_records.folder(runtime(root), "root:/helper")
+            folder = hook_records.folder(runtime(root), "root:/other-helper")
             folder.mkdir(parents=True)
             (folder / "last-report-failure.json").write_text(json.dumps(
                 {"pane_id": "h4:p2", "agent": "claude-code", "event": "SessionStart",
-                 "error": "denied", "at_unix_ms": 1, "kind": "record"}))
+                 "error": "other helper record denied", "at_unix_ms": 1, "kind": "record"}))
+            # The app run's own folder holds nothing, so the cause is absence.
+            cause = hook_records.identity_cause(runtime(root), "h4:p2")
+            self.assertTrue(cause.startswith("no_hook_outcome: "), cause)
+            self.assertIn(str(root / "state" / "agent-hooks"), cause)
+            self.assertNotIn("other helper record denied", cause)
+            self.assertIsNone(hook_records.last_failure(runtime(root)))
+            self.assertIsNone(hook_records.pane_cause(runtime(root), "h4:p2"))
+            # Asked for that installation, the same rule reads its own folder.
             self.assertEqual(
-                hook_records.identity_cause(runtime(root), "h4:p2"),
-                "hook_record_refused (h4:p2, SessionStart): denied")
+                hook_records.identity_cause(runtime(root), "h4:p2", "root:/other-helper"),
+                "hook_record_refused (h4:p2, SessionStart): other helper record denied")
 
     def test_a_refused_record_write_is_a_named_cause(self):
         with tempfile.TemporaryDirectory() as root:
