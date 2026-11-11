@@ -1237,6 +1237,7 @@ it("tells a node being worked from one whose worker rests and what it waits on, 
     node("busy", { status: "working", work: { state: "working" } }),
     node("rests", { status: "working", work: { state: "waiting", on: { kind: "review" } } }),
     node("gone", { status: "working", work: { state: "no_worker" } }),
+    node("stopped", { status: "working", work: { state: "stopped", cause: { kind: "limit", line: "You've hit your limit · resets 4pm" }, since_unix_ms: Date.now() - 3 * 60_000 } }),
     node("unseen", { status: "working" }),
   ];
   const map = await mount({ items: [mission({ nodes })] });
@@ -1245,6 +1246,9 @@ it("tells a node being worked from one whose worker rests and what it waits on, 
     expect(look("busy")).toEqual([null, false, "Working"]);
     expect(look("rests")).toEqual(["Waiting · review", true, "Waiting · review"]);
     expect(look("gone")).toEqual(["No worker", true, "No worker"]);
+    // A worker stopped with nothing to wait on says why first and how long ago at the end, its ring still (mission-56).
+    expect(look("stopped")).toEqual(["Stopped · usage limit · You've hit your limit · resets 4pm· 3m", true, "Stopped · usage limit · You've hit your limit · resets 4pm"]);
+    expect(card(map, "stopped").querySelector("[data-node-work]")?.getAttribute("title")).toBe("Stopped 3m ago · usage limit · You've hit your limit · resets 4pm");
     // Hide cannot see the worker's row: the card stays as it was, in progress and turning.
     expect(look("unseen")).toEqual([null, false, "In progress"]);
     expect(card(map, "rests").getAttribute("aria-label")).toContain("Waiting · review");

@@ -10362,10 +10362,14 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_fix_reason", &fixes);
             checked.insert("mission_fix_reason");
             use crate::missions::WarningKind;
-            let warnings = [WarningKind::ReviewFails, WarningKind::NoPush];
+            let warnings = [
+                WarningKind::ReviewFails,
+                WarningKind::NoPush,
+                WarningKind::Stopped,
+            ];
             for variant in warnings {
                 match variant {
-                    WarningKind::ReviewFails | WarningKind::NoPush => {}
+                    WarningKind::ReviewFails | WarningKind::NoPush | WarningKind::Stopped => {}
                 }
             }
             assert_wire(&contract, "mission_warning_kind", &warnings);
@@ -10447,11 +10451,18 @@ mod wire_enum_tests {
                 NodeWork::Waiting {
                     on: crate::missions::WaitingOn::Review,
                 },
+                NodeWork::Stopped {
+                    cause: None,
+                    since_unix_ms: 0,
+                },
                 NodeWork::NoWorker,
             ];
             for variant in &work {
                 match variant {
-                    NodeWork::Working | NodeWork::Waiting { .. } | NodeWork::NoWorker => {}
+                    NodeWork::Working
+                    | NodeWork::Waiting { .. }
+                    | NodeWork::Stopped { .. }
+                    | NodeWork::NoWorker => {}
                 }
             }
             let states: Vec<String> = work

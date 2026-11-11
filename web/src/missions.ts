@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -775,7 +775,7 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 없음`. */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `일꾼 없음`; a stop's age is the card's, at the line's end. */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
@@ -784,7 +784,21 @@ export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">
       return t("mission.work.noWorker");
     case "waiting":
       return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+    case "stopped":
+      return t("mission.work.stopped", { why: stopCauseWords(work.cause, t) });
   }
+}
+
+/**
+ * Why a node's worker stopped, in the words its card and warning say it:
+ * a usage limit with the agent's own line (its reset time when it gave
+ * one), an API error, or no report. The line is the agent's as it wrote it;
+ * an API error's line is in `full` only, since its first words say the same.
+ */
+export function stopCauseWords(cause: MissionStopCause | null | undefined, t: TFunction<"translation">, full = false): string {
+  if (!cause) return t("mission.work.stop.none");
+  if (cause.kind === "limit") return t("mission.work.stop.limit", { line: cause.line });
+  return full ? t("mission.work.stop.errorLine", { line: cause.line }) : t("mission.work.stop.error");
 }
 
 /** What a resting worker's node waits on, in one or two words. */
@@ -1024,10 +1038,17 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
   const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []);
   const first = warnings[0];
   if (!first) return null;
-  const words = (warning: MissionNodeWarning, form: "short" | "full") =>
-    warning.kind === "review_fails"
-      ? t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 })
-      : t(`mission.warning.no_push.${form}`, { minutes: String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000)) });
+  const minutes = (warning: MissionNodeWarning) => String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000));
+  const words = (warning: MissionNodeWarning, form: "short" | "full") => {
+    switch (warning.kind) {
+      case "review_fails":
+        return t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 });
+      case "no_push":
+        return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
+      case "stopped":
+        return form === "short" ? t("mission.warning.stopped.short") : t("mission.warning.stopped.full", { minutes: minutes(warning), why: stopCauseWords(warning.cause, t, true) });
+    }
+  };
   const more = warnings.length - 1;
   return {
     short: more > 0 ? `${words(first, "short")} +${more}` : words(first, "short"),

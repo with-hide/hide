@@ -437,6 +437,11 @@ pub enum WarningKind {
     /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
     /// request does not just wait on others.
     NoPush,
+    /// Its worker's program runs, its turn ended and it waits on nothing
+    /// (`mission_health::stopped_worker`), for
+    /// `mission_health::STOPPED_THAT_WARNS_MS` (hide-private
+    /// docs/missions.md, A stopped worker).
+    Stopped,
 }
 
 impl WarningKind {
@@ -444,6 +449,29 @@ impl WarningKind {
         match self {
             Self::ReviewFails => "review_fails",
             Self::NoPush => "no_push",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+/// Why a node's worker stopped, as its agent's hook reported the turn's
+/// end: the provider refused it for the account's usage limit, or failed or
+/// refused it otherwise (an API error). `line` is the agent's own first line
+/// for it, a limit's reset time included when the agent gave one. A stop
+/// with no cause has none of these.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StopCause {
+    Limit { line: String },
+    Error { line: String },
+}
+
+impl StopCause {
+    pub(crate) fn of(refused: &hide_node_link::panes::HookRefusal) -> Self {
+        let line = refused.line.clone();
+        match refused.kind {
+            hide_node_link::panes::RefusalKind::Limit => Self::Limit { line },
+            hide_node_link::panes::RefusalKind::Error => Self::Error { line },
         }
     }
 }
@@ -464,6 +492,10 @@ pub struct NodeWarning {
     /// was full, so each evaluation after asks again until it is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub told_unix_ms: Option<u64>,
+    /// A stopped worker's cause, as it stood when the warning rose, which
+    /// its letter carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<StopCause>,
 }
 
 /// What Hide itself did to a node last (D-07, D-15): the card's small Hide

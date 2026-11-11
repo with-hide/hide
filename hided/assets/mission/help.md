@@ -289,10 +289,15 @@ The same cause is raised once.
 CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, is not warned for being quiet, neither by the no-push warning nor by its watch's no-activity letter.
 A failed CI is its worker's to run again or fix, so it is no wait: put a wait on the operator that is not a merge on the map with `decide --node`, or the quiet worker is warned.
 
-Two signs that a worker is stuck are told to you first: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet).
-Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
+Three signs that a worker is stuck are told to you first: a node whose review failed twice in a row, a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet), and a node whose worker stopped for 5 minutes.
+A worker is stopped when its program runs, its turn ended and it waits on nothing: no question or approval for the operator, no person's turn, child, background task, checks or reply it waits on, no letter of its own waiting for an answer, and no report to you as its last word; and its node waits on no one either (no pull request waiting on CI, a review or the merge, no raise, no question of yours about it, no delay, hold or gate).
+Its letter says why the turn ended when the agent said: a usage limit, with the agent's own line and its reset time when it gave one, or an API error; otherwise that it ended with no report.
+Send it on with a letter saying what is left, or give the node a fresh worker; on a usage limit, send it on once the limit resets (hold the mission until then with `hide mission delay`) or give the node a fresh worker on another model.
+The map draws the node `멈춤` with its cause and how long ago from the moment it stops, before the letter.
+Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, a new push, or the stopped worker at work again takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
+While a stopped worker's warning stands, no no-push warning rises beside it and its watch sends you no no-activity letter.
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
-The two thresholds are fixed: two failed reviews in a row and 90 minutes with no push.
+The three thresholds are fixed: two failed reviews in a row, 90 minutes with no push, and 5 minutes stopped.
 
 ### A move that did not come
 

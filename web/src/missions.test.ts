@@ -683,6 +683,14 @@ describe("a node's warnings", () => {
     expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
   });
 
+  it("says a stopped worker's warning with how long and why (mission-56)", () => {
+    const stopped = { kind: "stopped" as const, from_unix_ms: 0, since_unix_ms: 6 * 60_000, told_unix_ms: 6 * 60_000, cause: { kind: "error" as const, line: "API Error: 500" } };
+    expect(warningWords(mission("m"), { ...warned, warnings: [stopped] }, t)).toEqual({
+      short: "Stopped",
+      full: ["Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"],
+    });
+  });
+
   it("says a warning told only once its letter was queued", () => {
     const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
     expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: no push for 95 minutes"]);
@@ -794,8 +802,12 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
     for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
     const states = contract.mission_node_work as string[];
-    expect(states).toEqual(["working", "waiting", "no_worker"]);
+    expect(states).toEqual(["working", "waiting", "stopped", "no_worker"]);
     expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    // A stopped worker says why: a usage limit with the agent's own line, an API error, or no report (mission-56).
+    expect(nodeWorkWords({ state: "stopped", cause: { kind: "limit", line: "resets 4pm" }, since_unix_ms: 1 }, t)).toBe("Stopped · usage limit · resets 4pm");
+    expect(nodeWorkWords({ state: "stopped", cause: { kind: "error", line: "API Error: 500" }, since_unix_ms: 1 }, t)).toBe("Stopped · API error");
+    expect(nodeWorkWords({ state: "stopped", cause: null, since_unix_ms: 1 }, t)).toBe("Stopped · no report");
     expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("No worker");
     for (const kind of ["decision", "blocked", "start", "worker", "review", "verify", "ci", "merge", "conductor"] as const) {
       expect(nodeWorkWords({ state: "waiting", on: { kind } }, t)).toMatch(/^Waiting · \S/);

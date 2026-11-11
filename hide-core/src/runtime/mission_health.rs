@@ -18,7 +18,9 @@ use serde_json::json;
 use super::Runtime;
 use crate::mission_criteria::GATE_KEY;
 use crate::mission_events::{EventKind, MissionEvent};
-use crate::mission_health::{Act, Facts, NodeFacts, WarnAct, WorkerLife, evaluate, warn_acts};
+use crate::mission_health::{
+    Act, Facts, NodeFacts, WarnAct, WorkerLife, WorkerStopped, evaluate, warn_acts,
+};
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
     MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, WOKEN_LIMIT,
@@ -567,14 +569,21 @@ impl Runtime {
     /// operator's. A mission whose device does not answer is left as it is
     /// (B29). Whether the book changed.
     pub(crate) fn warn_missions(&mut self, now: u64) -> bool {
+        let ledger = self.delivery_state().ok();
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
             if self.mission_stale(mission) {
                 continue;
             }
-            let pulls = self.mission_pulls(mission);
-            let acts = warn_acts(mission, pulls, now);
+            let sleeping = self.mission_sleeping(mission, ledger.as_deref());
+            let facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
+            let operator_waits: Vec<bool> = mission
+                .nodes
+                .iter()
+                .map(|node| self.gate_open(mission, node))
+                .collect();
+            let acts = warn_acts(mission, facts.pulls, &facts.nodes, &operator_waits, now);
             let untold = mission
                 .nodes
                 .iter()
@@ -587,13 +596,19 @@ impl Runtime {
             let mut moved = !acts.is_empty();
             for act in acts {
                 match act {
-                    WarnAct::Raise { node, kind, from } => {
+                    WarnAct::Raise {
+                        node,
+                        kind,
+                        from,
+                        cause,
+                    } => {
                         let target = &mut mission.nodes[node];
                         target.warnings.push(NodeWarning {
                             kind,
                             from_unix_ms: from,
                             since_unix_ms: now,
                             told_unix_ms: None,
+                            cause,
                         });
                         crate::diagnostic!(json!({
                             "component": "missions", "kind": "mission.warned",
@@ -854,10 +869,14 @@ impl Runtime {
                 } else {
                     Vec::new()
                 };
+                let stopped = record.and_then(|record| {
+                    self.worker_stopped(record, ledger, &mission.conductor.actor)
+                });
                 NodeFacts {
                     worker,
                     own_prs,
                     unmet,
+                    stopped,
                 }
             })
             .collect();
@@ -866,6 +885,76 @@ impl Runtime {
             nodes,
             device_stale: self.mission_stale(mission),
         }
+    }
+
+    /// The worker `record`'s row read as stopped with nothing of its own to
+    /// wait on (`mission_health::WorkerStopped`, hide-private
+    /// docs/missions.md, A stopped worker): the row says so
+    /// (`worker_row_stopped`), no letter of the worker's waits an answer, and
+    /// its last word to its Conductor is not a report.
+    pub(super) fn worker_stopped(
+        &self,
+        record: &crate::coordination::AgentRecord,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        conductor: &crate::delivery::Actor,
+    ) -> Option<WorkerStopped> {
+        let stopped = self.worker_row_stopped(record)?;
+        let own = |actor: &crate::delivery::Actor| actor.same_identity(&record.actor);
+        let letters = &ledger?.letters;
+        if letters
+            .iter()
+            .any(|letter| own(&letter.sender) && letter.waiting_answer)
+        {
+            return None;
+        }
+        let last_word = letters
+            .iter()
+            .filter(|letter| {
+                (own(&letter.sender) && letter.recipient.same_identity(conductor))
+                    || (letter.sender.same_identity(conductor) && own(&letter.recipient))
+            })
+            .max_by_key(|letter| letter.created_at_unix_ms);
+        if last_word.is_some_and(|letter| own(&letter.sender) && letter.kind == "report") {
+            return None;
+        }
+        Some(stopped)
+    }
+
+    /// What the worker `record`'s own row says of a stop, the part of
+    /// `worker_stopped` the mission views are kept by
+    /// (`rows_and_holds_digest`): its pane still runs the worker's session;
+    /// the row is stopped, asks the operator nothing, and no person's turn,
+    /// sleep, child, background task, reply or checks hold it. Stopped since
+    /// its hook's refusal when one ended the turn, since an agent waiting on
+    /// its screen for a limit's reset reads working to the engine, else since
+    /// its row last changed.
+    pub(super) fn worker_row_stopped(
+        &self,
+        record: &crate::coordination::AgentRecord,
+    ) -> Option<WorkerStopped> {
+        if record.ended || !self.device_answers(&record.machine) {
+            return None;
+        }
+        let row = self
+            .agent_row(&record.pane_on(self.node.as_str()))
+            .filter(|row| row.lineage_session == record.actor.session)?;
+        let rests = row.activity == "stopped"
+            && !matches!(row.demand.as_str(), "question" | "approval")
+            && !row.blocked
+            && row.wait.is_none()
+            && row.human_turn.is_none()
+            && row.declared_human_turn.is_none()
+            && row.sleep.is_none();
+        if !rests {
+            return None;
+        }
+        let refused = row.refused.as_ref();
+        Some(WorkerStopped {
+            since_unix_ms: refused
+                .map(|refused| refused.at_unix_ms)
+                .or(row.changed_at_unix_ms)?,
+            cause: refused.map(|refused| crate::missions::StopCause::of(&refused.refusal)),
+        })
     }
 
     /// Evaluates one mission and applies what it answers; whether the book
@@ -1878,7 +1967,9 @@ impl Runtime {
     /// Whether the mission worker `target` waits on someone else now
     /// (`mission_health::quiet_waits`, D-06, B22, with-hide/hide#2300): its
     /// watch then reads it as active, so its quiet is counted from when the
-    /// wait ends. The rule its node's quiet warning reads too.
+    /// wait ends. The rule its node's quiet warning reads too. A worker
+    /// whose node warns that it stopped waits on its Conductor, whom that
+    /// warning's letter told, so its watch adds no second letter.
     pub(crate) fn mission_worker_waits(&self, target: &crate::delivery::Actor) -> bool {
         let Ok(ledger) = self.delivery_state() else {
             return false;
@@ -1900,11 +1991,14 @@ impl Runtime {
                 mission.nodes.iter().any(|node| {
                     node.status == NodeStatus::Working
                         && node.agent_id.as_deref() == Some(agent.id.as_str())
-                        && crate::mission_health::quiet_waits(
+                        && (crate::mission_health::quiet_waits(
                             mission,
                             node,
                             self.mission_pulls(mission),
                         ) == Some(true)
+                            || node.warnings.iter().any(|warning| {
+                                warning.kind == crate::missions::WarningKind::Stopped
+                            }))
                 })
             })
     }

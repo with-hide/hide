@@ -35,7 +35,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionStopCause, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
@@ -228,6 +228,33 @@ function stalled(one: MissionNode): MissionNode {
 }
 
 /**
+ * The stopped state (mission-56): the search fix's worker stopped on an API
+ * error six minutes ago and Hide told the Conductor; the reopen fix's worker
+ * stopped on a usage limit with the reset time in the agent's own line; the
+ * screen's worker ended its turn with no report two minutes ago, not told
+ * yet; the API change's worker is back at work after the Conductor's letter.
+ */
+function stopped(one: MissionNode, now: number): MissionNode {
+  const told = (since: number, cause: MissionStopCause) => [{ kind: "stopped" as const, from_unix_ms: since, since_unix_ms: since + 5 * MINUTE, told_unix_ms: since + 5 * MINUTE, cause }];
+  switch (one.key) {
+    case "fix-1490": {
+      const cause = { kind: "error" as const, line: "API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}" };
+      return { ...one, work: { state: "stopped", cause, since_unix_ms: now - 6 * MINUTE }, warnings: told(now - 6 * MINUTE, cause) };
+    }
+    case "fix-1487": {
+      const cause = { kind: "limit" as const, line: "You've hit your limit · resets 4pm (Asia/Seoul)" };
+      return { ...one, work: { state: "stopped", cause, since_unix_ms: now - 42 * MINUTE }, warnings: told(now - 42 * MINUTE, cause) };
+    }
+    case "screen":
+      return { ...one, work: { state: "stopped", cause: null, since_unix_ms: now - 2 * MINUTE } };
+    case "api":
+      return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "working" } };
+    default:
+      return one;
+  }
+}
+
+/**
  * The steps a Conductor wrote with the plan, by node (hide-private missions.md):
  * a node ahead of its worker shows them as dashed cells, a node whose worker has
  * a plan shows that plan, and the reopen fix's worker changed one of its steps.
@@ -326,10 +353,10 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const adhoc = shown === "gate-all";
   // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
   const remote = shown === "remote" || shown === "remote-long" || shown === "stalled";
-  const state = answered || looking ? "decision" : shown === "gate-plan" ? "plan" : shown === "gate-nocond" ? "no-conductor" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || gating || adhoc || remote ? "running" : shown;
+  const state = answered || looking ? "decision" : shown === "gate-plan" ? "plan" : shown === "gate-nocond" ? "no-conductor" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || shown === "stopped" || gating || adhoc || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
-  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : one)));
+  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : shown === "stopped" ? stopped(one, now) : one)));
   const at = (key: string) => nodes.find((one) => one.key === key)!;
   if (shown === "gate-plan") {
     gated(at("cause"), "ahead", "원인 결론");
