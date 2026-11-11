@@ -11215,3 +11215,63 @@ fn a_reopened_mission_reads_missing_worker_and_checker_history_after_eviction() 
     assert_eq!(shown["checker_letters"], json!([]));
     assert!(runtime.mission_view_of("mission-1").is_some());
 }
+
+/// A replan carries existing bindings forward; only a new binding requires
+/// a live registration. Finished or evicted history cannot block unrelated
+/// plan edits or retries (the accepted reopened-history policy).
+#[test]
+fn replanning_keeps_existing_ended_or_missing_workers_and_checkers() {
+    for (worker_ended, checker_ended, missing) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        let mut planned = criteria_plan();
+        planned["plan"]["nodes"][0]["delivery"] = json!("direct");
+        command(&mut runtime, "sender", planned.clone()).unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        with_worker_and_reviewer(&mut runtime);
+        command(&mut runtime, "sender", json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "reviewer": "agent-3"}})).unwrap();
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        ledger.agents[1].ended = worker_ended;
+        ledger.agents[2].ended = checker_ended;
+        if missing {
+            ledger.agents.retain(|record| record.id == "agent-1");
+        }
+        runtime.delivery_ledger = Ok(Arc::new(ledger));
+        // Both the identical retry and an unrelated node edit succeed.
+        command(&mut runtime, "sender", planned.clone()).unwrap();
+        planned["plan"]["nodes"][1]["title"] = json!("Update the guide");
+        planned["plan"]["nodes"][1]["change"] = json!("Clarify the documentation task");
+        command(&mut runtime, "sender", planned.clone()).unwrap();
+        command(&mut runtime, "sender", planned).unwrap();
+        let (shown, _) = command(
+            &mut runtime,
+            "sender",
+            json!({"op": "show", "mission": "mission-1", "node": "fix"}),
+        )
+        .unwrap();
+        assert_eq!(shown["node"]["agent_id"], "agent-2");
+        let fix = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .node("fix")
+            .unwrap();
+        assert!(
+            fix.criteria
+                .iter()
+                .flat_map(|line| &line.checkers)
+                .any(|checker| checker.agent_id.as_deref() == Some("agent-3"))
+        );
+    }
+}

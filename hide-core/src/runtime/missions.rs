@@ -1735,15 +1735,25 @@ impl Runtime {
                     patch.verifier.as_deref(),
                     patch.agent_id.as_ref().and_then(Option::as_deref),
                 ];
-                // An agent from another machine is bound only where a spawn
-                // for this node would start it; one it holds already stays.
+                // A new binding requires a live registration. Existing
+                // bindings, including a replan's history, remain valid.
+                // Another machine is admitted only where a spawn for this
+                // node would start it.
                 let held = &current.nodes[index];
                 for id in named.into_iter().flatten() {
-                    if held.agent_id.as_deref() != Some(id)
-                        && !Self::checks_node(held, id)
-                        && let Some(machine) = self.registered_elsewhere(current, id)?
-                    {
-                        self.admit_elsewhere(current, &machine, Some(held))?;
+                    if held.agent_id.as_deref() != Some(id) && !Self::checks_node(held, id) {
+                        let ledger = self.delivery_state()?;
+                        let record = ledger
+                            .agents
+                            .iter()
+                            .find(|record| record.id == id)
+                            .ok_or("agent_unavailable")?;
+                        if record.ended {
+                            return Err("agent_ended".into());
+                        }
+                        if record.machine != current.device_id {
+                            self.admit_elsewhere(current, &record.machine, Some(held))?;
+                        }
                     }
                 }
                 let mut bound = current.nodes[index].clone();
@@ -2922,19 +2932,15 @@ impl Runtime {
     }
 
     /// The machine registration `id` runs on, when the ledger has it on
-    /// another machine than `mission`'s. A new binding must name a live
-    /// registration; already bound identities skip this check on replay.
+    /// another machine than `mission`'s. A replan retains existing ended
+    /// or missing history; only new bindings require a live registration.
     fn registered_elsewhere(&self, mission: &Mission, id: &str) -> Result<Option<String>, String> {
-        let ledger = self.delivery_state()?;
-        let record = ledger
+        Ok(self
+            .delivery_state()?
             .agents
             .iter()
-            .find(|record| record.id == id)
-            .ok_or("agent_unavailable")?;
-        if record.ended {
-            return Err("agent_ended".into());
-        }
-        Ok((record.machine != mission.device_id).then(|| record.machine.clone()))
+            .find(|record| record.id == id && record.machine != mission.device_id)
+            .map(|record| record.machine.clone()))
     }
 
     /// The missions whose Conductor's session is one of `sessions`
