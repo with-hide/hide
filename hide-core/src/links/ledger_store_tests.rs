@@ -2680,6 +2680,7 @@ fn a_project_past_the_session_limit_is_summarized_by_its_newest_sessions() {
             missed: vec![NewMissedWork {
                 kind: MissedKind::Ask,
                 text: "Q4 범위를 정해 주세요".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
