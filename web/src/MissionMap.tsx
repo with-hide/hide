@@ -418,7 +418,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
         ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
-        ...(holdLine ? [holdLine] : []),
+        ...(holdLine ? [holdLine.full] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
@@ -453,11 +453,12 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {doingLine}
         </span>
       ) : null}
-      {/* A node its Conductor holds back says why and how long in grey under the title, with the pause mark the list's `⏸N` uses. */}
+      {/* A node its Conductor holds back says why in grey under the title, cut when it runs long, and keeps how long it still holds whole at the line's end (operator decision 2026-11-11). */}
       {holdLine ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={holdLine} data-node-hold="true">
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={holdLine.full} data-node-hold="true">
           <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="min-w-0 truncate">{holdLine}</span>
+          <span className="min-w-0 truncate">{holdLine.why}</span>
+          {holdLine.left ? <span className="shrink-0 whitespace-nowrap" data-node-hold-left="true">· {holdLine.left}</span> : null}
         </span>
       ) : null}
       {humanLine ? (
@@ -603,15 +604,20 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
   );
 }
 
-/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
-/** A held node's line: why, and how long it still holds while the core has not lifted it yet. */
-function useHoldWords(hold: MissionNodeHold | null): string | null {
+/** A held node's line: why first, then how long it still holds while the core has not lifted it yet; `full` is the whole sentence for the hover and the card's name. */
+function useHoldWords(hold: MissionNodeHold | null): { why: string; left: string | null; full: string } | null {
   const { t } = useInterfaceTranslation();
   const left = useRemaining(hold?.until_unix_ms);
   if (!hold) return null;
-  return left && left !== "past" ? t("mission.holdLeft", { why: hold.why, left: left.text }) : t("mission.hold", { why: hold.why });
+  const still = left && left !== "past" ? left.text : null;
+  return {
+    why: t("mission.hold", { why: hold.why }),
+    left: still,
+    full: still ? t("mission.holdLeft", { why: hold.why, left: still }) : t("mission.hold", { why: hold.why }),
+  };
 }
 
+/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
 function DelayLine({ line, until }: { line: string; until: number | null | undefined }) {
   const { t } = useInterfaceTranslation();
   const left = useRemaining(until);

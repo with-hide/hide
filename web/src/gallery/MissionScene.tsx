@@ -444,7 +444,7 @@ function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest
   }
   const node = mission.nodes.find((one) => one.status === "planned") ?? mission.nodes[mission.nodes.length - 1]!;
   if (shown === "hold") {
-    node.hold = { why: "아침에 실기기로 확인", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE };
+    node.hold = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE };
     return { mission, rest };
   }
   node.attention = { reason: "not_started", pr: null, to: "operator", since_unix_ms: now - 31 * MINUTE, on_row: false, item: true, choices: ["leave", "drop"] };
