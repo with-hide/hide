@@ -291,6 +291,12 @@ pub struct NodeView {
     /// stands (PRD mission-human-gate D-09); absent for a node without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<super::mission_gates::GateView>,
+    /// Who merges its pull request and where that merge stands (PRD
+    /// mission-destination D-10, D-35, D-45): the `👤` station, the
+    /// second-line strip and the operator's turn read it. Absent for a node
+    /// that is no change delivered by pull request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<super::mission_landing::NodeMerge>,
 }
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
@@ -483,6 +489,12 @@ pub struct NodePrView {
     pub number: u32,
     pub state: Option<PrState>,
     pub url: Option<String>,
+    /// The branch it merges into, as GitHub last answered (PRD
+    /// mission-destination D-14): the destination, the lower pull
+    /// request's branch of a stack, or another base. Absent while GitHub
+    /// has not answered for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// The mission's safety net as its card draws it (`MissionView::safety_net`).
@@ -4116,6 +4128,7 @@ impl Runtime {
                                 PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                             }),
                             url: pull.map(|pull| pull.url.clone()),
+                            base: pull.map(|pull| pull.base_branch.clone()),
                         }
                     })
                     .collect();
@@ -4225,6 +4238,11 @@ impl Runtime {
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),
+                    merge: super::mission_landing::node_merge(
+                        mission,
+                        node,
+                        github.is_some_and(|pulls| crate::mission_health::merge_ready(node, pulls)),
+                    ),
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
@@ -4556,10 +4574,13 @@ impl Runtime {
 impl Runtime {
     /// Lays each device's missions that are their own Needs You item on that
     /// device's scope, oldest first, so its Needs You number counts them: a
-    /// mission whose safety net holds, and one with a raise only the
-    /// operator settles that no Conductor or worker row carries (B14). One
-    /// per mission, however many nodes it holds. Run after the mission
-    /// views, which decide `on_row` and the safety net.
+    /// mission whose safety net holds, one with a raise only the operator
+    /// settles that no Conductor or worker row carries (B14), and one with a
+    /// ready pull request its plan left to the operator to merge (PRD
+    /// mission-destination D-11, D-22; `MergeStep::Due`, never a scope `pr`
+    /// mission's), waited on since its node was done. One per mission,
+    /// however many nodes it holds. Run after the mission views, which
+    /// decide `on_row`, the safety net and the merge.
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
@@ -4570,6 +4591,7 @@ impl Runtime {
                 .filter_map(|node| node.attention.as_ref())
                 .filter(|attention| attention.item)
                 .map(|attention| attention.since_unix_ms)
+                .chain(mission.nodes.iter().filter_map(merge_due_since))
                 .chain(mission.safety_net.as_ref().map(|net| net.since_unix_ms))
                 .min();
             if let Some(since) = oldest {
@@ -4588,6 +4610,16 @@ impl Runtime {
             .collect();
         self.agent_scope_cache.note_mission_asks(asks) && self.refresh_agent_scopes()
     }
+}
+
+/// Since when `node`'s merge has been the operator's turn: from its finish,
+/// which a ready pull request the operator merges makes (`MergeStep::Due`);
+/// none for a node whose merge is not due.
+fn merge_due_since(node: &NodeView) -> Option<u64> {
+    node.merge
+        .as_ref()
+        .filter(|merge| merge.state == super::mission_landing::MergeStep::Due)
+        .map(|_| node.finished_at_unix_ms.unwrap_or_default())
 }
 
 /// Whether a node of a closed `mission` may wait on the operator: any raise

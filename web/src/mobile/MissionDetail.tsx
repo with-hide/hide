@@ -24,7 +24,7 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, openAttention, skipWords, stageWord } from "../missions";
+import { DECISION_VIEWS_SHOWN, mergePull, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, openAttention, skipWords, stageWord } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { progress, stepRail, workerOf, type RailStep, type StepKind } from "./missionModel";
@@ -373,6 +373,8 @@ function Step({ mission, step, first, last, together }: { mission: PhoneMission;
   // A raise the Conductor settles is waiting, not the operator's turn.
   const mark = kind === "hold" ? (openAttention(mission, node)?.to === "conductor" ? "waiting" : "turn") : nodeMark(node, null);
   const detail = stepLine(mission, step, t);
+  const merging = node.landing?.state === "left" && node.landing.action === "merge";
+  const pr = merging ? mergePull(node) : { number: node.pr, state: node.pr_state, more: 0 };
   // The step's review gate, as the desktop's card draws it; reached past 24 hours it says so in grey (PRD mission-human-gate B13, B22).
   const minute = useMinuteClock();
   const long = gateWaitedLong(node.gate, minute);
@@ -386,7 +388,8 @@ function Step({ mission, step, first, last, together }: { mission: PhoneMission;
         <span className={cn("flex min-w-0 flex-1 flex-col justify-center gap-xs py-sm", together && "border-l-2 border-border pl-sm")} data-phone-step-together={together ?? undefined}>
           <span className={cn("break-keep text-title wrap-anywhere", kind === "done" ? "text-subtle-foreground" : "text-foreground")}>{node.title}</span>
           <span className="flex min-w-0 flex-wrap items-center gap-sm text-body text-muted-foreground">
-            {node.pr != null ? <StepPr number={node.pr} state={node.pr_state} /> : null}
+            {pr.number != null ? <StepPr number={pr.number} state={pr.state} /> : null}
+            {pr.more > 0 ? <span>+{pr.more}</span> : null}
             {detail ? <span className="min-w-0 break-keep wrap-anywhere" data-phone-step-line={kind}>{detail}</span> : null}
             {worker ? <span className="shrink-0">· {worker}</span> : null}
           </span>
@@ -524,7 +527,11 @@ function stepLine(mission: PhoneMission, { node, kind, waits }: RailStep, t: Ret
         return null;
     }
   }
-  if (kind === "done") return node.pr_state ? t(`agentSessions.pr.${node.pr_state}`) : t(kindWord(node.kind));
+  if (node.merge?.state === "due") return t("mission.turn.mergeDue");
+  if (kind === "done") {
+    const state = node.landing?.state === "left" && node.landing.action === "merge" ? mergePull(node).state : node.pr_state;
+    return state ? t(`agentSessions.pr.${state}`) : t(kindWord(node.kind));
+  }
   return node.base_pr != null ? t("mobile.mission.after", { pr: String(node.base_pr) }) : t(stageWord(node));
 }
 

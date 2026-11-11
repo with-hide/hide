@@ -60,7 +60,7 @@ describe('what the project builds for the store', () => {
     expect(config.ios.webContentsDebuggingEnabled).toBe(false);
   });
 
-  it('leaves the notification center to the app, because Capacitor would otherwise replace the delegate that opens an agent and sends a reply', () => {
+  it('leaves the notification center to the app, because Capacitor would otherwise replace the delegate that opens an agent', () => {
     expect(JSON.parse(read('capacitor.config.json')).ios.handleApplicationNotifications).toBe(false);
   });
 

@@ -7,12 +7,12 @@ HOW TO TRY THE APP WITHOUT A COMPUTER
 4. Missions tab: a mission with its steps, a pull request per step and one decision to answer.
 5. PRs tab: sample pull requests with status and reviews. "Merge" takes one off the list; "Assign to an agent" hands it to a sample agent.
 6. In the Agents tab open the second agent under Needs You, "Tidy the install guide", and its "To look at" tab: one page made by an agent ("Install guide") and one image, shown in the app.
-7. Settings tab: language, and Notifications. Notifications are optional and off by default; iOS asks only when the user turns the switch on, and the app works fully without them. Turn it on and allow. About 2 seconds later a sample notification arrives, worded like a real one: "Address review comments", "Question · Apply all 3 review comments? · demo · fix/review", with a Reply action. Lock the phone first to see it on the lock screen.
+7. Settings tab: language, and Notifications. Notifications are optional and off by default; iOS asks only when the user turns the switch on, and the app works fully without them. Turn it on and allow. About 2 seconds later a sample notification arrives, worded like a real one: "Address review comments", "Question · Apply all 3 review comments? · demo · fix/review". Tap it to open the app. A real notification opens its conversation.
 8. "Leave demo" returns to the first screen. The host sheet (tap "Demo Mac" in the list's header) has "Connect a real computer": the QR scanner (camera permission); pairing needs a real computer.
 
 WHY THIS IS MORE THAN A WEB PAGE (4.2)
 - Encrypted push: a notification service extension in the app decrypts Apple's push on the device, so neither Apple nor our relay sees the text.
-- Reply from the notification: the action needs the phone unlocked (Face ID or passcode) and sends the reply end-to-end encrypted to the user's computer.
+- Tap a notification to open its conversation and reply in the app.
 - Pairing keys are kept in the iOS Keychain.
 - The app connects only to the relay and to Apple's push service, and has no analytics or ad tools.
 - A native QR scanner pairs the phone with a computer.

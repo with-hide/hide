@@ -151,6 +151,36 @@ final class ShellViewControllerTests: XCTestCase {
         XCTAssertEqual(ShellViewController.webFrame(in: window, keyboard: CGRect(x: 0, y: -50, width: 390, height: 900)).height, 0)
     }
 
+    /// The first page script sees the saved mode already applied, before the phone's module can load. The opposite
+    /// system appearance must not paint a light frame between the loader and its protocol page (or the reverse).
+    func testTheFirstPageScriptSeesTheStoredAppearance() throws {
+        for mode in ["dark", "light"] {
+            try """
+            <!doctype html><script>
+            localStorage.setItem('hide.phone.settings', JSON.stringify({theme:'\(mode)'}));
+            location.replace('/theme.html');
+            </script>
+            """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+            try """
+            <!doctype html><script>
+            const mode = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+            localStorage.removeItem('hide.phone.settings');
+            webkit.messageHandlers.bridge.postMessage({type:'message',pluginId:'Probe',methodName:'ping',callbackId:mode,options:{}});
+            </script>
+            """.write(to: folder.appendingPathComponent("theme.html"), atomically: true, encoding: .utf8)
+            let shell = TestShell()
+            shell.folder = folder
+            shell.overrideUserInterfaceStyle = mode == "dark" ? .light : .dark
+            let finished = expectation(description: "the first script reports its mode")
+            shell.probe.onPing = { actual in XCTAssertEqual(actual, mode); finished.fulfill() }
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+            window.rootViewController = shell
+            window.makeKeyAndVisible()
+            retained.append(contentsOf: [shell, window])
+            wait(for: [finished], timeout: 30)
+        }
+    }
+
     /// The phone's secret is only for the app's own main frame: a sandboxed frame, which is what agent-made HTML runs
     /// in, and a frame of the app's own origin both ask the Keychain plugin for an item and are never heard; the main
     /// frame is. Take the gate out of `ShellViewController` and the frames' calls arrive, and this fails.

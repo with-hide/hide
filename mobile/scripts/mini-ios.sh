@@ -24,8 +24,7 @@ bundle_id=me.grab.hide.ios
 # One folder (about 0.5 GB) and one simulator per branch built here: past this many other branches the build refuses
 # and says what to remove, because the machine runs other work and nothing prunes a branch it does not own.
 max_other_branches=4
-# The simulator build is arm64 only: the build machine is Apple silicon, and the relay library is built for the two arm64
-# targets (a device and a simulator), so an x86_64 simulator slice has nothing to link.
+# The simulator build targets the build machine's Apple silicon.
 # Ad-hoc signed, not unsigned: the simulator gives the Keychain only to an app that carries its entitlements, which an
 # unsigned build does not (the Keychain answers -34018). No account or certificate is involved; release signing is the release workflow's.
 signing=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES)
@@ -34,6 +33,8 @@ settle=${HIDE_IOS_SETTLE:-15}
 device_line() { xcrun simctl list devices | sed -n "s/^ *$device_name (\\([0-9A-F-]*\\)) (\\([A-Za-z]*\\)).*/\\1 \\2/p" | head -1; }
 device_id() { device_line | cut -d' ' -f1; }
 
+recording=
+fixture_app=0
 created=0
 was_booted=0
 id=
@@ -41,7 +42,20 @@ id=
 found_appearance=
 # Set by `store-shots`: the status bar override and the system language it put on the simulator.
 store_touched=0
+stop_recording() {
+    if [[ -n "$recording" ]]; then
+        kill -INT "$recording" 2>/dev/null || true
+        wait "$recording" || true
+        recording=
+    fi
+}
 cleanup() {
+    # A fixture app holds SSH's forwarded connections open even when capture or launch failed. Close this run's app
+    # before any other cleanup and before the keep-simulator return; a failed terminate must preserve the first error.
+    if [[ "$fixture_app" == 1 && -n "$id" ]]; then
+        xcrun simctl terminate "$id" "$bundle_id" 2>/dev/null || true
+    fi
+    stop_recording
     if [[ -n "$found_appearance" && "$created" == 0 && -n "$id" ]]; then
         xcrun simctl ui "$id" appearance "$found_appearance" 2> /dev/null || true
     fi
@@ -77,19 +91,6 @@ ensure_device() {
         # A simulator an earlier command was told to keep is this command's to end, unless this one is told to keep it too.
         if [[ -f "$kept_marker" && "${HIDE_IOS_KEEP_SIMULATOR:-}" != 1 ]]; then created=1; fi
     fi
-}
-
-# The relay protocol library: the two static libraries built on the developer's Mac (the mini has no Rust) become
-# the xcframework the HideShell package links. Made fresh every build, so it is never older than its source.
-make_relay_framework() {
-    local relay=$base/ios/relay frameworks=$project/HideShell/Frameworks
-    [[ -f "$relay/source.json" ]] || { printf 'the relay library is missing: run scripts/build-relay-ios.sh on the developer Mac\n' >&2; exit 1; }
-    rm -rf "$frameworks/HideRelayC.xcframework"
-    mkdir -p "$frameworks"
-    xcodebuild -create-xcframework \
-        -library "$relay/aarch64-apple-ios/libhide_relay_ios.a" -headers "$relay/include" \
-        -library "$relay/aarch64-apple-ios-sim/libhide_relay_ios.a" -headers "$relay/include" \
-        -output "$frameworks/HideRelayC.xcframework"
 }
 
 # The simulator's own language and region, so what iOS draws (a notification's "now", the date) is in the shot's language
@@ -131,7 +132,7 @@ allow_notifications() {
     xcrun simctl bootstatus "$id" -b > /dev/null
     TEST_RUNNER_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcodebuild test-without-building -project "$project/App.xcodeproj" -scheme App \
         -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-        -only-testing:AppUITests "${signing[@]}"
+        -only-testing:AppUITests/AllowNotificationsUITests/testAllowTheNotificationQuestion "${signing[@]}"
 }
 
 case "$command" in
@@ -146,7 +147,6 @@ case "$command" in
         fi
         ;;
     build)
-        make_relay_framework
         build_app
         ensure_device
         # The HideShell tests run in a real web view on the simulator: they are what proves the bridge refuses a frame.
@@ -170,7 +170,6 @@ case "$command" in
         # this script on its standard input, as for `run`: HIDE_STORE_PLAN, one tab-separated line per language and shot
         # (language, file, capture kind (`notification` asks iOS's notification question first and checks the banner is in the capture), seconds a launch may take before its steps finish, Apple language, Apple locale, the debug steps), HIDE_STORE_CLOCK
         # (the page's clock) and HIDE_STORE_APPEARANCE. The app is built here, without the tests `build` runs.
-        make_relay_framework
         build_app
         ensure_device
         store_touched=1
@@ -253,7 +252,9 @@ case "$command" in
         ensure_device
         xcrun simctl bootstatus "$id" -b > /dev/null
         xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
-        xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
+        if [[ "${HIDE_IOS_JOURNEY:-}" != notification ]]; then
+            xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
+        fi
         if [[ -n "${HIDE_IOS_APPEARANCE:-}" ]]; then
             if [[ $created == 0 && ! -f "$kept_marker" ]]; then found_appearance=$(xcrun simctl ui "$id" appearance 2> /dev/null || true); fi
             xcrun simctl ui "$id" appearance "$HIDE_IOS_APPEARANCE"
@@ -262,7 +263,24 @@ case "$command" in
         # The debug build's inputs (see ShellViewController): a pairing link and taps, from variables the script was
         # sent with. `HIDE_IOS_HOME=1` shows the home screen with the icon, `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on
         # its launch screen (it starts and waits for a debugger that never comes) and captures that.
-        if [[ "${HIDE_IOS_HOME:-}" == 1 ]]; then
+        if [[ "${HIDE_IOS_RECORD:-}" == 1 ]]; then
+            rm -f "$shots/launch.mp4"
+            xcrun simctl io "$id" recordVideo --codec=h264 "$shots/launch.mp4" > "$shots/record.log" 2>&1 &
+            recording=$!
+        fi
+        # A launch can fail after starting the app. Own that possibility before asking the tool to launch it.
+        if [[ -n "${HIDE_IOS_RELAY_PORT:-}" ]]; then fixture_app=1; fi
+        if [[ -n "${HIDE_IOS_JOURNEY:-}" ]]; then
+            journey_status=0
+            case "$HIDE_IOS_JOURNEY" in
+                notification) journey=testOpenTheDeliveredNotification ;;
+                back) journey=testSwipeBackStartsOnlyAtTheEdge ;;
+                *) printf 'invalid HIDE_IOS_JOURNEY\n' >&2; exit 2 ;;
+            esac
+            xcodebuild test -project "$project/App.xcodeproj" -scheme App \
+                -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+                -only-testing:AppUITests/AllowNotificationsUITests/"$journey" "${signing[@]}" || journey_status=$?
+        elif [[ "${HIDE_IOS_HOME:-}" == 1 ]]; then
             xcrun simctl launch "$id" "$bundle_id" > /dev/null
             sleep 2
             xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
@@ -275,7 +293,9 @@ case "$command" in
         sleep "$settle"
         xcrun simctl io "$id" screenshot "$shots/run.png" 2>&1 | tail -1
         [[ "${HIDE_IOS_LAUNCH_SCREEN:-}" == 1 ]] && xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+        stop_recording
         printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
+        exit "${journey_status:-0}"
         ;;
     clean)
         id=$(device_id)

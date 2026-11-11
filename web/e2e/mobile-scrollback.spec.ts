@@ -1,0 +1,157 @@
+// Pulling older terminal output crosses the phone, daemon and real holder.
+// A component test cannot tell whether styled, soft-wrapped PTY output is
+// still available at the phone's paging boundary.
+import { devices, expect, test, type Browser, type Page } from "@playwright/test";
+import { startFixture } from "./engine-fixture";
+import { startHided, type Daemon } from "./hided-fixture";
+import { sendKeys, viewPane, withControl } from "./daemon-actions";
+import { FakeTailscale } from "./fake-tailscale";
+import { chord } from "./chords";
+import { screenshot } from "./wire";
+import { animationsFinished } from "./wait";
+
+type PhoneFixture = { fixture: Awaited<ReturnType<typeof startFixture>>; daemon: Daemon; phone: Page; rowsFrames: Record<string, unknown>[] };
+
+async function withPhone(browser: Browser, page: Page, check: (fixture: PhoneFixture) => Promise<void>): Promise<void> {
+  const fixture = await startFixture();
+  const tailscale = new FakeTailscale();
+  const context = await browser.newContext({ ...devices["iPhone 13"], locale: "ko-KR", colorScheme: "dark" });
+  let daemon: Daemon | null = null;
+  try {
+    tailscale.install(); tailscale.ready();
+    daemon = await startHided(fixture, "mobile-scrollback", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await expect(page.locator("[data-sidebar-overview]")).toBeVisible();
+    await page.keyboard.press(chord("settings"));
+    await page.locator('[data-settings-tab="mobile"]').click();
+    const mobile = page.locator("[data-mobile-tab]");
+    await mobile.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
+    await mobile.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
+    await page.locator("[data-mobile-switch]").click();
+    await expect(page.locator("[data-mobile-ready]")).toBeVisible();
+    await page.locator("[data-mobile-show-code]").click();
+    const qr = page.locator("[data-mobile-qr]");
+    await expect(qr).toBeVisible();
+    const address = (await qr.getAttribute("data-mobile-qr"))!;
+    const phone = await context.newPage();
+    const rowsFrames: Record<string, unknown>[] = [];
+    phone.on("websocket", (socket) => socket.on("framereceived", (message) => {
+      const frame = JSON.parse(String(message.payload)) as Record<string, unknown>;
+      if (frame.type === "rows") rowsFrames.push(frame);
+    }));
+    await phone.goto(`${daemon.origin}/m/${address.slice(address.indexOf("#"))}`);
+    await phone.locator("[data-phone-pair]").tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
+    await check({ fixture, daemon, phone, rowsFrames });
+  } finally {
+    await context.close(); daemon?.stop(); fixture.stop(); tailscale.remove();
+  }
+}
+
+// @platform: terminal history and screen mode come from the native pane holder.
+test("the phone reaches terminal history and explains an alternate screen", { tag: "@platform" }, async ({ browser, page }) => {
+  test.setTimeout(120_000); // wait-ok: pairing and two native agent starts precede four page reads.
+  await withPhone(browser, page, async ({ fixture, daemon, phone }) => {
+    const pane = fixture.panes[0];
+    await withControl(daemon, async (control) => {
+      viewPane(control, pane, { cols: 80, rows: 24 });
+      // Each 150-character answer occupies two desktop rows, but one phone
+      // paragraph. Cursor redraws replace the status below each answer.
+      for (let start = 0; start < 600; start += 50) {
+        const output = Array.from({ length: 50 }, (_, i) => `\x1b[2K\x1b[32mrow ${String(start + i).padStart(4, "0")} ${"answer ".repeat(20)}\x1b[0m\r\x1b[2Kworking\x1b[1G\x1b[2K`).join("");
+        sendKeys(control, pane, output);
+      }
+      sendKeys(control, pane, "NEWEST-READY\r");
+    });
+    await phone.locator(`[data-phone-agent$="|${pane}"]`).tap();
+    await phone.locator('[data-phone-view="terminal"]').tap();
+    const scroll = phone.locator("[data-phone-scrollback]");
+    const output = phone.locator("[data-phone-scrollback] pre");
+    await expect(output).toContainText("NEWEST-READY");
+    for (const lines of [400, 600, 800, 1000]) {
+      await scroll.evaluate((element) => { element.scrollTop = 0; });
+      await expect(scroll).toHaveAttribute("data-phone-scrollback", String(lines));
+    }
+    await scroll.evaluate((element) => { element.scrollTop = 0; });
+    // 1,000 physical rows include 499 complete two-row answers and the ready row.
+    await expect(output).toContainText("row 0101");
+    await expect(phone.getByText("위로 당기면 더 불러와요", { exact: true })).toHaveCount(0);
+    const hint = phone.locator("[data-phone-screen-history]");
+    await expect(hint).toHaveCount(0);
+    await screenshot(phone, "mobile-scrollback-oldest");
+    await withControl(daemon, async (control) => {
+      sendKeys(control, pane, "\x1b[?1049h\x1b[H\x1b[2JALTERNATE-SCREEN\r");
+      for (let row = 0; row < 100; row++) sendKeys(control, pane, `alternate ${row}\r`);
+      sendKeys(control, pane, "ALTERNATE-NEWEST\r");
+    });
+    await expect(output).toContainText("ALTERNATE-NEWEST");
+    await expect(output).not.toContainText("alternate 0\n");
+    await expect(phone.getByText("위로 당기면 더 불러와요", { exact: true })).toHaveCount(0);
+    await expect(hint).toHaveText("전체 화면 프로그램이라 지난 줄은 여기 없어요. 지난 내용은 대화에서 보세요.");
+    await scroll.evaluate((element) => { element.scrollTop = 0; });
+    await expect(hint).toBeInViewport();
+    expect(await hint.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+    expect(await hint.evaluate((element) => {
+      const text = element.firstChild!;
+      let offset = 0;
+      return element.textContent!.split(" ").every((word) => {
+        const range = document.createRange();
+        range.setStart(text, offset); range.setEnd(text, offset + word.length);
+        offset += word.length + 1;
+        return range.getClientRects().length === 1;
+      });
+    })).toBe(true);
+    await phone.mouse.move(0, 0);
+    await screenshot(phone, "mobile-scrollback-hint-ko-dark");
+    await phone.emulateMedia({ colorScheme: "light" });
+    await animationsFinished(phone);
+    await screenshot(phone, "mobile-scrollback-hint-ko-light");
+    await phone.evaluate(() => localStorage.setItem("hide.phone.settings", JSON.stringify({ language: "en", theme: "system" })));
+    await phone.reload();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
+    await phone.locator(`[data-phone-agent$="|${pane}"]`).tap();
+    await phone.locator('[data-phone-view="terminal"]').tap();
+    await expect(output).toContainText("ALTERNATE-NEWEST");
+    await scroll.evaluate((element) => { element.scrollTop = 0; });
+    await expect(hint).toBeInViewport();
+    await animationsFinished(phone);
+    await screenshot(phone, "mobile-scrollback-hint-en-light");
+    await phone.emulateMedia({ colorScheme: "dark" });
+    await animationsFinished(phone);
+    await screenshot(phone, "mobile-scrollback-hint-en-dark");
+    await hint.tap();
+    await expect(phone.locator("[data-phone-conversation]")).toBeVisible();
+  });
+});
+
+// @platform: the mode is read from each operating system's native pane holder.
+test("the phone updates its history explanation when only the screen mode changes", { tag: "@platform" }, async ({ browser, page }) => {
+  test.setTimeout(120_000); // wait-ok: pairing and two native agent starts precede three mode-only reads.
+  await withPhone(browser, page, async ({ fixture, daemon, phone, rowsFrames }) => {
+    const pane = fixture.panes[0];
+    await phone.locator(`[data-phone-agent$="|${pane}"]`).tap();
+    await phone.locator('[data-phone-view="terminal"]').tap();
+    const output = phone.locator("[data-phone-scrollback] pre");
+    const hint = phone.locator("[data-phone-screen-history]");
+    await withControl(daemon, async (control) => { sendKeys(control, pane, "MODE-ONLY-READY\r"); });
+    await expect(output).toContainText("MODE-ONLY-READY");
+    await withControl(daemon, async (control) => {
+      sendKeys(control, pane, "\x1b[?1049l\x1b[3J\x1b[2J\x1b[H");
+    });
+    await expect(output).toHaveText(/^\s*$/);
+    const primary = rowsFrames.at(-1)!;
+    const unchanged = (frame: Record<string, unknown>) => ({ text: frame.text, state: frame.state, lines: frame.lines, more: frame.more });
+    expect(primary.alternate_screen ?? false).toBe(false);
+    expect(primary.more).toBe(false);
+    // With no text, truncation or page demand moving, mode alone must
+    // publish a rows frame and show, then clear, the phone's explanation.
+    await withControl(daemon, async (control) => { sendKeys(control, pane, "\x1b[?1049h"); });
+    await expect(hint).toHaveCount(1);
+    expect(rowsFrames.at(-1)!.alternate_screen).toBe(true);
+    expect(unchanged(rowsFrames.at(-1)!)).toEqual(unchanged(primary));
+    await withControl(daemon, async (control) => { sendKeys(control, pane, "\x1b[?1049l"); });
+    await expect(hint).toHaveCount(0);
+    expect(rowsFrames.at(-1)!.alternate_screen ?? false).toBe(false);
+    expect(unchanged(rowsFrames.at(-1)!)).toEqual(unchanged(primary));
+  });
+});

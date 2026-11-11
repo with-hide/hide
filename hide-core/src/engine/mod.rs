@@ -141,7 +141,7 @@ pub(crate) fn same_engine(left: &SharedEngine, right: &SharedEngine) -> bool {
 }
 
 pub(crate) use answers::*;
-pub use answers::{PaneProof, PaneSession, PaneSessionKind, PaneText, ServerPong};
+pub use answers::{PaneProof, PaneRows, PaneSession, PaneSessionKind, PaneText, ServerPong};
 
 /// What `hide agent exec` reported of a profile's start
 /// (`HookCommand::AgentExec`), with the process that sent it as the pane's
@@ -437,7 +437,7 @@ pub(crate) trait Engine: Send + Sync {
     /// The last `lines` rows of a pane with soft wraps joined, escape
     /// sequences kept (a holder built before that answers the rows as
     /// drawn).
-    fn read_rows(&self, wait: Wait, pane: &str, lines: u32) -> Answer<PaneText>;
+    fn read_rows(&self, wait: Wait, pane: &str, lines: u32) -> Answer<PaneRows>;
     /// Types `text` into a pane as it is.
     fn send_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Presses `keys` in a pane, in order.
@@ -744,7 +744,7 @@ impl EngineHandle {
         pane: &str,
         lines: u32,
         timeout: Duration,
-    ) -> Result<PaneText, EngineError> {
+    ) -> Result<PaneRows, EngineError> {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 

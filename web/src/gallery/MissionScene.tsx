@@ -336,6 +336,19 @@ function gated(one: MissionNode, state: MissionGateState, look: string, extra: P
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+  // A still-open PR remains the merge target after the most recently held PR merged.
+  if (shown === "operator-merge" || shown === "pr-ready") {
+    const fixture = missionFixture("running", now);
+    const one = fixture.mission.nodes.find((node) => node.key === "api")!;
+    one.prs = [{ number: 1503, state: "mergeable", url: null }, { number: 1505, state: "merged", url: null }];
+    one.pr = 1505;
+    one.pr_state = "merged";
+    one.landing = MERGE_LEFT;
+    one.merge = { by: "operator", state: shown === "operator-merge" ? "due" : "ahead", prs: [1503], ...(shown === "operator-merge" ? { why: "DB 변경은 직접 확인" } : {}) };
+    fixture.mission.scope = shown === "operator-merge" ? "merge" : "pr";
+    fixture.mission.landing_order = [one.key];
+    return fixture;
+  }
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
   // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, unsettled 31 minutes behind the safety net; `hold`: its Conductor holds one node back for nine hours.

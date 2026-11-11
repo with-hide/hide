@@ -108,3 +108,7 @@ export const UPDATE_DISMISS_CHANNEL = "hide:update-dismiss";
 
 /** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */
 export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";
+
+/** System use, observed by the main host and replayed to its own shell. */
+export const COMPUTER_USE_CHANNEL = "hide:computer-use";
+export const COMPUTER_USE_GET_CHANNEL = "hide:computer-use-get";

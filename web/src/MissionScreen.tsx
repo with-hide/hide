@@ -38,7 +38,7 @@ import {
   type MissionGroup,
   type MissionProject,
 } from "./missionList";
-import { gatesAhead, heldNodes, missionCells, missionCounts, type TurnItem } from "./missions";
+import { mergePull, gatesAhead, heldNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
@@ -460,12 +460,16 @@ function LandingLine({ nodes, join }: { nodes: MissionNode[]; join: boolean }) {
   return (
     <span className="flex min-w-0 items-center gap-xxs overflow-hidden text-caption text-muted-foreground" data-mission-row-line={join ? "join" : "merge"}>
       <span className="shrink-0">{t(join ? "mission.turn.join" : "mission.turn.merge")}</span>
-      {nodes.map((node, index) => (
-        <span key={node.key} className="flex min-w-0 shrink-0 items-center gap-xxs">
-          {index > 0 ? <span aria-hidden="true">→</span> : null}
-          {node.pr != null && node.pr_state ? <PrMark state={node.pr_state} number={node.pr} /> : node.pr != null ? <span className="font-mono">#{node.pr}</span> : <span className="max-w-(--size-flow-title) truncate">{node.title}</span>}
-        </span>
-      ))}
+      {nodes.map((node, index) => {
+        const pr = join ? { number: node.pr, state: node.pr_state, more: 0 } : mergePull(node);
+        return (
+          <span key={node.key} className="flex min-w-0 shrink-0 items-center gap-xxs">
+            {index > 0 ? <span aria-hidden="true">→</span> : null}
+            {pr.number != null && pr.state ? <PrMark state={pr.state} number={pr.number} /> : pr.number != null ? <span className="font-mono">#{pr.number}</span> : <span className="max-w-(--size-flow-title) truncate">{node.title}</span>}
+            {pr.more > 0 ? <span>+{pr.more}</span> : null}
+          </span>
+        );
+      })}
     </span>
   );
 }

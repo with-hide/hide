@@ -19,7 +19,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, coreLog, loggedCount, openProject, sendKeys, untilLogged, withControl } from "./daemon-actions";
+import { closePane, coreLog, openProject, sendKeys, withControl } from "./daemon-actions";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
@@ -268,20 +268,6 @@ function readOf(frames: string[], pane: string): boolean | null {
 /** No push arrived past the first `count`. */
 function noPushBeyond(received: Push[], count: number): void {
   expect(received).toHaveLength(count);
-}
-
-/**
- * Runs `act`, which raises a notice the push setting must not send, and returns once the daemon has logged that it
- * skipped one for the setting, with the push list still `count` long. The daemon decides per notice, before it queues
- * any send, so the test waits for that record and not for a time in which a push would have arrived. The count is
- * taken before `act`, because one taken after can already include the record.
- */
-async function pushSkippedByMode(daemon: Daemon, received: Push[], count: number, act: () => Promise<void>): Promise<void> {
-  const skipped = { component: "mobile_push", kind: "push.skipped", reason: "mode" };
-  const before = loggedCount(daemon, skipped);
-  await act();
-  await untilLogged(daemon, skipped, before + 1, "a push skipped for the push setting");
-  noPushBeyond(received, count);
 }
 
 test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke", async ({ browser, page }) => {
@@ -535,14 +521,14 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     noPushBeyond(push.received, 1);
     await phone.locator('[data-phone-back="true"]').tap();
 
-    // B33 (only while the app is closed): nothing while the desktop is connected. The
-    // desktop then reads two, which clears its notification (B34).
+    // A browser tab reports no system activity and cannot replace desktop notices,
+    // so the pause switch still sends here. Reading two clears its notice (B34).
     await choosePush(page, "app_closed");
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await pushSkippedByMode(daemon!, push.received, 1, () => ask(fixture, daemon!, two, "앱이 열려 있을 때"));
+    await ask(fixture, daemon!, two, "브라우저가 열려 있을 때");
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2); // wait-ok: the browser-open question reaches the phone push endpoint
     await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
-    await expect.poll(() => coreLog(daemon as Daemon)).toContain('"mode":"app_closed","renderers":1');
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);
     await page.locator(`nav[data-sidebar] [data-project] [data-agent-open="${two}"]`).click();
@@ -551,8 +537,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "데스크톱이 닫혔을 때");
-    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2);
-    const closed = push.received[1]!;
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(3);
+    const closed = push.received[2]!;
     expect(closed.payload.title).toBe("Agent one");
     expect(closed.payload.state).toBe("needs_you");
     expect(closed.payload.clear).toContain(`${closed.payload.device_id}|${two}`);

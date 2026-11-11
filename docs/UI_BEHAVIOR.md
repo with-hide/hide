@@ -1023,6 +1023,9 @@ Moved to a private document: `docs/hide-ai-tool.md` in with-hide/hide-private.
 
 ## The mission screen
 
+A merge turn names the most recently held PR still open in the last GitHub read, with `+N` for the other open PRs; merged or closed PRs stay in the node history and never replace an open merge target.
+The turn card, sidebar, mission list and phone read the same open PR list (`node.merge.prs`); the closing report names all of them.
+
 Web owner: `web/src/MissionScreen.tsx`, `web/src/missionList.ts`, `web/src/components/sidebar-header.tsx`; core owner for which mission's events are sent: `hide-core/src/runtime/mission_events.rs` (`mission_shown`).
 Every mission is listed on a screen of the page's own beside the Overview and Desk, which lists the missions of the device in front on the rail, every project of it, and opens one's map beside the list; it edits no mission (PRD mission-screen D-01, D-02).
 A mission pressed anywhere else opens its map as a card in the 보기 slot of its Conductor's pane, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19).
@@ -1041,6 +1044,7 @@ Existing live missions can still close and remain loaded while that pending limi
 Older closed missions are shelved and absent from the snapshot, this screen, chips and map cards; `hide mission list` still lists their title and project with `shelved: true`, and explicit `hide mission show <id>` or `hide mission reopen --mission <id>` reads their file without retaining a separate cache.
 A row shows the mission's number, the state pill (in 내 차례 the operator's action in the hold colour with no `!`, since the group and the row's border already say it is their turn: 답하기, 편지 읽기, 막힌 곳 보기, 확인하기, 머지하기 or 합치기; a mission no Conductor holds draws no pill, since its `이어받기` button says it, while the phone, which has no button, draws `이어받기` as that row's pill), the mission's title, its one line (the question, `Conductor에게 편지 N통 대기 · <what to do>` for letters the Conductor has not got, the stuck worker's node and line, `머지 순서` with each pull request's PR mark, `걸린 일 N건 · Conductor가 아직 풀지 못했어요` for the safety net, `남은 노드 n개` or `보고만 남음` for a mission no Conductor holds, or `이 미션에 Conductor가 없어요 · 걸린 일 N건` when raises stand there, or `지금: <node>` with its worker's mark), its project (the catalog's name, else the last folder of its path), its steps as a cell per node with `n/m`, and how long it has run; it draws no device chip, since every row is the device's in front (B5, D-11).
 While a mission shows letters to its Conductor waiting (`Conductor에게 편지 N통 대기`), a worker raised only because its own letter to the Conductor is held (a draft, an approval, three bells, undelivered) is folded into that line in 내 차례 by one rule (`shownEscalation`, `web/src/missions.ts`); a worker raised for anything else keeps its own item.
+While a mission runs, a ready pull request its plan left to the operator to merge (`merge.state` `due`, PRD mission-destination D-11) stands in 내 차례 as `머지할 차례` with its node's chip, which stands the mission in the list's 내 차례 with `머지하기`, and makes the mission its own Needs You row with the line `<node> · 머지할 차례 PR #n`; a pull request the mission's scope `pr` leaves to the operator stands in none of them until the mission waits on its merges, where the merge order stands as before (D-35).
 What waits on the operator stands in 내 차례 above the map and nowhere else on the page: the summary beside the map lists it in no group of its own, and the node's card wears a thick border and ring in the hold colour (`--mission-hold`, 내 차례's colour), a dot of it on its corner and `내 차례`.
 A node raised to its Conductor is never a card of the operator's (the principle of 2026-11-11, with-hide/hide-private `docs/missions.md`): the raises its Conductor has not settled are the mission's one safety net card in 내 차례, however many nodes they hold.
 The core derives it (`safety_net` on the mission's view): it stands at once while no Conductor holds the mission, and with one once the oldest raise stood 20 minutes unsettled, counted from the later of that raise and the Conductor's arrival.
@@ -2083,7 +2087,7 @@ The app icon sums root agents in every enabled notification group across every d
 Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
 macOS draws it on the Dock once it lets Hide notify, Linux where the desktop shows launcher counts, and Windows as a dot on the taskbar button whose description gives the count.
 With both switches off nothing is sent and the app icon has no count; with Done alone on, it counts unread Done.
-The phone's push follows its own settings whatever these switches say (B36, B38).
+The phone's own settings decide whether it receives pushes; computer-use resting applies only while an attached window enables Needs You notices (Notifications).
 
 Settings > Devices keeps its own description.
 The persisted `screen_intros_seen` field remains readable for older builds; this release has no Factory introduction.
@@ -2706,8 +2710,11 @@ Each toggle sends one event and persists through the core's existing UI-state wr
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
-Its two description lines are `데스크톱 Hide가 열려 있으면 폰으로 알림을 보내지 않아요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
-On pauses phone pushes while any desktop renderer is connected (`app_closed`); Off allows them with the desktop open too (`always`).
+Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
+On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, and at least one attached desktop window has Needs You notifications enabled (`app_closed`).
+Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
+A rested notice still waiting for the operator is sent once when resting ends; an answered or withdrawn notice is discarded.
+Off always permits pushes (`always`), subject to the phone’s own receiving choice and viewing suppression.
 A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 
 ### Usage
@@ -3034,6 +3041,12 @@ A phone is told only when an agent waits on the operator’s answer, a question,
 
 ### The phone app
 
+In the iOS app, a rightward swipe from the left edge uses the visible back control: a conversation, mission or pull request returns to its list, a View returns to its Views, and the start settings and add-computer pages return through their own back action.
+An open sheet prevents a swipe from pressing a back control behind it; swipes starting inside the page keep their horizontal scrolling or panning.
+A notification cold start keeps the launch background until its agent can open, without showing the computer or agent list on the way.
+An offline, refused or unavailable connection still shows its existing recovery actions.
+The browser phone app keeps its existing navigation.
+
 A reply or quick key sent while its pane is being forked waits for that fork under the same 64 KiB and 30-second holder bounds as desktop input.
 The phone reports success only after the engine confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
 A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.
@@ -3084,6 +3097,11 @@ Cursor uses its native graph units under the same page and text bounds; a record
 OpenCode uses its own messages from its database, paged by message with the same 30-message and text bounds; every page, idle poll and copied pager proves the root session and exact checkout again, and a session rewound under the phone is read anew.
 An unavailable or changed native source falls back through the existing feature-local refusal path; no transcript is borrowed from another session and no new banner is added.
 터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, in the monospace face at the caption text size (a step under the body text, so a row keeps more of its columns on a phone, as the desktop pane's smaller terminal text does), each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
+When the holder reports an alternate screen and there are no older rows to load, the top of the terminal says quietly, `전체 화면 프로그램이라 지난 줄은 여기 없어요. 지난 내용은 대화에서 보세요.`
+Korean words in this line wrap at spaces, with a long unbroken word allowed to wrap to fit the phone.
+The line opens Conversation when that tab exists, and is plain text otherwise; it scrolls with the output, so it appears only at the top.
+Primary-screen panes and computers that do not report the screen mode show no line, regardless of the agent kind.
+Pulling the phone's output never sends input to the program or moves the desktop's view.
 볼 것 is the third tab, `대화 | 터미널 | 볼 것` (`터미널 | 볼 것` for an agent with no conversation), and it is there only while the agent has a View open now; the number of Views not seen is on it.
 The list's eye row, the 볼 것 mark, opens the detail on this tab; a row that asks a question or needs an approval, and every other row, opens on the conversation as before, and 대화 goes straight to the agent's conversation.
 The tab lists the Views the agent opened, `안 본 것 N` above `본 것 N`, newest first: a tile with the kind's icon and a dot when the View is not seen, its name, its kind (변경 내용, 문서, 이미지, 웹 화면, 파일) and how long ago it was opened.
@@ -3180,7 +3198,8 @@ Returning to On restores each computer’s actual subscription when connected, e
 An unsaved browser choice shows the existing storage-failure guidance and survives visibility changes and reopening Settings until this page closes.
 The iOS app removes this phone’s keys for every computer when turned off; removing a computer removes only that computer’s subscription or key.
 In the demo 연결된 컴퓨터 holds three rows, the sample host with its `샘플` mark, `내 컴퓨터 연결하기` and `체험 끝내기`, with the note that nothing goes to a computer under the card.
-In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
+In the demo the switch asks the same question and posts one sample notification on this phone, without actions: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
+In the iOS app a real notification tap opens its conversation, where the person can reply; long pressing a notification offers no Reply action, including the demo sample.
 The browser demo keeps its notification row as `샘플` without a receiving control; only the iOS app can post the demo’s local sample notification.
 The first screen's 언어 value reads `폰 따라가기` (the phone's own language) while no computer is connected, and `Mac 따라가기` only inside a computer; the camera view says the camera is already open (`카메라가 이미 열려 있어요. 닫고 다시 시도해 주세요.`) when another screen holds it, and keeps the permission wording for a camera that cannot be used.
 표시 has 언어 and 화면 as one-line values that open a bottom sheet to choose from, and under the card `이 폰에만 저장돼요`.

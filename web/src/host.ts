@@ -145,6 +145,8 @@ export type ExternalBridge = {
 
 export type HostBridge = {
   kind: "electron";
+  /** Replays system use once, then reports transitions only; absent on an older host. */
+  onComputerUse?(listener: (inUse: boolean) => void): () => void;
   /** The host's OS as Node names it (`process.platform`): what the OS file manager is called. */
   platform: string;
   /** Delivers each app-menu command id, a registry command's or `SETUP_COMMAND`; returns the unsubscribe. */

@@ -56,7 +56,7 @@ test("a ready Mac is one line, the QR waits for Show QR, and the phone pause swi
     await page.locator('[data-settings-tab="notifications"]').click();
     const rest = page.locator("[data-phone-push-rest]");
     await expect(rest).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByText("No phone notifications while desktop Hide is open.", { exact: true })).toBeVisible();
+    await expect(page.getByText("No phone notifications while you use your computer. After 10 minutes away, or when the screen locks, they go to your phone.", { exact: true })).toBeVisible();
     await expect(page.getByText("Choose whether to receive notifications in the phone app settings.", { exact: true })).toBeVisible();
     await rest.click();
     await expect(rest).toHaveAttribute("aria-checked", "false");

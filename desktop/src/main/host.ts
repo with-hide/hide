@@ -17,7 +17,8 @@ import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-update
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
@@ -182,6 +183,9 @@ export class DesktopHost {
   private readonly editor: Editor;
   /** This app's own updates; made at start, since electron-updater needs the app ready. */
   private updates: AppUpdates | null = null;
+  private readonly computerUse = new ComputerUse(powerMonitor, (inUse) => {
+    this.window?.webContents.send(COMPUTER_USE_CHANNEL, inUse);
+  });
 
   constructor(
     private readonly env: DesktopEnv,
@@ -235,6 +239,10 @@ export class DesktopHost {
     this.listenEditor();
     this.listenPractice();
     this.listenWake();
+    ipcMain.on(COMPUTER_USE_GET_CHANNEL, (event: IpcMainEvent) => {
+      if (this.fromShell(event)) event.sender.send(COMPUTER_USE_CHANNEL, this.computerUse.current());
+    });
+    this.computerUse.start();
     // An optional feature: a failure to set it up is the log's, and the window opens regardless.
     try {
       this.startUpdates();
@@ -261,6 +269,7 @@ export class DesktopHost {
     if (this.quitting) return;
     this.quitting = true;
     this.stopWatch();
+    this.computerUse.stop();
     this.runner.stop();
     this.permission.stop();
     this.editor.stop();

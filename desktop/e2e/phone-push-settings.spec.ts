@@ -22,7 +22,7 @@ test("phone pause defaults On and keeps Off after reopening Settings", async () 
     await page.locator('[data-settings-tab="notifications"]').click();
     const rest = page.getByRole("switch", { name: "컴퓨터를 쓰는 동안 폰 알림 쉬기", exact: true });
     await expect(rest).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByText("데스크톱 Hide가 열려 있으면 폰으로 알림을 보내지 않아요.", { exact: true })).toBeVisible();
+    await expect(page.getByText("컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.", { exact: true })).toBeVisible();
     await expect(page.getByText("알림을 받을지는 폰 앱의 설정에서 정해요.", { exact: true })).toBeVisible();
     const capture = async (name: string) => {
       await animationsFinished(page); await compositorPresents(page);

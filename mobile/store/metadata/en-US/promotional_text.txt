@@ -1,1 +1,1 @@
-The mobile companion to Hide for desktop. See which of your computer's coding agents needs you and reply from your phone. No computer yet? Try the demo.
+Hide's mobile companion. See which agent needs you, tap a notification to open its conversation, and reply in the app. No computer yet? Try the demo.

@@ -1140,7 +1140,7 @@ The receipt lives on the existing warning letters and survives daemon restart an
 The second agent warning introduces no second human notification schedule.
 An overdue letter's notification key is its ID plus the cause and sends once.
 A phone that cannot be reached is not sent to, and a failed send records a diagnostic without retry.
-The phone is skipped before any send when its desktop pause choice is on while a desktop or web shell is connected (`app_open`), Mobile is off (`mobile_off`) or no paired phone has a Web Push subscription or an iOS app registration (`no_subscription`); the first that applies is the reason, and a send that fails (a Web Push phone while the push key is missing included) or finds every subscription gone is `send_failed` or `subscription_gone`.
+The phone is skipped before any send when its desktop pause choice is on while an attached desktop host reports system input within ten minutes, unlocked and awake, and an attached desktop window enables Needs You notifications (`computer_in_use`), Mobile is off (`mobile_off`) or no paired phone has a Web Push subscription or an iOS app registration (`no_subscription`); the first that applies is the reason, and a send that fails (a Web Push phone while the push key is missing included) or finds every subscription gone is `send_failed` or `subscription_gone`.
 The core's own engine shows no notification, so the phone is the one channel.
 When the phone was not reached, one `human.channels_failed` record in `Logs/core.jsonl` carries the notice (`letter_undelivered`, `observer_unconfirmed` or `mission_attention`), the letter id and `push` (the reason); it never carries a letter's text, a phone endpoint or a key.
 The claim stays consumed, so the same letter or warning is never announced again, and nothing is drawn on screen: an operator with phone push off learns of a held letter from that record only.
@@ -1259,6 +1259,7 @@ Like `hide agent catalog`, it needs the running daemon and a Hide credential but
 ## Missions
 
 Moved to a private document: `docs/missions.md` in with-hide/hide-private.
+Its section "A merge the plan leaves to the operator" owns per-node merge ownership, the ready-PR turn and the quiet `pr` scope.
 
 ## Plans
 
