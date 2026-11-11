@@ -3028,6 +3028,8 @@ Under the Mac being viewed the sheet lists 이 Mac을 통해 연결된 기기 wi
 A protocol mismatch uses the same device-first layout, the two version numbers with labels, and a secondary action to choose another device.
 Home-screen and notification prompts are plain rows separated by spacing, without repeated filled accent buttons or enclosing cards.
 Agents sit in 내 차례, 읽을 것, 작업 중 and 확인함, the sidebar's own section names, with their counts, each row with its status mark (the sidebar's five marks and the word that leads its line), task name, project and branch, the SSH device's chip, the elapsed time and the request or news line, and the list updates live.
+After the task name come the desktop row's marks, which never shrink, so a narrow phone cuts the name first: the pull requests that name the agent (one as its state's mark and `#number`, several as each state's mark and count) and, on a Conductor's row only, its open mission's chip with `!` while the mission waits on the operator and `k/n` while it runs; the marks only show, and the row opens the detail, whose chips open the pages.
+A task the operator starred to revisit wears the desktop's ★: in the mark's place in 다시 볼 것, and small after the name anywhere else; the phone cannot star or unstar, and a Mac that predates the star sends none, so its rows show no ★.
 A group's title counts every top row of the group, the folded ones too.
 Inside a group the rows of this Mac and of its connected devices are mixed and ordered by the same last activity as the sidebar, newest first, so an agent that just moved on the Mac mini stands above an older row of this Mac.
 A group shows its newest rows and folds the rest under `더 보기 N`, which opens them in place: 내 차례 5, 읽을 것 3, 작업 중 5 and 확인함 3 (the first two are the sidebar's own raised caps); 다시 볼 것 does not fold.
@@ -3160,6 +3162,7 @@ The notification words follow the language in effect, so an explicit language al
 정보 holds `개인정보 처리방침` (`https://withhide.dev/privacy`) and `지원` (`https://withhide.dev/support`), which open outside the app, then, in the iOS app, the app's version and build, and the phone protocol number.
 The app follows the phone's light or dark choice, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 In the iOS app every screen keeps clear of the notch, the home indicator and the keyboard, the page does not rubber-band or zoom, and a press on a control selects nothing and opens no callout.
+In a browser and a Home Screen app the page is as tall as what the keyboard leaves of the screen, so the reply bar stays above it there too, and a detail read at its bottom keeps its newest line in view above the reply bar when the keyboard comes up; one scrolled up to older lines stays where it was.
 
 The start page with no computer connected is a first screen that says what to do, in order (`web/src/mobile/StartScreens.tsx`).
 It has `hide` with a gear at the right, the title `컴퓨터를 연결하세요`, one line (`Hide는 내 컴퓨터에서 도는 에이전트를 폰에서 보고 답하는 앱이에요.`) and three steps: `컴퓨터에 Hide 설치` (`맥, 윈도우, 리눅스` and a `withhide.dev` link that opens outside the app), `설정 > 모바일 열기` (`컴퓨터의 Hide에서 QR이 보여요`) and `아래 버튼으로 QR 스캔`.
@@ -3193,7 +3196,7 @@ The entry is a plain row of the page, not a hidden switch, and it is there wheth
 Only the hosted phone takes `?demo`; the page the desktop serves at `/m/` does not.
 The sample host is a socket the phone's connection opens in place of the relay's, so the store and every screen read the frames a real host sends and no screen branches on it.
 It sends the lists, a conversation per agent, 볼 것 and the content of its Views, the start sheet's catalog and a card per pull request, and answers each request the way a Mac would, a moment later.
-The list shows 내 차례, 작업 중, 끝남 and 확인함 with a parent's children under it and a folded `더 보기`; an agent's detail shows its conversation, and a reply gets a sample answer in the same conversation.
+The list shows 내 차례, 작업 중, 끝남, 다시 볼 것 (one starred task) and 확인함 with a parent's children under it and a folded `더 보기`, the first agent as the release mission's Conductor with its chip, and a working agent with its pull request's mark; an agent's detail shows its conversation, and a reply gets a sample answer in the same conversation.
 The start sheet and the pull request's `맡기기` sheet add a sample row to 작업 중, which opens as a started agent's detail does; an answer to the mission's decision clears it, and `머지` takes the pull request off the list.
 볼 것 holds one HTML page, drawn in the sandboxed frame, and one image.
 An agent's 터미널 shows a sample pane in the terminal's colours: the request, the file it read and changed with the diff, the command it ran with its output, and its question or that it is still at work; the agent's own words follow the phone's language, and file names, commands and their output are code text.
