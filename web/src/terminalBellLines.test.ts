@@ -208,16 +208,19 @@ describe("rows as the agents drew them", () => {
     expect(bellRows(rows, 24)).toEqual([0]);
   });
 
-  it("Grok: the wrapped rows of an unframed letter row, up to its output", () => {
+  it("Grok: the wrapped rows of an unframed letter row, and a `◆` row at their indent under the last one", () => {
+    // The letter's rows fill the width, as a Grok pane's did; its own `◆` rows sit
+    // at a smaller indent in a capture, so this one is placed at the wrap indent
+    // with no blank row between, which only the declared chrome ends the line at.
     const rows = screen([
       "     ❯ 🦉 m58-conductor 보고: 시험 줄입니다. 아무것도 하지 말고 ok 한 단어로만 답하세요. 이 줄은 pane 폭을 넘겨 여",
       "       러 줄로 꺾이도록 길게 씁니다 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게",
-      "       길게 길게 길게 길게 길게 길게 길게 길게 길게 · hide inbox",
+      `       ${"길게 ".repeat(17)}· hide inbox`,
+      "       ◆ Thought for 0.6s",
       "",
-      "     ◆ Thought for 0.6s",
       "     ok",
     ]);
-    expect(bellRows(rows, rows[0]!.used)).toEqual([0, 1, 2]);
+    expect(bellRows(rows, rows[1]!.used)).toEqual([0, 1, 2]);
   });
 });
 
