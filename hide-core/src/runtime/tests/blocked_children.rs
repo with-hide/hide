@@ -156,3 +156,112 @@ fn a_device_childs_block_keeps_its_start_and_its_note_through_a_reconnect() {
     assert!(runtime.tick_session_window(start + CHILD_BLOCKED_GRACE_MS));
     assert_eq!(agent_row(&runtime, "local-parent").raised.len(), 1);
 }
+
+/// The note reaches the parent's mailbox through the delivery store, sent
+/// by Hide's own `hide:blocked` for the parent's next tool call (`--now`),
+/// once per block; the next block is a new note.
+#[test]
+fn a_blocked_childs_note_lands_in_its_parents_mailbox_once_per_block() {
+    use std::sync::{Arc, Mutex};
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    hide_platform::fs::private::create_dir_all(&state).unwrap();
+    let runtime = Arc::new(Mutex::new(blocked_lineage()));
+    let (worker, client) = crate::delivery::worker::Worker::store(
+        Arc::downgrade(&runtime),
+        ChangeNotifier::noop(),
+        hide_kit::layout::delivery_ledger(&state),
+    )
+    .unwrap();
+    // The parent is observed in its pane, running the session the child's
+    // lineage names; Hide sends from a thread of its own.
+    let drive = |runtime: &Arc<Mutex<Runtime>>| {
+        let mut guard = runtime.lock().unwrap();
+        let parent_session = agent_row(&guard, "w1:p1").lineage_session.clone();
+        let observed: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"parent-agent","pane_id":"w1:p1","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":parent_session},
+            {"id":"child-agent","pane_id":"w1:p2","agent":"claude","agent_status":"blocked","state_change_seq":1},
+        ]}))
+        .unwrap();
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+        guard.drive_blocked_notes();
+        agent_row(&guard, "w1:p2").blocked_since_unix_ms
+    };
+    let settle = |runtime: &Arc<Mutex<Runtime>>, what: &str| {
+        super::wait_for(what, || !runtime.lock().unwrap().blocked_notes_sending());
+    };
+    let notes = |runtime: &Arc<Mutex<Runtime>>| -> Vec<(String, String, String, bool)> {
+        let guard = runtime.lock().unwrap();
+        let Ok(ledger) = guard.delivery_state() else {
+            return Vec::new();
+        };
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.recipient.pane_id == "w1:p1")
+            .map(|letter| {
+                (
+                    letter.sender.name.clone(),
+                    letter.intent.clone(),
+                    letter.kind.clone(),
+                    letter.immediate,
+                )
+            })
+            .collect()
+    };
+    let note = |start: u64| {
+        (
+            "hide:blocked".to_owned(),
+            format!("child-blocked:w1:p2:{start}"),
+            "progress".to_owned(),
+            true,
+        )
+    };
+    {
+        let mut guard = runtime.lock().unwrap();
+        guard.install_delivery_client(client);
+        guard.install_worker_context(Arc::downgrade(&runtime), ChangeNotifier::noop());
+        // What the new store read back, as it publishes it.
+        guard.publish_delivery(Arc::default(), true);
+    }
+
+    let first = drive(&runtime).expect("the child's block has a start");
+    settle(&runtime, "the first note was sent");
+    assert_eq!(notes(&runtime), [note(first)]);
+    let body = runtime.lock().unwrap().delivery_state().unwrap().letters[0]
+        .body
+        .clone();
+    assert!(
+        body.contains("is blocked at a prompt: read it with `hide pane read w1:p2`."),
+        "{body}"
+    );
+
+    assert_eq!(drive(&runtime), Some(first));
+    settle(&runtime, "nothing more was sent");
+    assert_eq!(notes(&runtime), [note(first)], "one note per block");
+
+    // The child is answered and blocks again: a new block, a new note.
+    ingest_lineage(
+        &mut runtime.lock().unwrap(),
+        &[
+            ("w1:p1", None, "working", ""),
+            ("w1:p2", Some("w1:p1"), "working", ""),
+        ],
+    );
+    assert_eq!(drive(&runtime), None);
+    // A block is keyed by its start, read from the clock.
+    super::wait_for("the clock passed the first block's start", || {
+        crate::runtime::unix_milliseconds() > first
+    });
+    ingest_lineage(
+        &mut runtime.lock().unwrap(),
+        &[
+            ("w1:p1", None, "working", ""),
+            ("w1:p2", Some("w1:p1"), "blocked", ""),
+        ],
+    );
+    let second = drive(&runtime).expect("the second block has a start");
+    settle(&runtime, "the second note was sent");
+    assert_eq!(notes(&runtime), [note(first), note(second)]);
+    drop(worker);
+}

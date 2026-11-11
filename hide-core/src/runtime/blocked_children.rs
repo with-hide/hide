@@ -217,6 +217,11 @@ impl Runtime {
             .map(|(pane, key)| (pane.clone(), key.clone()))
             .collect()
     }
+
+    /// A thread is still sending notes.
+    pub(in crate::runtime) fn blocked_notes_sending(&self) -> bool {
+        self.blocked_children.sending
+    }
 }
 
 #[cfg(test)]

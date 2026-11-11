@@ -2057,6 +2057,7 @@ impl Runtime {
                 || *actor == Actor::hide(crate::delivery::typed::INPUT_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::unreadable_letters::DELIVERY_ROLE, self.node.as_str())
+                || *actor == Actor::hide(super::blocked_children::BLOCKED_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(
                         super::transition_letters::TRANSITION_ROLE,
