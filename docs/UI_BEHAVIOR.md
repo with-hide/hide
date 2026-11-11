@@ -2961,6 +2961,9 @@ No Hide account, login, payment or Tailscale setup appears in this connection fl
 
 The hosted phone app at `app.withhide.dev` and the advanced Tailscale app at `/m/` share every list, detail and command screen.
 The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`, and until it opens the page shows the blinking owl over the device name, `연결 중…` and 다른 기기 고르기 (`DeviceConnecting`, `web/src/mobile/HostList.tsx`).
+With exactly one saved device that has not refused this phone, the start page skips the list and opens that device as if its row had been chosen, so the phone app opens on it at launch (`hostToOpen`, `web/src/mobile/hosts.ts`); two or more devices, or one marked 연결 해제됨, keep the list.
+That device's own screen reaches the list through the header's device sheet and the Settings tab, which keep 다른 기기 연결; the demo stays on the list and the first screen only.
+Every way back to the list, 다른 기기 고르기 on the `연결 중…`, version and refusal screens and leaving the demo, lands on a list that does not open the device again: the start page's own `연결 중…` shows it in place, and the others open it at `/?list=1`; an address that names a device (a link or a notification tap), a pairing link and 다른 기기 연결 (`/?add=1`) go where they did.
 A QR opens the shared device-first page described below, with an escaped, wrapping device name, a short line about viewing and replying to agents, 연결, the encryption assurance and five-minute expiry guidance.
 Its code leaves the address before connection and is never stored.
 Expired and already-used codes retain the device's existing `code_expired` wording, and four paired phones retain the existing limit guidance.
@@ -3153,7 +3156,7 @@ In the iOS app every screen keeps clear of the notch, the home indicator and the
 The start page with no computer connected is a first screen that says what to do, in order (`web/src/mobile/StartScreens.tsx`).
 It has `hide` with a gear at the right, the title `컴퓨터를 연결하세요`, one line (`Hide는 내 컴퓨터에서 도는 에이전트를 폰에서 보고 답하는 앱이에요.`) and three steps: `컴퓨터에 Hide 설치` (`맥, 윈도우, 리눅스` and a `withhide.dev` link that opens outside the app), `설정 > 모바일 열기` (`컴퓨터의 Hide에서 QR이 보여요`) and `아래 버튼으로 QR 스캔`.
 At the bottom is the big `QR 스캔` button, and under it `체험해 보기` with its one line.
-With one computer or more, or a computer whose connection was refused, the page is the list of computers it was.
+With two computers or more, or a computer whose connection was refused, the page is the list of computers it was; with one, it opens that computer ([Mobile companion](#mobile-companion)).
 In the iOS app `QR 스캔` opens the camera at once; in a browser, which has no native scanner, it opens the scan and paste page, where the browser's own camera or a pasted link connects.
 The gear opens the same display and about rows as the Settings tab, with `연결한 컴퓨터가 아직 없어요` under 연결된 컴퓨터, and a back arrow returns to the first screen; a language chosen there applies at once.
 The demo's own Settings tab is unchanged.

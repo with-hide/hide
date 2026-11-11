@@ -9,7 +9,7 @@ import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr, scanInApp } from "./ScanQr";
 import { FirstScreen, StartSettings } from "./StartScreens";
-import { bundlePath, hostStore, MAX_HOSTS, type PairedHost } from "./hosts";
+import { bundlePath, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
 import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
@@ -54,25 +54,31 @@ function Loader() {
   const [target, setTarget] = useState<PairedHost | PairingQr | null>(null);
   const [error, setError] = useState<"qrError" | "cameraError" | "cameraBusy" | "storage" | "loadError" | "limit" | null>(null);
   const [version, setVersion] = useState<{ device: number; supported: number[] } | null>(null);
-  // How many computers this phone knows: none shows the first screen, any shows the list. Null while it is read.
+  // How many computers this phone knows: none shows the first screen, any shows the list (one opens at once, hostToOpen). Null while it is read.
   const [known, setKnown] = useState<number | null>(null);
   const [settings, setSettings] = useState(false);
-  useEffect(() => { void hostStore().list().then((hosts) => setKnown(hosts.length), () => setKnown(-1)); }, []);
   useEffect(() => {
-    void pairing.then((qr) => {
-      if (qr) { setPair(qr); return; }
-      const host = new URLSearchParams(location.search).get("host");
-      if (host) void hostStore().list().then((hosts) => setTarget(hosts.find((candidate) => candidate.room === host) ?? null)).catch(() => setError("storage"));
-    }).catch(() => setError("qrError"));
+    // A pairing link that arrives while the list is read wins over opening a computer by itself.
+    let paired = false;
+    const query = new URLSearchParams(location.search);
+    void pairing.then((qr) => { if (qr) { paired = true; setPair(qr); } }, () => { paired = true; setError("qrError"); })
+      .then(() => hostStore().list())
+      .then((hosts) => {
+        // The computer the address names, or the only one kept, opens without the list; both land in one render.
+        const open = paired ? null : hostToOpen(query, hosts);
+        if (open) setTarget(open);
+        setKnown(hosts.length);
+      }, () => { setKnown(-1); if (query.has("host")) setError("storage"); });
     const followQr = () => {
       void takePairing().then((qr) => {
         if (!qr) return;
+        paired = true;
         setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr);
       }).catch(() => setError("qrError"));
     };
     window.addEventListener("hashchange", followQr);
     // A link that opened the app lands on the same pairing screen a scanned QR does, and waits for the person's tap.
-    const stopLinks = followNativeLinks((qr) => { setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
+    const stopLinks = followNativeLinks((qr) => { paired = true; setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
     if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
     // A tap on a notification of the app: the start page finds the computer and hands the agent on to its bundle.
     const stopOpens = followPushOpens((opened) => window.location.assign(pushOpenAddress(opened)));

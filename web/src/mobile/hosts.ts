@@ -190,6 +190,20 @@ export function bundlePath(protocol: number, supported: readonly number[]): stri
   return Number.isSafeInteger(protocol) && protocol > 0 && supported.includes(protocol) ? `/p/${protocol}/` : null;
 }
 
+/** The start page as the list of saved computers: it never opens one by itself, so a way back to the list stays there. */
+export const HOST_LIST_LINK = "/?list=1";
+
+/**
+ * The computer the start page opens without showing the list: the one its address names, or else the only computer
+ * this phone keeps, unless the address asks for the list or the scanner, or that computer refused this phone.
+ */
+export function hostToOpen(query: URLSearchParams, hosts: readonly PairedHost[]): PairedHost | null {
+  const named = query.get("host");
+  if (named) return hosts.find((host) => host.room === named) ?? null;
+  if (query.has("list") || query.has("add") || hosts.length !== 1) return null;
+  return hosts[0]!.credential === null ? null : hosts[0]!;
+}
+
 export function hostLink(host: PairedHost, tag?: string): string {
   const query = new URLSearchParams({ host: host.room });
   if (tag) query.set("open", tag);
