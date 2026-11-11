@@ -6,8 +6,10 @@
 //! changed, so the record grows by files rather than by one file every
 //! change rewrites (engineering #15).
 //!
-//! Every changed body is written before its index line, including a take,
-//! create or reopen. A failed body write leaves the previous index intact.
+//! A closed-to-open transition first marks its existing index line open,
+//! so an interrupted reopen cannot hide a saved open body on the shelf.
+//! Startup reads that body as the authority and repairs its line. Every
+//! other change writes the body before its index line, including a take.
 //! A file no line names is a create or delete interrupted before its index
 //! was saved; startup removes it. Builds before the folder kept
 //! every mission in `missions.json`, which is read as before while no index
@@ -179,25 +181,7 @@ impl MissionStore {
         if let Err(reason) = validate_lines(&index.missions.kept) {
             return Restored::Unreadable(reason);
         }
-        if index.missions.dropped > 0 {
-            let result = serde_json::to_vec(&index)
-                .map_err(|error| error.to_string())
-                .and_then(|bytes| {
-                    hide_platform::fs::atomic::write_file(
-                        &hide_kit::layout::mission_index(&self.dir),
-                        &bytes,
-                        hide_platform::fs::Access::Private,
-                    )
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-                });
-            if let Err(reason) = result {
-                return Restored::Unreadable(format!("its shelf could not be trimmed: {reason}"));
-            }
-            crate::diagnostic!(
-                json!({"component":"missions","kind":"missions.shelf_trimmed","dropped":index.missions.dropped})
-            );
-        }
+        let mut repaired = false;
         let loaded = loaded_ids(&index.missions.kept);
         let mut book = MissionBook {
             next: index.next,
@@ -209,7 +193,10 @@ impl MissionStore {
                 continue;
             }
             match read_mission(&self.dir, &line.id) {
-                Ok(Some(mission)) => book.missions.push(mission),
+                Ok(Some(mission)) => {
+                    repaired |= MissionLine::of(&mission) != line;
+                    book.missions.push(mission);
+                }
                 Ok(None) => crate::diagnostic!(json!({
                     "component": "missions", "kind": "missions.file_missing",
                     "mission": line.id,
@@ -225,6 +212,24 @@ impl MissionStore {
         }
         book.missions
             .sort_by_key(|mission| mission_number(&mission.id));
+        // An open line may precede its reopen body, or outlive a close
+        // whose final index write failed. Read bodies decide the state;
+        // rebalance the newly confirmed closed records before saving it.
+        let dropped = index.missions.dropped + bound_restored(&mut book);
+        if repaired || dropped > 0 {
+            let result = encode_index(&book).and_then(|bytes| {
+                MissionFiles::new(self.dir.clone(), None)
+                    .replace(hide_kit::layout::MISSION_INDEX, &bytes)
+            });
+            if let Err(reason) = result {
+                return Restored::Unreadable(format!("its index could not be repaired: {reason}"));
+            }
+        }
+        if dropped > 0 {
+            crate::diagnostic!(
+                json!({"component":"missions","kind":"missions.shelf_trimmed","dropped":dropped})
+            );
+        }
         Restored::Read(book)
     }
 
@@ -330,6 +335,46 @@ fn loaded_ids(lines: &[MissionLine]) -> BTreeSet<String> {
         .collect()
 }
 
+/// A body read through an open line may already be closed. Apply the same
+/// shelf bounds to those authoritative states, without reading more files.
+fn bound_restored(book: &mut MissionBook) -> usize {
+    let mut resting: Vec<MissionLine> = book
+        .missions
+        .iter()
+        .map(MissionLine::of)
+        .chain(book.shelved.iter().cloned())
+        .filter(MissionLine::at_rest)
+        .collect();
+    resting.sort_by_key(|line| std::cmp::Reverse(line.closed_order()));
+    let dropped = resting
+        .len()
+        .saturating_sub(LOADED_CLOSED_LIMIT + SHELVED_LIMIT);
+    let kept: BTreeSet<&str> = resting
+        .iter()
+        .take(LOADED_CLOSED_LIMIT + SHELVED_LIMIT)
+        .map(|line| line.id.as_str())
+        .collect();
+    let loaded: BTreeSet<&str> = resting
+        .iter()
+        .take(LOADED_CLOSED_LIMIT)
+        .map(|line| line.id.as_str())
+        .collect();
+    book.shelved
+        .retain(|line| !line.at_rest() || kept.contains(line.id.as_str()));
+    book.missions.retain(|mission| {
+        let line = MissionLine::of(mission);
+        if !line.at_rest() || loaded.contains(line.id.as_str()) {
+            true
+        } else {
+            if kept.contains(line.id.as_str()) {
+                book.shelved.push(line);
+            }
+            false
+        }
+    });
+    dropped
+}
+
 /// Mission `id`'s file, read and checked to hold that one mission; `None`
 /// when there is no file.
 pub(crate) fn read_mission(dir: &Path, id: &str) -> Result<Option<Mission>, String> {
@@ -418,8 +463,9 @@ impl MissionFiles {
     }
 
     /// Writes what changed since the last save: `leaving`, the missions
-    /// shelved since, and every loaded mission whose file differs. The index
-    /// follows every changed body, including changes of Conductor. Then delete files the
+    /// shelved since, and every loaded mission whose file differs. Mark a
+    /// closed-to-open line open first; all other index changes follow their
+    /// bodies, including changes of Conductor. Then delete files the
     /// index no longer names. A failure is returned with what is not yet
     /// written kept for the next save, which writes it again.
     pub(crate) fn write(
@@ -435,6 +481,35 @@ impl MissionFiles {
             Some(before) if *before != index => removed_ids(before, book)?,
             _ => Vec::new(),
         };
+        if let Some(before) = &self.index
+            && *before != index
+        {
+            let mut admitted: Index = serde_json::from_slice(before)
+                .map_err(|error| format!("the index could not be decoded: {error}"))?;
+            let open: BTreeMap<_, _> = book
+                .missions
+                .iter()
+                .chain(leaving.iter())
+                .filter(|mission| mission.status.open())
+                .map(|mission| (mission.id.as_str(), mission.status))
+                .collect();
+            let mut reopened = false;
+            for line in &mut admitted.missions.kept {
+                if !line.status.open()
+                    && let Some(status) = open.get(line.id.as_str())
+                {
+                    // Preserve all other old fields until their body is saved.
+                    line.status = *status;
+                    reopened = true;
+                }
+            }
+            if reopened {
+                let bytes = serde_json::to_vec(&admitted)
+                    .map_err(|error| format!("the index could not be encoded: {error}"))?;
+                self.replace(hide_kit::layout::MISSION_INDEX, &bytes)?;
+                self.index = Some(bytes);
+            }
+        }
         while let Some(mission) = leaving.first() {
             if book.get(&mission.id).is_none() && book.shelf(&mission.id).is_none() {
                 gone.push(leaving.remove(0).id);

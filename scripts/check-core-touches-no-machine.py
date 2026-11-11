@@ -94,12 +94,12 @@ STORES = {
         "after the logs they go with",
     ),
     "hide-core/src/mission_store.rs": (
-        11,
+        9,
         "the core's mission bodies and index, split from missions.json: reads "
         "the index, sweeps orphan bodies, creates the mission folder and "
         "atomically replaces its private files; all move with the core, "
         "and explicit shelf reads run outside the runtime lock; startup streams "
-        "and atomically trims excess closed index rows before sweeping, "
+        "and reconciles and trims index rows through the same writer before sweeping, "
         "and committed shelf eviction also deletes its owned history",
     ),
     "hide-core/src/latest_file.rs": (

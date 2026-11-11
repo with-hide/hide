@@ -11136,6 +11136,162 @@ fn a_full_shelf_discards_the_oldest_finished_files_and_accepts_new_work() {
     assert_eq!(created["mission"]["id"], "mission-2178");
 }
 
+/// R7: an interrupted reopen errs toward reading a possibly open body.
+/// Before that body saves, Done wins; after it saves, Running survives
+/// restart, admission and the next oldest-finished eviction.
+#[test]
+fn an_interrupted_shelved_reopen_restores_its_body_before_the_next_shelf_eviction() {
+    use crate::mission_events::MissionEventStore;
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    for body_saved in [false, true] {
+        let fixture = conducting();
+        let state = fixture._root.path().join("interrupted-reopen");
+        saved_closed_missions(&fixture, &state, 2176);
+        let dir = hide_kit::layout::missions_dir(&state);
+        let histories = hide_kit::layout::mission_histories(&state);
+        std::fs::create_dir_all(&histories).unwrap();
+        let history = hide_kit::layout::mission_history(&dir, "mission-1");
+        let history_bytes = br#"{"schema_version":1,"events":[{"at_unix_ms":1,"kind":"reported","line":"Completed work before reopen"}]}"#;
+        std::fs::write(&history, history_bytes).unwrap();
+        let body = hide_kit::layout::mission_file(&dir, "mission-1");
+        let before_body = std::fs::read(&body).unwrap();
+        let index = hide_kit::layout::mission_index(&dir);
+        let mut runtime = fixture.runtime.lock().unwrap();
+        drop(runtime.missions.event_store.take());
+        let mut files = MissionFiles::new(dir.clone(), Some(&runtime.missions.book));
+        let visiting =
+            crate::mission_store::read_shelved(&dir, Some(&histories), "mission-1").unwrap();
+        let actor = runtime.delivery_observations["sender"].actor.clone();
+        runtime
+            .mission_command_with(
+                crate::node::TEST_NODE,
+                "sender",
+                &authority(&actor).context,
+                serde_json::from_value(json!({"op":"reopen","mission":"mission-1"})).unwrap(),
+                Some(Ok(visiting)),
+            )
+            .unwrap();
+        // Fail the body replacement with a real filesystem obstruction.
+        // The preceding index replacement must already expose it as open.
+        std::fs::remove_file(&body).unwrap();
+        std::fs::create_dir(&body).unwrap();
+        std::fs::write(body.join("block"), b"").unwrap();
+        let failure = files
+            .write(&runtime.missions.book, &mut Vec::new())
+            .unwrap_err();
+        assert!(failure.contains("mission-1.json"), "{failure}");
+        let open_index = std::fs::read(&index).unwrap();
+        let saved: Value = serde_json::from_slice(&open_index).unwrap();
+        assert_eq!(saved["missions"][0]["status"], "running");
+        std::fs::remove_dir_all(&body).unwrap();
+        std::fs::write(&body, &before_body).unwrap();
+        if body_saved {
+            // Retry with only the final index replacement blocked. The
+            // actual writer saves Running, then fails to replace the index.
+            std::fs::remove_file(&index).unwrap();
+            std::fs::create_dir(&index).unwrap();
+            std::fs::write(index.join("block"), b"").unwrap();
+            let failure = files
+                .write(&runtime.missions.book, &mut Vec::new())
+                .unwrap_err();
+            assert!(failure.contains("index.json"), "{failure}");
+            std::fs::remove_dir_all(&index).unwrap();
+            std::fs::write(&index, &open_index).unwrap();
+        }
+        drop(files);
+        let store = MissionStore::new(&state);
+        let Restored::Read(book) = store.restore() else {
+            panic!("the interrupted folder restores");
+        };
+        let expected = if body_saved {
+            MissionStatus::Running
+        } else {
+            MissionStatus::Done
+        };
+        let saved: Value = serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+        assert_eq!(
+            saved["missions"][0]["status"],
+            if body_saved { "running" } else { "done" }
+        );
+        assert_eq!(book.missions.len(), if body_saved { 129 } else { 128 });
+        let files = MissionFiles::new(dir.clone(), Some(&book));
+        runtime.install_mission_store(store, Restored::Read(book));
+        runtime.install_mission_events(
+            MissionEventStore::with_book(histories, files),
+            Default::default(),
+        );
+        runtime.refresh_missions();
+        assert_eq!(
+            runtime
+                .snapshot
+                .missions
+                .items
+                .iter()
+                .any(|mission| mission.id == "mission-1"),
+            body_saved
+        );
+        let (list, _) = command(&mut runtime, "sender", json!({"op":"list"})).unwrap();
+        let row = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "mission-1")
+            .unwrap();
+        assert_eq!(row["status"], if body_saved { "running" } else { "done" });
+        assert_eq!(row["shelved"].as_bool().unwrap_or(false), !body_saved);
+        assert_eq!(
+            crate::mission_store::read_mission(&dir, "mission-1")
+                .unwrap()
+                .unwrap()
+                .status,
+            expected
+        );
+        let pane = if body_saved {
+            let failure = command(
+                &mut runtime,
+                "sender",
+                json!({"op":"create","title":"Cannot open twice"}),
+            )
+            .unwrap_err();
+            assert_eq!(failure, "mission_already_conducting");
+            "recipient"
+        } else {
+            "sender"
+        };
+        for _ in 0..if body_saved { 2 } else { 1 } {
+            command(
+                &mut runtime,
+                pane,
+                json!({"op":"create","title":"Next work"}),
+            )
+            .unwrap();
+            command(&mut runtime, pane, json!({"op":"close","end":"cancelled"})).unwrap();
+        }
+        assert_eq!(runtime.missions.book.shelved.len(), 2048);
+        let barrier = runtime
+            .missions
+            .event_store
+            .as_ref()
+            .unwrap()
+            .read_barrier();
+        drop(runtime);
+        barrier.wait().unwrap();
+        assert_eq!(body.exists(), body_saved);
+        assert_eq!(history.exists(), body_saved);
+        if body_saved {
+            assert_eq!(std::fs::read(history).unwrap(), history_bytes);
+            assert_eq!(
+                crate::mission_store::read_mission(&dir, "mission-1")
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                MissionStatus::Running
+            );
+            assert!(!hide_kit::layout::mission_file(&dir, "mission-2").exists());
+        }
+    }
+}
+
 /// A take and close can share one writer batch. If the taken body's write
 /// fails, restart must keep its former owner in list, reopen and deletion.
 #[test]
