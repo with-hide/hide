@@ -7,8 +7,8 @@
 
 import { useMemo } from "react";
 import { missionEntry, turnCount, type MissionEntry } from "../missionList";
-import { missionCounts, summaryGroups, type WorkerEscalation } from "../missions";
-import type { PhoneMission, PhoneMissionNode } from "./protocol";
+import { missionCounts, missionOpen, summaryGroups, type WorkerEscalation } from "../missions";
+import type { AgentKey, PhoneMission, PhoneMissionNode, PhonePr } from "./protocol";
 import { usePhone } from "./store";
 
 /** Each mission with its group and what waits on the operator; the worker's escalation is the one hided read from its row. */
@@ -56,4 +56,25 @@ export function workerOf(node: PhoneMissionNode): WorkerEscalation | null {
 export function progress(mission: PhoneMission): { done: number; total: number } {
   const { done, total } = missionCounts(mission);
   return { done, total };
+}
+
+/** What an agent's detail links to: an open mission it conducts (no step) or works a step of, with whether its 내 차례 waits, and each listed pull request that names it. */
+export type AgentLinks = { missions: { mission: PhoneMission; node: PhoneMissionNode | null; turn: boolean }[]; prs: PhonePr[] };
+
+const sameAgent = (a: AgentKey | null, b: AgentKey) => a !== null && a.device_id === b.device_id && a.pane_id === b.pane_id;
+
+/**
+ * The links of one agent, by its exact row only (the Conductor's or a step worker's row, a pull request's named agents): a mission
+ * or a pull request that merely shares its checkout is not one. A finished mission links nothing; a pull request links while the
+ * PR tab lists it.
+ */
+export function agentLinks(key: AgentKey, missions: readonly PhoneMission[] | null, prs: readonly PhonePr[] | null): AgentLinks {
+  const linked: AgentLinks["missions"] = [];
+  for (const mission of missions ?? []) {
+    if (!missionOpen(mission)) continue;
+    const node = sameAgent(mission.conductor.agent, key) ? null : mission.nodes.find((each) => sameAgent(each.agent, key));
+    if (node === undefined) continue;
+    linked.push({ mission, node, turn: missionEntry(mission, workerOf).turn.length > 0 });
+  }
+  return { missions: linked, prs: (prs ?? []).filter((pr) => pr.agents.some((agent) => sameAgent(agent, key))) };
 }

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { stop, start } from "./connection";
+import { openDetail, stop, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { SettingsScreen } from "./SettingsScreen";
 import { PRIVACY_POLICY_URL } from "./SettingsParts";
@@ -60,6 +60,20 @@ describe("the sample host's screens", () => {
     expect(document.querySelector('[data-phone-group="done"]')).not.toBeNull();
     expect(text()).toContain("Address review comments");
     expect(text()).toContain("Fix the Windows path test");
+  });
+
+  it("link a step's worker to its mission and its pull request, and a chip opens that page", async () => {
+    await act(async () => openDetail({ device_id: "local", pane_id: "a3" }));
+    await settle(50);
+    const mission = document.querySelector<HTMLElement>('[data-phone-detail-mission="mission-release"]')!;
+    expect(mission.textContent).toContain("Prepare release 1.2.0");
+    expect(mission.textContent).toContain("Rehearse the migration");
+    expect(document.querySelector("[data-phone-detail-pr]")?.textContent).toContain("2091");
+    await act(async () => mission.click());
+    expect(usePhone.getState().detail).toBeNull();
+    expect(usePhone.getState().tab).toBe("missions");
+    expect(usePhone.getState().missionOpen).toBe("mission-release");
+    await act(async () => setTab("agents"));
   });
 
   it("open the host sheet on the sample host, which leads to the real connect flow and back", async () => {
