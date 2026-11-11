@@ -97,7 +97,8 @@ open class ShellViewController: CAPBridgeViewController {
     /// and nothing outside can tap the web view. A pairing link given as the launch value `HIDE_DEBUG_PAIR_LINK` is
     /// handed to the same inbox a link opened from outside reaches, and Connect is pressed once the page shows it.
     /// `HIDE_DEBUG_TAPS` is selectors separated by `;;`, each pressed once the page has it, in order; a selector written
-    /// `<selector>::=<text>` is filled with that text instead of pressed. The file `hide-debug-taps` in the app's
+    /// `<selector>::=<text>` is filled with that text instead of pressed, and one written `<selector>::^` is scrolled to the
+    /// top instead. The file `hide-debug-taps` in the app's
     /// temporary folder says how it went: `done` once the last one is pressed, `failed <selector>` when one is never
     /// found, so a script that waits on it fails instead of capturing a screen the steps never reached. `HIDE_DEBUG_NOW` is a local date and time
     /// (`2026-11-09T09:41:00`) the page's clock starts from, so a capture shows the same times on every run. A release
@@ -138,12 +139,16 @@ open class ShellViewController: CAPBridgeViewController {
     private func tap(_ selectors: [String], attempt: Int) {
         guard let step = selectors.first else { return }
         guard attempt < 120 else { reportTaps("failed \(step)"); return }
-        let parts = step.components(separatedBy: "::=")
+        // `<selector>::^` brings that element to the top of what scrolls it instead of pressing it.
+        let scrolls = step.hasSuffix("::^")
+        let parts = (scrolls ? String(step.dropLast(3)) : step).components(separatedBy: "::=")
         let selector = parts[0].trimmingCharacters(in: .whitespaces)
         guard let literal = try? JSONEncoder().encode(selector), let source = String(data: literal, encoding: .utf8) else { return }
         // A press is a mouse-down and a click: the page's tab strip reacts to the first, its buttons to the second.
         var action = "found.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })); found.click();"
-        if parts.count > 1 {
+        if scrolls {
+            action = "found.scrollIntoView({ block: 'start' });"
+        } else if parts.count > 1 {
             // A field of the page is filled the way typing does: through the element's own setter, then an input event, so the page's state sees it.
             guard let text = try? JSONEncoder().encode(parts.dropFirst().joined(separator: "::=")), let typed = String(data: text, encoding: .utf8) else { return }
             action = "Object.getOwnPropertyDescriptor(Object.getPrototypeOf(found), 'value').set.call(found, \(typed)); found.dispatchEvent(new Event('input', { bubbles: true }));"
