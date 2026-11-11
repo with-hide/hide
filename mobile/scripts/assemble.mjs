@@ -86,10 +86,11 @@ export async function sourceProtocol(root = ROOT) {
 }
 
 /**
- * @param {{dist: string, out: string, pins: ReturnType<typeof parsePins>, origin?: string, fetcher?: typeof fetch}} options
+ * @param {{dist: string, out: string, pins: ReturnType<typeof parsePins>, origin?: string, fetcher?: typeof fetch, expected?: number, simulatorRelayPort?: number}} options
  * @returns {Promise<number[]>} the protocols the folder carries
  */
-export async function assemble({ dist, out, pins, expected, origin = ORIGIN, fetcher = fetch }) {
+export async function assemble({ dist, out, pins, expected, simulatorRelayPort, origin = ORIGIN, fetcher = fetch }) {
+  if (simulatorRelayPort !== undefined && (!Number.isInteger(simulatorRelayPort) || simulatorRelayPort < 1024 || simulatorRelayPort > 65535)) throw new Error('Invalid simulator relay port');
   const built = JSON.parse(await readFile(resolve(dist, 'protocols.json'), 'utf8'));
   if (!Array.isArray(built) || built.length !== 1 || !Number.isSafeInteger(built[0]) || built[0] < 1) {
     throw new Error('The phone build must contain exactly its own protocol');
@@ -130,7 +131,13 @@ export async function assemble({ dist, out, pins, expected, origin = ORIGIN, fet
   for (const page of await htmlFiles(out)) {
     const html = await readFile(resolve(out, page), 'utf8');
     if (/^p\/[1-9][0-9]*\/look-frame\.html$/.test(page)) framePolicy(html);
-    else contentPolicy(html);
+    else {
+      const local = `connect-src 'self' ws://127.0.0.1:${simulatorRelayPort}`;
+      if (simulatorRelayPort !== undefined && (page === 'index.html' || page.startsWith(`p/${current}/`)) && !html.includes(local)) {
+        throw new Error(`Simulator page does not use the fixture relay: ${page}`);
+      }
+      contentPolicy(simulatorRelayPort === undefined ? html : html.replace(local, "connect-src 'self' wss://relay.withhide.dev"));
+    }
   }
   for (const number of protocols) await readFile(resolve(out, `p/${number}/index.html`));
   return protocols;
@@ -139,7 +146,9 @@ export async function assemble({ dist, out, pins, expected, origin = ORIGIN, fet
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const pins = parsePins(JSON.parse(await readFile(PINS, 'utf8')));
-    const protocols = await assemble({ dist: resolve(ROOT, 'web/phone-dist'), out: resolve(ROOT, 'mobile/www'), pins, expected: await sourceProtocol() });
+    const args = process.argv.slice(2);
+    if (args.length && (args.length !== 2 || args[0] !== '--simulator-relay-port')) throw new Error('Unknown assembly argument');
+    const protocols = await assemble({ dist: resolve(ROOT, 'web/phone-dist'), out: resolve(ROOT, 'mobile/www'), pins, expected: await sourceProtocol(), simulatorRelayPort: args.length ? Number(args[1]) : undefined });
     console.log(`phone bundles in the app: ${protocols.join(', ')}`);
   } catch (error) {
     console.error(`App bundle assembly stopped: ${error.message}`);

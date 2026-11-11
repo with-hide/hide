@@ -16,17 +16,28 @@ public final class PushOpenInbox {
     }
 
     private var target: Target?
+    private var lastNotificationID: String?
     private let lock = NSLock()
 
     public init() {}
 
+    /// Scene connection and the notification delegate receive the same delivery. A later delivery can reuse a
+    /// request identifier, so its date is part of the identity too; only the last delivery is retained.
+    @discardableResult
+    public func offer(_ notification: UNNotification) -> Bool {
+        offer(notification.request.content.userInfo,
+              notificationID: "\(notification.request.identifier):\(notification.date.timeIntervalSince1970)")
+    }
+
     /// Keeps the target of `userInfo` when it names an agent of a computer by the shapes the extension writes.
     @discardableResult
-    public func offer(_ userInfo: [AnyHashable: Any]) -> Bool {
+    public func offer(_ userInfo: [AnyHashable: Any], notificationID: String? = nil) -> Bool {
         guard let room = userInfo[NoticeInfo.room] as? String, PushKeychain.isRoom(room),
               let device = userInfo[NoticeInfo.deviceId] as? String, !device.isEmpty, device.count <= 256,
               let pane = userInfo[NoticeInfo.paneId] as? String, !pane.isEmpty, pane.count <= 512 else { return false }
         lock.lock()
+        if let notificationID, lastNotificationID == notificationID { lock.unlock(); return false }
+        lastNotificationID = notificationID
         target = Target(room: room, deviceId: device, paneId: pane)
         lock.unlock()
         // After the lock: an observer that calls `take()` from the notification must not wait on it.
@@ -72,10 +83,9 @@ public final class PushCenter: NSObject, UNUserNotificationCenterDelegate {
 
     public func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                        withCompletionHandler completionHandler: @escaping () -> Void) {
-        let info = response.notification.request.content.userInfo
         switch response.actionIdentifier {
         case UNNotificationDefaultActionIdentifier:
-            inbox.offer(info)
+            inbox.offer(response.notification)
             completionHandler()
         default:
             completionHandler()
