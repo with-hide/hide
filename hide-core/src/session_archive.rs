@@ -793,24 +793,22 @@ mod tests {
     #[test]
     fn a_record_being_resumed_deleted_or_still_archiving_is_never_evicted() {
         let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
-        let busy: [(u64, fn(&mut ArchiveRecord)); 6] = [
-            (1, |record| {
-                record.members[0].resume = Resume::Queued { front: true }
-            }),
-            (2, |record| record.phase = ArchivePhase::Closing),
-            (3, |record| record.phase = ArchivePhase::CloseUnknown),
+        let busy: [fn(&mut ArchiveRecord); 6] = [
+            |record| record.members[0].resume = Resume::Queued { front: true },
+            |record| record.phase = ArchivePhase::Closing,
+            |record| record.phase = ArchivePhase::CloseUnknown,
             // An agent end whose pane has not left its machine yet.
-            (4, |record| record.members[0].closed = false),
-            (5, |record| {
+            |record| record.members[0].closed = false,
+            |record| {
                 record.members[0].resume = Resume::Failed {
                     reason: "start refused".into(),
                     pane_id: Some("w3:p1".into()),
                 }
-            }),
-            (6, |record| record.deleting = true),
+            },
+            |record| record.deleting = true,
         ];
-        for (at, make_busy) in busy {
-            make_busy(archive.records.get_mut(&id(at)).unwrap());
+        for (index, make_busy) in busy.into_iter().enumerate() {
+            make_busy(archive.records.get_mut(&id(index as u64 + 1)).unwrap());
         }
         let leaving = |held: &ArchiveId| *held == id(7);
         assert_eq!(
