@@ -105,10 +105,9 @@ test("a planned review stays quiet until arrival and the phone's answer passes t
     await phone.locator("[data-phone-choice-send]").tap();
     await expect(map.locator('[data-node-gate="passed"]')).toHaveText("계획과 결과 화면");
     await expect(map.locator('[data-panel-gate-via="phone"]')).toContainText("Go on");
-    // A research step finishes once its last line passes; the phone keeps
-    // finished steps folded, including when that closes the last mission node.
-    await expect(phone.locator('[data-phone-mission-done="folded"]')).toBeVisible();
-    await phone.locator("[data-phone-fold]").tap();
+    // The graph keeps the completed step visible, including when the last
+    // research line closes the mission (UI_BEHAVIOR.md, The phone app).
+    await expect(phone.locator('[data-mission-node="screen"][data-node-look="done"]')).toBeVisible();
     await expect(phone.locator('[data-node-gate="passed"]')).toBeVisible();
     await screenshot(page, "mission-gate-passed-desktop");
     await screenshot(phone, "mission-gate-passed-phone");
