@@ -21,9 +21,7 @@ import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
 import { AgentHead, DETAIL_INSET, PhoneHumanTurn, Place } from "./parts";
-import { appHost } from "./appHost";
-import { push } from "./appBridge";
-import { closeDetail, closeLook, currentHost, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
   MAX_MESSAGES,
@@ -455,15 +453,6 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
   const [text, setText] = useState("");
   const pending = usePhone((s) => s.pendingInput);
   const error = usePhone((s) => s.inputError);
-  const key = usePhone((s) => s.detail?.key);
-  // A reply typed on a notification that did not arrive comes back into the box, once, for an hour (the app only).
-  useEffect(() => {
-    const room = currentHost()?.room;
-    if (!appHost() || !room || !key) return;
-    let current = true;
-    void push.takeReply(room, key).then((held) => { if (current && held) setText((typed) => typed || held); }, () => undefined);
-    return () => { current = false; };
-  }, [key?.device_id, key?.pane_id]);
   useEffect(
     () =>
       onReplyResult((ok) => {

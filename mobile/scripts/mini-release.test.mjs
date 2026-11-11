@@ -46,7 +46,6 @@ describe('the release command on the build machine', { timeout: 120000 }, () => 
     for (const file of ['release-env.json', 'release-expect.json']) copyFileSync(join(mobile, file), join(base(slug), 'release-inputs', file));
     put(join(base(slug), 'release-inputs/check-release-app.sh'), '#!/bin/bash\nexit 0\n', 0o755); // its own tests are check-release-app.test.mjs
     put(join(base(slug), 'release-inputs/bundle-manifest.json'), '{"schema":1,"files":{}}');
-    put(join(base(slug), 'release-inputs/relay-source.txt'), `${'a'.repeat(64)}\n`);
     // The project's entitlements name build settings, as the real files do.
     put(join(base(slug), 'ios/App/App/App.entitlements'), 'aps=$(APS_ENVIRONMENT) own=$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER) shared=$(AppIdentifierPrefix)me.grab.hide.ios.push-keys');
     put(join(base(slug), 'ios/App/HideNotification/HideNotification.entitlements'), 'shared=$(AppIdentifierPrefix)me.grab.hide.ios.push-keys');
@@ -85,7 +84,8 @@ case "$*" in *-exportArchive*)
   for logs in ${appleTmp}App_x.xcdistributionlogs ${appleTmp}XcodeDistPipeline.~~~x; do mkdir -p "$logs" && echo "${KEY_ID} ${ISSUER} ${TOKEN}" > "$logs/log"; done
   # Every copy of the key's body that exists while the export runs, where the script writes: the build folders and the
   # account temporary folder.
-  ${real('grep')} -rlF "${SECRET_LINE}" "${home}/hide-ios-build" "${accountTmp}" > "${home}/key-copies" 2> /dev/null || true
+  # BSD grep otherwise opens the step's log FIFO and waits for its own output forever; only files can hold a copy.
+  ${real('grep')} -r -D skip -lF "${SECRET_LINE}" "${home}/hide-ios-build" "${accountTmp}" > "${home}/key-copies" 2> /dev/null || true
   [ -n "$STUB_EXPORT_HOLDS" ] && { bash -c 'sleep 300 & echo $! > "${home}/grandchild.tmp" && mv "${home}/grandchild.tmp" "${home}/grandchild"; wait' & n=0; while [ -d "${home}" ] && [ ! -e "${home}/go" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done; }
   [ -n "$STUB_EXPORT_FAILS" ] && exit 65;;
 esac

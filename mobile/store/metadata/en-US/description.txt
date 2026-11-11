@@ -12,7 +12,7 @@ Your coding agents keep working on your own computer. Hide on your phone shows w
 WHAT YOU CAN DO
 - See every agent in one list: Needs You, Working, Unread and Seen.
 - Read an agent's conversation and reply from wherever you are.
-- Get a notification when an agent asks you something. Notifications are encrypted and opened on your phone, and you can reply right from the notification.
+- Get a notification when an agent asks you something. Notifications are encrypted and opened on your phone, and tapping one opens that conversation.
 - Follow a mission: its steps, its pull requests and the one decision that waits on you.
 - Check a pull request's status and reviews, then merge it, or hand it to an agent.
 - Open the pages and images your agent made, right in the app.

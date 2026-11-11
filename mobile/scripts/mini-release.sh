@@ -323,7 +323,7 @@ version=${3:?version} build=${4:?build number} commit=${5:?commit} again=${6:-0}
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version '$version' is not three numbers"
 [[ "$build" =~ ^[0-9]{1,18}$ ]] || die "build number '$build' is not a number"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "commit '$commit' is not a full commit id"
-for file in "$registry" "$expect" "$inputs/check-release-app.sh" "$inputs/bundle-manifest.json" "$inputs/relay-source.txt"; do
+for file in "$registry" "$expect" "$inputs/check-release-app.sh" "$inputs/bundle-manifest.json"; do
     [[ -f "$file" ]] || die "$file was not copied to this machine"
 done
 account_tmp=$(getconf DARWIN_USER_TEMP_DIR 2> /dev/null || true)
@@ -362,10 +362,7 @@ auth=(-authenticationKeyPath "$HIDE_IOS_ASC_KEY_PATH" -authenticationKeyID "$HID
 altool_auth=(--api-key "$HIDE_IOS_ASC_KEY_ID" --api-issuer "$HIDE_IOS_ASC_ISSUER_ID" --p8-file-path "$HIDE_IOS_ASC_KEY_PATH")
 
 # The extensions are signed before the app that holds them (Xcode's export does that order), and `--deep --strict` below
-# fails when an extension's signature is missing or was made after the app's. The relay library's source digest is read
-# from the release inputs build-ios.sh recomputed from the checkout.
-relay_digest=$(cat "$inputs/relay-source.txt")
-[[ "$relay_digest" =~ ^[0-9a-f]{64}$ ]] || die "release-inputs/relay-source.txt does not hold a relay source digest"
+# fails when an extension's signature is missing or was made after the app's.
 
 # ---- archive, export, check ----------------------------------------------------------------------------------------
 
@@ -454,7 +451,7 @@ signature=$(codesign -dvv "$app" 2>&1)
 grep -q '^Authority=Apple Distribution: ' <<< "$signature" || die "the app is not signed with an Apple Distribution certificate (authorities: $(grep '^Authority=' <<< "$signature" | tr '\n' ';'))"
 
 step "release checks"
-bash "$inputs/check-release-app.sh" "$app" "$facts" "$expect" "$inputs/bundle-manifest.json" "$version" "$build" "$relay_digest"
+bash "$inputs/check-release-app.sh" "$app" "$facts" "$expect" "$inputs/bundle-manifest.json" "$version" "$build"
 
 # ---- upload --------------------------------------------------------------------------------------------------------
 

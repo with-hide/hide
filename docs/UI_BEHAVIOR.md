@@ -3185,7 +3185,8 @@ Returning to On restores each computer’s actual subscription when connected, e
 An unsaved browser choice shows the existing storage-failure guidance and survives visibility changes and reopening Settings until this page closes.
 The iOS app removes this phone’s keys for every computer when turned off; removing a computer removes only that computer’s subscription or key.
 In the demo 연결된 컴퓨터 holds three rows, the sample host with its `샘플` mark, `내 컴퓨터 연결하기` and `체험 끝내기`, with the note that nothing goes to a computer under the card.
-In the demo the switch asks the same question and posts one sample notification on this phone, with the same Reply button: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
+In the demo the switch asks the same question and posts one sample notification on this phone, without actions: the first sample agent's title, then the status word, its question and its project, worded by the code that words a real notification; it names no computer, and no key is made and nothing is registered or sent.
+In the iOS app a real notification tap opens its conversation, where the person can reply; long pressing a notification offers no Reply action, including the demo sample.
 The browser demo keeps its notification row as `샘플` without a receiving control; only the iOS app can post the demo’s local sample notification.
 The first screen's 언어 value reads `폰 따라가기` (the phone's own language) while no computer is connected, and `Mac 따라가기` only inside a computer; the camera view says the camera is already open (`카메라가 이미 열려 있어요. 닫고 다시 시도해 주세요.`) when another screen holds it, and keeps the permission wording for a camera that cannot be used.
 표시 has 언어 and 화면 as one-line values that open a bottom sheet to choose from, and under the card `이 폰에만 저장돼요`.
