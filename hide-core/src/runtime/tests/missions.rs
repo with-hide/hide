@@ -11022,7 +11022,7 @@ fn a_failed_taken_body_keeps_one_owner_after_a_close_shelves_it() {
             .iter()
             .find(|row| row["id"] == "mission-1")
             .unwrap();
-        assert_eq!(row["conductor"]["pane_id"], "sender");
+        assert_eq!(row["conductor"], "sender");
         let other = runtime.delivery_observations["recipient"]
             .actor
             .session
