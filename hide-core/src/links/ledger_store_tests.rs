@@ -1157,6 +1157,7 @@ fn turn_replay_and_status_undo_survive_restart() {
         missed: vec![NewMissedWork {
             kind: MissedKind::Problem,
             text: "모바일 줄바꿈이 남음".into(),
+            same_as: None,
         }],
         ..Default::default()
     };
@@ -1281,6 +1282,7 @@ fn an_off_or_failed_turn_remains_raw_after_restart_and_a_late_answer() {
             missed: vec![NewMissedWork {
                 kind: MissedKind::Leftover,
                 text: "과거 보고를 뒤늦게 등록하면 안 됨".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -1306,6 +1308,7 @@ fn the_durable_issue_intent_keeps_the_original_attempt_and_closes_without_an_out
             missed: vec![NewMissedWork {
                 kind: MissedKind::Problem,
                 text: "모바일 검증이 남음".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -1399,6 +1402,7 @@ fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolvin
             missed: vec![NewMissedWork {
                 kind: MissedKind::FollowUp,
                 text: "회귀 검증 이슈 등록".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -1602,6 +1606,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
                     missed: vec![NewMissedWork {
                         kind: MissedKind::Leftover,
                         text: "정리할 일".into(),
+                        same_as: None,
                     }],
                     ..Default::default()
                 },
@@ -1716,6 +1721,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
             missed: vec![NewMissedWork {
                 kind: MissedKind::Problem,
                 text: "parent follow-up".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -1750,6 +1756,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
             missed: vec![NewMissedWork {
                 kind: MissedKind::Problem,
                 text: "invalid follow-up".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -1912,6 +1919,7 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
             missed: vec![NewMissedWork {
                 kind: MissedKind::FollowUp,
                 text: "문서 갱신".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -2594,10 +2602,12 @@ fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_
                 NewMissedWork {
                     kind: MissedKind::Ask,
                     text: "Q4 범위를 정해 주세요".into(),
+                    same_as: None,
                 },
                 NewMissedWork {
                     kind: MissedKind::Problem,
                     text: "e2e가 로컬에서 깨짐".into(),
+                    same_as: None,
                 },
             ],
             ..Default::default()
@@ -2723,6 +2733,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
     let ask = |text: &str| NewMissedWork {
         kind: MissedKind::Ask,
         text: text.into(),
+        same_as: None,
     };
     let asks = |store: &LinkStore| {
         store
@@ -2830,6 +2841,7 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
         missed: vec![NewMissedWork {
             kind: MissedKind::Ask,
             text: "PRD로 넘어갈까요?".into(),
+            same_as: None,
         }],
         ..Default::default()
     };
@@ -2861,6 +2873,128 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
     assert!(store.ledger_record(&session()).unwrap().asks.is_empty());
 }
 
+/// The turn-end update of a turn at `offset`, woken by a letter
+/// (`asks_answered` false) or by a reply.
+fn turn_end(offset: u64, asks_answered: bool, judgment: TurnJudgment) -> LedgerUpdate {
+    LedgerUpdate::TurnEnd {
+        session: session(),
+        offset,
+        started_at_unix_ms: offset * 1_000,
+        at_unix_ms: offset * 1_000 + 500,
+        end: LabelEnd::Question,
+        work_author: false,
+        asks_answered,
+        line: String::new(),
+        turn_witness: None,
+        judgment,
+    }
+}
+
+fn asks(lines: &[(&str, Option<&str>)]) -> TurnJudgment {
+    TurnJudgment {
+        missed: lines
+            .iter()
+            .map(|(text, same_as)| NewMissedWork {
+                kind: MissedKind::Ask,
+                text: (*text).into(),
+                same_as: same_as.map(str::to_owned),
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// A turn a letter woke words a question still open again and names it by
+/// its id: the record keeps the one line, and a question it does not name
+/// is a new one.
+#[test]
+fn an_open_ask_a_letter_turn_rewords_stays_one_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "미션 시작해 줘");
+    chapter(&mut store);
+    end(&mut store, 1, asks(&[("main 커밋을 push할지 결정", None)]));
+    let id = store.ledger_record(&session()).unwrap().asks[0].id.clone();
+    store
+        .apply_ledger_update(&turn_end(
+            2,
+            false,
+            asks(&[
+                ("main에 push 안 된 커밋 61개를 push할지 결정", Some(&id)),
+                ("Hide 문제를 이슈로 올릴지", None),
+            ]),
+        ))
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    let lines: Vec<&str> = record.asks.iter().map(|ask| ask.text.as_str()).collect();
+    assert_eq!(
+        lines,
+        ["main 커밋을 push할지 결정", "Hide 문제를 이슈로 올릴지"]
+    );
+}
+
+/// A reply closes the questions before it, so one the turn names by its id
+/// and still waits on is listed as this turn's.
+#[test]
+fn an_ask_named_again_after_a_reply_is_this_turns_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "미션 시작해 줘");
+    chapter(&mut store);
+    end(&mut store, 1, asks(&[("main 커밋을 push할지 결정", None)]));
+    let id = store.ledger_record(&session()).unwrap().asks[0].id.clone();
+    store
+        .apply_ledger_update(&turn_end(
+            2,
+            true,
+            asks(&[("커밋 61개를 push할지 결정", Some(&id))]),
+        ))
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    let lines: Vec<&str> = record.asks.iter().map(|ask| ask.text.as_str()).collect();
+    assert_eq!(lines, ["커밋 61개를 push할지 결정"]);
+}
+
+/// The questions a turn repeats by id take no place of its new lines, and
+/// more new lines than the limit are refused.
+#[test]
+fn repeated_asks_do_not_count_against_a_turns_new_lines() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "미션 시작해 줘");
+    chapter(&mut store);
+    end(
+        &mut store,
+        1,
+        asks(&[("가", None), ("나", None), ("다", None)]),
+    );
+    let open = store.ledger_record(&session()).unwrap().asks;
+    let ids: Vec<&str> = open.iter().map(|ask| ask.id.as_str()).collect();
+    store
+        .apply_ledger_update(&turn_end(
+            2,
+            false,
+            asks(&[
+                ("가 다시", Some(ids[0])),
+                ("나 다시", Some(ids[1])),
+                ("다 다시", Some(ids[2])),
+                ("라", None),
+                ("마", None),
+                ("바", None),
+            ]),
+        ))
+        .unwrap();
+    assert_eq!(store.ledger_record(&session()).unwrap().asks.len(), 6);
+    assert_eq!(
+        store.apply_ledger_update(&turn_end(
+            3,
+            false,
+            asks(&[("사", None), ("아", None), ("자", None), ("차", None)]),
+        )),
+        Err("ledger_judgment_capacity".to_owned())
+    );
+}
+
 /// B12: the label's `resolved` closes a question only in a turn an answer
 /// came in, so text in a letter cannot hide what waits on the operator.
 #[test]
@@ -2876,6 +3010,7 @@ fn a_label_cannot_resolve_an_ask_in_a_turn_no_answer_came_in() {
             missed: vec![NewMissedWork {
                 kind: MissedKind::Ask,
                 text: "Q4 범위를 정해 주세요".into(),
+                same_as: None,
             }],
             ..Default::default()
         },
@@ -3008,6 +3143,7 @@ fn stopped(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, asks: 
                     .map(|text| NewMissedWork {
                         kind: MissedKind::Ask,
                         text: (*text).into(),
+                        same_as: None,
                     })
                     .collect(),
                 ..Default::default()
