@@ -44,6 +44,9 @@ ok "build number is $build" ".CFBundleVersion == \"$build\"" "$facts/info.json"
 ok "iPhone only" '.UIDeviceFamily == [1]' "$facts/info.json"
 ok "minimum iOS is $min_os" ".MinimumOSVersion == \"$min_os\"" "$facts/info.json"
 ok "built with the $sdk SDK" "(.DTSDKName // \"\") | startswith(\"$sdk\")" "$facts/info.json"
+# The app and its extension name their keychain groups from this value (PairingKeychain, PushKeychain). Without it the
+# app keeps a push key in its own group, which the extension cannot read, and every notification stays the fixed text.
+ok "the app's Info.plist names the team prefix $team." ".AppIdentifierPrefix == \"$team.\"" "$facts/info.json"
 
 # Export compliance: the operator answered App Store Connect's questionnaire (standard encryption algorithms, not
 # distributed in France), and the app states that answer so no build waits at Missing Compliance. The key must be present
@@ -98,6 +101,7 @@ while IFS= read -r name; do
         [[ -s "$file" ]] || { fail "$name: $file is missing or empty"; continue 2; }
     done
     ok "$name: bundle id is $appex_bundle" ".CFBundleIdentifier == \"$appex_bundle\"" "$af/info.json"
+    ok "$name: Info.plist names the team prefix $team." ".AppIdentifierPrefix == \"$team.\"" "$af/info.json"
     ok "$name: version is $version" ".CFBundleShortVersionString == \"$version\"" "$af/info.json"
     ok "$name: build number is $build" ".CFBundleVersion == \"$build\"" "$af/info.json"
     ok "$name: extension point is $point" ".NSExtension.NSExtensionPointIdentifier == \"$point\"" "$af/info.json"
