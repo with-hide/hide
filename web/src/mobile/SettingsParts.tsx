@@ -1,10 +1,13 @@
 // The pieces the phone's Settings screen is built from, with no store in them: the Settings tab uses them inside a
 // computer, and the start page (no computer yet) uses the same ones, so display and about look and behave alike.
-// Each takes the translator of the page it is on.
+// A section is the desktop Settings' own group (`Group`, settings-rows.tsx): its heading, a card of rows split by
+// hairlines, and its note under the card; the rows are the phone's, a touch target tall. Each takes the translator of
+// the page it is on.
 
 import { ChevronRightIcon, ExternalLinkIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
+import { Group } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { RowButton } from "../components/ui/row-button";
@@ -22,14 +25,17 @@ export const SUPPORT_URL = "https://withhide.dev/support";
 const FOLLOW = "follow";
 const THEMES = ["system", "light", "dark"] as const satisfies readonly ThemeChoice[];
 
-export function Section({ title, children, ...marker }: { title: string; children: ReactNode } & Record<`data-${string}`, string>) {
+export function Section({ title, note, children, ...marker }: { title: string; note?: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
   return (
-    <section className="px-xl pt-lg" {...marker}>
-      <h2 className="pb-xs text-body text-muted-foreground">{title}</h2>
-      <div className="divide-y divide-border">{children}</div>
-    </section>
+    <div className="px-xl pt-lg">
+      {/* The note keeps Korean words whole, as the phone's other lines do, and still breaks a long unbroken string. */}
+      <Group title={title} note={note ? <span className="break-keep wrap-anywhere">{note}</span> : undefined} {...marker}>{children}</Group>
+    </div>
   );
 }
+
+/** The inset of a row inside a section's card, so its words line up with the card's other rows. */
+export const ROW_INSET = "px-md";
 
 /** A row that tells a value and, when it is pressable, where it leads. */
 export function ValueRow({ label, value, onPress, marker }: { label: string; value: ReactNode; onPress?: () => void; marker: string }) {
@@ -39,7 +45,7 @@ export function ValueRow({ label, value, onPress, marker }: { label: string; val
       <span className="flex min-w-0 items-center gap-xs text-subhead text-muted-foreground">{value}{onPress ? <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}</span>
     </>
   );
-  const className = "min-h-(--size-touch-target) gap-md px-none py-sm";
+  const className = `min-h-(--size-touch-target) gap-md rounded-none py-sm ${ROW_INSET}`;
   return onPress
     ? <RowButton className={className} data-phone-setting={marker} onClick={onPress}>{body}</RowButton>
     : <div className={`flex items-center ${className}`} data-phone-setting={marker}>{body}</div>;
@@ -48,7 +54,7 @@ export function ValueRow({ label, value, onPress, marker }: { label: string; val
 /** A link row that opens the page in the system browser, never inside the app. */
 function LinkRow({ label, href, marker }: { label: string; href: string; marker: string }) {
   return (
-    <Button asChild variant="ghost" className="h-auto min-h-(--size-touch-target) w-full justify-between gap-md rounded-none px-none py-sm text-title font-normal text-foreground">
+    <Button asChild variant="ghost" className={`h-auto min-h-(--size-touch-target) w-full justify-between gap-md rounded-none py-sm text-title font-normal text-foreground ${ROW_INSET}`}>
       <a href={href} target="_blank" rel="noopener noreferrer" data-phone-setting={marker}>
         <span>{label}</span>
         <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
@@ -106,16 +112,17 @@ export function DisplaySection({ t, openSheet = null, follows = "mac" }: { t: TF
   const followWords = t(follows === "phone" ? "mobile.settings.followPhone" : "mobile.settings.followMac");
   return (
     <>
-      <Section title={t("mobile.settings.display")} data-phone-settings-section="display">
+      <Section
+        title={t("mobile.settings.display")}
+        data-phone-settings-section="display"
+        note={<span data-phone-settings-note={kept ? "kept" : "not-kept"} role={kept ? undefined : "status"}>{t(kept ? "mobile.settings.note" : "mobile.settings.notKept")}</span>}
+      >
         <div ref={(node) => { languageRow.current = node; }}>
           <ValueRow label={t("common.language")} marker="language" value={language ? LANGUAGE_NAMES[language] : followWords} onPress={() => setSheet("language")} />
         </div>
         <div ref={(node) => { themeRow.current = node; }}>
           <ValueRow label={t("mobile.settings.appearance")} marker="theme" value={t(`mobile.settings.${theme}`)} onPress={() => setSheet("theme")} />
         </div>
-        <p className="py-sm text-body text-muted-foreground" data-phone-settings-note={kept ? "kept" : "not-kept"} role={kept ? undefined : "status"}>
-          {t(kept ? "mobile.settings.note" : "mobile.settings.notKept")}
-        </p>
       </Section>
     <ChoiceSheet t={t} title={t("common.language")} open={sheet === "language"} onOpenChange={(open) => setSheet(open ? "language" : null)} returnTo={() => languageRow.current?.querySelector("button") ?? null}>
       <RadioGroup

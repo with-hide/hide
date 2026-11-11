@@ -41,7 +41,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
   }, [hosts, activeRoom]);
   if (hosts === undefined) return null;
   if (hosts === null) return <p role="alert">{t("mobile.relay.storage")}</p>;
-  return <div className="flex min-w-0 flex-col gap-xs">
+  return <div className="flex min-w-0 flex-col divide-y divide-border">
     {hosts.map((host) => {
       const state = host.room === activeRoom ? active : presence[host.room];
       const seen = state?.lastSeen ?? host.lastSeen;
@@ -49,7 +49,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
         ? t("mobile.relay.versions", { app: PHONE_PROTOCOL, device: state.protocolMismatch }) : null;
       const trash = <Button variant="ghost" size="icon" className="mt-md min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 aria-hidden="true" /></Button>;
       if (host.credential === null) return <div key={host.room} className="flex min-w-0 items-start" data-phone-host-revoked={host.room}>
-        <div className="flex min-w-0 flex-1 items-start gap-md px-sm py-md">
+        <div className="flex min-w-0 flex-1 items-start gap-md px-md py-md">
           <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground opacity-(--opacity-dimmed)" />
           <span className="flex min-w-0 flex-1 flex-col gap-xs">
             <span className="flex min-w-0 flex-col gap-xs opacity-(--opacity-dimmed)">
@@ -68,7 +68,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
       const viewing = host.room === activeRoom && state?.online === true;
       return <div key={host.room} className="flex min-w-0 flex-col">
         <div className="flex min-w-0 items-start">
-        <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-sm py-md text-left" data-phone-host="true" onClick={() => choose(host)}>
+        <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-md py-md text-left" data-phone-host="true" onClick={() => choose(host)}>
           <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground" />
           <span className="flex min-w-0 flex-1 flex-col gap-xs">
             <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
@@ -86,7 +86,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
         {host.room === activeRoom ? <ReachedDevices t={t} devices={machines} /> : null}
       </div>;
     })}
-    {removing ? <div className="flex flex-col gap-sm px-sm py-md">
+    {removing ? <div className="flex flex-col gap-sm px-md py-md">
       <p className="text-subhead">{t("mobile.relay.removeConfirm", { name: removing.name })}</p>
       <div className="flex gap-sm">
         <Button variant="secondary" className="min-h-(--size-touch-target)" onClick={() => setRemoving(null)}>{t("common.cancel")}</Button>
@@ -98,7 +98,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
         }}>{t("mobile.relay.remove")}</Button>
       </div>
     </div> : null}
-    <Button variant="ghost" className="mt-sm min-h-(--size-touch-target) justify-start gap-sm border-t border-border px-sm text-body" data-phone-add="true" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
+    <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm rounded-none px-md text-body" data-phone-add="true" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
     {error ? <p role="alert">{t("mobile.relay.storage")}</p> : null}
   </div>;
 }

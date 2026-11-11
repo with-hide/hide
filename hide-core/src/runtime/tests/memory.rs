@@ -547,6 +547,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
             },
         }],
         last_report_failure: None,
+        records_error: None,
     };
     guard.ingest_hook_diagnosis(diagnosis(hide_agent_hooks::HookStatus::NotInstalled));
     guard.ingest_kit_report(
@@ -643,6 +644,7 @@ fn a_switch_pressed_before_the_hooks_are_read_turns_memory_on_once_they_are() {
             },
         }],
         last_report_failure: None,
+        records_error: None,
     });
     assert_eq!(pending(&guard), Some(MemoryAction::Enable));
 }
@@ -700,6 +702,7 @@ fn one_unsupported_runtime_does_not_disable_another_supported_runtime() {
             },
         ],
         last_report_failure: None,
+        records_error: None,
     });
 
     assert!(runtime.hooks_support_memory());

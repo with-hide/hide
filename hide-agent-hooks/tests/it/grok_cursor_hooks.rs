@@ -101,12 +101,9 @@ fn grok_diagnoses_conflicting_session_ids_at_every_intake_point() {
         let run = machine.run_event("grok", event, &payload.to_string(), Some(PANE), GROK);
         assert!(run.status_ok && run.stdout.is_empty(), "{event}: {run:?}");
         assert!(machine.calls().is_empty(), "{event}: {:?}", machine.calls());
-        let diagnostic = std::fs::read_to_string(
-            machine
-                .home
-                .join(".hide/agent-hooks/delivery-diagnostics.json"),
-        )
-        .unwrap_or_default();
+        let diagnostic =
+            std::fs::read_to_string(machine.records().join("delivery-diagnostics.json"))
+                .unwrap_or_default();
         assert!(
             diagnostic.contains("session_conflict"),
             "{event}: {diagnostic:?} {run:?}"

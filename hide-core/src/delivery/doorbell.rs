@@ -2486,6 +2486,7 @@ mod tests {
                     },
                 }],
                 last_report_failure: None,
+                records_error: None,
             });
             if let Some(passed) = checked {
                 let miss = (!passed).then_some("not_placeholder");
@@ -2725,7 +2726,13 @@ mod tests {
     /// with first.
     struct Owing {
         bell: Bell,
-        home: tempfile::TempDir,
+        /// The account the node answers for, kept alive for the folder below.
+        _home: tempfile::TempDir,
+        /// The records folder this machine's node reads: it answers for the
+        /// home above with no state folder of its own and belongs to no
+        /// installation, so the route names the account's own folder, once
+        /// (`hide_agent_hooks::route::records_of_state`).
+        records: std::path::PathBuf,
         /// A minute after the handover, well after the hook ended.
         later: u64,
     }
@@ -2749,8 +2756,14 @@ mod tests {
             bell.pass(&mut Doorbell::default(), start);
             let handed = prompt_pull(&bell, &bell.line().unwrap());
             assert_eq!(handed["ids"], json!([bell.letter]));
-            hide_agent_hooks::owed::owe(
-                home.path(),
+            // The hook writes where its own daemon reads: it names no state
+            // folder and no installation of its own, and the route names the
+            // account's folder for both the writer and the node.
+            let records =
+                hide_agent_hooks::route::records_of_state(home.path(), None, None).unwrap();
+            let folder = hide_agent_hooks::owed::folder_in(&records);
+            hide_agent_hooks::owed::owe_in(
+                &folder,
                 "recipient",
                 "recipient-native",
                 std::slice::from_ref(&bell.letter),
@@ -2759,14 +2772,15 @@ mod tests {
             .unwrap();
             Self {
                 bell,
-                home,
+                _home: home,
+                records,
                 later: now() + 60_000,
             }
         }
 
         /// Whether the pane's machine still keeps the confirmation.
         fn kept(&self) -> bool {
-            hide_agent_hooks::owed::folder_of(self.home.path(), None)
+            hide_agent_hooks::owed::folder_in(&self.records)
                 .join("recipient.json")
                 .exists()
         }
@@ -2831,7 +2845,7 @@ mod tests {
     #[test]
     fn a_handed_letter_is_asked_about_again_once_its_pane_state_moves() {
         let owing = Owing::start(Vec::new());
-        let folder = hide_agent_hooks::owed::folder_of(owing.home.path(), None);
+        let folder = hide_agent_hooks::owed::folder_in(&owing.records);
         let record = std::fs::read(folder.join("recipient.json")).unwrap();
         std::fs::remove_file(folder.join("recipient.json")).unwrap();
         let mut doorbell = Doorbell::default();

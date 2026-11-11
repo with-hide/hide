@@ -111,9 +111,12 @@ describe("the Settings tab", () => {
 
   it("shows the sample computer with a way out that only leaves the demo, and no notification control", async () => {
     await act(async () => { usePhone.setState({ demo: true }); root.render(<><PhoneLanguageBoundary /><SettingsScreen /></>); });
-    expect(document.querySelector("[data-phone-demo-panel]")).not.toBeNull();
-    expect(document.querySelector("[data-phone-demo-sample]")).not.toBeNull();
-    expect(document.querySelector("[data-phone-demo-exit], [data-phone-demo-connect]")).not.toBeNull();
+    const computers = document.querySelector('[data-phone-settings-section="computers"]')!;
+    expect(computers.querySelector("[data-phone-demo-sample]")).not.toBeNull();
+    expect(computers.querySelector("[data-phone-demo-connect]")?.textContent).toBe("Connect a real computer");
+    expect(computers.querySelector("[data-phone-demo-leave]")?.textContent).toBe("Leave demo");
+    expect(computers.textContent).toContain("Everything here is sample data");
+    expect(document.querySelector("[data-phone-notifications] [role=switch]")).toBeNull();
     await act(async () => usePhone.setState({ demo: false }));
   });
 });

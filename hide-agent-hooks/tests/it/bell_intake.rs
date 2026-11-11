@@ -210,7 +210,7 @@ fn a_confirmation_the_prompt_hook_missed_is_kept_for_the_node_and_no_hook_sends_
     });
     kit.hook("Stop", &stop, &pane);
     assert_eq!(confirms(), 1, "a turn end sends nothing: {:?}", kit.asked());
-    let folder = hide_agent_hooks::owed::folder_of(kit.root.path(), None);
+    let folder = kit.daemon.records().join("owed-confirmations");
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()

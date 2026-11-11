@@ -344,7 +344,7 @@ function Scrollback({ text, more, lines, loading }: { text: string; more: boolea
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-scrollback={lines} onScroll={onScroll}>
       {more ? <p className="pb-sm text-center text-body text-muted-foreground">{t("mobile.pullOlder")}</p> : null}
       {loading ? <p className="text-body text-muted-foreground">{t("mobile.loading")}</p> : null}
-      <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-body leading-normal text-foreground">
+      <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-caption leading-normal text-foreground">
         {rows.map((row, index) => (
           <span
             key={index}
