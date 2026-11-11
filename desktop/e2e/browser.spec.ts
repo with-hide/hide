@@ -15,6 +15,7 @@ import path from "node:path";
 import { corePaneFocus, focusPane, focusTab, newTab, openProject, runInPaneKeepingFocus, viewPane, waitForPaneInput, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { testBrowserArgs } from "../../web/e2e/browser-launch.cjs";
 import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, focusPage, hostLog, launchShell, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
@@ -526,19 +527,40 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   await tab(again, "Page A").click();
   await expect.poll(async () => (await views()).find((view) => view.url === `${origin}/a.html`)?.visible).toBe(true);
   await windowShot("browser-relaunched");
+});
 
-  // A plain browser tab on the same daemon shows a notice, not a page.
+// The plain browser has its own launcher and startup contract. Keep this
+// independent of the native-view lifecycle so Windows checks it too.
+test("browser: a plain browser preserves startup features and shows the native-host notice", { tag: "@platform" }, async () => {
+  ({ app } = await launchShell(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await shellPage(app);
+  await withProbe(page);
+  await enterWorkspace(page, "fixture");
+  expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ status: 0, ok: true });
+  const display = await displayIdOf(page, "Page A");
   const status = JSON.parse(run.hide(["status", "--json"]).stdout) as { url: string };
-  const browser = await chromium.launch();
+  // CDP exposes the actual command line only with this switch.
+  const browser = await chromium.launch({ args: testBrowserArgs(["--enable-automation"]) });
   try {
+    const session = await browser.newBrowserCDPSession();
+    try {
+      const { arguments: args } = await session.send("Browser.getBrowserCommandLine");
+      const effective = args.filter((arg) => arg.startsWith("--disable-features=")).at(-1);
+      expect(effective).toBeDefined();
+      const features = effective!.slice("--disable-features=".length).split(",");
+      expect(features).toEqual(expect.arrayContaining(["PaintHolding", "Translate"]));
+      if (process.platform === "win32") expect(features).toContain("TcpPortRandomizationWin");
+    } finally {
+      await session.detach();
+    }
     const plain = await browser.newPage();
     await plain.goto(status.url);
     await enterWorkspace(plain, "fixture");
     await showDocuments(plain);
     await tab(plain, "Page A").click();
-    // Page C, opened beside Page A, shows the same notice in its own area.
-    await expect(plain.locator(`[data-browser-display="${a}"] [data-area-empty="browser-host"]`)).toContainText("Pages open in the Hide desktop app.");
-    await expect(plain.locator(`[data-browser-open-external="${a}"]`)).toBeVisible();
+    await expect(plain.locator(`[data-browser-display="${display}"] [data-area-empty="browser-host"]`)).toContainText("Pages open in the Hide desktop app.");
+    await expect(plain.locator(`[data-browser-open-external="${display}"]`)).toBeVisible();
     await screenshot(plain, "browser-plain-tab");
   } finally {
     await browser.close();

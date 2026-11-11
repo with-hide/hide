@@ -330,6 +330,10 @@ pub enum PushOutcome {
     Delivered,
     /// Apple says the token no longer names an install; the sender drops it.
     TokenGone,
+    /// Apple refuses the token itself (400 `BadDeviceToken`, `DeviceTokenNotForTopic`): malformed, made for the other
+    /// environment or for another app. It does not say the install is gone, so the sender keeps the registration and
+    /// reports it as a configuration problem.
+    TokenRejected,
     /// A limit refused the request; the socket stays open.
     RateLimited,
     /// Apple could not be reached or its answer means "try later".

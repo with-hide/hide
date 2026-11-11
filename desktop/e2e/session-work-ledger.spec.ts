@@ -6,7 +6,7 @@ import { setAgentState } from "../../web/e2e/fixture-agents";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
-import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
+import { enterWorkspace, hoverSettledTaskRow, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, launchShell, REPO, startStack, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 import { finishNative } from "./native-teardown";
@@ -43,7 +43,8 @@ test("@platform session records by goal flow, ended work and search render in bo
     const child = delegated!;
     const root = await taskRow(page, pane, FIRST_GOAL);
     const tasks = page.locator("[data-task-lens]");
-    await root.hover();
+    // The core settles the root among the resting ones once its child has ended; a hover before that is lost when the row moves.
+    await hoverSettledTaskRow(root, "resting");
     await page.locator(`[data-task-record="${pane}"]`).click();
     // The record opens in the lane's 보기 slot (PRD sidebar-task-lens B15).
     const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
@@ -117,7 +118,8 @@ test("@platform session records by goal flow, ended work and search render in bo
       await page.keyboard.press("Escape");
     }
     // Resolve from the row's ⋯ menu puts the task under 쉬는 중 once it is saved (B18).
-    await root.hover();
+    // The summaries turned back on, the record's ask returns and the core moves the row to 내 차례; the menu opens on that row.
+    await hoverSettledTaskRow(root, "needs_you");
     await page.locator(`[data-task-more="${pane}"]`).click();
     await page.locator(`[data-task-menu="${pane}"] [data-menu-item="resolve"]`).click();
     await expect(tasks.locator('[data-task-fold="rest"]')).toBeVisible({ timeout: 30_000 });

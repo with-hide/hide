@@ -641,33 +641,24 @@ fn variables(pairs: Vec<(&'static str, PathBuf)>) -> impl Fn(&str) -> Option<std
 }
 
 #[test]
-fn herdrs_default_socket_is_resolved_in_herdrs_own_order() {
+fn herdrs_config_folder_is_resolved_in_herdrs_own_order() {
     let base = std::env::temp_dir();
     let home = base.join("example-home");
     let roaming = base.join("example-roaming");
     let config = base.join("example-config");
-    let socket = |folder: PathBuf| folder.join("herdr").join("herdr.sock");
 
     let home_only = variables(vec![(host::HOME_VARIABLE, home.clone())]);
     let expected = if cfg!(windows) {
-        socket(home.join("AppData").join("Roaming"))
+        home.join("AppData").join("Roaming").join("herdr")
     } else {
-        socket(home.join(".config"))
+        home.join(".config").join("herdr")
     };
-    assert_eq!(
-        host::herdr_socket_default_from(&home_only).unwrap(),
-        expected
-    );
+    assert_eq!(host::herdr_config_dir_from(&home_only).unwrap(), expected);
 
     let with_appdata = variables(vec![
         (host::HOME_VARIABLE, home.clone()),
         ("APPDATA", roaming.clone()),
     ]);
-    let expected = if cfg!(windows) {
-        socket(roaming.clone())
-    } else {
-        socket(home.join(".config"))
-    };
     assert_eq!(
         host::herdr_config_dir_from(&with_appdata).unwrap(),
         if cfg!(windows) {
@@ -675,10 +666,6 @@ fn herdrs_default_socket_is_resolved_in_herdrs_own_order() {
         } else {
             home.join(".config/herdr")
         }
-    );
-    assert_eq!(
-        host::herdr_socket_default_from(&with_appdata).unwrap(),
-        expected
     );
 
     let with_config = variables(vec![
@@ -690,83 +677,21 @@ fn herdrs_default_socket_is_resolved_in_herdrs_own_order() {
         host::herdr_config_dir_from(&with_config).unwrap(),
         config.join("herdr")
     );
-    assert_eq!(
-        host::herdr_socket_default_from(&with_config).unwrap(),
-        socket(config)
-    );
 
     let relative = variables(vec![
         (host::HOME_VARIABLE, home),
         ("XDG_CONFIG_HOME", PathBuf::from("relative")),
     ]);
     assert_eq!(
-        host::herdr_socket_default_from(&relative)
-            .unwrap_err()
-            .kind(),
+        host::herdr_config_dir_from(&relative).unwrap_err().kind(),
         ErrorKind::InvalidInput
     );
     assert_eq!(
-        host::herdr_socket_default_from(&variables(Vec::new()))
+        host::herdr_config_dir_from(&variables(Vec::new()))
             .unwrap_err()
             .kind(),
         ErrorKind::NotFound
     );
-}
-
-#[test]
-fn the_herdr_socket_override_precedes_the_account_default_and_invalid_paths_fail() {
-    let dir = tempfile::tempdir().unwrap();
-    let chosen = dir.path().join("chosen.sock");
-    let vars = variables(vec![
-        (host::HOME_VARIABLE, dir.path().to_owned()),
-        ("HERDR_SOCKET_PATH", chosen.clone()),
-        ("HERDR_SESSION", PathBuf::from("work")),
-    ]);
-    assert_eq!(host::herdr_socket_from(&vars).unwrap(), chosen);
-    for (invalid, expected) in [
-        ("", ErrorKind::NotFound),
-        ("relative.sock", ErrorKind::InvalidInput),
-        ("/bad\nsocket", ErrorKind::InvalidInput),
-    ] {
-        let vars = variables(vec![
-            (host::HOME_VARIABLE, dir.path().to_owned()),
-            ("HERDR_SOCKET_PATH", PathBuf::from(invalid)),
-        ]);
-        assert_eq!(host::herdr_socket_from(&vars).unwrap_err().kind(), expected);
-    }
-    let vars = variables(vec![(host::HOME_VARIABLE, dir.path().to_owned())]);
-    assert_eq!(
-        host::herdr_socket_from(&vars).unwrap(),
-        host::herdr_socket_default_from(&vars).unwrap()
-    );
-}
-
-#[test]
-fn the_environment_session_selects_its_own_socket_without_a_socket_override() {
-    let dir = tempfile::tempdir().unwrap();
-    for name in ["work", "default"] {
-        let vars = variables(vec![
-            (host::HOME_VARIABLE, dir.path().to_owned()),
-            ("HERDR_SESSION", PathBuf::from(name)),
-        ]);
-        let folder = host::herdr_config_dir_from(&vars).unwrap();
-        let expected = if name == "default" {
-            folder.join("herdr.sock")
-        } else {
-            folder.join("sessions/work/herdr.sock")
-        };
-        assert_eq!(host::herdr_socket_from(&vars).unwrap(), expected);
-    }
-    for invalid in ["", ".", "..", "../other", "a/b", "work room"] {
-        let vars = variables(vec![
-            (host::HOME_VARIABLE, dir.path().to_owned()),
-            ("HERDR_SESSION", PathBuf::from(invalid)),
-        ]);
-        assert_eq!(
-            host::herdr_socket_from(&vars).unwrap_err().kind(),
-            ErrorKind::InvalidInput
-        );
-    }
 }
 
 #[test]

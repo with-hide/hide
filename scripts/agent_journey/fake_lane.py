@@ -238,7 +238,7 @@ PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": om
 def fake_home(kind):
     """`kind`'s fake-home declaration in contracts/agent-journey.json."""
     rows = json.loads((Path(__file__).resolve().parents[2] / "contracts/agent-journey.json").read_text())
-    return next(row.get("fake_home", {}) for row in rows if row["herdr_kind"] == kind)
+    return next(row.get("fake_home", {}) for row in rows if row["agent_cli"] == kind)
 
 
 def configure(kind, home, url, root, local, key=KEY):

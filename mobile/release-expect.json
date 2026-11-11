@@ -8,6 +8,39 @@
     "com.apple.developer.team-identifier": "GH6F6ZA497",
     "get-task-allow": false,
     "beta-reports-active": true,
-    "com.apple.developer.associated-domains": ["applinks:app.withhide.dev"]
-  }
+    "aps-environment": "production",
+    "com.apple.developer.associated-domains": [
+      "applinks:app.withhide.dev"
+    ],
+    "keychain-access-groups": [
+      "GH6F6ZA497.me.grab.hide.ios",
+      "GH6F6ZA497.me.grab.hide.ios.push-keys"
+    ]
+  },
+  "backgroundModes": [
+    "remote-notification"
+  ],
+  "appExtensions": [
+    {
+      "name": "HideNotification.appex",
+      "bundleId": "me.grab.hide.ios.notification-service",
+      "extensionPoint": "com.apple.usernotifications.service",
+      "entitlements": {
+        "application-identifier": "GH6F6ZA497.me.grab.hide.ios.notification-service",
+        "com.apple.developer.team-identifier": "GH6F6ZA497",
+        "get-task-allow": false,
+        "beta-reports-active": true,
+        "keychain-access-groups": [
+          "GH6F6ZA497.me.grab.hide.ios.push-keys"
+        ]
+      },
+      "forbiddenBinaryStrings": [
+        "URLSession",
+        "CFNetwork",
+        "NSURLConnection",
+        "nw_connection",
+        "WebSocket"
+      ]
+    }
+  ]
 }

@@ -2,8 +2,8 @@
 // commit 2ecf19a), src/worktree.rs (`branch_to_path_slug`).
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
-// Changed by Hide: an empty slug falls back to `worktree` rather than Herdr's
-// branch prefix; the rest of this file is Hide's own.
+// Changed by Hide: an empty slug becomes the literal `worktree`, as
+// the code below returns it; the rest of this file is Hide's own.
 
 //! The worktrees of the core's own engine (PRD engine-bundle-3-core-owns
 //! D-28): a new one is made with Git in Hide's own folder,
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_becomes_a_folder_name_as_herdr_spells_it() {
+    fn a_branch_becomes_a_folder_name_under_the_slug_rule() {
         assert_eq!(
             path_slug("feat/Engine Own__layout"),
             "feat-engine-own-layout"

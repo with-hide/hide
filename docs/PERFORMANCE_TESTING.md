@@ -591,7 +591,7 @@ Keys are CDP `Input.dispatchKeyEvent` events, which Chrome delivers to the focus
 Every time is on the page's clock from the chord's first keydown (or the click): `screen_ms` is the first animation frame whose DOM shows the change (the canvas's pane count, its zoom flag or the shown tab), and `frame_ms` the first frame after it in which the terminal the change is about shows it (text in a new pane, a new grid in a resized one).
 `topology-summary.json` gives each operation's p50, p95 and max to screen and to frame.
 `MEASURE_HIDED_BIN` points the run at another hided, such as a baseline built from the merge base with its `hide-holder` beside it, so baseline and candidate share the fixture; run both headless (`--isolated-headless`) under the same scale and report the load beside each.
-The stage times are read from the candidate's `pane_op.timing` lines in the run's `hide-state` diagnostic log (`summarize.py timing`, Drawn ahead of Herdr in [ARCHITECTURE.md](ARCHITECTURE.md#drawn-ahead-of-herdr)).
+The stage times are read from the candidate's `pane_op.timing` lines in the run's `hide-state` diagnostic log (`summarize.py timing`, Drawn ahead of the engine in [ARCHITECTURE.md](ARCHITECTURE.md#drawn-ahead-of-the-engine)).
 
 ### Restore after a reboot
 

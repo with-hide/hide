@@ -17,11 +17,12 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { focusTab, openProject, openWorktree, withControl } from "./daemon-actions";
 import { startAgentInProject } from "./fixture-agents";
-import { startHided, type Daemon } from "./hided-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { chooseTheme, countSent, enterWorkspace, openOtherCheckouts, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { quietFor } from "./wait";
+import { withCheckoutHoverDump } from "./checkout-hover";
 import { initGithubRepository } from "./github-remote";
 
 test.describe.configure({ timeout: 180_000 });
@@ -104,6 +105,11 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workspaceAt(engine, daemon, repo, "메인 체크아웃 정리");
     await workspaceAt(engine, daemon, worktree, "PR 카드 구현", true);
+    // Setup focuses each new agent. Leave that connection, then open as a
+    // first run so the external-open assertion starts on Main deterministically.
+    await page.goto("about:blank");
+    daemon = await asFirstRun(daemon);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
@@ -263,10 +269,12 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await rest(page);
     await expect(plain).toHaveCount(0);
 
-    await chooseTheme(page, "light");
-    await feature.locator("[data-checkout]").hover();
-    await expect(card).toBeVisible();
-    await screenshot(page, "checkout-pr-card-light");
+    await withCheckoutHoverDump(feature.locator("[data-checkout]"), async () => {
+      await chooseTheme(page, "light");
+      await feature.locator("[data-checkout]").hover();
+      await expect(card).toBeVisible();
+      await screenshot(page, "checkout-pr-card-light");
+    });
   } finally {
     daemon?.stop();
     engine.stop();

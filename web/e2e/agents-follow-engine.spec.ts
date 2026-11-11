@@ -1,5 +1,5 @@
 // A Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces on the first run and
-// lists no Gemini row (PRD agent-list-follows-herdr, B31 retirement). Every step runs against the core's own
+// lists no Gemini row (PRD agent-list-follows-engine, B31 retirement). Every step runs against the core's own
 // engine and a hided that runs the install kit.
 
 import { expect, test, type Page } from "@playwright/test";

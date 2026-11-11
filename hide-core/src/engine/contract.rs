@@ -1013,7 +1013,7 @@ fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
 }
 
 /// PRD engine-bundle-3-core-owns B28, D-9: a pane on the core's own engine
-/// names itself `HIDE_PANE_ID` and no Herdr pane, says its terminal is
+/// names itself `HIDE_PANE_ID` and no foreign pane identity, says its terminal is
 /// Hide's, and its proof names the shell its record holds, by the start time
 /// the system gives that shell.
 #[test]
@@ -1021,12 +1021,13 @@ fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
 fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
     let built = BuiltHolders::start();
     let engine = &built.engine;
-    // What the daemon was started with reaches its holders; a Herdr pane's
+    // What the daemon was started with reaches its holders; a foreign pane's
     // variables among it must not reach the pane's program.
+    let foreign = hide_platform::process::FOREIGN_PANE_IDENTITY;
     let env = BTreeMap::from([
-        ("HERDR_PANE_ID".to_owned(), "w9:p9".to_owned()),
+        (format!("{foreign}PANE_ID"), "w9:p9".to_owned()),
         (
-            "HERDR_SOCKET_PATH".to_owned(),
+            format!("{foreign}SOCKET_PATH"),
             "/nowhere/herdr.sock".to_owned(),
         ),
     ]);
@@ -1035,11 +1036,11 @@ fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
         .expect("a workspace is made");
     prompted(engine, &pane);
     let line = if cfg!(windows) {
-        "Write-Output \"id=$env:HIDE_PANE_ID term=$env:TERM_PROGRAM herdr=$(@(Get-ChildItem env:HERDR_* -ErrorAction SilentlyContinue).Count)\""
+        "Write-Output \"id=$env:HIDE_PANE_ID term=$env:TERM_PROGRAM herdr=$(@(Get-ChildItem env:HERDR_* -ErrorAction SilentlyContinue).Count)\"".to_owned()
     } else {
-        "echo \"id=$HIDE_PANE_ID term=$TERM_PROGRAM herdr=$(env | grep -c '^HERDR_')\""
+        format!("echo \"id=$HIDE_PANE_ID term=$TERM_PROGRAM herdr=$(env | grep -c '^{foreign}')\"")
     };
-    engine.submit_text(WAIT, &pane, line).unwrap();
+    engine.submit_text(WAIT, &pane, &line).unwrap();
     shows(engine, &pane, &format!("id={pane} term=hide herdr=0"));
 
     let proof = engine

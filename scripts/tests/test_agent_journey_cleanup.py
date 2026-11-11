@@ -151,7 +151,7 @@ class FinishedAgent(unittest.TestCase):
         runtime = SimpleNamespace(run=Path("/run"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         record = {}
-        journey = Journey(runtime, None, None, {}, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
+        journey = Journey(runtime, None, None, {}, {"id": "codex", "agent_cli": "codex", "model_flag": []},
                           Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
         journey.opened += ["w4:p2", "w4:p3", "w4:p2", None, "w5:p1"]
         journey.close()
@@ -166,7 +166,7 @@ class FinishedAgent(unittest.TestCase):
             return 0, ""
         runtime = SimpleNamespace(run=Path("/run"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
-        journey = Journey(runtime, None, None, {}, {"id": "omp", "herdr_kind": "omp", "model_flag": []},
+        journey = Journey(runtime, None, None, {}, {"id": "omp", "agent_cli": "omp", "model_flag": []},
                           Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
         # The agent's pane, then its fork's: the fork's ends with the fork cell.
         journey.pane = "w4:p2"
@@ -194,7 +194,7 @@ class FinishedAgent(unittest.TestCase):
             return 0, ""
         runtime = SimpleNamespace(run=Path("/run"), probe=Path("/probe"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
-        journey = Journey(runtime, None, None, {}, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
+        journey = Journey(runtime, None, None, {}, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},
                           Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={},
                           composer_judge=None, failure_logs=None)
         refused = {"ok": False, "reason": "native_identity_unavailable", "message": "not reported yet"}
@@ -223,7 +223,7 @@ class FailedCellScreen(unittest.TestCase):
             runtime = SimpleNamespace(run=Path(folder),
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
-            journey = Journey(runtime, None, SimpleNamespace(read_pane=read_pane), table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
+            journey = Journey(runtime, None, SimpleNamespace(read_pane=read_pane), table, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},
                               Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
             journey.pane = "w3:p1"
             # A fork is measured in its own pane while the journey's stays the source's.

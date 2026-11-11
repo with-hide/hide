@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
 import { LaptopIcon, PlusIcon, ServerIcon, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
+import { leaveHostPush } from "./appPush";
 import { hostStore, hostLink, removeHost, dropHostPush, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 import { MovingOwl } from "../components/moving-owl";
-import blink from "../../../site/assets/owls/owl-blink.svg";
-import blinkStill from "../../../site/assets/owls/owl-blink-still.svg";
+import blink from "../../../site/public/assets/owls/owl-blink.svg";
+import blinkStill from "../../../site/public/assets/owls/owl-blink-still.svg";
 import type { PhoneDevice } from "./protocol";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */
@@ -90,7 +91,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
       <div className="flex gap-sm">
         <Button variant="secondary" className="min-h-(--size-touch-target)" onClick={() => setRemoving(null)}>{t("common.cancel")}</Button>
         <Button variant="destructive" className="min-h-(--size-touch-target)" onClick={() => {
-          void removeHost(removing.room).then(() => {
+          void leaveHostPush(removing.room).then(() => removeHost(removing.room)).then(() => {
             if (removing.room === activeRoom) location.assign("/");
             else { void reload(); setRemoving(null); }
           }).catch(() => setError(true));
@@ -125,7 +126,7 @@ function ReachedDevices({ t, devices }: { t: TFunction; devices: readonly PhoneD
 }
 
 /** A chosen device while its bundle opens: the blinking owl holds the wait (the start page has no log, so a failed drawing goes to the console). */
-export function DeviceConnecting({ t, name, error, onChoose }: { t: TFunction; name: string; error: "qrError" | "cameraError" | "storage" | "loadError" | "limit" | null; onChoose: () => void }) {
+export function DeviceConnecting({ t, name, error, onChoose }: { t: TFunction; name: string; error: "qrError" | "cameraError" | "cameraBusy" | "storage" | "loadError" | "limit" | null; onChoose: () => void }) {
   return <Landing>
     <MovingOwl motion={blink} still={blinkStill} scene="phone_connecting" className="size-(--size-brand-owl)"
       onUnavailable={(asset) => console.error(JSON.stringify({ event: "brand_owl.unavailable", scene: "phone_connecting", asset }))} />

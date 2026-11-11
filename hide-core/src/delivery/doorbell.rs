@@ -1606,7 +1606,7 @@ fn deliver(
     // The line is the one the reservation saved, so the prompt hook of the
     // turn it opens is recognized by it (`mailbox::rang`).
     // The engine owns submission for each input reader, including Windows paste
-    // bursts, as Herdr's `agent.prompt` did (herdrdev/herdr#3187). Raw pane
+    // bursts (herdrdev/herdr#3187). Raw pane
     // input bypasses that contract.
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the
@@ -1685,11 +1685,13 @@ fn reserve(
     if stop.load(Ordering::Acquire) {
         return Ok(Some(Outcome::Stopped));
     }
-    if let Err(reason) = owner
+    // Own the verdict before recording it: the writer also takes Runtime's
+    // lock, including when the reservation became stale while it was saved.
+    let current = owner
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
-        .delivery_bell_current(id, observed, Some(attempt))
-    {
+        .delivery_bell_current(id, observed, Some(attempt));
+    if let Err(reason) = current {
         return held(reason);
     }
     Ok(None)
@@ -2200,6 +2202,9 @@ mod tests {
         /// A key that reaches the pane, at this time, while the engine answers
         /// the next read.
         key_during_read: Arc<Mutex<Option<u64>>>,
+        /// A key arriving after the durable reservation, while the engine
+        /// still answers with the native state the bell was admitted for.
+        key_after_reservation: Arc<Mutex<Option<u64>>>,
         _worker: crate::delivery::worker::Worker,
         _root: tempfile::TempDir,
     }
@@ -2225,6 +2230,8 @@ mod tests {
             let answered = Arc::clone(&read_answer);
             let key_during_read = Arc::new(Mutex::new(None::<u64>));
             let typed_during_read = Arc::clone(&key_during_read);
+            let key_after_reservation = Arc::new(Mutex::new(None::<u64>));
+            let reserved_key = Arc::clone(&key_after_reservation);
             let owner = Arc::downgrade(&runtime);
             let fake = crate::engine::fake::FakeEngine::start(move |method, _| {
                 use crate::engine::fake::{refused, reply, unanswered};
@@ -2267,6 +2274,18 @@ mod tests {
                         }
                     },
                     "delivery_agent" => {
+                        if let Some(runtime) = owner.upgrade() {
+                            let mut guard = runtime.lock().unwrap();
+                            let reserved = guard
+                                .delivery_state()
+                                .unwrap()
+                                .letters
+                                .iter()
+                                .any(|letter| letter.bell_in_flight());
+                            if reserved && let Some(at) = reserved_key.lock().unwrap().take() {
+                                guard.note_delivery_key_at("recipient", at);
+                            }
+                        }
                         let mut agent = json!({
                             "pane_id": "recipient", "terminal_id": "terminal",
                             "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
@@ -2329,6 +2348,7 @@ mod tests {
                 typed_screen,
                 read_answer,
                 key_during_read,
+                key_after_reservation,
                 letter: sent["id"].as_str().unwrap().to_owned(),
                 _worker: worker,
                 _root: root,
@@ -3322,6 +3342,41 @@ mod tests {
                 Some("🦉 Codex report: private · hide inbox")
             );
         }
+    }
+
+    /// A key can reach the pane while the bell's reservation is being saved.
+    /// Rejecting that stale observation must finish its durable receipt
+    /// without blocking the mailbox writer behind the runtime lock
+    /// (with-hide/hide-private#173).
+    #[test]
+    fn a_key_after_reservation_records_the_hold_without_blocking_the_mailbox() {
+        let bell = Bell::start(json!({}));
+        let at = now();
+        *bell.key_after_reservation.lock().unwrap() = Some(at);
+        let records = bell.pass(&mut Doorbell::default(), at);
+        assert!(
+            bell.key_after_reservation.lock().unwrap().is_none(),
+            "the key arrived after a durable reservation"
+        );
+        assert!(bell.typed().is_empty(), "the stale bell typed nothing");
+        assert!(
+            !records
+                .iter()
+                .any(|record| record["kind"] == "doorbell.transaction_failed"),
+            "the refusal must be saved before the pass returns: {records:?}"
+        );
+        let guard = bell.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == bell.letter)
+            .unwrap();
+        assert_eq!(letter.bell_ended, Some(1));
+        assert_eq!(letter.state, State::Pending);
+        let failure = letter.bell_failure.as_ref().unwrap();
+        assert_eq!(failure.code, "input_after_verdict");
+        assert!(!failure.maybe_typed);
     }
 
     /// A bell whose reservation the store did not answer typed nothing, so
@@ -4760,7 +4815,7 @@ mod tests {
         );
         assert_eq!(bell.reads(), 1);
         // A key in the quiet period is no rest yet.
-        key(start - 5_000);
+        key(start - 10_000);
         pass_logged(&bell, &mut doorbell, start + 2_000);
         assert_eq!(bell.reads(), 1);
         // Once it rests, the new draft is read: now the operator erased it.

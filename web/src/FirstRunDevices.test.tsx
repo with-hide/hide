@@ -72,7 +72,7 @@ it("keeps loading and a failed read distinct from an empty result, and Retry onl
     expect(document.querySelector(`[data-first-run-devices="${state}"]`)).not.toBeNull();
     if (state === "failed") {
       await act(async () => button("devices-retry").click());
-      expect(view.events.map((event) => event.kind)).toEqual(["herdr_profiles_list"]);
+      expect(view.events.map((event) => event.kind)).toEqual(["machine_profiles_list"]);
     }
     await view.unmount();
   }

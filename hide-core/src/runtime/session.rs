@@ -3194,7 +3194,7 @@ impl Runtime {
             changed = true;
         }
         if let Some(mut agents) = agents {
-            let held = Arc::clone(&self.herdr_held);
+            let held = Arc::clone(&self.import_held);
             let local = ReadRecordScope::Local(&held);
             self.stamp_agent_sleep(&mut agents, live_pane_ids.as_ref());
             self.place_agents_in_navigator(&mut agents);

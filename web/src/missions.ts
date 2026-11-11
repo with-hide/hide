@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -149,7 +149,7 @@ export function itemNames(devices: readonly Device[] | undefined, ai: Background
   const device = devices?.find((row) => row.id === machine);
   const named = profile?.id || profile?.name ? profile : null;
   const listed = named ? listedProfiles(device)?.profiles.find((row) => (named.id ? row.id === named.id : row.kind === adapter?.id && row.name === named.name)) ?? null : null;
-  const kind = adapter?.can_start ? (adapter.herdr_kind as ProviderKind) : null;
+  const kind = adapter?.can_start ? (adapter.agent_cli as ProviderKind) : null;
   const local = device !== undefined && device.kind !== "remote";
   const catalog = local && kind && takesModel(kind) && (!named || listed) ? catalogFor(ai, kind, listed ? { id: listed.id, version: listed.version } : null) : null;
   return { profile: named ? (listed?.name ?? named.name ?? gone) : null, model: (model) => modelLabel(catalog, model) };
@@ -864,6 +864,29 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
     case "resolved":
       return { what: event.action ? `${t("mission.operator")} · ${t(`mission.operator.${event.action}`)}` : t("mission.operator"), line };
   }
+}
+
+/**
+ * The nodes whose gate the plan still has the operator look at later (PRD
+ * mission-human-gate D-18, B9): `ahead` on an open mission, a dropped node
+ * left out. They are never the operator's turn: only the eye strip, the plan's
+ * `내가 볼 곳 N` and the list row's grey eye count show them.
+ */
+export function gatesAhead<N extends { status: MissionNode["status"]; gate?: MissionGate | null }>(mission: { status: Mission["status"]; nodes: readonly N[] }): N[] {
+  if (!missionOpen(mission)) return [];
+  return mission.nodes.filter((node) => node.gate?.state === "ahead" && node.status !== "dropped");
+}
+
+/** Whether a reached gate has waited long (`오래 기다림`, D-22, B22): the core gives the moment, the screen compares it with its own clock. */
+export function gateWaitedLong(gate: Pick<MissionGate, "state" | "long_wait_at_unix_ms"> | null | undefined, now: number): boolean {
+  return gate?.state === "open" && gate.long_wait_at_unix_ms != null && now >= gate.long_wait_at_unix_ms;
+}
+
+/** The node whose gate the open decision asks now (D-04), or none. */
+export function gateAsked(mission: Pick<Mission, "nodes" | "question">): MissionNode | null {
+  const key = mission.question?.key;
+  if (key == null) return null;
+  return mission.nodes.find((node) => node.gate?.state === "open" && node.gate.ask === key) ?? null;
 }
 
 /**

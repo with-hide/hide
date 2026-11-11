@@ -641,7 +641,7 @@ impl Service {
 
     /// Types a letter into `pane` as the core's own engine: one submission
     /// of `text`'s parts, then `submit` once `gap` has passed since the text
-    /// was written ([`Typed::Submit`]), as Herdr's `agent.prompt` makes one;
+    /// was written ([`Typed::Submit`]);
     /// the holder that owns the program's terminal keeps the gap there, and
     /// a holder built before submissions is refused it. The
     /// operator's keys typed into the pane until the submission was handed
@@ -1755,7 +1755,7 @@ impl Inner {
     /// transport that takes submissions whole, each submit goes with the
     /// keys typed before it as one submission, whose gap the holder keeps
     /// ([`input::submissions`]), and the operator's keys typed after go
-    /// behind it. As Herdr's Windows submission does, a queue whose
+    /// behind it. On Windows, a queue whose
     /// submission's gap would end past the hold's age is dropped and
     /// reported rather than started; once handed over, every submit is
     /// written. A holder built before submissions takes none of them, which

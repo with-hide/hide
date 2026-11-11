@@ -322,7 +322,7 @@ mod reason_name_tests {
     /// A letter recorded before the engine names carries the `herdr_*` reason;
     /// it explains the same as the engine name it became.
     #[test]
-    fn a_reason_recorded_under_the_herdr_name_explains_as_its_engine_name() {
+    fn a_reason_recorded_under_the_old_name_explains_as_its_engine_name() {
         for (old, new) in [
             ("herdr_call_failed", "engine_call_failed"),
             ("herdr_format", "engine_format"),

@@ -920,6 +920,9 @@ impl CoreHandle {
             Arc::clone(&reports),
         )?;
         let pane_holders = holders.clone();
+        // A holder that died without saying why is settled by a start of the
+        // daemon, which this one asks for (`holder_restart`).
+        holders.on_holder_lost(crate::holder_restart::on_holder_lost(state_dir.clone()));
         // One node answers for this machine, to the core and to its engine
         // alike, so the core's stop closes the one that owns the panes.
         let own_node = Arc::new(own_node(&options, &state_dir, holders, &local)?);

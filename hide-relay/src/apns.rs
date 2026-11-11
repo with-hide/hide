@@ -451,8 +451,10 @@ fn classify(status: StatusCode, reason: &str) -> Answer {
         200..=299 => sent(PushOutcome::Delivered, "delivered"),
         410 => sent(PushOutcome::TokenGone, "unregistered"),
         400 => match reason {
-            "BadDeviceToken" => sent(PushOutcome::TokenGone, "bad_device_token"),
-            "DeviceTokenNotForTopic" => sent(PushOutcome::TokenGone, "device_token_not_for_topic"),
+            "BadDeviceToken" => sent(PushOutcome::TokenRejected, "bad_device_token"),
+            "DeviceTokenNotForTopic" => {
+                sent(PushOutcome::TokenRejected, "device_token_not_for_topic")
+            }
             _ => sent(PushOutcome::Failed, "bad_request"),
         },
         403 if reason == "ExpiredProviderToken" => Answer::ExpiredToken,
@@ -501,11 +503,11 @@ mod tests {
         for (status, reason, outcome) in [
             (S::OK, "", PushOutcome::Delivered),
             (S::GONE, "", PushOutcome::TokenGone),
-            (S::BAD_REQUEST, "BadDeviceToken", PushOutcome::TokenGone),
+            (S::BAD_REQUEST, "BadDeviceToken", PushOutcome::TokenRejected),
             (
                 S::BAD_REQUEST,
                 "DeviceTokenNotForTopic",
-                PushOutcome::TokenGone,
+                PushOutcome::TokenRejected,
             ),
             (S::BAD_REQUEST, "PayloadTooLarge", PushOutcome::Failed),
             (S::FORBIDDEN, "BadCertificate", PushOutcome::Failed),

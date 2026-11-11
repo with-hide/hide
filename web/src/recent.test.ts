@@ -152,7 +152,7 @@ describe("Recent Panels rows", () => {
     const rest = session("c-main", "t1");
     use(rest);
     const [one, two] = ["t1", "t2"].map((id) => panelItem(rest, recentEntries().find((entry) => !isScreenVisit(entry) && entry.id === id)!)!);
-    expect(one).toMatchObject({ title: "Fix the build", detail: { kind: "surface", place: "hide · main", surface: "herdr" }, agent: { mark: "going" } });
+    expect(one).toMatchObject({ title: "Fix the build", detail: { kind: "surface", place: "hide · main", surface: "engine" }, agent: { mark: "going" } });
     expect(two).toMatchObject({ title: "t2 label", agent: null });
   });
 

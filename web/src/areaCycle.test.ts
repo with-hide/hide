@@ -193,9 +193,9 @@ describe("Agent pane cycle (issue 301)", () => {
     expect(panes(cycle)).toEqual(["t1-pane", "t2-pane", "other-tab-pane", "remote:mini:pane:p1"]);
     expect(cycle.index).toBe(0);
     const rows = Object.fromEntries(cycle.items.map((row) => [row.target.kind === "pane" ? row.target.paneId : row.key, row]));
-    expect(rows["t1-pane"]).toMatchObject({ title: "planner", detail: { kind: "surface", place: "fixture", surface: "herdr" }, chip: null, agent: expect.objectContaining({ agent_kind: "claude" }) });
-    expect(rows["other-tab-pane"]).toMatchObject({ title: "fixer", detail: { kind: "surface", place: "fixture · review", surface: "herdr" }, chip: null });
-    expect(rows["remote:mini:pane:p1"]).toMatchObject({ title: "reviewer", detail: { kind: "surface", place: "api", surface: "herdr" }, chip: { label: "mini", local: false }, agent: expect.objectContaining({ agent_kind: "codex" }) });
+    expect(rows["t1-pane"]).toMatchObject({ title: "planner", detail: { kind: "surface", place: "fixture", surface: "engine" }, chip: null, agent: expect.objectContaining({ agent_kind: "claude" }) });
+    expect(rows["other-tab-pane"]).toMatchObject({ title: "fixer", detail: { kind: "surface", place: "fixture · review", surface: "engine" }, chip: null });
+    expect(rows["remote:mini:pane:p1"]).toMatchObject({ title: "reviewer", detail: { kind: "surface", place: "api", surface: "engine" }, chip: { label: "mini", local: false }, agent: expect.objectContaining({ agent_kind: "codex" }) });
   });
 
   it("from a pane with no agent, lands first on the most recent agent pane", () => {

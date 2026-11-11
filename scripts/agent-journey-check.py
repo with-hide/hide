@@ -8,7 +8,7 @@ from agent_journey.cli import main
 from agent_live_check.protection import ProtectionError
 
 if __name__ == "__main__":
-    # hide, Herdr and the agents write UTF-8, and the journey reads their files
+    # hide and the agents write UTF-8, and the journey reads their files
     # in Python's default encoding, which on Windows is the ANSI code page
     # unless Python runs in UTF-8 mode.
     if locale.getpreferredencoding(False).replace("-", "").lower() != "utf8":

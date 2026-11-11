@@ -120,7 +120,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       } as never;
       rest.ui_state = { ...rest.ui_state, detail: { items: [{ kind: "record", session: world.recordSession }], shown: true } } as never;
     }
-    const usage: NodeUsage = ledgerScene({ node: "local", agents: AGENT_ADAPTERS.map((adapter) => ({ agent: adapter.herdr_kind, limits: { state: "unsupported" }, consumption: { state: "unsupported" } })), history: null }, "reference");
+    const usage: NodeUsage = ledgerScene({ node: "local", agents: AGENT_ADAPTERS.map((adapter) => ({ agent: adapter.agent_cli, limits: { state: "unsupported" }, consumption: { state: "unsupported" } })), history: null }, "reference");
     if (usage.history) usage.history.models = usage.agents.flatMap((row) => row.consumption.state === "reading" ? row.consumption.value.year.days.map((day) => ({ date: day.date, agent: row.agent, model: row.agent === "claude" ? "model-a" : "model-c", hide_ai: false, amount: day.amount })) : []);
     useShellStore.setState({ rest, usage: { nodes: [usage] }, agents: world.agents, focusedPaneId: world.recordPane, linkSummaries: world.linkSummaries, connection: "live", sessionRecord });
     useUiStore.setState({

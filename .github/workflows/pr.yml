@@ -222,6 +222,7 @@ jobs:
           python3 scripts/check-agent-screen-rules.py
           python3 scripts/check-device-kits-single-source.py
           bash scripts/check-agent-folders.sh
+          python3 scripts/check-herdr-names.py
 
       # Reads the pull request's body, which no merge group carries, so a merge
       # group's `policy` leaves it out.
@@ -419,6 +420,56 @@ jobs:
         # The app bundle assembler: its digest and content-policy checks.
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bash scripts/verify-web.sh mobile test
+
+  # The user docs, which share `site/` with the landing page (docs/TESTING.md, The user
+  # docs): the guides and the feature pages hold each other, the CLI reference is read
+  # from the `hide` this checkout builds and fails on a command with no note, and the
+  # site builds with the live parts it frames, made from the web shell's own components.
+  # It plans for `site/`, the web shell, `scripts/docs/`, the files that own `hide --help`'s
+  # text (`HELP_SOURCES` in scripts/ci-plan.py) and the CLI contract, and needs only `hide`, so its cargo build is the one binary.
+  docs:
+    name: user docs
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'docs')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          # site/package.json pins the same version
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            site/pnpm-lock.yaml
+      - name: Install the live parts' packages and the site's
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install docs
+      # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: false
+      - name: Build the hide CLI whose help the reference reads
+        timeout-minutes: 15
+        run: bash scripts/verify-cargo.sh build -p hided --bin hide
+      # check-all loads every live part in Chromium (web/src/docs/check-still.mjs); the same step the web e2e lane
+      # uses, with no `--with-deps` for the reason its comment gives.
+      - name: Install Playwright Chromium
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh web playwright-install
+      - name: Check the guides, features and CLI reference, and build the site
+        timeout-minutes: 10
+        # The hide just built above, from this checkout, is the one authority on which
+        # commands exist; --ci makes a missing binary a failure before anything is generated.
+        run: node scripts/docs/check-all.mjs --ci --hide "$GITHUB_WORKSPACE/target/debug/hide"
 
   # What differs on Windows (issue #293), as a required lane: the whole
   # workspace compiles for Windows, hided's pane bootstrap and end-to-end
@@ -1106,7 +1157,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
+    needs: [plan, policy, rust, checks, docs, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

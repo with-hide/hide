@@ -65,9 +65,11 @@ export function useMissionPlace(ask: MissionAsk): string | null {
   return useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === workspace_id && row.device_id === device_id)?.label ?? null);
 }
 
-/** The line a carried ask reads, for the mission's oldest waiting node: `확인 필요 · <node> · <why>`, `외 N건`. */
+/** The line a carried ask reads, for the mission's oldest waiting node: `확인 필요 · <node> · <why>`, `외 N건`; a reached gate names what to look at after the node (PRD mission-human-gate D-23). */
 export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?: string }) {
-  const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node: ask.node.title, reason: ask.attention.reason, unmet: ask.attention.unmet_nodes } };
+  const look = ask.attention.reason === "human_gate" ? ask.node.gate?.look : undefined;
+  const node = look ? `${ask.node.title} · ${look}` : ask.node.title;
+  const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node, reason: ask.attention.reason, unmet: ask.attention.unmet_nodes } };
   return <AskLine ask={line} className={className} />;
 }
 

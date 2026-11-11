@@ -78,7 +78,7 @@ test("the repository README opens as drawn HTML and shows a block source under t
   const stack = await openStack(page, {
     "README.md": fs.readFileSync(path.join(root, "README.md")),
     "design/brand/hide-icon-blinking.svg": fs.readFileSync(path.join(root, "design/brand/hide-icon-blinking.svg")),
-    "site/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/assets/video/kick-conductor.gif")),
+    "site/public/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/public/assets/video/kick-conductor.gif")),
   });
   const appRequests: string[] = [];
   page.on("request", (request) => {
@@ -119,7 +119,7 @@ test("the repository README opens as drawn HTML and shows a block source under t
     await blocks.filter({ has: page.locator('img[alt^="A Conductor plans"]') }).click();
     await expect(hero).toHaveCount(0);
     await expect(logo).toBeVisible();
-    await expect(page.locator(".cm-content")).toContainText('<img src="site/assets/video/kick-conductor.gif"');
+    await expect(page.locator(".cm-content")).toContainText('<img src="site/public/assets/video/kick-conductor.gif"');
     await screenshot(page, "markdown-html-hero-source");
   } finally {
     close(stack);
@@ -159,7 +159,7 @@ test("a badge that cannot be reached ends in its alt text and the logo still dra
   const stack = await openStack(page, {
     "README.md": fs.readFileSync(path.join(root, "README.md")),
     "design/brand/hide-icon-blinking.svg": fs.readFileSync(path.join(root, "design/brand/hide-icon-blinking.svg")),
-    "site/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/assets/video/kick-conductor.gif")),
+    "site/public/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/public/assets/video/kick-conductor.gif")),
   });
   // One badge host refuses at once (offline), the other never answers.
   await page.route("https://img.shields.io/badge/**", (route) => route.abort("internetdisconnected"));

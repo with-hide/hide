@@ -323,7 +323,7 @@ version=${3:?version} build=${4:?build number} commit=${5:?commit} again=${6:-0}
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version '$version' is not three numbers"
 [[ "$build" =~ ^[0-9]{1,18}$ ]] || die "build number '$build' is not a number"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "commit '$commit' is not a full commit id"
-for file in "$registry" "$expect" "$inputs/check-release-app.sh" "$inputs/bundle-manifest.json"; do
+for file in "$registry" "$expect" "$inputs/check-release-app.sh" "$inputs/bundle-manifest.json" "$inputs/relay-source.txt"; do
     [[ -f "$file" ]] || die "$file was not copied to this machine"
 done
 account_tmp=$(getconf DARWIN_USER_TEMP_DIR 2> /dev/null || true)
@@ -361,6 +361,12 @@ with_private_home
 auth=(-authenticationKeyPath "$HIDE_IOS_ASC_KEY_PATH" -authenticationKeyID "$HIDE_IOS_ASC_KEY_ID" -authenticationKeyIssuerID "$HIDE_IOS_ASC_ISSUER_ID")
 altool_auth=(--api-key "$HIDE_IOS_ASC_KEY_ID" --api-issuer "$HIDE_IOS_ASC_ISSUER_ID" --p8-file-path "$HIDE_IOS_ASC_KEY_PATH")
 
+# The extensions are signed before the app that holds them (Xcode's export does that order), and `--deep --strict` below
+# fails when an extension's signature is missing or was made after the app's. The relay library's source digest is read
+# from the release inputs build-ios.sh recomputed from the checkout.
+relay_digest=$(cat "$inputs/relay-source.txt")
+[[ "$relay_digest" =~ ^[0-9a-f]{64}$ ]] || die "release-inputs/relay-source.txt does not hold a relay source digest"
+
 # ---- archive, export, check ----------------------------------------------------------------------------------------
 
 logged "$limit_archive" "archive" xcodebuild archive -project "$project/App.xcodeproj" -scheme App -configuration Release \
@@ -369,12 +375,28 @@ logged "$limit_archive" "archive" xcodebuild archive -project "$project/App.xcod
     MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build"
 
 # An archive made with signing off carries none of the project's entitlements, and the export only keeps what the archive
-# holds, so the entitlements file the project names is put into the archived app first (an ad hoc signature, which the
-# export replaces with the distribution one; no certificate or keychain is involved).
-entitlements=$project/App/App.entitlements
-[[ -f "$entitlements" ]] || die "the project's App.entitlements is missing"
+# holds, so each entitlements file the project names is put into its archived bundle first (an ad hoc signature, which
+# the export replaces with the distribution one; no certificate or keychain is involved). The files name build settings
+# (`$(AppIdentifierPrefix)`, `$(PRODUCT_BUNDLE_IDENTIFIER)`, `$(APS_ENVIRONMENT)`) that only a signing build resolves, so
+# they are resolved here to what the Release configuration gives them; one left unresolved would be exported as text,
+# and the signed app would name a keychain group that is no group of its own.
 archived=$work/App.xcarchive/Products/Applications/App.app
-logged 120 "embed entitlements" codesign --force --sign - --entitlements "$entitlements" --timestamp=none "$archived"
+mkdir -p "$work/entitlements"
+embed_entitlements() { # <bundle> <the project's entitlements file> <bundle id>
+    local bundle=$1 source=$2 id=$3 resolved
+    [[ -f "$source" ]] || die "the project's ${source##*/} is missing"
+    resolved=$work/entitlements/${source##*/}
+    sed -e "s/\$(AppIdentifierPrefix)/$team./g" -e "s/\$(PRODUCT_BUNDLE_IDENTIFIER)/$id/g" \
+        -e 's/\$(APS_ENVIRONMENT)/production/g' "$source" > "$resolved"
+    if grep -qF '$(' "$resolved"; then die "${source##*/} names a build setting the release does not resolve"; fi
+    logged 120 "embed entitlements: ${bundle##*/}" codesign --force --sign - --entitlements "$resolved" --timestamp=none "$bundle"
+}
+# An extension before the app that holds it: signing the app seals the extension's signature.
+while IFS=$'\t' read -r name id; do
+    [[ -n "$name" ]] || continue
+    embed_entitlements "$archived/PlugIns/$name" "$project/${name%.appex}/${name%.appex}.entitlements" "$id"
+done < <(jq -r '.appExtensions[]? | [.name, .bundleId] | @tsv' "$expect")
+embed_entitlements "$archived" "$project/App/App.entitlements" "$(jq -r .bundleId "$expect")"
 
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -410,13 +432,24 @@ security cms -D -i "$app/embedded.mobileprovision" > "$work/profile.plist"
 for key in DeveloperCertificates DER-Encoded-Profile CreationDate ExpirationDate; do plutil -remove "$key" "$work/profile.plist" 2> /dev/null || true; done
 plutil -convert json -o "$facts/profile.json" "$work/profile.plist"
 
+# Each app extension the same way: its own properties, privacy manifest and entitlements, under facts/appex/<name>/.
+for appex in "$app"/PlugIns/*.appex; do
+    [[ -d "$appex" ]] || continue
+    name=$(basename "$appex")
+    mkdir -p "$facts/appex/$name"
+    plutil -convert json -o "$facts/appex/$name/info.json" "$appex/Info.plist"
+    if [[ -f "$appex/PrivacyInfo.xcprivacy" ]]; then plutil -convert json -o "$facts/appex/$name/privacy.json" "$appex/PrivacyInfo.xcprivacy"; else printf '{}' > "$facts/appex/$name/privacy.json"; fi
+    codesign -d --entitlements :- "$appex" > "$work/appex-entitlements.plist" 2> /dev/null
+    plutil -convert json -o "$facts/appex/$name/entitlements.json" "$work/appex-entitlements.plist"
+done
+
 step "verify the signature"
 codesign --verify --strict --deep "$app"
 signature=$(codesign -dvv "$app" 2>&1)
 grep -q '^Authority=Apple Distribution: ' <<< "$signature" || die "the app is not signed with an Apple Distribution certificate (authorities: $(grep '^Authority=' <<< "$signature" | tr '\n' ';'))"
 
 step "release checks"
-bash "$inputs/check-release-app.sh" "$app" "$facts" "$expect" "$inputs/bundle-manifest.json" "$version" "$build"
+bash "$inputs/check-release-app.sh" "$app" "$facts" "$expect" "$inputs/bundle-manifest.json" "$version" "$build" "$relay_digest"
 
 # ---- upload --------------------------------------------------------------------------------------------------------
 

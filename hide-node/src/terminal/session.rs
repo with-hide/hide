@@ -102,7 +102,7 @@ pub trait SessionWriter: Send {
     fn release(&mut self) -> io::Result<()>;
     /// Answers once everything written before has reached the transport.
     fn flush(&mut self) -> io::Result<()>;
-    /// One submission, as Herdr's `agent.prompt` makes it, which the
+    /// One submission, which the
     /// transport keeps whole at the program's terminal; only a session whose
     /// [`Transport::submissions`] is [`Submissions::Whole`] is sent one.
     fn submit(&mut self, submit: &hide_holder_protocol::Submit) -> io::Result<()>;

@@ -54,8 +54,8 @@ const NOMINAL_AREA: SessionLayoutRect = SessionLayoutRect {
     height: u16::MAX,
 };
 
-/// Why a pane move changed nothing, as Herdr words it: the caller reads it
-/// as a move declined, not failed.
+/// Why a pane move changed nothing: the caller reads it as a move declined,
+/// not failed.
 const SAME_TAB: &str = "same_tab";
 const ZOOMED_TAB: &str = "zoomed_tab";
 
@@ -66,18 +66,16 @@ pub(super) struct Topology {
     /// The last workspace number given.
     workspace_numbers: usize,
     /// The tab the keyboard's workspace shows, each time it changed, in the
-    /// order it changed, as Herdr's event stream reports its own moves: the
-    /// core answers the tab moves it asked for from these, never from a
-    /// wait ([`Topology::note_shown`]).
+    /// order it changed: the core answers the tab moves it asked for from
+    /// these, never from a wait ([`Topology::note_shown`]).
     shown: Shown,
     /// The engine's count of agent state changes, kept in memory only: a
-    /// sequence is compared only with one this engine gave, as Herdr's is
-    /// with its own server's.
+    /// sequence is compared only with one this engine gave.
     agent_seq: u64,
 }
 
 /// The shown tab's moves and the last of them, kept in memory only: a new
-/// engine starts its count again, as a new Herdr replica does.
+/// engine starts its count again.
 #[derive(Default)]
 struct Shown {
     moves: SessionTabMoves,
@@ -170,8 +168,8 @@ pub(super) struct Pane {
     /// only; no new split can publish behind an in-flight close.
     pub(super) closing: bool,
     /// Its holder is being started by the call that drew it (a new tab or
-    /// split is drawn before its holder starts, as Herdr's pane exists
-    /// once it forked). Whoever takes the pane out meanwhile leaves its
+    /// split is drawn before its holder starts, and the pane exists once it
+    /// forked). Whoever takes the pane out meanwhile leaves its
     /// holder to that call, which ends it once it finds the pane gone.
     /// Kept in memory only.
     pub(super) starting: Option<std::sync::Arc<super::starts::Starting>>,
@@ -412,8 +410,8 @@ impl Topology {
     }
 
     /// Records a move when the shown tab is not the one last recorded, as
-    /// Herdr publishes `tab_focused` for every tab it moves to and none for
-    /// a focus of the tab it shows. The engine calls it as each hold of its
+    /// the engine publishes `tab_focused` for every tab it moves to and none
+    /// for a focus of the tab it shows. The engine calls it as each hold of its
     /// lock ends, so every change, from any caller, is recorded under the
     /// lock that made it and in the order they were made.
     pub(super) fn note_shown(&mut self) {
@@ -733,7 +731,7 @@ impl Topology {
 
     /// Zooms `pane`'s tab onto it, or ends the zoom; `None` turns it the
     /// other way. Either way the pane takes the tab's focus, as the drawing
-    /// ahead predicts. A tab of one pane is never zoomed, as Herdr answers it
+    /// ahead predicts. A tab of one pane is never zoomed; the call answers it
     /// unchanged. Whether anything changed.
     pub(super) fn zoom(&mut self, pane: &str, zoomed: Option<bool>) -> Result<bool, EngineError> {
         let (workspace, index) = self.position(pane)?;
@@ -1107,8 +1105,8 @@ impl Topology {
         workspace.tabs[tab].layout(&workspace.id)
     }
 
-    /// The whole session as of `now`, as a snapshot of Herdr's would
-    /// project it, its agents named by `catalog`'s definitions. `now` decides
+    /// The whole session as of `now`, its agents named by `catalog`'s
+    /// definitions. `now` decides
     /// each start's `launch_pending` and, from the same `now`, when the first
     /// of those can change (`settles_at`, [`Self::next_start_change`]).
     pub(super) fn state_at(
@@ -1327,8 +1325,7 @@ impl Topology {
                     // sequence was numbered by the engine the pane is on now
                     // (`crate::engine::tokens::SERVER_MARK_TOKEN`). The agents'
                     // sequences start again with the engine and are not saved,
-                    // so a restored pane carries no mark, as a pane on a
-                    // restarted Herdr server carries none.
+                    // so a restored pane carries no mark.
                     pane.tokens.remove(crate::engine::tokens::SERVER_MARK_TOKEN);
                     panes.insert(
                         pane.id,
@@ -1546,7 +1543,7 @@ impl Topology {
     }
 }
 
-/// A move that changed nothing, with Herdr's reason.
+/// A move that changed nothing, with its reason.
 fn unchanged((workspace, tab, pane): (String, String, String), reason: &str) -> PaneJoinResult {
     PaneJoinResult {
         changed: false,
@@ -1710,9 +1707,8 @@ impl Tab {
     }
 }
 
-/// What the engine says of the agent a pane runs, as Herdr's agent list
-/// says it: its parent and lineage are read from the pane's tokens the
-/// spawner wrote, as for a Herdr agent.
+/// What the engine says of the agent a pane runs: its parent and lineage
+/// are read from the pane's tokens the spawner wrote.
 fn projected_agent(
     workspace: &str,
     tab: &str,
@@ -1825,7 +1821,7 @@ impl Topology {
     }
 
     /// The pane an agent target names, and its agent while it runs or
-    /// starts: refused `agent_not_found` otherwise, as Herdr refuses it.
+    /// starts: refused `agent_not_found` otherwise.
     pub(super) fn agent(&self, target: &str) -> Result<(String, &Pane, &PaneAgent), EngineError> {
         let now = Instant::now();
         self.panes()

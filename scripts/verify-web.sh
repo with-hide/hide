@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The web and desktop entrypoint for verification, as plain argv.
 #
-# Usage: verify-web.sh [install [--ignore-scripts | holder] | PACKAGE ACTION [args...]]
-# PACKAGE: web, desktop, mobile (test only), relay-protocol (typecheck only). ACTION: typecheck, lint, test, build, e2e, e2e-list,
-# bundle and build:phone (web only), playwright-install,
+# Usage: verify-web.sh [install [--ignore-scripts | holder | docs] | PACKAGE ACTION [args...]]
+# PACKAGE: web, desktop, mobile (test only), relay-protocol (typecheck only), site (build only). ACTION: typecheck, lint, test, build, e2e, e2e-list,
+# bundle, build:phone and build:docs-embed (web only), playwright-install,
 # package and electron-install (desktop only).
 #
 # Runs the web shell and desktop app typecheck, lint, unit tests and build.
@@ -32,8 +32,19 @@ if (( $# > 0 )); then
             # else: a Rust lane needs no web shell (docs/TESTING.md, The pane
             # holder).
             1:holder) exec pnpm install --frozen-lockfile --filter hide-holder-xterm ;;
+            # What the user docs build needs (docs/TESTING.md, The user docs):
+            # the web shell's packages, which the live parts are built from, and
+            # the site's own, a pnpm root of its own (`site/pnpm-workspace.yaml`)
+            # that no other lane installs.
+            1:docs)
+                pnpm install --frozen-lockfile --filter hide-web...
+                # From inside `site/`, so pnpm reads that project's `packageManager` pin and
+                # switches to it; `--dir` from here would run the machine's own pnpm against it.
+                cd site
+                exec pnpm install --frozen-lockfile
+                ;;
             *)
-                printf 'usage: %s install [--ignore-scripts | holder]\n' "$0" >&2
+                printf 'usage: %s install [--ignore-scripts | holder | docs]\n' "$0" >&2
                 exit 2
                 ;;
         esac
@@ -48,6 +59,11 @@ if (( $# > 0 )); then
             [[ "$action" == test ]] || { printf 'mobile supports test only\n' >&2; exit 2; }
             directory=$package
             ;;
+        site)
+            [[ "$action" == build && $# == 0 ]] || { printf 'site supports build only\n' >&2; exit 2; }
+            cd site
+            exec pnpm build
+            ;;
         relay-protocol)
             [[ "$action" == typecheck && $# == 0 ]] || { printf 'relay-protocol supports typecheck only\n' >&2; exit 2; }
             exec pnpm --dir web exec tsc -p ../hide-relay-protocol/tsconfig.json
@@ -56,7 +72,7 @@ if (( $# > 0 )); then
     esac
     case "$action" in
         typecheck|lint|test|build) exec pnpm --dir "$directory" "$action" "$@" ;;
-        bundle|build:phone)
+        bundle|build:phone|build:docs-embed)
             [[ "$package" == web ]] || { printf '%s requires web\n' "$action" >&2; exit 2; }
             exec pnpm --dir web "$action" "$@"
             ;;

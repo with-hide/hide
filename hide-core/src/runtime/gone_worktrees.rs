@@ -25,7 +25,7 @@ impl Runtime {
                 "component": "cleanup",
                 "kind": "gone_worktree.close_requested",
                 "workspace_id": gone.workspace_id,
-                "herdr_workspace_ids": gone.engine_workspace_ids,
+                "engine_workspace_ids": gone.engine_workspace_ids,
                 "checkout": gone.path,
                 "pane_ids": gone.panes,
             }));

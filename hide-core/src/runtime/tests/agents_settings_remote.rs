@@ -123,8 +123,8 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
     let mut remote_checkout = checkout(
         workspace_id,
         checkout_id,
-        "/tmp/herdr-remote-terminal",
-        Some(pane(pane_id, "/tmp/herdr-remote-terminal")),
+        "/tmp/remote-terminal",
+        Some(pane(pane_id, "/tmp/remote-terminal")),
     );
     remote_checkout.tabs[0].id = Some(active_tab_id.to_owned());
     remote_checkout.tabs.push(TabSnapshot {
@@ -136,12 +136,12 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         label: Some("Inactive".to_owned()),
         empty: false,
         delegated: false,
-        panes: vec![pane(inactive_pane_id, "/tmp/herdr-remote-terminal")],
+        panes: vec![pane(inactive_pane_id, "/tmp/remote-terminal")],
     });
     let mut remote_workspace = workspace(
         workspace_id,
         "Remote fixture",
-        "/tmp/herdr-remote-terminal",
+        "/tmp/remote-terminal",
         vec![remote_checkout],
     );
     remote_workspace.remote_target_id = Some("mini".to_owned());
@@ -150,7 +150,7 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         workspaces: vec![remote_workspace],
         agents: project_agents(serde_json::from_value(serde_json::json!({
             "agents": [{"pane_id": pane_id, "agent": "codex", "agent_status": "done", "state_change_seq": 1,
-                "cwd": "/tmp/herdr-remote-terminal"}]
+                "cwd": "/tmp/remote-terminal"}]
         })).unwrap()).agents,
         active_tab_ids: [(checkout_id.to_owned(), active_tab_id.to_owned())]
             .into_iter()
@@ -368,7 +368,7 @@ fn listing(rows: &[(&str, bool)]) -> hide_node_link::list::Listing {
 #[test]
 fn remote_file_results_are_scoped_and_generation_guarded() {
     let mut runtime = runtime();
-    let root_path = "/private/tmp/herdr-remote-files";
+    let root_path = "/private/tmp/remote-files";
     let workspace_id = "remote:mini:workspace:w9";
     let checkout_id = "remote:mini:checkout:w9";
     let mut remote_workspace = workspace(
@@ -1871,14 +1871,14 @@ fn a_device_pane_read_before_its_server_restarts_stays_read() {
         let mut remote_checkout = checkout(
             workspace_id,
             checkout_id,
-            "/tmp/herdr-remote-read",
-            Some(pane(pane_id, "/tmp/herdr-remote-read")),
+            "/tmp/remote-read",
+            Some(pane(pane_id, "/tmp/remote-read")),
         );
         remote_checkout.tabs[0].id = Some(tab_id.to_owned());
         let mut remote_workspace = workspace(
             workspace_id,
             "Remote",
-            "/tmp/herdr-remote-read",
+            "/tmp/remote-read",
             vec![remote_checkout],
         );
         remote_workspace.remote_target_id = Some("mini".to_owned());
@@ -1889,7 +1889,7 @@ fn a_device_pane_read_before_its_server_restarts_stays_read() {
                 serde_json::from_value(serde_json::json!({
                     "agents": [{"pane_id": pane_id, "agent": "codex", "agent_status": status,
                         "state_change_seq": seq, "agent_session": {"kind": "id", "value": "s1"},
-                        "cwd": "/tmp/herdr-remote-read"}]
+                        "cwd": "/tmp/remote-read"}]
                 }))
                 .unwrap(),
             )
@@ -2306,16 +2306,16 @@ fn read_record_reaches_the_pane_tree_and_not_only_the_agent_rows() {
     runtime.reset_terminal_projection(None);
     let tab = |index: u8| {
         serde_json::json!({
-            "workspace_id": "herdr-workspace",
-            "tab_id": format!("herdr-workspace:t{index}"),
+            "workspace_id": "ws-remote",
+            "tab_id": format!("ws-remote:t{index}"),
             "label": index.to_string()
         })
     };
     let layout = |index: u8| {
         let pane_id = format!("plain:p{index}");
         serde_json::json!({
-            "workspace_id": "herdr-workspace",
-            "tab_id": format!("herdr-workspace:t{index}"),
+            "workspace_id": "ws-remote",
+            "tab_id": format!("ws-remote:t{index}"),
             "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": pane_id,

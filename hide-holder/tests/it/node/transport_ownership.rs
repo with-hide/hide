@@ -449,7 +449,7 @@ fn a_new_visible_attach_cancels_the_deferred_release() {
     connection.service.close();
 }
 
-/// Herdr's `agent.prompt`: a submission whose text was written is
+/// A submission whose text was written is
 /// committed, so a close that begins during its gap still gets its submit
 /// and never leaves the text without it.
 #[test]

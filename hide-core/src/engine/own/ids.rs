@@ -9,8 +9,8 @@
 // finds; a workspace this engine makes is spelled `h<n>`, which Herdr never
 // spells, and one moved from Herdr keeps its `w<n>`.
 
-//! The ids the own engine gives its workspaces, tabs and panes, in Herdr's
-//! shape so every reader of a pane id reads them as it reads Herdr's (PRD
+//! The ids the own engine gives its workspaces, tabs and panes, in the
+//! shape every reader of a pane id expects (PRD
 //! engine-bundle-3-core-owns D-4): `h<n>` for a workspace, `<workspace>:t<n>`
 //! and `<workspace>:p<n>` for its tabs and panes, each number in a 32-letter
 //! alphabet with no 0, I, L, O or U before its last letter. A number is
@@ -64,14 +64,14 @@ pub(super) fn decode_public_number(spelled: &str) -> Option<usize> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Numbered {
     Engine,
-    Herdr,
+    Imported,
 }
 
 /// The letter this engine's own workspace ids start with.
 pub(super) const ENGINE_WORKSPACE: char = 'h';
 
 /// The letter Herdr's workspace ids start with.
-pub(super) const HERDR_WORKSPACE: char = 'w';
+pub(super) const IMPORTED_WORKSPACE: char = 'w';
 
 /// Who numbered the workspace id `workspace` and its number, or `None` for
 /// a spelling neither makes: the one reader of both spellings, which the
@@ -81,7 +81,7 @@ pub(super) fn workspace_of(workspace: &str) -> Option<(Numbered, usize)> {
     let mut letters = workspace.chars();
     let numbered = match letters.next()? {
         ENGINE_WORKSPACE => Numbered::Engine,
-        HERDR_WORKSPACE => Numbered::Herdr,
+        IMPORTED_WORKSPACE => Numbered::Imported,
         _ => return None,
     };
     Some((numbered, decode_public_number(letters.as_str())?))
@@ -102,7 +102,7 @@ pub(super) fn numbered(id: &str, kind: char) -> Option<(&str, usize)> {
 pub(super) fn engine_workspace_number(workspace: &str) -> Option<usize> {
     match workspace_of(workspace)? {
         (Numbered::Engine, number) => Some(number),
-        (Numbered::Herdr, _) => None,
+        (Numbered::Imported, _) => None,
     }
 }
 
@@ -130,14 +130,14 @@ pub(super) fn tab_id(workspace_id: &str, tab_number: usize) -> String {
 mod tests {
     use super::*;
 
-    fn herdr_workspace_id(number: usize) -> String {
-        format!("{HERDR_WORKSPACE}{}", encode_public_number(number))
+    fn imported_workspace_id(number: usize) -> String {
+        format!("{IMPORTED_WORKSPACE}{}", encode_public_number(number))
     }
 
     #[test]
-    fn ids_read_as_herdr_spells_them_with_the_engine_s_own_workspace_letter() {
+    fn ids_read_as_the_import_spells_them_with_the_engine_s_own_workspace_letter() {
         assert_eq!(workspace_id(1), "h1");
-        assert_eq!(herdr_workspace_id(1), "w1");
+        assert_eq!(imported_workspace_id(1), "w1");
         assert_eq!(pane_id("h1", 32), "h1:p0");
         assert_eq!(tab_id("w1", 33), "w1:t11");
         assert_eq!(workspace_id(9 + 1), "hA");
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn an_id_reads_back_as_the_number_it_was_given() {
         for number in [1, 9, 31, 32, 33, 1024, 1025, 40_000] {
-            for workspace in [workspace_id(number), herdr_workspace_id(number)] {
+            for workspace in [workspace_id(number), imported_workspace_id(number)] {
                 let pane = pane_id(&workspace, number);
                 assert_eq!(numbered(&pane, 'p'), Some((workspace.as_str(), number)));
             }
@@ -155,11 +155,14 @@ mod tests {
                 Some((Numbered::Engine, number))
             );
             assert_eq!(
-                workspace_of(&herdr_workspace_id(number)),
-                Some((Numbered::Herdr, number))
+                workspace_of(&imported_workspace_id(number)),
+                Some((Numbered::Imported, number))
             );
             assert_eq!(engine_workspace_number(&workspace_id(number)), Some(number));
-            assert_eq!(engine_workspace_number(&herdr_workspace_id(number)), None);
+            assert_eq!(
+                engine_workspace_number(&imported_workspace_id(number)),
+                None
+            );
         }
         assert_eq!(numbered("w1:t3", 'p'), None);
         assert_eq!(numbered("pane-1", 'p'), None);

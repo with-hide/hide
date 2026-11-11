@@ -14,6 +14,7 @@ import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
 import { followNativeLinks } from "./nativeLink";
+import { followPushOpens, pushOpenAddress } from "./pushOpen";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 import { PlayIcon } from "lucide-react";
 
@@ -51,7 +52,7 @@ function Loader() {
   const [pair, setPair] = useState<PairingQr | null>(null);
   const [adding, setAdding] = useState(new URLSearchParams(location.search).has("add"));
   const [target, setTarget] = useState<PairedHost | PairingQr | null>(null);
-  const [error, setError] = useState<"qrError" | "cameraError" | "storage" | "loadError" | "limit" | null>(null);
+  const [error, setError] = useState<"qrError" | "cameraError" | "cameraBusy" | "storage" | "loadError" | "limit" | null>(null);
   const [version, setVersion] = useState<{ device: number; supported: number[] } | null>(null);
   // How many computers this phone knows: none shows the first screen, any shows the list. Null while it is read.
   const [known, setKnown] = useState<number | null>(null);
@@ -73,7 +74,9 @@ function Loader() {
     // A link that opened the app lands on the same pairing screen a scanned QR does, and waits for the person's tap.
     const stopLinks = followNativeLinks((qr) => { setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
     if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
-    return () => { window.removeEventListener("hashchange", followQr); stopLinks(); };
+    // A tap on a notification of the app: the start page finds the computer and hands the agent on to its bundle.
+    const stopOpens = followPushOpens((opened) => window.location.assign(pushOpenAddress(opened)));
+    return () => { window.removeEventListener("hashchange", followQr); stopLinks(); stopOpens(); };
   }, []);
   useEffect(() => {
     if (!target) return;

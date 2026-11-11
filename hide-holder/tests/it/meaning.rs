@@ -264,7 +264,7 @@ fn a_color_question_is_answered_once_through_conpty() {
     assert_eq!(heard.matches("11;rgb:").count(), 1, "{heard:?}");
 }
 
-/// A submission is written as Herdr's `agent.prompt` writes one: its text,
+/// A submission is written text first: its text,
 /// then its submit no sooner than its gap after, and input sent behind it
 /// reaches the program after the submit, never between the two.
 #[cfg(unix)]

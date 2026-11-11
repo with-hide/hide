@@ -10,7 +10,7 @@ export interface DeviceHello {
   phone_protocol: number;
 }
 export type PushEnvironment = 'sandbox' | 'production';
-export type PushOutcome = 'delivered' | 'token_gone' | 'rate_limited' | 'unavailable' | 'failed';
+export type PushOutcome = 'delivered' | 'token_gone' | 'token_rejected' | 'rate_limited' | 'unavailable' | 'failed';
 export interface PushRequest {
   id: number;
   environment: PushEnvironment;

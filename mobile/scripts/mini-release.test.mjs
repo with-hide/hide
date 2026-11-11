@@ -46,7 +46,10 @@ describe('the release command on the build machine', { timeout: 120000 }, () => 
     for (const file of ['release-env.json', 'release-expect.json']) copyFileSync(join(mobile, file), join(base(slug), 'release-inputs', file));
     put(join(base(slug), 'release-inputs/check-release-app.sh'), '#!/bin/bash\nexit 0\n', 0o755); // its own tests are check-release-app.test.mjs
     put(join(base(slug), 'release-inputs/bundle-manifest.json'), '{"schema":1,"files":{}}');
-    put(join(base(slug), 'ios/App/App/App.entitlements'), '<plist/>');
+    put(join(base(slug), 'release-inputs/relay-source.txt'), `${'a'.repeat(64)}\n`);
+    // The project's entitlements name build settings, as the real files do.
+    put(join(base(slug), 'ios/App/App/App.entitlements'), 'aps=$(APS_ENVIRONMENT) own=$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER) shared=$(AppIdentifierPrefix)me.grab.hide.ios.push-keys');
+    put(join(base(slug), 'ios/App/HideNotification/HideNotification.entitlements'), 'shared=$(AppIdentifierPrefix)me.grab.hide.ios.push-keys');
   };
   // Where the real export writes its distribution logs whatever $TMPDIR and the home say: confstr's temporary folder.
   const appleTmp = '"$(getconf DARWIN_USER_TEMP_DIR)"';
@@ -93,7 +96,9 @@ done
 [ -n "$STUB_PRINTS_KEY" ] && cat "${keyPath()}"
 [ -n "$STUB_XCODEBUILD_FAILS" ] && exit 1
 exit 0`);
-    stub('codesign', 'case "$*" in *-dvv*) echo "Authority=${STUB_AUTHORITY:-Apple Distribution: Hide (GH6F6ZA497)}" >&2;; esac; exit 0');
+    // An embed records the bundle it signed and the entitlements it was handed, in the order the script signed.
+    stub('codesign', `args="$*"; while [ $# -gt 1 ]; do [ "$1" = --entitlements ] && [ -f "$2" ] && printf '%s: %s\\n' "$(basename "\${@: -1}")" "$(cat "$2")" >> "${home}/embedded"; shift; done
+case "$args" in *-dvv*) echo "Authority=\${STUB_AUTHORITY:-Apple Distribution: Hide (GH6F6ZA497)}" >&2;; esac; exit 0`);
     stub('unzip', 'dest=${@: -1}; mkdir -p "$dest/Payload/App.app"; : > "$dest/Payload/App.app/Info.plist"; : > "$dest/Payload/App.app/embedded.mobileprovision"');
     stub('plutil', 'case "$1" in -convert) while [ $# -gt 0 ]; do [ "$1" = -o ] && echo "{}" > "$2"; shift; done;; esac; exit 0');
     stub('security', 'echo "<plist/>"');
@@ -239,6 +244,23 @@ exit 0`);
       // Each xcodebuild step names its result bundle inside the work folder, and altool's log went to the private home.
       expect(readFileSync(join(home, 'result-bundles'), 'utf8').trim().split('\n')).toEqual([join(base(), 'release/archive.xcresult'), join(base(), 'release/export.xcresult')]);
       expect(existsSync(join(home, 'Library'))).toBe(false);
+      leftNothing();
+    });
+
+    it('signs the extension and then the app with entitlements whose build settings are resolved', () => {
+      expect(run({ HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
+      expect(readFileSync(join(home, 'embedded'), 'utf8').trim().split('\n')).toEqual([
+        'HideNotification.appex: shared=GH6F6ZA497.me.grab.hide.ios.push-keys',
+        'App.app: aps=production own=GH6F6ZA497.me.grab.hide.ios shared=GH6F6ZA497.me.grab.hide.ios.push-keys',
+      ]);
+    });
+
+    it('stops before it signs anything when an entitlements file names a build setting it does not resolve', () => {
+      put(join(base(), 'ios/App/App/App.entitlements'), 'group=$(SOME_OTHER_SETTING)');
+      const result = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('App.entitlements names a build setting the release does not resolve');
+      expect(log()).not.toContain('No errors validating archive');
       leftNothing();
     });
 

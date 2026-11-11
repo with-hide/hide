@@ -1,0 +1,13 @@
+---
+// The header's left side: the landing's owl icon and wordmark lead back to `/`, "docs" stays on `/docs/`.
+---
+<div class="site-title">
+  <a class="mark" href="/" aria-label="hide home"><img src="/assets/hide-icon.svg" width="30" height="30" alt="" /><span>hide</span></a>
+  <a class="docs" href="/docs/">docs</a>
+</div>
+<style>
+  .site-title { display: flex; align-items: center; gap: 0.5rem; font-size: var(--sl-text-h4); font-weight: 600; }
+  .site-title a { color: var(--sl-color-white); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+  .site-title .docs { color: var(--sl-color-text-accent); }
+  img { border-radius: 8px; }
+</style>

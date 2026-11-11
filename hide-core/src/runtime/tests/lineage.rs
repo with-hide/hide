@@ -2890,6 +2890,45 @@ fn a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply() {
     assert_eq!(wait_of(&rows, "child"), None);
 }
 
+/// A delegated child waiting on its pull request's running checks keeps its
+/// root waiting on it, as a child on a background task does: the checks move
+/// the work on, so a root that stopped with that child under it is waiting
+/// (자식 기다림), not resting.
+#[test]
+fn a_root_waits_on_a_child_whose_pull_request_checks_run() {
+    let mut rows = project_agents(
+        crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [
+            {"pane_id":"parent","agent_status":"done","state_change_seq":1},
+            {"pane_id":"child","spawned_from_pane_id":"parent","agent_status":"done","state_change_seq":2},
+        ]}))
+        .unwrap(),
+    )
+    .agents;
+    let child = rows.iter().position(|row| row.pane_id == "child").unwrap();
+    let wait_of = |rows: &[SidebarAgentSnapshot], id: &str| {
+        rows.iter().find(|row| row.pane_id == id).unwrap().wait
+    };
+
+    rows[child].checks_wait = Some(7);
+    crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+    assert_eq!(
+        wait_of(&rows, "child"),
+        Some(crate::model::AgentWait::Checks)
+    );
+    let parent = rows.iter().find(|row| row.pane_id == "parent").unwrap();
+    assert_eq!(parent.wait, Some(crate::model::AgentWait::Children));
+    assert_eq!(parent.group, "working");
+    assert_eq!(parent.descendant_counts.working, 1);
+
+    rows[child].checks_wait = None;
+    crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+    assert_eq!(
+        wait_of(&rows, "parent"),
+        None,
+        "the checks ended, so nothing moves on under the root"
+    );
+}
+
 /// A source and its fork as the engine lists them once the fork's pane names the
 /// source (`lineage::desired`); `fork_session` is the fork's own session.
 fn fork_rows(fork_session: &str) -> Vec<SidebarAgentSnapshot> {

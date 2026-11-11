@@ -13,7 +13,7 @@ use serde::Deserialize;
 pub const SCHEMA: u32 = 1;
 /// The most words a line typed into a pane's shell holds, its program
 /// included, and the most bytes its words hold: the resume command
-/// limits of Herdr's `validate_resume_argv`, which the engine's start line
+/// limits of the resume command check, which the engine's start line
 /// keeps. A definition's words are checked against them here and the line a
 /// start or resume types against them in the core's own engine (`engine/own/shell_line.rs`, `check_resume`).
 pub const LINE_WORDS: usize = 64;
@@ -265,7 +265,7 @@ fn valid_package(package: &str) -> bool {
 /// Programs are compared by their file's name, so none is a path or holds a
 /// space; the first is what a start types into the pane's shell, so it is a
 /// plain command name, as the resume check
-/// (Herdr's `validate_resume_argv`) holds it.
+/// holds it.
 fn check_executables(name: &str, executables: &[String]) -> Result<(), String> {
     let Some(first) = executables.first() else {
         return Err(format!("{name}: executables is empty"));
@@ -289,7 +289,7 @@ fn check_executables(name: &str, executables: &[String]) -> Result<(), String> {
 }
 
 /// Words a start or a resume types after the program: the resume
-/// command rules of Herdr's `validate_resume_argv` (no control character,
+/// command rules (no control character,
 /// no apostrophe, 64 words and 8 KiB with the program), and `{session}` exactly where the field takes it.
 fn check_words(name: &str, field: &str, words: &[String], sessions: usize) -> Result<(), String> {
     if words.len() > MAX_WORDS || words.iter().map(String::len).sum::<usize>() > LINE_BYTES {

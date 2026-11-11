@@ -150,7 +150,7 @@ type ProgramGesture = {
 
 /** The most history rows one drag selects (each kept as its cells until the selection ends). */
 const MAX_SELECTION_ROWS = 20_000;
-/** How often a drag past the screen's edge scrolls, as Herdr's client does. */
+/** How often a drag past the screen's edge scrolls. */
 const AUTOSCROLL_MS = 30;
 /** How long a drag's scroll waits for its frame before the next may go. */
 const SCROLL_ANSWER_MS = 500;

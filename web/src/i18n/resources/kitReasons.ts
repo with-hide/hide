@@ -42,11 +42,11 @@ export const kitReasonsEnglish = {
   "kitUnavailable.unreadable": "Hide could not read its kit on this device. Check the connection, then try again.",
   "kitUnavailable.other": "Hide's kit does not run on this device.",
 
-  "herdrProfileRefusal.no_consent": "Allow the installation of Hide's helper, then connect.",
-  "herdrProfileRefusal.invalid_target": "Fix this device in your ssh config, then try again.",
-  "herdrProfileRefusal.discovery_pending": "Hide is still reading the saved devices. Try again in a moment.",
-  "herdrProfileRefusal.device_limit": "Hide already keeps as many devices as it can. Remove one you no longer use, then connect.",
-  "herdrProfileRefusal.other": "Hide did not connect this device.",
+  "profileRefusal.no_consent": "Allow the installation of Hide's helper, then connect.",
+  "profileRefusal.invalid_target": "Fix this device in your ssh config, then try again.",
+  "profileRefusal.discovery_pending": "Hide is still reading the saved devices. Try again in a moment.",
+  "profileRefusal.device_limit": "Hide already keeps as many devices as it can. Remove one you no longer use, then connect.",
+  "profileRefusal.other": "Hide did not connect this device.",
 } as const;
 
 const ko = {
@@ -84,11 +84,11 @@ const ko = {
   "kitUnavailable.unreadable": "이 기기의 Hide 도구를 읽지 못했어요. 연결을 확인한 뒤 다시 시도하세요.",
   "kitUnavailable.other": "이 기기에서는 Hide 도구가 동작하지 않아요.",
 
-  "herdrProfileRefusal.no_consent": "Hide 헬퍼 설치를 허용한 뒤 연결하세요.",
-  "herdrProfileRefusal.invalid_target": "ssh 설정에서 이 기기를 고친 뒤 다시 시도하세요.",
-  "herdrProfileRefusal.discovery_pending": "저장된 기기를 아직 읽는 중이에요. 잠시 뒤 다시 시도하세요.",
-  "herdrProfileRefusal.device_limit": "등록할 수 있는 기기 수가 다 찼어요. 쓰지 않는 기기를 제거한 뒤 연결하세요.",
-  "herdrProfileRefusal.other": "이 기기를 연결하지 않았어요.",
+  "profileRefusal.no_consent": "Hide 헬퍼 설치를 허용한 뒤 연결하세요.",
+  "profileRefusal.invalid_target": "ssh 설정에서 이 기기를 고친 뒤 다시 시도하세요.",
+  "profileRefusal.discovery_pending": "저장된 기기를 아직 읽는 중이에요. 잠시 뒤 다시 시도하세요.",
+  "profileRefusal.device_limit": "등록할 수 있는 기기 수가 다 찼어요. 쓰지 않는 기기를 제거한 뒤 연결하세요.",
+  "profileRefusal.other": "이 기기를 연결하지 않았어요.",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 const ja = {
@@ -126,11 +126,11 @@ const ja = {
   "kitUnavailable.unreadable": "このデバイスの Hide ツールを読み取れませんでした。接続を確認してからもう一度お試しください。",
   "kitUnavailable.other": "このデバイスでは Hide ツールが動作しません。",
 
-  "herdrProfileRefusal.no_consent": "Hide のヘルパーのインストールを許可してから接続してください。",
-  "herdrProfileRefusal.invalid_target": "ssh設定でこのデバイスを直してから、もう一度お試しください。",
-  "herdrProfileRefusal.discovery_pending": "保存されたデバイスをまだ読み取っています。少し待ってからもう一度お試しください。",
-  "herdrProfileRefusal.device_limit": "登録できるデバイスの数に達しています。使っていないデバイスを削除してから接続してください。",
-  "herdrProfileRefusal.other": "このデバイスは接続されませんでした。",
+  "profileRefusal.no_consent": "Hide のヘルパーのインストールを許可してから接続してください。",
+  "profileRefusal.invalid_target": "ssh設定でこのデバイスを直してから、もう一度お試しください。",
+  "profileRefusal.discovery_pending": "保存されたデバイスをまだ読み取っています。少し待ってからもう一度お試しください。",
+  "profileRefusal.device_limit": "登録できるデバイスの数に達しています。使っていないデバイスを削除してから接続してください。",
+  "profileRefusal.other": "このデバイスは接続されませんでした。",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 const zhCN = {
@@ -168,11 +168,11 @@ const zhCN = {
   "kitUnavailable.unreadable": "无法读取此设备上的 Hide 工具。请检查连接后重试。",
   "kitUnavailable.other": "Hide 工具无法在此设备上运行。",
 
-  "herdrProfileRefusal.no_consent": "请先允许安装 Hide 的辅助程序，再进行连接。",
-  "herdrProfileRefusal.invalid_target": "请在 ssh 配置中修正此设备，然后重试。",
-  "herdrProfileRefusal.discovery_pending": "Hide 仍在读取已保存的设备。请稍后重试。",
-  "herdrProfileRefusal.device_limit": "可登记的设备数量已满。请移除不再使用的设备后再连接。",
-  "herdrProfileRefusal.other": "Hide 未连接此设备。",
+  "profileRefusal.no_consent": "请先允许安装 Hide 的辅助程序，再进行连接。",
+  "profileRefusal.invalid_target": "请在 ssh 配置中修正此设备，然后重试。",
+  "profileRefusal.discovery_pending": "Hide 仍在读取已保存的设备。请稍后重试。",
+  "profileRefusal.device_limit": "可登记的设备数量已满。请移除不再使用的设备后再连接。",
+  "profileRefusal.other": "Hide 未连接此设备。",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 export const kitReasonsCatalogs = { en: kitReasonsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof kitReasonsEnglish>;

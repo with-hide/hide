@@ -317,6 +317,7 @@ impl DeskJobFailure {
             | "invalid_launch_choice"
             | "beside_other_checkout"
             | "beside_other_machine"
+            | "beside_with_parent"
             | "parent_authority_required"
             | "machine_not_permitted" => Self::InvalidRequest,
             _ => Self::Other,

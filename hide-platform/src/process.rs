@@ -254,6 +254,20 @@ pub fn hand_over(mut command: Command, spawned: impl FnOnce(u32)) -> io::Result<
 /// that control this account's launch environment.
 pub const OWNER_LAUNCH_KEYS: &[&str] = &["HIDE_PROCESS_OWNER_FD", "HIDE_PROCESS_OWNER_JOB"];
 
+/// The prefix of the operator's own Herdr pane identity (`HERDR_PANE_ID`,
+/// `HERDR_SOCKET_PATH` and the rest). A Hide pane is no Herdr pane, and a
+/// program that read one would act on the Herdr the operator runs, so every
+/// pane and every child Hide starts withholds these variables. The one rule
+/// the copies in the holder, desk, node and core share; see
+/// [`is_foreign_pane_identity`].
+pub const FOREIGN_PANE_IDENTITY: &str = "HERDR_";
+
+/// Whether the variable `name` is part of the foreign pane identity, ignoring
+/// case as a Windows variable name does.
+pub fn is_foreign_pane_identity(name: &str) -> bool {
+    name.to_ascii_uppercase().starts_with(FOREIGN_PANE_IDENTITY)
+}
+
 /// The variables a child that has to find the account's own login receives
 /// from this process, and nothing else: what locates the account (its home
 /// and name), the programs it runs (`PATH`, and on Windows `PATHEXT`), and
@@ -1445,8 +1459,8 @@ fn is_console_host(pid: u32) -> bool {
 /// A single-child cmd or PowerShell wrapper is followed to the program it
 /// waits for; any other program leads its descendants ([`group_members`]).
 /// An unreadable process table or live child identity is an error, never
-/// evidence that the shell runs alone. Herdr read a
-/// Windows pane's foreground the same way, from the shell down. `NotFound`
+/// evidence that the shell runs alone. A Windows pane's foreground
+/// is read the same way, from the shell down. `NotFound`
 /// when `shell` has ended.
 #[cfg(windows)]
 pub fn console_foreground(shell: u32) -> io::Result<u32> {
@@ -6407,8 +6421,7 @@ mod sys {
     }
 
     /// Windows keeps no process group: a terminal's foreground job is named
-    /// by its first process, which stands in for the group (Herdr's
-    /// `foreground_process_group_id` there), so the job is that process and
+    /// by its first process, which stands in for the group, so the job is that process and
     /// everything under it. No signal asks a process on another console to
     /// end, so each ends at once, as `terminate` ends one.
     pub(super) fn terminate_group(leader: u32) -> io::Result<super::GroupEnd> {

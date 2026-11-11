@@ -356,7 +356,7 @@ impl Core {
         // move or import starts the core role again, which reads it again,
         // and a workspace the engine makes meanwhile is numbered apart from the
         // engine's (D-26), so nothing the cleanup sees until then is one.
-        let herdr_held = own_engine
+        let import_held = own_engine
             .as_ref()
             .and_then(|engine| engine.own_scope())
             .map(crate::herdr_import::held)
@@ -371,7 +371,7 @@ impl Core {
             lock_recover(&runtime).install_product_analytics(sink);
         }
         lock_recover(&runtime).set_system_language(system_language);
-        lock_recover(&runtime).hold_herdr_state(herdr_held);
+        lock_recover(&runtime).hold_import_state(import_held);
         let notifier = ChangeNotifier::new();
         lock_recover(&runtime).install_worker_context(Arc::downgrade(&runtime), notifier.clone());
         lock_recover(&runtime).set_guardrails_own_file(options.account_state_folder);

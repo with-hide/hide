@@ -1281,6 +1281,22 @@ impl Panes {
         found
     }
 
+    /// Whether `pane`'s record still says its holder runs while the holder's
+    /// pid and start time are confirmed gone (`Identity::gone`; a process table
+    /// that cannot be read is not proof): the holder was killed or crashed
+    /// without saying why. It reads and changes nothing, and a record that is
+    /// not `running`, is another folder's, or names a holder that runs (one
+    /// that is only slow or busy) answers `false`; the next start of a node
+    /// ends the record as `holder_lost` (`reconcile`).
+    pub fn holder_gone(&self, pane: &str) -> bool {
+        self.record(pane).ok().flatten().is_some_and(|current| {
+            current.phase == Phase::Running
+                && current.end.is_none()
+                && current.owner == self.owner
+                && current.holder.is_some_and(|holder| holder.gone())
+        })
+    }
+
     /// Runs `work` on each item on up to [`RECONCILE_WORKERS`] threads,
     /// taking up no item once `deadline` has passed; an item not taken up
     /// answers `None`. Every thread ends before this returns.

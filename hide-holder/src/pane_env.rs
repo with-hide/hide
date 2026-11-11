@@ -14,6 +14,7 @@
 //! pane's own identity, `HIDE_PANE_ID`, is the starting node's to add, since
 //! the node names the pane by the core's id.
 
+use hide_platform::process::is_foreign_pane_identity;
 use portable_pty::CommandBuilder;
 
 /// The terminal the holder emulates, an xterm with 256 colors and true color.
@@ -55,11 +56,6 @@ const PARENT_AGENT: [&str; 6] = [
     "CLAUDE_CODE_MESSAGING_TOKEN",
 ];
 
-/// The prefix of Herdr's pane identity (`HERDR_PANE_ID`, `HERDR_SOCKET_PATH`
-/// and the rest): a pane on this engine is no Herdr pane, and a program that
-/// read one would act on the Herdr that started the daemon.
-const HERDR_PREFIX: &str = "HERDR_";
-
 /// Sets `command`'s terminal and removes what names another terminal, pane
 /// or agent, whatever the environment it was started from held (an app
 /// opened from the Dock has no `TERM`).
@@ -68,13 +64,13 @@ pub fn apply(command: &mut CommandBuilder) {
     command.env("COLORTERM", COLORTERM);
     command.env("TERM_PROGRAM", TERM_PROGRAM);
     command.env("FORCE_HYPERLINK", FORCE_HYPERLINK);
-    let herdr: Vec<String> = command
+    let foreign: Vec<String> = command
         .iter_full_env_as_str()
         .map(|(key, _)| key)
-        .filter(|key| key.to_ascii_uppercase().starts_with(HERDR_PREFIX))
+        .filter(|key| is_foreign_pane_identity(key))
         .map(str::to_owned)
         .collect();
-    for key in herdr
+    for key in foreign
         .iter()
         .map(String::as_str)
         .chain(OUTER_TERMINAL)
@@ -89,7 +85,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_pane_says_it_runs_in_hide_and_names_no_herdr_pane_or_outer_terminal() {
+    fn a_pane_says_it_runs_in_hide_and_names_no_foreign_pane_or_outer_terminal() {
         let mut command = CommandBuilder::new("sh");
         command.env("HERDR_PANE_ID", "w1:p1");
         command.env("HERDR_SOCKET_PATH", "/tmp/herdr.sock");
@@ -109,8 +105,7 @@ mod tests {
         assert_eq!(env.get("COLORTERM"), Some(&"truecolor"));
         assert_eq!(env.get("FORCE_HYPERLINK"), Some(&"1"));
         assert!(
-            env.keys()
-                .all(|key| !key.to_ascii_uppercase().starts_with("HERDR_")),
+            env.keys().all(|key| !is_foreign_pane_identity(key)),
             "{env:?}"
         );
         for gone in ["TERM_PROGRAM_VERSION", "TMUX", "CLAUDECODE"] {

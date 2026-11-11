@@ -1,6 +1,6 @@
 //! What this machine and the account running on it are called, and where
 //! their things live: the home folder, the folder an application keeps its
-//! state in, the socket the pinned Herdr listens on by default, the programs
+//! state in, the Herdr config folder the import reads, the programs
 //! on the search path, the `PATH` and the environment the login shell sets
 //! up, the account's environment on Windows, the default shell, the Trash, the Tailscale CLI, the account's primary language, and
 //! the machine's name and identity.
@@ -15,12 +15,10 @@
 //!
 //! | Variable | System | Absent |
 //! | --- | --- | --- |
-//! | `HOME` | macOS, Linux | no home folder, so no state, socket or Trash location |
+//! | `HOME` | macOS, Linux | no home folder, so no state, Herdr config or Trash location |
 //! | `USERPROFILE` | Windows | no home folder |
 //! | `XDG_STATE_HOME` | Linux | state lives under `~/.local/state` |
 //! | `LOCALAPPDATA` | Windows | no state folder |
-//! | `HERDR_SOCKET_PATH` | all | use `HERDR_SESSION`, or Herdr's account default socket |
-//! | `HERDR_SESSION` | all | use Herdr's default session when no socket overrides it |
 //! | `XDG_CONFIG_HOME` | all, as Herdr reads it | Herdr's config folder is the system's own |
 //! | `APPDATA` | Windows | Herdr's config folder is under `USERPROFILE` |
 //! | `PATH` | all | no program is found |
@@ -45,8 +43,6 @@ pub const VARIABLES: &[&str] = &[
     HOME_VARIABLE,
     "XDG_STATE_HOME",
     "LOCALAPPDATA",
-    "HERDR_SOCKET_PATH",
-    "HERDR_SESSION",
     "XDG_CONFIG_HOME",
     "APPDATA",
     "PATH",
@@ -126,72 +122,6 @@ pub fn state_dir_under(home: &Path) -> PathBuf {
     } else {
         home.join(".local").join("state")
     }
-}
-
-/// The socket the pinned Herdr's default session listens on when nothing
-/// overrides it: `herdr.sock` in Herdr's config folder, which is
-/// `$XDG_CONFIG_HOME/herdr` wherever that is set, and otherwise
-/// `~/.config/herdr` on macOS and Linux and `%APPDATA%\herdr` on Windows
-/// (whose socket is a named pipe of that name). `HERDR_SOCKET_PATH` and a
-/// named session are the caller's to apply before asking.
-pub fn herdr_socket_default() -> io::Result<PathBuf> {
-    herdr_socket_default_from(&process)
-}
-
-/// [`herdr_socket_default`] from the caller's variables.
-pub fn herdr_socket_default_from(variables: Variables) -> io::Result<PathBuf> {
-    Ok(herdr_config_dir_from(variables)?.join("herdr.sock"))
-}
-
-/// The account socket, honoring the environment override before the
-/// named environment session and system default. An explicit CLI session
-/// is the caller's and takes precedence over both environment selectors.
-pub fn herdr_socket_from(variables: Variables) -> io::Result<PathBuf> {
-    if variables("HERDR_SOCKET_PATH").is_some() {
-        let socket = absolute_variable(variables, "HERDR_SOCKET_PATH")?;
-        if socket
-            .as_os_str()
-            .to_string_lossy()
-            .chars()
-            .any(char::is_control)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "HERDR_SOCKET_PATH must be single-line",
-            ));
-        }
-        return Ok(socket);
-    }
-    let folder = herdr_config_dir_from(variables)?;
-    match variables("HERDR_SESSION") {
-        None => Ok(folder.join("herdr.sock")),
-        Some(session) => {
-            let session = session
-                .to_str()
-                .filter(|session| valid_herdr_session(session))
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "HERDR_SESSION is not a valid session name",
-                    )
-                })?;
-            if session == "default" {
-                Ok(folder.join("herdr.sock"))
-            } else {
-                Ok(folder.join("sessions").join(session).join("herdr.sock"))
-            }
-        }
-    }
-}
-
-/// A session name the pinned Herdr accepts, safe as one path component.
-pub fn valid_herdr_session(session: &str) -> bool {
-    !session.is_empty()
-        && session.len() <= 64
-        && !matches!(session, "." | "..")
-        && session
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
 
 /// Herdr's config folder, resolved in Herdr's own order (`config::io` of the

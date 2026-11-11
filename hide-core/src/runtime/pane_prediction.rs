@@ -6,8 +6,8 @@
 //! shows it changes nothing, so a prediction can stay applied until its
 //! operation settles without counting twice once the engine's layout carries it.
 //!
-//! The rules follow what Herdr does (v0.9.1, measured on a private
-//! server): a split puts the new pane second at ratio 0.5 and focuses it; a
+//! The rules were measured under Herdr v0.9.1 on a private server:
+//! a split puts the new pane second at ratio 0.5 and focuses it; a
 //! close collapses the parent split into the sibling, focuses the sibling and
 //! ends a zoom on the closed pane; a zoom focuses its pane; a resize moves the
 //! split on the pane's edge toward its direction (the opposite edge at the
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resize_is_clamped_like_herdr_and_needs_a_split_of_its_axis() {
+    fn a_resize_is_clamped_by_the_engine_and_needs_a_split_of_its_axis() {
         let tree = layout(split(Right, 0.6, pane("w1:p1"), pane("w1:p2")), "w1:p1");
         let Some(Prediction::Resize { ratio, .. }) =
             resize_prediction(&tree, "w1:p1", PaneResizeDirection::Right, 0.5)
