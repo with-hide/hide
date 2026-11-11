@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Terminal } from "@xterm/xterm";
 import { AGENT_ADAPTERS } from "./agentAdapters";
-import { bellRows, bellScan, dimBellLines, forgetBellLines, queueBellLines, type ScreenRow } from "./terminalBellLines";
+import { MAX_BAR_ROWS, bellRows, bellScan, dimBellLines, forgetBellLines, queueBellLines, styleBar, type ScreenRow } from "./terminalBellLines";
 
 /** A row as the scan reads it: wide glyphs and the owl take two cells. */
 function row(text: string): ScreenRow {
@@ -126,7 +126,7 @@ describe("the echo each agent declares", () => {
 
 /** A terminal that counts what the shell asks of it: reads of its rows, markers and decorations. */
 function fakeTerminal(text: string[]) {
-  const counts = { reads: 0, markers: 0, decorations: 0, disposed: 0 };
+  const counts = { reads: 0, markers: 0, decorations: 0, disposed: 0, renderers: [] as Array<(element: HTMLElement) => void> };
   const term = {
     rows: text.length,
     cols: 100,
@@ -151,7 +151,14 @@ function fakeTerminal(text: string[]) {
     },
     registerDecoration: () => {
       counts.decorations += 1;
-      return { isDisposed: false, dispose: () => (counts.disposed += 1) };
+      return {
+        isDisposed: false,
+        onRender: (listener: (element: HTMLElement) => void) => {
+          counts.renderers.push(listener);
+          return { dispose: () => {} };
+        },
+        dispose: () => (counts.disposed += 1),
+      };
     },
   };
   return { term: term as unknown as Terminal, counts, text };
@@ -266,6 +273,32 @@ describe("what is drawn on a real terminal", () => {
     dimBellLines(term, "#666666");
     expect(markersHeld(term)).toBe(1);
     forgetBellLines(term);
+    term.dispose();
+  });
+});
+
+describe("the bar on a letter's rows", () => {
+  it("is drawn on each row's own element inside its box, over nothing, in the token's color", () => {
+    const { term, counts } = fakeTerminal(["❯ 🦉 a 보고: 끝에서 끝까지", "  꺾인 둘째 줄", "⏺ ok"].map((line, i) => (i === 0 ? line.padEnd(95, "가") : line)));
+    dimBellLines(term, "#666");
+    expect(counts.renderers.length).toBe(counts.decorations);
+    const style: Record<string, string> = {};
+    for (const render of counts.renderers) render({ style } as unknown as HTMLElement);
+    expect(style).toMatchObject({ boxSizing: "border-box", pointerEvents: "none", borderLeft: "3px solid var(--terminal-letter-bar)" });
+    const element = { style: {} as Record<string, string> };
+    styleBar(element as unknown as HTMLElement);
+    expect(element.style.borderLeft).toBe("3px solid var(--terminal-letter-bar)");
+  });
+
+  it("is drawn on at most the cap of rows, the newest", async () => {
+    const term = new Terminal({ rows: 200, cols: 40, scrollback: 0, allowProposedApi: true });
+    let data = "";
+    for (let y = 1; y <= 200; y += 1) data += `\x1b[${y};1H❯ 🦉 a 보고: ${y}`;
+    await written(term, data + "\x1b[200;1H");
+    dimBellLines(term, "#666666");
+    expect(markersHeld(term)).toBe(MAX_BAR_ROWS);
+    forgetBellLines(term);
+    expect(markersHeld(term)).toBe(0);
     term.dispose();
   });
 });

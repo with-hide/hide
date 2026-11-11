@@ -116,6 +116,7 @@
   --color-terminal-magenta: var(--terminal-magenta);
   --color-terminal-cyan: var(--terminal-cyan);
   --color-terminal-white: var(--terminal-white);
+  --color-terminal-letter-bar: var(--terminal-letter-bar);
   --color-terminal-bright-black: var(--terminal-bright-black);
   --color-terminal-bright-red: var(--terminal-bright-red);
   --color-terminal-bright-green: var(--terminal-bright-green);
@@ -516,6 +517,7 @@
   --terminal-magenta: #8a4cc2;
   --terminal-cyan: #0e7576;
   --terminal-white: #8c959f;
+  --terminal-letter-bar: #2f6f90;
   --terminal-bright-black: #62686f;
   --terminal-bright-red: #a3212a;
   --terminal-bright-green: #1d6630;
@@ -622,6 +624,7 @@
   --terminal-magenta: #c99cf0;
   --terminal-cyan: #5fd0c8;
   --terminal-white: #c9cbcf;
+  --terminal-letter-bar: #4f8fb0;
   --terminal-bright-black: #7c7f85;
   --terminal-bright-red: #ff9da0;
   --terminal-bright-green: #a6e9ae;

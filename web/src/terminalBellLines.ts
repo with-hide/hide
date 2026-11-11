@@ -8,6 +8,12 @@
 // rewritten: the agent's own TUI draws it, so the shell only lays a foreground
 // color over its cells, and the text, the selection and the copy stay as drawn.
 //
+// Each such row also carries a bar at its left edge, `--terminal-letter-bar`, so
+// the letter reads as a letter at a glance while its words stay quiet. The bar
+// is the decoration's own element, a DOM overlay in the WebGL renderer too, one
+// per row so a wrapped line keeps it on every row, with pointer events off and
+// a border inside the element's box so no text moves under it.
+//
 // The pane keeps no scrollback and the holder redraws its screen rows in place,
 // so a marker on a row says nothing about what the row shows next. After a
 // frame the screen is read again and the decorations are replaced only when the
@@ -44,6 +50,19 @@ export function bellScan(echoes: readonly BellEchoShape[]): { bellRow: RegExp; c
 
 const declared = AGENT_ADAPTERS.flatMap((row) => (row.bell_echo ? [row.bell_echo] : []));
 const declaredScan = bellScan(declared);
+
+/** The most rows one terminal draws a bar on; past it the rows nearest the cursor, the newest, keep theirs. */
+export const MAX_BAR_ROWS = 120;
+
+/** The bar's width, the left border of the decoration's element. */
+const BAR_WIDTH_PX = 3;
+
+/** Draws the bar on the element xterm made for one row's decoration; the element is xterm's to remove with it. */
+export function styleBar(element: HTMLElement) {
+  element.style.boxSizing = "border-box";
+  element.style.borderLeft = `${BAR_WIDTH_PX}px solid var(--terminal-letter-bar)`;
+  element.style.pointerEvents = "none";
+}
 
 /** A wrapped row leaves this many cells unused at most when the next word fits no better. */
 const WRAP_SLACK = 16;
@@ -140,7 +159,7 @@ function holds(term: Terminal, was: Drawn, rows: readonly number[], color: strin
 
 /** Reads the screen now and draws the bell rows in `color`; nothing changes while what is drawn holds. */
 export function dimBellLines(term: Terminal, color: string) {
-  const rows = bellRows(readRows(term), term.cols);
+  const rows = bellRows(readRows(term), term.cols).slice(-MAX_BAR_ROWS);
   const was = drawn.get(term);
   if (was && holds(term, was, rows, color)) return;
   dispose(term);
@@ -151,7 +170,10 @@ export function dimBellLines(term: Terminal, color: string) {
     const marker = term.registerMarker(buffer.viewportY + y - (buffer.baseY + buffer.cursorY));
     if (!marker) continue;
     const decoration = term.registerDecoration({ marker, x: 0, width: term.cols, foregroundColor: color, layer: "top" });
-    if (decoration) items.push({ y, marker, decoration });
+    if (decoration) {
+      decoration.onRender(styleBar);
+      items.push({ y, marker, decoration });
+    }
     else marker.dispose();
   }
   drawn.set(term, { rows, color, cols: term.cols, height: term.rows, items });
