@@ -52,7 +52,7 @@ const fn lacks(
 }
 
 const NOT_SURVEYED: &str = "No survey has measured this screen on the agent's pinned CLI.";
-const OLD_HERDR: &str = "Only an earlier measurement exists, made on Herdr with an older agent build before Hide's own engine typed letters; it is no evidence for the current build.";
+const OLD_ENGINE: &str = "Only an earlier measurement exists, made on an earlier engine with an older agent build before Hide's own engine typed letters; it is no evidence for the current build.";
 const DOOR_UNCONFIRMED: &str = "The command that opens it is the design's reading of the agent, not yet confirmed in the agent's own command list.";
 const NO_FAKE_TOOLS: &str = "A scripted tool call needs a real login: the journey's fake model calls no tools, so this screen is surveyed on a real login and is not checked in CI.";
 const FAKE_NO_FIRST_RUN: &str = "A start with an empty account folder is not yet scripted; the journey's accounts are set up before the agent starts.";
@@ -195,8 +195,8 @@ pub(super) const GROK: SceneDeclaration = SceneDeclaration {
         "A kind with tool letters is not rung while it works; the line may only wait in the agent's own queue. Not surveyed.",
     ),
     interrupted: has(INTERRUPTED, DOOR_UNCONFIRMED),
-    session_picker: has(command!("/resume"), OLD_HERDR),
-    model_picker: has(command!("/model"), OLD_HERDR),
+    session_picker: has(command!("/resume"), OLD_ENGINE),
+    model_picker: has(command!("/model"), OLD_ENGINE),
     popup: has(popup!("/"), DOOR_UNCONFIRMED),
     tool_approval: has(SHELL, NO_FAKE_TOOLS),
     question: has(ASK, NO_FAKE_TOOLS),
@@ -223,7 +223,7 @@ pub(super) const OPENCODE: SceneDeclaration = SceneDeclaration {
     interrupted: has(INTERRUPTED, DOOR_UNCONFIRMED),
     session_picker: has(
         command!("/sessions"),
-        "A bell's Enter in the previous-session picker opened another session (2026-10-07, on Herdr with an earlier OpenCode); the own engine is not surveyed, and the command name is unconfirmed.",
+        "A bell's Enter in the previous-session picker opened another session (2026-10-07, on the earlier engine with an earlier OpenCode); the own engine is not surveyed, and the command name is unconfirmed.",
     ),
     model_picker: has(command!("/models"), DOOR_UNCONFIRMED),
     popup: has(popup!("/"), DOOR_UNCONFIRMED),
@@ -255,7 +255,7 @@ pub(super) const PI: SceneDeclaration = SceneDeclaration {
     interrupted: has(INTERRUPTED, DOOR_UNCONFIRMED),
     session_picker: has(
         command!("/resume"),
-        "The previous-session picker read `done` and a bell's Enter resumed another session (2026-10-07, on Herdr); the own engine is not surveyed.",
+        "The previous-session picker read `done` and a bell's Enter resumed another session (2026-10-07, on the earlier engine); the own engine is not surveyed.",
     ),
     model_picker: has(command!("/model"), DOOR_UNCONFIRMED),
     popup: has(
@@ -277,7 +277,7 @@ pub(super) const PI: SceneDeclaration = SceneDeclaration {
     ),
     trust_dialog: has(
         UNTRUSTED,
-        "Pi's engine reads the dialog `idle` and its Enter picked the highlighted item (2026-10-07, on Herdr); the own engine is not surveyed.",
+        "Pi's engine reads the dialog `idle` and its Enter picked the highlighted item (2026-10-07, on the earlier engine); the own engine is not surveyed.",
     ),
     hooks_review: NO_HOOK_REVIEW,
     first_run: has(
@@ -300,7 +300,7 @@ pub(super) const OMP: SceneDeclaration = SceneDeclaration {
     interrupted: has(INTERRUPTED, DOOR_UNCONFIRMED),
     session_picker: has(
         command!("/resume"),
-        "The previous-session picker read `done` and a bell's Enter resumed another session (2026-10-07, on Herdr); the own engine is not surveyed.",
+        "The previous-session picker read `done` and a bell's Enter resumed another session (2026-10-07, on the earlier engine); the own engine is not surveyed.",
     ),
     model_picker: has(command!("/model"), DOOR_UNCONFIRMED),
     popup: has(
