@@ -78,7 +78,7 @@
   {
    "step": "a Home started on the core and the device",
    "ok": null,
-   "why": "not in this release: {'kind': 'agent_start.invalid_target', 'message': 'A start names one checkout', 'retryable': False, 'occurred_at': 1794398279108, 'request_id': 'release-state-home-51'}"
+   "why": "not in this release: {'kind': 'agent_start.invalid_target', 'message': 'A start names one checkout', 'retryable': False, 'occurred_at': 1794401077981, 'request_id': 'release-state-home-51'}"
   }
  ],
  "missions": [
@@ -368,6 +368,37 @@
    "stack_waiting": 0,
    "report": "feat/wait is left to join.",
    "nodes": [
+    {
+     "key": "landed",
+     "kind": "change",
+     "delivery": "direct",
+     "status": "done",
+     "depends_on": [],
+     "branch": "feat/landed",
+     "base_pr": null,
+     "commit": null,
+     "verdict": null,
+     "checks": null,
+     "landing": {
+      "state": "landed",
+      "proof": {
+       "by": "in_main",
+       "commit": "c0d92dbacbe038b74df4d1aa463c8d33cf1f982b"
+      }
+     },
+     "external": null,
+     "line": null,
+     "prs": [],
+     "criteria": [
+      [
+       "c1",
+       "own",
+       "pass"
+      ]
+     ],
+     "gate": null,
+     "hold": null
+    },
     {
      "key": "join",
      "kind": "change",

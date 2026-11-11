@@ -392,8 +392,8 @@ class Scenario:
         one closed done and one with its nodes at work, stacked on another
         pull request, behind a gate asked and a gate passed, waiting on an
         outside branch, verified, and held, conducted on the core; one
-        waiting for its direct change's branch, conducted by a second agent
-        on the core.
+        waiting for a direct change's branch beside one whose branch it read
+        in main, conducted by a second agent on the core.
         With the device mission above (a research node worked on the
         device), these are the states the upgrade test holds every later
         build to. A part the release does not have is named in the answer
@@ -482,9 +482,18 @@ class Scenario:
                                             for row in tab["panes"] if row["id"] not in before), None), "a new core pane")
         time.sleep(2)
         self.start_agent(pane, "core-b", str(STATE / "engine"), pane)
+        # One direct change whose branch main already holds, which the
+        # release reads in main and stores as proof, and one left to join.
+        branch("feat/landed", CORE_REPO, False)
+        subprocess.run(["git", "-C", str(CORE_REPO), "merge", "-q", "--ff-only", "feat/landed"], check=True)
         branch("feat/wait", CORE_REPO, False)
         waiting = mission("core-b", "States waiting", {"nodes": [
-            {"key": "join", "title": "Join it", "kind": "change", "delivery": "direct", "criteria": ["it works"]}]})
+            {"key": "landed", "title": "Joined", "kind": "change", "delivery": "direct", "criteria": ["it works"]},
+            {"key": "join", "title": "Join it", "kind": "change", "delivery": "direct", "criteria": ["it works too"]}]})
+        met("core-b", "landed")
+        self.checked("core-b", "hide mission node landed --status done --branch feat/landed")
+        shown(waiting, lambda row: any(node.get("key") == "landed" and (node.get("landing") or {}).get("state") == "landed"
+                                       for node in row.get("nodes") or []), "the joined branch read in main")
         met("core-b", "join")
         self.checked("core-b", "hide mission node join --status done --branch feat/wait")
         self.checked("core-b", "hide mission close --as merge_wait --report 'feat/wait is left to join.'")

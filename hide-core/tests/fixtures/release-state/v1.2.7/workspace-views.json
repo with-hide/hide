@@ -8,8 +8,8 @@
       "documents": true,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794398273088,
-      "made_unix_ms": 1794398095673,
+      "last_used_unix_ms": 1794401071969,
+      "made_unix_ms": 1794400889151,
       "view_layout": {
         "root": {
           "area": {
@@ -22,12 +22,12 @@
                 "kind": "file",
                 "committed": null,
                 "preview": false,
-                "last_focused_unix_ms": 1794398112046,
+                "last_focused_unix_ms": 1794400906601,
                 "opener": {
                   "device_id": "c0de0000000000000000000000000001",
                   "terminal_id": "h1:p1",
-                  "session": "f7442914e1bcbf896787937500b19311a3903b5c6366d320da0d73067393a7a9",
-                  "resume": "80745ed0-d9db-411b-b2d3-c98fed47e085",
+                  "session": "717062b9251f26f639645c84f3e5e602d4e092a876d721d6081c8a6dc8a2a511",
+                  "resume": "88e1e03b-cc98-4eb1-b05e-11dfab3e0745",
                   "provider": "claude",
                   "name": "Claude"
                 },
@@ -35,14 +35,14 @@
                   {
                     "device_id": "c0de0000000000000000000000000001",
                     "terminal_id": "h1:p1",
-                    "session": "f7442914e1bcbf896787937500b19311a3903b5c6366d320da0d73067393a7a9",
-                    "resume": "80745ed0-d9db-411b-b2d3-c98fed47e085",
+                    "session": "717062b9251f26f639645c84f3e5e602d4e092a876d721d6081c8a6dc8a2a511",
+                    "resume": "88e1e03b-cc98-4eb1-b05e-11dfab3e0745",
                     "provider": "claude",
                     "name": "Claude"
                   }
                 ],
                 "unseen": {
-                  "opened_unix_ms": 1794398112046
+                  "opened_unix_ms": 1794400906601
                 }
               }
             ]
@@ -63,11 +63,11 @@
               },
               {
                 "id": "h1:t2",
-                "focused": 1794398272775
+                "focused": 1794401071544
               },
               {
                 "id": "h1:t4",
-                "focused": 1794398279124
+                "focused": 1794401077977
               }
             ]
           }
@@ -94,7 +94,7 @@
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794398272838,
+          "recorded_at": 1794401071610,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -112,8 +112,8 @@
               "pane_id": "h1:p4",
               "identity": {
                 "terminal_id": "h1:p4",
-                "shell_pid": 5137,
-                "shell_started": 2471409
+                "shell_pid": 5456,
+                "shell_started": 2751286
               }
             }
           }
@@ -129,7 +129,7 @@
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794398272940,
+          "recorded_at": 1794401071923,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -147,8 +147,8 @@
               "pane_id": "h1:p5",
               "identity": {
                 "terminal_id": "h1:p5",
-                "shell_pid": 5239,
-                "shell_started": 2471419
+                "shell_pid": 5595,
+                "shell_started": 2751317
               }
             }
           }
@@ -162,8 +162,8 @@
       "documents": true,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794398272917,
-      "made_unix_ms": 1794398099082,
+      "last_used_unix_ms": 1794401071794,
+      "made_unix_ms": 1794400892419,
       "view_layout": {
         "root": {
           "area": {
@@ -183,11 +183,11 @@
             "displays": [
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t1",
-                "focused": 1794398116020
+                "focused": 1794400910584
               },
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t2",
-                "focused": 1794398116012
+                "focused": 1794400910575
               },
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t3",
@@ -195,7 +195,7 @@
               },
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t4",
-                "focused": 1794398272917
+                "focused": 1794401071794
               }
             ]
           }
@@ -234,7 +234,7 @@
           "terminal_id": "h1:p3",
           "workspace_id": "h1",
           "phase": "completed",
-          "started_at": 1794398116005,
+          "started_at": 1794400910569,
           "message": null,
           "target_terminal": "h1:p2",
           "new_tab_slot": false,
@@ -254,7 +254,7 @@
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794398272893,
+          "recorded_at": 1794401071761,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -272,8 +272,8 @@
               "pane_id": "h1:p5",
               "identity": {
                 "terminal_id": "h1:p5",
-                "shell_pid": 2137,
-                "shell_started": 2471414
+                "shell_pid": 2160,
+                "shell_started": 2751301
               }
             }
           }
@@ -288,7 +288,7 @@
       "tool": null,
       "pinned": false,
       "last_used_unix_ms": 0,
-      "made_unix_ms": 1794398140687,
+      "made_unix_ms": 1794400935247,
       "view_layout": {
         "root": {
           "area": {
