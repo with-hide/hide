@@ -13302,9 +13302,21 @@ fn an_outside_nodes_view_says_where_its_work_goes() {
         [Some(unread), develop.clone(), None]
     );
     for (badge, checks, state) in [
-        (PullRequestBadge::Open, PullRequestChecks::Pending, PrState::Pending),
-        (PullRequestBadge::Merged, PullRequestChecks::Passing, PrState::Merged),
-        (PullRequestBadge::Closed, PullRequestChecks::Passing, PrState::Closed),
+        (
+            PullRequestBadge::Open,
+            PullRequestChecks::Pending,
+            PrState::Pending,
+        ),
+        (
+            PullRequestBadge::Merged,
+            PullRequestChecks::Passing,
+            PrState::Merged,
+        ),
+        (
+            PullRequestBadge::Closed,
+            PullRequestChecks::Passing,
+            PrState::Closed,
+        ),
     ] {
         let mut outside = pull(1232, "a1", badge, None);
         outside.base_branch = "release/1.2".into();

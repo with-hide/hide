@@ -641,7 +641,10 @@ fn phone_mission(
                 pr_base: source.prs.into_iter().next_back().and_then(|pr| pr.base),
                 external_pr: source.external.as_ref().and_then(|external| external.pr),
                 external_branch: source.external.and_then(|external| external.branch),
-                external_base: source.outside.as_ref().and_then(|outside| outside.base.clone()),
+                external_base: source
+                    .outside
+                    .as_ref()
+                    .and_then(|outside| outside.base.clone()),
                 external_state: source.outside.and_then(|outside| outside.state),
                 stage: source.stage,
                 attention: source.attention,
@@ -982,14 +985,29 @@ mod tests {
         // An outside step's pull request or branch is its first station, and where it goes its last (D-14): its pull
         // request's base with its state, or the default branch its branch is judged against with no state.
         let outside = |at: usize| {
-            ["external_pr", "external_branch", "external_base", "external_state"]
-                .map(|key| new["nodes"][at].get(key).cloned())
+            [
+                "external_pr",
+                "external_branch",
+                "external_base",
+                "external_state",
+            ]
+            .map(|key| new["nodes"][at].get(key).cloned())
         };
         assert_eq!(
             [outside(2), outside(3), outside(0)],
             [
-                [Some(json!(1232)), None, Some(json!("release/1.2")), Some(json!("mergeable"))],
-                [None, Some(json!("work/direct")), Some(json!("develop")), None],
+                [
+                    Some(json!(1232)),
+                    None,
+                    Some(json!("release/1.2")),
+                    Some(json!("mergeable"))
+                ],
+                [
+                    None,
+                    Some(json!("work/direct")),
+                    Some(json!("develop")),
+                    None
+                ],
                 [None, None, None, None],
             ]
         );
