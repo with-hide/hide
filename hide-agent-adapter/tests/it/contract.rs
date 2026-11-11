@@ -830,7 +830,10 @@ fn rest_and_working_are_proven_by_the_letter_cells_and_a_bell_has_a_rest() {
     use hide_agent_adapter::usage::Support;
     for row in ADAPTERS {
         let Support::Supported(rest) = row.scenes.rest else {
-            panic!("{}: an agent with no `rest` has nothing to ring into", row.id);
+            panic!(
+                "{}: an agent with no `rest` has nothing to ring into",
+                row.id
+            );
         };
         assert!(
             matches!(rest.door, Door::Cell { cell: "letter" }),
@@ -839,7 +842,12 @@ fn rest_and_working_are_proven_by_the_letter_cells_and_a_bell_has_a_rest() {
         );
         if let Support::Supported(working) = row.scenes.working {
             assert!(
-                matches!(working.door, Door::Cell { cell: "letter_busy" }),
+                matches!(
+                    working.door,
+                    Door::Cell {
+                        cell: "letter_busy"
+                    }
+                ),
                 "{}: `working` is the `letter_busy` cell",
                 row.id
             );
@@ -880,7 +888,11 @@ fn a_finding_names_its_version_date_and_procedure_and_an_unknown_one_says_what_c
                         "{at}: {:?} is not YYYY-MM-DD",
                         seen.on
                     );
-                    assert!(seen.on <= today.as_str(), "{at}: seen on {}, after today", seen.on);
+                    assert!(
+                        seen.on <= today.as_str(),
+                        "{at}: seen on {}, after today",
+                        seen.on
+                    );
                     let minimum = row.minimum.expect("a supported agent declares one").version;
                     assert!(
                         version_parts(seen.version) >= version_parts(minimum),
@@ -888,7 +900,10 @@ fn a_finding_names_its_version_date_and_procedure_and_an_unknown_one_says_what_c
                         seen.version
                     );
                     if let Finding::Unsafe { closes_with, .. } = case.finding {
-                        assert!(!closes_with.trim().is_empty(), "{at}: unsafe, closes with nothing");
+                        assert!(
+                            !closes_with.trim().is_empty(),
+                            "{at}: unsafe, closes with nothing"
+                        );
                     }
                 }
                 Finding::Unknown { why, closes_with } => {
@@ -1002,7 +1017,11 @@ fn today() -> String {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_part = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_part + 2) / 5 + 1;
-    let month = if month_part < 10 { month_part + 3 } else { month_part - 9 };
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
 }

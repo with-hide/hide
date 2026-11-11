@@ -144,7 +144,9 @@ pub enum Stage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(tag = "key", rename_all = "snake_case")]
 pub enum Key {
-    Text { text: &'static str },
+    Text {
+        text: &'static str,
+    },
     Enter,
     Esc,
     Tab,

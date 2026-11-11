@@ -313,7 +313,10 @@ fn release_checked_scenes(row: &super::AgentAdapter) -> u32 {
             scene_cell(row, scene)
                 && matches!(
                     row.scenes.get(scene),
-                    Support::Supported(SceneCase { release_check: true, .. })
+                    Support::Supported(SceneCase {
+                        release_check: true,
+                        ..
+                    })
                 )
         })
         .count() as u32
