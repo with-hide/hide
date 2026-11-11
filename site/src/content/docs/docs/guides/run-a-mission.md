@@ -6,7 +6,7 @@ features: [tasks-status, missions]
 
 **Use when** one goal needs planning first, several pull requests, or another agent to check the work, and you want to say it once.
 
-<iframe src="/embed/docs-embed.html?part=mission-map&theme=dark" title="A mission map: the Conductor, workers side by side, a decision for you, checks, and main" height="825" loading="lazy"></iframe>
+<iframe src="/embed/docs-embed.html?part=mission-map&theme=dark" title="A mission map: the Conductor, workers side by side, a decision for you, checks, and main" height="839" loading="lazy"></iframe>
 
 A mission is one goal carried by a lead agent, the Conductor: it plans with you, starts the agents, another model checks each part, and only decisions come to you. The map shows that, with the one node that waits on you.
 

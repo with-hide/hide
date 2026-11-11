@@ -21,7 +21,7 @@ if (!existsSync(join(dist, "docs-embed.html"))) throw new Error(`${dist} is miss
 
 // The width a docs page gives a frame at each viewport (measured on /docs/guides/run-a-mission/), and the height its page writes.
 const CASES = [{ viewport: 1440, frame: 736 }, { viewport: 390, frame: 358 }];
-const FRAME_ATTRIBUTE_HEIGHT = 825;
+const FRAME_ATTRIBUTE_HEIGHT = 839;
 const SETTLED_FRAMES = 30;
 // The frame grows by what is hidden and no more: the box may end this many pixels below the last line of the map.
 const BLANK_TOLERANCE = 2;
