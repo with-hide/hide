@@ -37,6 +37,18 @@ const EXAMPLES: Example[] = [
 const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", origin_title: "한국어 입력 경계 검토", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
 const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };
 const NO_NOTICE = { notice: null, band: null };
+/** Questions a session put to the operator that still wait (`open_asks`): drawn as `질문 N` in the pane head and listed in the turn card, never on a row (status-model.md, A question still waiting). */
+const openAsks = (session: string, texts: string[]): NonNullable<AgentRow["open_asks"]> => ({
+  session: { device_id: "local", agent: "claude", session_id: session },
+  items: texts.map((text, index) => ({ id: `${session}-${index}`, text, at_unix_ms: Date.now() - 86_400_000 + index * 60_000 })),
+});
+/** The rows and panes that keep questions: a working row asked one, a resting row and the pane head's progress case keep two. */
+const OPEN_ASKS: Record<string, NonNullable<AgentRow["open_asks"]>> = {
+  s4: openAsks("gallery-s4", ["실패한 검증을 이 PR에서 고칠까요?"]),
+  s6: openAsks("gallery-s6", ["(a)로 별도 PR로 할지", "설정 탭에 행을 넣을지"]),
+  progress: openAsks("gallery-progress", ["(a)로 별도 PR로 할지", "설정 탭에 행을 넣을지"]),
+  "turn-working": openAsks("gallery-turn-working", ["종합 뷰를 별도 탭으로 둘까요?"]),
+};
 const TURN_REQUEST = { text: "제안대로 진행 + 애매한 상태 더 점검", images: 0 };
 /** The turn card's facts for the request cases: the raw request, its summary and two earlier turns. */
 const TURN_VIEW = {
@@ -127,6 +139,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,
         // A quiet task starred to revisit, and a working one that keeps its group with a ★ (PRD revisit-group B6, B7).
         revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : example.read ? { starred: false, read_ask: true, since_unix_ms: Date.now() - 900_000 } : null,
+        open_asks: OPEN_ASKS[`s${index}`],
       };
     });
     // state=scroll gives each status section enough rows to review its pinned head.
@@ -214,6 +227,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       // A childless approval and merge show the row only for the ask, and none for a PR.
       lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image", ...CHILD_CASES].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished", "turn-narrow", "turn-children"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
       pulls: headerPulls(id),
+      open_asks: OPEN_ASKS[id],
       direct_child_counts: id === "narrow" ? { error: 0, approval: 0, question: 0, working: 12, done: 0 } : ["children", "progress", "question", "approval-case", "blocked-case", "raised-case", "stopped", "tree-only", "finished", "popover", "turn-narrow"].includes(id) ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}),
       ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, pulls: null, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
