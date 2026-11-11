@@ -199,6 +199,16 @@ pub(super) struct MissionShownPayload {
     pub mission: Option<String>,
 }
 
+/// What a decision asks beside its line: why, its options, the recommended
+/// one, the node it stopped and the other nodes it is about.
+type Asked = (
+    Option<String>,
+    Vec<String>,
+    Option<u8>,
+    Option<String>,
+    Vec<String>,
+);
+
 impl Runtime {
     pub(crate) fn install_mission_events(
         &mut self,
@@ -283,11 +293,11 @@ impl Runtime {
         &mut self,
         id: &str,
         line: Option<String>,
-        asked: (Option<String>, Vec<String>, Option<u8>, Option<String>),
+        asked: Asked,
         shown: Option<(&crate::delivery::Actor, &[String])>,
         now: u64,
     ) -> Result<bool, String> {
-        let (why, options, recommend, node) = asked;
+        let (why, options, recommend, node, nodes) = asked;
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
         crate::missions::check_question(
             mission,
@@ -296,6 +306,7 @@ impl Runtime {
             &options,
             recommend,
             node.as_deref(),
+            &nodes,
         )?;
         if line.is_none() && shown.is_some_and(|(_, show)| !show.is_empty()) {
             return Err("mission_question_without_line".into());
@@ -320,6 +331,7 @@ impl Runtime {
                     && question.options == options
                     && question.recommend == recommend
                     && question.node == node
+                    && question.nodes == nodes
             })
             // A decision from before questions keeps its key while its line
             // stays and nothing is added beside it.
@@ -328,7 +340,8 @@ impl Runtime {
                 && why.is_none()
                 && options.is_empty()
                 && recommend.is_none()
-                && node.is_none());
+                && node.is_none()
+                && nodes.is_empty());
         if same {
             // The same question again may name more Views to show with it.
             let Some((actor, show)) = shown.filter(|(_, show)| !show.is_empty()) else {
@@ -423,6 +436,7 @@ impl Runtime {
                     options,
                     recommend,
                     node,
+                    nodes,
                     asked_at_unix_ms: now,
                     views,
                     material_asked: false,

@@ -223,6 +223,11 @@ export function missionDelay(mission: Mission): string | null {
 }
 
 /** Whether an open mission waits on the operator's decision: its chips keep their progress and add `!` in the decision colour (needs-you-cleanup D-02). */
+/** Whether a question is about node `key`: the node it stopped or one of the others it names (`Question::names`). */
+export function questionNames(question: { node: string | null; nodes?: string[] } | null | undefined, key: string): boolean {
+  return question != null && (question.node === key || (question.nodes ?? []).includes(key));
+}
+
 export function missionDeciding(mission: Mission): boolean {
   return Boolean(mission.decision) && missionOpen(mission);
 }
@@ -346,7 +351,7 @@ export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly
 export type HoldReason = { kind: "attention"; attention: Omit<MissionAttention, "choices"> } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
 
 /** What `holdReason` reads of a mission: its state, and the decision with the node it stopped. */
-export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node"> | null; conductor_letters?: MissionHeldLetters | null };
+export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node" | "nodes"> | null; conductor_letters?: MissionHeldLetters | null };
 
 export function holdReason<N extends MissionNodeBrief>(mission: HoldMission, node: N, escalationOf: (node: N) => WorkerEscalation | null): HoldReason | null {
   const attention = openAttention(mission, node);
@@ -354,7 +359,7 @@ export function holdReason<N extends MissionNodeBrief>(mission: HoldMission, nod
   if (node.status !== "working") return null;
   const escalation = shownEscalation(mission, escalationOf(node));
   if (escalation) return { kind: "worker", escalation };
-  return mission.decision && mission.question?.node === node.key ? { kind: "decision" } : null;
+  return mission.decision && questionNames(mission.question, node.key) ? { kind: "decision" } : null;
 }
 
 /**

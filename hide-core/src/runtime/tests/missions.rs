@@ -6334,6 +6334,87 @@ fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
     assert_eq!(raised(&runtime), 1);
 }
 
+/// One decision about several nodes is the operator's one card for them:
+/// the question names them all, and while it is open the safety net stays
+/// down however long their raises stood (mission-49 showed one question and
+/// seven cards); once it is answered the safety net holds them, one card.
+#[test]
+fn a_decision_about_several_nodes_is_the_operators_one_card_for_their_raises() {
+    use crate::missions::{AttentionReason, AttentionTo};
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let then = now - 25 * MINUTE;
+    // The Conductor has been there since before the raises.
+    runtime.drive_mission_health(then);
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for key in ["cause", "fix"] {
+        assert!(
+            !crate::runtime::mission_health::raise(
+                mission,
+                key,
+                AttentionReason::PrClosed,
+                Some(7),
+                then
+            )
+            .is_empty()
+        );
+    }
+    runtime.save_missions();
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Skip the check lines?", "nodes": ["fix"]}),
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("mission_question_nodes_invalid"),
+        "{refused}"
+    );
+    let (answer, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Skip the check lines?", "node": "cause", "nodes": ["fix"]}),
+    )
+    .unwrap();
+    assert_eq!(answer["mission"]["question"]["nodes"], json!(["fix"]));
+    let shown = |runtime: &Runtime| {
+        let view = runtime.mission_view_of("mission-1").unwrap();
+        let to: Vec<AttentionTo> = view
+            .nodes
+            .iter()
+            .filter_map(|node| node.attention.as_ref().map(|attention| attention.to))
+            .collect();
+        let held = view.safety_net.map(|net| {
+            net.nodes
+                .into_iter()
+                .map(|node| node.key)
+                .collect::<Vec<_>>()
+        });
+        (to, held)
+    };
+    assert_eq!(
+        shown(&runtime),
+        (vec![AttentionTo::Conductor, AttentionTo::Conductor], None)
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert_eq!(
+        shown(&runtime),
+        (
+            vec![AttentionTo::Conductor, AttentionTo::Conductor],
+            Some(vec!["cause".to_owned(), "fix".to_owned()])
+        )
+    );
+}
+
 /// PRD mission-node-simple B5: a node that waits on the operator with no
 /// Needs You row to lay it on, neither the Conductor nor its worker, is
 /// told by notice once; one with a row standing is not.

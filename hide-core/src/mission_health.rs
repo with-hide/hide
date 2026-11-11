@@ -881,12 +881,7 @@ pub(crate) fn quiet_waits(
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
 ) -> Option<bool> {
-    let asked = mission.decision.is_some()
-        && mission
-            .question
-            .as_ref()
-            .is_some_and(|question| question.node.as_deref() == Some(node.key.as_str()));
-    if node.attention.is_some() || asked {
+    if node.attention.is_some() || mission.deciding_on(&node.key) {
         return Some(true);
     }
     worker_waits(node, pulls)
@@ -1544,6 +1539,7 @@ mod tests {
             options: Vec::new(),
             recommend: None,
             node: Some("a".into()),
+            nodes: Vec::new(),
             asked_at_unix_ms: 100 * MINUTE,
             views: Vec::new(),
             material_asked: false,
