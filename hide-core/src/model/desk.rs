@@ -196,6 +196,8 @@ pub struct DeskJobMission {
     pub turn: Option<DeskMissionTurn>,
     /// The delay holding the open mission, the chip's grey pause.
     pub delay: Option<String>,
+    /// When that delay ends by itself, said by the chip's name with its reason.
+    pub delay_until_unix_ms: Option<u64>,
 }
 
 /// What of an open mission waits on the operator, as every mission chip

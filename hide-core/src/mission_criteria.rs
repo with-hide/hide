@@ -356,14 +356,14 @@ impl Criterion {
         }
     }
 
-    /// Whether the line is one only the operator's answer goes past (D-13):
-    /// the check command and the CI on an answered decision, a human gate
-    /// only by the operator's answer itself (`Runtime::settle_gate`).
+    /// Whether the line, as it is shown now, is one only the operator's
+    /// answer goes past (D-13, narrowed by the principle of 2026-11-11): a
+    /// failed CI, on an answered decision. A check line and a CI line with
+    /// no failed answer are the Conductor's to skip with its reason; a human
+    /// gate is passed only by the operator's answer itself
+    /// (`Runtime::settle_gate`) and never skipped.
     pub(crate) fn protected(&self) -> bool {
-        matches!(
-            self.kind,
-            CriterionKind::Check | CriterionKind::Ci | CriterionKind::Human
-        )
+        self.kind == CriterionKind::Ci && self.state == CriterionState::Fail
     }
 
     /// The operator passes the node's human gate with `words` from `via`
@@ -385,7 +385,11 @@ impl Criterion {
     /// The state the line shows against `heads`: a check command passes
     /// only for the commit the node's work folder is at now, so one that
     /// passed on an older commit, or with no folder Hide can read, is open
-    /// again (B7, D-16); a CI verdict holds only for the head it was read
+    /// again (B7, D-16), unless the node's pull request landed with its CI
+    /// passed on the merged head (`Heads::landed`): the commits after the
+    /// check, a merge of main among them, were proved there, and a check
+    /// nobody can run again on a merged branch is no question for the
+    /// operator; a CI verdict holds only for the head it was read
     /// on, so once a read names another head the line is open, whatever
     /// that head's checks are known to be (D-15).
     pub fn shown(&self, heads: Heads<'_>) -> CriterionState {
@@ -395,7 +399,9 @@ impl Criterion {
                 .is_some_and(|commit| same_commit(commit, head))
         };
         match (self.kind, self.state) {
-            (CriterionKind::Check, CriterionState::Pass) if !heads.work.is_some_and(on) => {
+            (CriterionKind::Check, CriterionState::Pass)
+                if !heads.landed && !heads.work.is_some_and(on) =>
+            {
                 CriterionState::Open
             }
             (CriterionKind::Ci, CriterionState::Pass | CriterionState::Fail)
@@ -926,6 +932,9 @@ pub struct Heads<'a> {
     /// The head of the node's pull request as the last read names it, which
     /// its CI line is for; `None` when no read names it.
     pub pull: Option<&'a str>,
+    /// The node's pull request is merged and its CI line passed on the
+    /// merged head: a check that passed on an earlier commit stands.
+    pub landed: bool,
 }
 
 /// The keys of the lines that keep a node from being done against `heads`.
@@ -945,7 +954,7 @@ mod tests {
     fn work(head: Option<&str>) -> Heads<'_> {
         Heads {
             work: head,
-            pull: None,
+            ..Heads::default()
         }
     }
     use crate::missions::CiResult;
@@ -1004,6 +1013,16 @@ mod tests {
         assert!(!line.met(work(Some(B))));
         // A work folder Hide cannot read proves nothing (D-16).
         assert_eq!(line.shown(work(None)), CriterionState::Open);
+        // Landed with its CI passed on the merged head, the earlier pass
+        // stands, whatever commit the merge left as the head.
+        let landed = Heads {
+            work: Some(B),
+            pull: Some(B),
+            landed: true,
+        };
+        assert!(line.met(landed));
+        // A check that never passed is not made to pass by the landing.
+        assert!(!Criterion::new("check", CriterionKind::Check).met(landed));
     }
 
     #[test]

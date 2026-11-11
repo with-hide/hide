@@ -315,7 +315,7 @@ pub mod phone {
     pub const LIST_BUDGET: usize = FRAME_LIMIT - 4 * 1024;
 
     /// The bytes `value` takes as the JSON a frame carries.
-    fn wire_len<T: Serialize + ?Sized>(value: &T) -> usize {
+    pub fn wire_len<T: Serialize + ?Sized>(value: &T) -> usize {
         struct Count(usize);
         impl std::io::Write for Count {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -384,6 +384,11 @@ pub mod phone {
         /// D-10).
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         pub read: bool,
+        /// The operator's ★ to revisit the task (PRD revisit-group D-03),
+        /// which the phone draws where the desktop row does; absent when the
+        /// row carries none, so a phone that predates it reads nothing new.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        pub starred: bool,
         /// The row's mark (`RowMark`): `turn`, `going`, `waiting`, `done`, `unread`, `quiet` or `asleep`.
         pub mark: String,
         /// What an in-progress row waits on (`AgentWait`), which its line
@@ -972,15 +977,13 @@ pub mod phone {
             let starred = agent.pointer("/revisit/starred").and_then(Value::as_bool) == Some(true);
             let read_ask = !starred
                 && agent.pointer("/revisit/read_ask").and_then(Value::as_bool) == Some(true);
-            // A quiet row the operator starred stands in 다시 볼 것 (PRD
-            // revisit-group D-10); an ask read and left unanswered stays in
-            // 내 차례, read (needs-you-cleanup B11).
+            // A resting row the operator starred stands in 다시 볼 것 (PRD
+            // revisit-group D-10), one that works or waits keeps its group
+            // (operator decision 2026-11-11); an ask read and left unanswered
+            // stays in 내 차례, read (needs-you-cleanup B11).
             let listed = |group: &str| match group {
                 "seen" | "working" if read_ask => "needs_you".to_owned(),
                 "seen" if starred => "revisit".to_owned(),
-                "working" if str_of(agent, "activity") != "working" && starred => {
-                    "revisit".to_owned()
-                }
                 group => group.to_owned(),
             };
             out.push(PhoneAgent {
@@ -1005,6 +1008,7 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .and_then(crate::agent_state::first_line_cut),
                 read: read_ask,
+                starred,
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),
                 descendants_working: agent

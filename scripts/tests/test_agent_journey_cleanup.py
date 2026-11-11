@@ -193,6 +193,7 @@ class FinishedAgent(unittest.TestCase):
             calls.append(pane)
             return 0, ""
         runtime = SimpleNamespace(run=Path("/run"), probe=Path("/probe"), close_pane=close_pane,
+                                  home=Path("/run/daemon-home"), state=Path("/run/state"),
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         journey = Journey(runtime, None, None, {}, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},
                           Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={},

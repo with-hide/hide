@@ -12,6 +12,9 @@ pub const FLOW_LIMIT: usize = 200;
 pub const SIGHTING_LIMIT: usize = 200;
 pub const MISSED_LIMIT: usize = 200;
 pub const NEW_MISSED_LIMIT: usize = 3;
+/// The lines one turn may list in all: its new ones and the open questions
+/// it repeats by id (`NewMissedWork::same_as`), which add no line.
+pub const TURN_MISSED_LIMIT: usize = 12;
 pub const MISSED_CHARS: usize = 80;
 /// The longest request summary kept: two lines of the widest language's
 /// line (B8), the one cap the label's schema, its parser and the ledger share.
@@ -493,6 +496,11 @@ pub struct MissedWork {
 pub struct NewMissedWork {
     pub kind: MissedKind,
     pub text: String,
+    /// The id of the session's open question this line repeats, in the same
+    /// or in other words: that question stays one line. Text alone cannot
+    /// say it, since a turn a letter woke words the same question again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_as: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

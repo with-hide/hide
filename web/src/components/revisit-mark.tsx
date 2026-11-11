@@ -1,4 +1,5 @@
 import { StarIcon } from "lucide-react";
+import type { HTMLAttributes } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { AgentRow } from "../snapshot";
 import { cn } from "../lib/utils";
@@ -14,11 +15,18 @@ export function RevisitStar({ slot = false, className }: { slot?: boolean; class
   const { t } = useInterfaceTranslation();
   return (
     <Hint label={t("taskLens.revisit.starred")}>
-      <span aria-hidden="true" data-revisit-star={slot ? "mark" : "title"}
-        className={cn("inline-flex shrink-0 items-center justify-center text-warning", slot ? "size-(--size-agent-mark)" : "", className)}>
-        <StarIcon className={cn("fill-current", slot ? "size-full" : "size-(--size-icon-sm)")} />
-      </span>
+      <RevisitStarShape slot={slot} className={className} />
     </Hint>
+  );
+}
+
+/** The ★ alone, without the pointer's hint: the phone, which has no pointer, draws it where the desktop does. */
+export function RevisitStarShape({ slot = false, className, ...rest }: { slot?: boolean; className?: string } & Omit<HTMLAttributes<HTMLSpanElement>, "slot">) {
+  return (
+    <span aria-hidden="true" data-revisit-star={slot ? "mark" : "title"} {...rest}
+      className={cn("inline-flex shrink-0 items-center justify-center text-warning", slot ? "size-(--size-agent-mark)" : "", className)}>
+      <StarIcon className={cn("fill-current", slot ? "size-full" : "size-(--size-icon-sm)")} />
+    </span>
   );
 }
 

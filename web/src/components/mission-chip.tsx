@@ -1,9 +1,9 @@
-import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/client";
-import { chipWords, conductedBy, missionDelay, missionTone, missionTurn, TURN_WORDS, type CellTone, type ConductorOwner } from "../missions";
+import { chipWords, conductedBy, missionTone, missionTurn, TURN_WORDS, type CellTone, type ConductorOwner } from "../missions";
+import { heldBy, useDelayWords, type MissionDelay } from "./mission-hold";
 import type { MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
-import { TONE_TEXT } from "./mission-tone";
+import { MissionChipFace, TONE_TEXT } from "./mission-tone";
 import { useShellStore } from "../store";
 import { Hint } from "./ui/tooltip";
 
@@ -22,7 +22,7 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
   const mission = useShellStore((s) => conductedBy(s.rest, agent));
   if (!mission) return null;
   const { key, counts } = chipWords(mission);
-  return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={missionTone(mission)} turn={missionTurn(mission)} delay={missionDelay(mission)} status={mission.status} onOpen={onOpen} />;
+  return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} status={mission.status} onOpen={onOpen} />;
 }
 
 /**
@@ -40,14 +40,14 @@ export function MissionChipView({ id, title, words, counts, tone, turn, delay, s
   tone: CellTone;
   /** The operator's turn, marked `!`. */
   turn: MissionTurn | null;
-  /** The mission delay holding it, marked by a grey pause. */
-  delay: string | null;
+  /** The mission delay holding it, marked by a grey pause and said by its name with how long it still holds. */
+  delay: MissionDelay | null;
   status?: string;
   onOpen: (missionId: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const label = [t("mission.chip.open"), title, words, counts, turn ? t(TURN_WORDS[turn]) : null, delay ? t("mission.delay", { line: delay }) : null].filter(Boolean).join(" · ");
-  const Mark = status === "done" ? CheckIcon : WaypointsIcon;
+  const held = useDelayWords(delay);
+  const label = [t("mission.chip.open"), title, words, counts, turn ? t(TURN_WORDS[turn]) : null, held].filter(Boolean).join(" · ");
   return (
     <Hint label={label}>
       <button
@@ -64,10 +64,7 @@ export function MissionChipView({ id, title, words, counts, tone, turn, delay, s
           onOpen(id);
         }}
       >
-        {turn ? <span aria-hidden="true" className="font-semibold">!</span> : null}
-        {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : null}
-        <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-        {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
+        <MissionChipFace turn={turn !== null} delay={delay !== null} status={status} counts={counts} />
       </button>
     </Hint>
   );

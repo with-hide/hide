@@ -66,6 +66,11 @@ const HOOK_FACTS: &str = "hook-facts.json";
 /// builds that have node ids, so the layer-1 conversion has nothing in it to
 /// rewrite; a core move maps its machines, panes and projects.
 pub(crate) const MISSIONS: &str = "missions.json";
+/// The mission folder (`hide_kit::layout::missions_dir`): each mission's
+/// file in it is a book of that one mission, so the `MISSIONS` rows place
+/// its keys, and every pass that rewrites `MISSIONS` rewrites each of them
+/// the same way (`mission_files`), including the index metadata identities.
+pub(crate) const MISSIONS_DIR: &str = hide_kit::layout::MISSIONS_DIR;
 const FACTORY: &str = "factory.sqlite3";
 /// Where a move keeps its staging copies (`reown::staging_dir`); the
 /// move's other files, which `hide_kit::layout` names, are `UNBOUND`.
@@ -91,6 +96,7 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     hide_kit::layout::PRODUCT_ANALYTICS_ID,
     LOCAL_ISSUES,
     MISSIONS,
+    MISSIONS_DIR,
     // Mission ids and node keys only; no machine is named in it.
     hide_kit::layout::MISSION_EVENTS,
     PROJECT_MEMORY,
@@ -1431,6 +1437,27 @@ pub(crate) fn read_json(path: &Path) -> Result<Option<Value>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// Each mission's file in the mission folder of `state_dir`, by its name
+/// in the folder, in name order; none without the folder.
+pub(crate) fn mission_files(state_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let dir = state_dir.join(MISSIONS_DIR);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".json") {
+            files.push((format!("{MISSIONS_DIR}/{name}"), entry.path()));
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission node <key> [--mission <id>] (--hold <why> --for <30m|2h> | --no-hold)\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission node <key> [--mission <id>] (--hold <why> --for <30m|2h> | --no-hold)\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>]... [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node-or-mission-id>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -497,22 +497,23 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "decide" => {
-            // `--option` is the one flag given more than once, in order.
+            // `--option`, `--show` and `--node` are given more than once, in order.
             let args: Vec<&String> = args.collect();
             let mut options = Vec::new();
             let mut show = Vec::new();
+            let mut nodes = Vec::new();
             let mut rest = Vec::new();
             let mut words = args.into_iter();
             while let Some(arg) = words.next() {
-                if arg == "--option" || arg == "--show" {
+                if arg == "--option" || arg == "--show" || arg == "--node" {
                     let value = words.next().ok_or_else(|| format!("{arg} needs a value"))?;
                     if value.starts_with("--") || value.trim().is_empty() {
                         return Err(format!("{arg} needs a value"));
                     }
-                    if arg == "--option" {
-                        options.push(value.clone());
-                    } else {
-                        show.push(value.clone());
+                    match arg.as_str() {
+                        "--option" => options.push(value.clone()),
+                        "--show" => show.push(value.clone()),
+                        _ => nodes.push(key(value)?),
                     }
                 } else {
                     rest.push(arg);
@@ -544,7 +545,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 why: values.get("--why").cloned(),
                 options,
                 recommend,
-                node: values.get("--node").map(|node| key(node)).transpose()?,
+                // The first names the node the decision stopped; the rest
+                // the other nodes it is about.
+                node: (!nodes.is_empty()).then(|| nodes.remove(0)),
+                nodes,
                 show,
             }
         }
@@ -742,6 +746,7 @@ fn shown_as_views(env: &Env, command: MissionCommand) -> Result<MissionCommand, 
         options,
         recommend,
         node,
+        nodes,
         show,
     } = command
     else {
@@ -762,6 +767,7 @@ fn shown_as_views(env: &Env, command: MissionCommand) -> Result<MissionCommand, 
         options,
         recommend,
         node,
+        nodes,
         show: views,
     })
 }
@@ -868,6 +874,16 @@ mod tests {
                     node: Some("fix".into())
                 },
                 json: true
+            })
+        );
+        assert_eq!(
+            show(&["show", "mission-129", "--json"]),
+            Ok(MissionCli::Show {
+                command: MissionCommand::Show {
+                    mission: None,
+                    node: Some("mission-129".into())
+                },
+                json: true,
             })
         );
         assert!(show(&["show", "fix", "docs"]).is_err());
@@ -989,6 +1005,10 @@ mod tests {
                     "2",
                     "--node",
                     "ui",
+                    "--node",
+                    "api",
+                    "--node",
+                    "docs",
                 ])
                 .iter()
             )
@@ -999,7 +1019,10 @@ mod tests {
                 why: Some("Two PRs touch it".into()),
                 options: vec!["main".into(), "#1503".into()],
                 recommend: Some(2),
+                // The first `--node` is the node it stopped; the rest are the
+                // other nodes it is about, in order.
                 node: Some("ui".into()),
+                nodes: vec!["api".into(), "docs".into()],
                 show: Vec::new(),
             })
         );

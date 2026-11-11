@@ -14,7 +14,8 @@ import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
-import { HEAD_FILL, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
+import { HeldMark, useDelayPill } from "./components/mission-hold";
+import { HEAD_FILL, PILL_TONE, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -211,14 +212,22 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const language = requireInterfaceLanguage(i18n.language);
   const running = useElapsed(mission.status !== "done" && mission.status !== "cancelled" && !mission.stale ? mission.started_at_unix_ms : null);
   const { done, total } = missionCounts(mission);
+  const held = useDelayPill(mission);
   const took = mission.started_at_unix_ms != null && mission.closed_at_unix_ms != null ? formatElapsed(language, mission.closed_at_unix_ms - mission.started_at_unix_ms) : null;
   const time = took ? t("mission.elapsed.total", { elapsed: took }) : running ? t("mission.elapsed.running", { elapsed: running }) : null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs px-md py-sm text-body" data-mission-summary="true">
       <MissionNumber mission={mission} className="text-caption" />
-      <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
-        {t(STATE_PILL[mission.status])}
-      </WorkPill>
+      {held ? (
+        <WorkPill tone={PILL_TONE.quiet} data-mission-pill="held">
+          <HeldMark />
+          {held}
+        </WorkPill>
+      ) : (
+        <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
+          {t(STATE_PILL[mission.status])}
+        </WorkPill>
+      )}
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
       {mission.nodes.length > 0 ? (
         <>
@@ -409,7 +418,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
         ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
-        ...(holdLine ? [holdLine] : []),
+        ...(holdLine ? [holdLine.full] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
@@ -444,11 +453,12 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {doingLine}
         </span>
       ) : null}
-      {/* A node its Conductor holds back says why and how long in grey under the title, with the pause mark the list's `⏸N` uses. */}
+      {/* A node its Conductor holds back says why in grey under the title, cut when it runs long, and keeps how long it still holds whole at the line's end (operator decision 2026-11-11). */}
       {holdLine ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={holdLine} data-node-hold="true">
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={holdLine.full} data-node-hold="true">
           <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="min-w-0 truncate">{holdLine}</span>
+          <span className="min-w-0 truncate">{holdLine.why}</span>
+          {holdLine.left ? <span className="shrink-0 whitespace-nowrap" data-node-hold-left="true">· {holdLine.left}</span> : null}
         </span>
       ) : null}
       {humanLine ? (
@@ -594,18 +604,28 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
   );
 }
 
-/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
-/** A held node's line: why, and how long it still holds while the core has not lifted it yet. */
-function useHoldWords(hold: MissionNodeHold | null): string | null {
+/** A held node's line: why first, then how long it still holds while the core has not lifted it yet; `full` is the whole sentence for the hover and the card's name. */
+function useHoldWords(hold: MissionNodeHold | null): { why: string; left: string | null; full: string } | null {
   const { t } = useInterfaceTranslation();
   const left = useRemaining(hold?.until_unix_ms);
   if (!hold) return null;
-  return left && left !== "past" ? t("mission.holdLeft", { why: hold.why, left: left.text }) : t("mission.hold", { why: hold.why });
+  const still = left && left !== "past" ? left.text : null;
+  return {
+    why: t("mission.hold", { why: hold.why }),
+    left: still,
+    full: still ? t("mission.holdLeft", { why: hold.why, left: still }) : t("mission.hold", { why: hold.why }),
+  };
 }
 
+/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). Shaped as a held node's line: the why first and cut when it runs long, the remaining time whole at the end. */
 function DelayLine({ line, until }: { line: string; until: number | null | undefined }) {
   const { t } = useInterfaceTranslation();
   const left = useRemaining(until);
-  const text = left && left !== "past" ? t("mission.delayLeft", { line, left: left.text }) : t("mission.delay", { line });
-  return <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{text}</p>;
+  const still = left && left !== "past" ? left.text : null;
+  return (
+    <p className="flex min-w-0 gap-xxs px-md pb-xs text-caption text-muted-foreground" title={still ? t("mission.delayLeft", { line, left: still }) : t("mission.delay", { line })} data-mission-delay="true">
+      <span className="min-w-0 truncate">{t("mission.delay", { line })}</span>
+      {still ? <span className="shrink-0 whitespace-nowrap">· {still}</span> : null}
+    </p>
+  );
 }

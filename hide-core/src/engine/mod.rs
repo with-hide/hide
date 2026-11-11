@@ -434,8 +434,9 @@ pub(crate) trait Engine: Send + Sync {
     fn read_pane(&self, wait: Wait, pane: &str, source: &str, lines: u32) -> Answer<PaneText>;
     /// The visible screen of a pane with its styling kept.
     fn read_screen(&self, wait: Wait, pane: &str) -> Answer<PaneText>;
-    /// The last `lines` rows of a pane as the terminal drew them, escape
-    /// sequences kept.
+    /// The last `lines` rows of a pane with soft wraps joined, escape
+    /// sequences kept (a holder built before that answers the rows as
+    /// drawn).
     fn read_rows(&self, wait: Wait, pane: &str, lines: u32) -> Answer<PaneText>;
     /// Types `text` into a pane as it is.
     fn send_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
@@ -632,6 +633,11 @@ pub struct EngineHandle {
     /// The folder the core's own engine stands for, which the core keys this
     /// machine's session by; `None` for a test's engine.
     own_scope: Option<std::path::PathBuf>,
+    /// The Hide installation whose panes this engine starts, as the embedder
+    /// that owns the machine read it (`hide_host::kit::running_install`), so
+    /// the core composes the hooks' records folder by the one rule those
+    /// panes' hooks apply; `None` for a pane that names none.
+    own_install: Option<String>,
 }
 
 impl EngineHandle {
@@ -639,6 +645,7 @@ impl EngineHandle {
         Self {
             engine,
             own_scope: None,
+            own_install: None,
         }
     }
 
@@ -651,14 +658,32 @@ impl EngineHandle {
     /// its Git and answers its pane holders through the same requests a
     /// device's node answers ([`hide_node_link::link_panes::LinkPanes`]).
     /// Every daemon builds it (PRD engine-bundle-4-herdr-removal D-2).
+    ///
+    /// `install` is the Hide installation whose panes this engine starts, as
+    /// the embedder that owns this machine names it
+    /// (`hide_host::kit::running_install`); the core never reads it from this
+    /// process itself (PRD core-host-node D-21). The hooks' records folder is
+    /// the state folder this engine was handed (never this process's
+    /// environment's) composed with it by the one rule those panes' hooks
+    /// apply, so `~/.hide/agent-hooks` for the desktop app on the account's
+    /// own state folder and that folder's `installs/<mark>` for a build
+    /// started from elsewhere.
     pub fn own(
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,
         home: std::path::PathBuf,
         definitions: hide_agent_adapter::definition::Catalog,
+        install: Option<String>,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
-        let hooks_home = home.clone();
+        let hooks_records =
+            hide_agent_hooks::route::records_of_state(&home, Some(&state_dir), install.as_deref())
+                .map_err(|error| {
+                    format!(
+                        "the hooks' records folder of {} could not be read: {error}",
+                        state_dir.display()
+                    )
+                })?;
         let home = hide_platform::path::to_wire(&home)
             .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
         // The choices this machine's agents were started with, which the
@@ -677,7 +702,7 @@ impl EngineHandle {
             own::Place {
                 engine_dir: scope.clone(),
                 home,
-                hooks_home: Some(hooks_home),
+                hooks_records: Some(hooks_records),
                 node,
                 // This machine's own node.
                 windows: cfg!(windows),
@@ -688,12 +713,19 @@ impl EngineHandle {
         Ok(Self {
             engine: Arc::new(engine),
             own_scope: Some(scope),
+            own_install: install,
         })
     }
 
     /// The folder the core's own engine stands for; `None` for a test's engine.
     pub fn own_scope(&self) -> Option<&std::path::Path> {
         self.own_scope.as_deref()
+    }
+
+    /// The Hide installation whose panes this engine starts, as its embedder
+    /// named it; `None` for panes that name none.
+    pub fn own_install(&self) -> Option<&str> {
+        self.own_install.as_deref()
     }
 
     pub(crate) fn shared(&self) -> SharedEngine {

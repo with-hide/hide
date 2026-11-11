@@ -207,6 +207,35 @@ it("opens a step's worker only when the phone's list holds that row", async () =
   }
 });
 
+it("draws the raises its Conductor has not settled as one safety net card with a line per held step, and folds the lines the Conductor skipped on its own", async () => {
+  const now = Date.now();
+  const held = ["a", "b", "c", "d", "e"].map((key) => ({ key, title: `Step ${key}`, reason: "worker_ended" as const, pr: null, since_unix_ms: now - 25 * 60_000 }));
+  const nodes = held.map((one) => node(one.key, "working", { attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: one.since_unix_ms, on_row: false, item: false } }));
+  const skip = { node: "a", title: "Step a", line: "check", kind: "check" as const, reason: "no check command in this repo", by: "conductor", at_unix_ms: now - 5 * 60_000 };
+  const silent = mission("m-net", { nodes, safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: held }, skipped_alone: [skip] });
+  const gone = mission("m-gone", { nodes, conductor: { present: false, takes_answers: false, name: "Conductor", agent_kind: "claude", agent: null }, safety_net: { conductor_present: false, since_unix_ms: now - 25 * 60_000, nodes: held } });
+  const { container, click, unmount } = await connect([silent, gone]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    expect(container.querySelector('[data-phone-mission="m-net"] [data-phone-mission-line]')?.textContent).toBe("5 stuck · the Conductor has not settled them yet");
+    await click('[data-phone-mission="m-net"]');
+    const net = container.querySelector('[data-phone-safety-net="present"]')!;
+    expect(net.querySelector("[data-phone-safety-net-head]")?.textContent).toBe("5 stuck items unchanged for 25m");
+    expect([...net.querySelectorAll("[data-phone-held-step]")].map((row) => row.textContent)).toEqual(held.map((one) => `${one.title}Worker ended with work left · for 25m`));
+    // Under 지금 each held step waits on its Conductor, in the waiting mark, never the operator's turn.
+    expect(container.querySelector('[data-phone-step="a"] [data-phone-step-line="hold"]')?.textContent).toBe("Conductor · Worker ended with work left");
+    expect(container.querySelector('[data-phone-step="a"] [data-mark]')?.getAttribute("data-mark")).toBe("waiting");
+    expect(container.querySelector('[data-phone-mission-decided="folded"]')?.textContent).toContain("Decided by the Conductor 1");
+    await click('[data-phone-fold="decided:m-net"]');
+    expect(container.querySelector('[data-phone-skip="a:check"]')?.textContent).toBe("Step acheck skipped · no check command in this repoconductor · 5m");
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-gone"]');
+    expect(container.querySelector('[data-phone-safety-net="absent"] [data-phone-safety-net-head]')?.textContent).toBe("No Conductor conducts this mission · 5 stuck");
+  } finally {
+    await unmount();
+  }
+});
+
 it("answers a decision with one request once a marked choice is sent with 답하기, and the same answer again reuses that request id (PRD mission-human-gate B19)", async () => {
   const { container, click, answers, connection, unmount } = await connect([deciding()]);
   try {
@@ -429,6 +458,32 @@ it("lists a decision's first three Views and folds the rest behind +N, as the de
     await click("[data-phone-decision-views-more]");
     expect(listed()).toEqual(["d1", "d2", "d3", "d4", "d5"]);
     expect(container.querySelector("[data-phone-decision-views-more]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+it("draws every step on one rail by what it waits on: side-by-side steps bracketed, a step not begun naming what it waits for, finished ones folded", async () => {
+  // a → (b, c side by side) → d; e was dropped and is not drawn; d names the two unfinished steps it waits for in its own order, by pull request or title, and not the finished a.
+  const { container, click, unmount } = await connect([mission("m-rail", { nodes: [
+    node("d", "planned", { depends_on: ["b", "a", "c"], agent_runtime: null }),
+    node("c", "working", { depends_on: ["a"] }),
+    node("b", "working", { depends_on: ["a"], pr: 7 }),
+    node("a", "done", { pr: 6, pr_state: "merged" }),
+    node("e", "dropped"),
+  ] })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-rail"]');
+    const steps = () => [...container.querySelectorAll<HTMLElement>("[data-phone-step]")].map((step) => step.dataset.phoneStep);
+    expect(steps()).toEqual(["c", "b", "d"]);
+    expect(container.querySelector('[data-phone-step="c"] [data-phone-step-together]')?.getAttribute("data-phone-step-together")).toBe("first");
+    expect(container.querySelector('[data-phone-step="b"] [data-phone-step-together]')?.getAttribute("data-phone-step-together")).toBe("next");
+    expect(container.querySelector('[data-phone-step="d"] [data-phone-step-together]')).toBeNull();
+    expect(container.querySelector('[data-phone-step="d"] [data-phone-step-line="planned"]')?.textContent).toBe("waiting for #7, Step c");
+    // The finished step opens in place, at the head of the rail it came first on.
+    await click('[data-phone-fold^="done:"]');
+    expect(steps()).toEqual(["a", "c", "b", "d"]);
   } finally {
     await unmount();
   }

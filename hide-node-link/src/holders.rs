@@ -391,8 +391,8 @@ pub enum StyledRead {
     /// The rows the screen shows now which an
     /// agent's composer is judged on.
     Screen,
-    /// The last rows of the screen and its scrollback as the terminal drew
-    /// them, soft wraps kept, at most this many.
+    /// The last rows of the screen and its scrollback, soft wraps joined
+    /// (a holder built before that keeps them), at most this many.
     Rows(u16),
 }
 

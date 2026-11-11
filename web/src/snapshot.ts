@@ -1504,6 +1504,8 @@ export type MissionQuestion = {
   recommend: number | null;
   /** The node the decision stopped. */
   node: string | null;
+  /** The other nodes the decision is about, beside `node`, whose raises wait on it with the Conductor; absent when it names none, and from an older core. */
+  nodes?: string[];
   asked_at_unix_ms: number;
   /** The operator asked the Conductor for something to look at (`자료 요청`); absent until then. */
   material_asked?: boolean;
@@ -1681,6 +1683,13 @@ export type MissionWarningKind = "review_fails" | "no_push";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null };
 
+/** One node the safety net holds (`HeldNodeView`): its raise's reason and since when it stands. */
+export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason; pr: number | null; since_unix_ms: number };
+/** The safety net (`SafetyNetView`): whether a Conductor holds the mission, what its minutes count from, and the held nodes oldest first. */
+export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: number; nodes: MissionHeldNode[] };
+/** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
+export type MissionSkip = { node: string; title: string; line: string; kind: MissionCriterionKind; text?: string; reason: string; by: string; at_unix_ms: number };
+
 /** One mission as the map draws it (`MissionView`). */
 export type Mission = {
   id: string;
@@ -1721,6 +1730,14 @@ export type Mission = {
   /** When the delay ends by itself; every delay has an end (`Mission::delay_until_unix_ms`). */
   delay_until_unix_ms?: number | null;
   report: string | null;
+  /**
+   * The mission's one card for the raises its Conductor has not settled (`SafetyNetView`): none while nothing is held, with no Conductor at
+   * once, and with one once the oldest held raise stood 20 minutes. The operator's turn for raised nodes is this, never a card per node
+   * (hide-private docs/missions.md, the principle of 2026-11-11). Absent from an older core.
+   */
+  safety_net?: MissionSafetyNet | null;
+  /** The lines the Conductor skipped on its own, oldest first: the map's `Conductor가 정한 것` (`SkippedAloneView`). Absent from an older core. */
+  skipped_alone?: MissionSkip[];
   created_at_unix_ms: number;
   started_at_unix_ms: number | null;
   closed_at_unix_ms: number | null;
@@ -1737,9 +1754,9 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime"> & { attention: Omit<MissionAttention, "choices"> | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
-export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters"> & {
+export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;
   nodes: N[];
 };
@@ -3064,7 +3081,7 @@ export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | 
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
 
-export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null };
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null; delay_until_unix_ms?: number | null };
 /** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
 export type DeskJob = {
   id: string;

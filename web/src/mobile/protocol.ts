@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionGate, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -29,6 +29,8 @@ export type PhoneAgent = {
   background_left?: number;
   /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
   children_left?: number;
+  /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
+  starred?: true;
   agent_kind: string;
   title: string;
   place: string | null;
@@ -111,8 +113,6 @@ export type PhoneMissionNode = MissionNodeBrief & {
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
   agent: AgentKey | null;
   escalation: WorkerEscalation | null;
-  /** The place the plan has the operator look before the step is done (`PhoneGate`, PRD mission-human-gate B13); absent for a step without one or from an older Mac. */
-  gate?: MissionGate;
 };
 
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */
@@ -124,7 +124,6 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   device_id: string;
   /** The device a mission away from the paired Mac runs on; null on the Mac. */
   device_label: string | null;
-  question: MissionQuestion | null;
   answer: MissionAnswer | null;
   answer_failed: MissionAnswerFailure | null;
   /** The Views linked to the open decision; absent when none. Each opens the 볼 것 of the agent that opened it. */

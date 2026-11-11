@@ -317,6 +317,7 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
                 missed: vec![NewMissedWork {
                     kind: MissedKind::Problem,
                     text: "One remote check remains".into(),
+                    same_as: None,
                 }],
                 ..Default::default()
             },

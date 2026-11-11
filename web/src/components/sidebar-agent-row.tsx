@@ -222,7 +222,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       data-agent-device={device ?? undefined}
       data-depth={depth}
       data-unreachable={unreachable ? "true" : undefined}
-      className={cn("group/row relative flex rounded-sm text-body", tree ? "items-stretch pr-xs" : "items-start gap-xs py-xs pr-xs", selected ? tree ? "bg-secondary" : "bg-selected" : "hover:bg-accent", (unreachable || rowDimmed(agent) || resting) && "opacity-(--opacity-dimmed)")}
+      className={cn("group/row group/turn relative flex rounded-sm text-body", tree ? "items-stretch pr-xs" : "items-start gap-xs py-xs pr-xs", selected ? tree ? "bg-secondary" : "bg-selected" : "hover:bg-accent", (unreachable || rowDimmed(agent) || resting) && "opacity-(--opacity-dimmed)")}
       style={{ paddingLeft: inset }}
     >
       <Hint label={hint} content={hintBody} reveals>

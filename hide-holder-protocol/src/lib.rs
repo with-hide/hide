@@ -71,6 +71,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 pub mod record;
+pub mod styled;
 
 /// The version of this protocol this build speaks as a holder.
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -905,10 +906,10 @@ pub enum Ask {
     /// their styling as escape sequences. A holder built before styled reads refuses it
     /// `hello_invalid`.
     Screen,
-    /// The last `lines` rows of the screen and its scrollback as the
-    /// terminal drew them, soft wraps kept, with their styling as escape
-    /// sequences, at most
-    /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads.
+    /// The last `lines` rows of the screen and its scrollback, soft wraps
+    /// joined, with their styling as escape sequences, at most
+    /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads. A
+    /// holder built before it joined them answers the rows as drawn.
     Rows { lines: u16 },
     /// Where the screen is scrolled to in its scrollback, answered
     /// [`Answer::Scroll`].

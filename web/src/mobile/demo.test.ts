@@ -45,7 +45,7 @@ describe("the sample host", () => {
     const { state } = await demoPhone();
     const s = state();
     expect(s).toMatchObject({ demo: true, screen: "app", connected: true, macName: "Demo Mac" });
-    expect(s.groups?.map((group) => group.group)).toEqual(["needs_you", "working", "done", "seen"]);
+    expect(s.groups?.map((group) => group.group)).toEqual(["needs_you", "working", "done", "revisit", "seen"]);
     const parent = s.groups![0]!.rows[0]!;
     expect(parent.kind === "agent" && parent.children?.length).toBe(2);
     expect(s.groups!.find((group) => group.group === "seen")!.more?.length).toBeGreaterThan(0);

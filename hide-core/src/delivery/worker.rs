@@ -680,7 +680,16 @@ impl Worker {
         let store_runtime = runtime.clone();
         let thread = thread::Builder::new()
             .name("hide-delivery-store".into())
-            .spawn(move || run(store_runtime, notifier, path, receiver, stopped))
+            .spawn(move || {
+                run(
+                    store_runtime,
+                    notifier,
+                    path,
+                    receiver,
+                    stopped,
+                    ledger::write,
+                )
+            })
             .map_err(|_| "delivery_unavailable".to_owned())?;
         let client = Client { requests, runtime };
         let worker = Self {
@@ -689,6 +698,42 @@ impl Worker {
             producers: Vec::new(),
         };
         Ok((worker, client))
+    }
+
+    /// A store whose first request is queued before it starts. The supplied
+    /// durable write lets a test bind a mission after settlement and before
+    /// publication, in a fixed order with no timed producers or sleeps.
+    #[cfg(test)]
+    pub(crate) fn store_queued(
+        runtime: Weak<Mutex<Runtime>>,
+        path: PathBuf,
+        effect: Effect,
+        write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError> + Send + 'static,
+    ) -> (Self, Receiver<Result<Value, String>>) {
+        let (requests, receiver) = mpsc::sync_channel(QUEUE_LIMIT);
+        let (reply, result) = mpsc::sync_channel(1);
+        requests.send(Request { effect, reply }).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let thread = thread::spawn(move || {
+            run(
+                runtime,
+                ChangeNotifier::noop(),
+                path,
+                receiver,
+                stopped,
+                write,
+            );
+            drop(requests);
+        });
+        (
+            Self {
+                stop,
+                thread: Some(thread),
+                producers: Vec::new(),
+            },
+            result,
+        )
     }
 
     /// How many timed producers run beside the store.
@@ -722,14 +767,19 @@ pub(crate) fn now() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
-fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, bool), String> {
+fn apply(
+    ledger: &mut Ledger,
+    request: &Request,
+    now: u64,
+    holds: &dyn crate::coordination::Holds,
+) -> Result<(Value, bool), String> {
     let (actor, target, command, language, also_reads) = match &request.effect {
         Effect::SpawnNames { work, names } => {
             crate::coordination::naming::apply(ledger, work, names)?;
             return Ok((json!({"saved":true}), false));
         }
         Effect::IdentityWait { id, settle } => {
-            return crate::coordination::identity_wait::apply(ledger, id, settle, now)
+            return crate::coordination::identity_wait::apply(ledger, id, settle, now, holds)
                 .map(|value| (value, true));
         }
         Effect::HumanClaim => {
@@ -739,7 +789,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         Effect::Agents {
             actor, mutation, ..
         } => {
-            return crate::coordination::apply(ledger, actor, mutation, now)
+            return crate::coordination::apply_with(ledger, actor, mutation, now, holds)
                 .map(|value| (value, true));
         }
         Effect::Tick(readings) => {
@@ -955,6 +1005,7 @@ fn run(
     path: PathBuf,
     requests: Receiver<Request>,
     stop: Arc<AtomicBool>,
+    write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError>,
 ) {
     let mut maintenance_at = 0;
     // The recipients asleep at the last saved pass, so the pass after one
@@ -1043,12 +1094,13 @@ fn run(
             mut transitions,
             moved,
             ended,
+            made_room,
         } = settle(&runtime, &state, &upkeep, &batch, now);
         transitions |= !ended.is_empty() || !moved.is_empty();
         let changed = bytes.is_some();
         let mut saved = match bytes {
             None => Ok(()),
-            Some(Ok(bytes)) => ledger::write(&path, &bytes),
+            Some(Ok(bytes)) => write(&path, &bytes),
             Some(Err(code)) => Err(ledger::SaveError::Validation(code)),
         };
         if let Err(error) = &saved {
@@ -1087,6 +1139,18 @@ fn run(
                     "agent_id":record.id,"machine":record.machine,"pane_id":record.pane,
                     "reason":reason.reason(),"spawn":spawn.map(|spawn| &spawn.id),
                     "brief":spawn.map(|spawn| spawn.brief_phase().word())}));
+            }
+            if made_room && changed {
+                let (agents, spawns) = crate::coordination::dropped(&state, &candidate);
+                for record in agents {
+                    crate::diagnostic!(json!({"component":"coordination","kind":"agent.dropped",
+                        "agent_id":record.id,"machine":record.machine,"pane_id":record.pane,
+                        "agents":candidate.agents.len()}));
+                }
+                for spawn in spawns {
+                    crate::diagnostic!(json!({"component":"coordination","kind":"spawn.dropped",
+                        "spawn":spawn.id,"child":spawn.child,"spawns":candidate.spawns.len()}));
+                }
             }
         }
         if saved.is_ok() && changed {
@@ -1138,6 +1202,9 @@ struct Settled {
     transitions: bool,
     moved: Moved,
     ended: Ended,
+    /// A full ledger read what the core's books hold to make room, so a
+    /// registration or spawn record may have been dropped.
+    made_room: bool,
 }
 
 /// Applies `batch` after the store's upkeep to one copy of `state`. A request
@@ -1152,6 +1219,7 @@ fn settle(
 ) -> Settled {
     // The batch's one copy of the ledger; a request applies to it in place.
     let mut candidate = state.clone();
+    let holds = BookHolds::new(runtime);
     let (moved, ended) = upkeep.apply(&mut candidate, now);
     let mut results = Vec::with_capacity(batch.len());
     let mut accepted = vec![false; batch.len()];
@@ -1161,7 +1229,7 @@ fn settle(
             Err(code) => Err(code),
             // Checked after each request: a later one that drops a letter
             // can bring the batch's end back under a limit this one broke.
-            Ok(()) => match apply(&mut candidate, request, now).and_then(|landed| {
+            Ok(()) => match apply(&mut candidate, request, now, &holds).and_then(|landed| {
                 candidate.check()?;
                 Ok(landed)
             }) {
@@ -1176,6 +1244,7 @@ fn settle(
                     (candidate, transitions) = rebuild(
                         state,
                         upkeep,
+                        &holds,
                         &batch[..index],
                         &mut accepted[..index],
                         &mut results[..index],
@@ -1197,6 +1266,39 @@ fn settle(
         transitions,
         moved,
         ended,
+        made_room: holds.read.get().is_some(),
+    }
+}
+
+/// What the core's books hold in the ledger (`Runtime::delivery_held`),
+/// read under the runtime lock the first time a full ledger makes room in a
+/// batch, and kept for the batch, so a request applied again finds the
+/// same.
+struct BookHolds<'a> {
+    runtime: &'a Mutex<Runtime>,
+    read: std::cell::OnceCell<Result<crate::coordination::Held, String>>,
+}
+
+impl<'a> BookHolds<'a> {
+    fn new(runtime: &'a Mutex<Runtime>) -> Self {
+        Self {
+            runtime,
+            read: std::cell::OnceCell::new(),
+        }
+    }
+}
+
+impl crate::coordination::Holds for BookHolds<'_> {
+    fn held(&self) -> Result<&crate::coordination::Held, String> {
+        self.read
+            .get_or_init(|| {
+                self.runtime
+                    .lock()
+                    .map_err(|_| "delivery_unavailable".to_owned())
+                    .and_then(|guard| guard.delivery_held())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 }
 
@@ -1376,6 +1478,7 @@ impl Upkeep {
 fn rebuild(
     state: &Ledger,
     upkeep: &Upkeep,
+    holds: &dyn crate::coordination::Holds,
     batch: &[Request],
     accepted: &mut [bool],
     results: &mut [Result<Value, String>],
@@ -1389,7 +1492,7 @@ fn rebuild(
             if !accepted[index] {
                 continue;
             }
-            match apply(&mut ledger, request, now) {
+            match apply(&mut ledger, request, now, holds) {
                 Ok((value, publish)) => {
                     transitions |= publish;
                     results[index] = Ok(value);
@@ -1465,12 +1568,18 @@ mod tests {
             effect: Effect::HumanClaim,
             reply,
         };
-        assert_eq!(apply(&mut ledger, &request, 2).unwrap().0, json!([]));
+        let none = crate::coordination::Held::default();
+        assert_eq!(apply(&mut ledger, &request, 2, &none).unwrap().0, json!([]));
         assert!(!ledger.expire(super::super::DELIVERY_EXPIRY_MS));
         assert!(ledger.expire(1 + super::super::DELIVERY_EXPIRY_MS));
-        let notices = apply(&mut ledger, &request, 1 + super::super::DELIVERY_EXPIRY_MS)
-            .unwrap()
-            .0;
+        let notices = apply(
+            &mut ledger,
+            &request,
+            1 + super::super::DELIVERY_EXPIRY_MS,
+            &none,
+        )
+        .unwrap()
+        .0;
         assert_eq!(notices[0]["id"], letter.id);
         assert_eq!(ledger.letters.len(), 1);
         let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
@@ -1478,7 +1587,8 @@ mod tests {
             apply(
                 &mut restored,
                 &request,
-                2 + super::super::DELIVERY_EXPIRY_MS
+                2 + super::super::DELIVERY_EXPIRY_MS,
+                &none,
             )
             .unwrap()
             .0,

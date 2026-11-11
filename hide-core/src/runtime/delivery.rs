@@ -926,6 +926,19 @@ impl Runtime {
             .collect()
     }
 
+    /// The registrations and spawn records the core's books still need,
+    /// which a full delivery ledger keeps when it makes room
+    /// (`coordination::room`): an open mission's and a plan step's still
+    /// handed. Read only when a registration or spawn finds the ledger full.
+    pub(crate) fn delivery_held(&self) -> Result<crate::coordination::Held, String> {
+        let ledger = self.delivery_state()?;
+        let mut held = crate::coordination::Held::default();
+        held.keep_published(&ledger);
+        self.mission_holds(Some(&ledger), &mut held);
+        self.plan_holds(Some(&ledger), &mut held);
+        Ok(held)
+    }
+
     /// The registrations the delivery store has still to end.
     pub(crate) fn delivery_registrations_gone(
         &self,
@@ -5506,6 +5519,7 @@ pub(crate) mod tests {
                 },
             }],
             last_report_failure: None,
+            records_error: None,
         }
     }
 

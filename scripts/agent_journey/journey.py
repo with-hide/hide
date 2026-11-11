@@ -17,7 +17,7 @@ from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
 
-from . import cells, composer, failure, fork, kit, memory, provider_limit, stop_observer, title, usage
+from . import cells, composer, failure, fork, hook_records, kit, memory, provider_limit, stop_observer, title, usage
 from .requests import model_requests
 
 SPAWN_SECONDS = 150
@@ -88,6 +88,15 @@ def git_env(runtime):
 
 def token():
     return "JOURNEY-" + secrets.token_hex(4).upper()
+
+
+def refused_pane(answer):
+    """The pane a refused spawn still names in its refusal, which is the one
+    the hook that could not report ran in; None when it names none."""
+    error = answer.get("error") if isinstance(answer, dict) else None
+    spawn = error.get("spawn") if isinstance(error, dict) else None
+    pane = spawn.get("pane") if isinstance(spawn, dict) else None
+    return pane if isinstance(pane, str) and pane else None
 
 
 def prompt(value):
@@ -180,6 +189,10 @@ class Journey:
         # Every pane this journey's spawns and fork opened, which close() ends.
         self.opened = []
         self.model = model
+        # The candidate's own explanation of the first start refused on the
+        # agent's session (hook_records.identity_cause), which the agent's
+        # later starts keep rather than each meeting the same refusal.
+        self.identity_refusal = None
         # Where the agent's provider log stood when the running step began:
         # what was logged before it is another step's, and never settles
         # this one's cell (provider_limit.cursor).
@@ -345,7 +358,13 @@ class Journey:
                 events = read.get("events", [])
                 verdict = cells.turn_verdict(observed, events, value, after(events))
             if verdict[0] == cells.PASS or time.monotonic() > end:
-                return verdict, read, observed
+                # A turn that never reads idle is a turn whose record never
+                # moved, and a hook whose record write was refused wrote down
+                # for this pane why: the cell says it rather than only that the
+                # row stayed working (hook_records.py).
+                cause = None if verdict[0] == cells.PASS else hook_records.pane_cause(self.runtime, self.pane)
+                return (cells.Verdict(verdict[0], verdict[1] + "; " + cause, cells.kind(verdict))
+                        if cause else verdict), read, observed
             if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
                 raise Cancelled("run_cancelled")
 
@@ -376,6 +395,34 @@ class Journey:
         finally:
             times["ended_ms"] = failure.now_ms()
             self.running = None
+
+    def spawn_verdict(self, answer, pane=None):
+        """The spawn's verdict, explained from the candidate's hook records when
+        the refusal is the agent's missing session: the hook's own record says
+        which outcome left Hide without an identity (hook_records.py), so the
+        cell names the cause rather than the same unclear sentence. A product
+        that refused a start still names the pane it opened, which is the one
+        the hook recorded."""
+        cause = None
+        if cells.refusal(answer)[0] == "native_identity_unavailable":
+            cause = hook_records.identity_cause(self.runtime, pane or refused_pane(answer))
+            # The first outcome stands for the agent: every start of it runs
+            # the same hook, so a later start cannot be measured either, and
+            # the journey keeps this one rather than repeating an unclear
+            # refusal per cell.
+            self.identity_refusal = self.identity_refusal or cause
+        return cells.spawn_verdict(answer, cause)
+
+    def identity_refused(self, name):
+        """Whether an earlier start of this agent already met the identity
+        refusal, settling the cell `name` still open as not measured with that
+        first outcome. A cell already settled, by a reason of its own, keeps
+        it: the start is skipped either way."""
+        if self.identity_refusal is None:
+            return False
+        cells.settle(self.table, self.id, name, cells.NOT_MEASURED,
+                     "not measured: the identity refusal of an earlier start stands: " + self.identity_refusal)
+        return True
 
     def spawn(self, name, repository, branch, path, prompt_text, brief=False):
         """`hide agent spawn` from the controller; a local request_timeout is the
@@ -428,7 +475,7 @@ class Journey:
         entry.update(created_branch(self.runtime, self.repository, self.branch, worktree))
         self.record["spawn"] = {"argv": ["hide", *args], "route": self.route,
                                 "answers": attempts}
-        spawned = cells.spawn_verdict(answer)
+        spawned = self.spawn_verdict(answer)
         view = answer.get("value") or {}
         self.pane, self.agent, self.session = view.get("pane"), view.get("id"), view.get("session")
         if spawned[0] != cells.PASS:
@@ -474,7 +521,7 @@ class Journey:
         its own in a worktree of a repository the account never trusted: the
         start carries it once, past any screen of the agent's, and the agent
         records it exactly."""
-        if not cells.measurable(self.table, self.id, "launch_brief"):
+        if not cells.measurable(self.table, self.id, "launch_brief") or self.identity_refused("launch_brief"):
             return
         value = token()
         name = "journey-launch-" + self.id
@@ -483,7 +530,7 @@ class Journey:
         args, answer, attempts = self.spawn(name, repository, name, worktree, sent, brief=True)
         record = {"argv": ["hide", *args], "answers": attempts}
         self.record["launch_brief"] = record
-        spawned = cells.spawn_verdict(answer)
+        spawned = self.spawn_verdict(answer)
         saved_pane, saved = self.pane, (self.agent, self.session, self.reference, self.checkout)
         self.pane = (answer.get("value") or {}).get("pane") or self.pane_of(answer)
         self.opened.append(self.pane)
@@ -1060,7 +1107,7 @@ class Journey:
 
     def untrusted(self, repository):
         """A start in a repository the account never trusted, with no preparation."""
-        if not cells.measurable(self.table, self.id, "start_untrusted"):
+        if not cells.measurable(self.table, self.id, "start_untrusted") or self.identity_refused("start_untrusted"):
             return
         value = token()
         worktree = self.runtime.probe / "worktrees-untrusted" / self.id
@@ -1068,7 +1115,7 @@ class Journey:
                                             worktree, prompt(value))
         record = {"argv": ["hide", *args], "answers": attempts}
         self.record["start_untrusted"] = record
-        spawned = cells.spawn_verdict(answer)
+        spawned = self.spawn_verdict(answer)
         saved_pane, saved = self.pane, (self.agent, self.session, self.reference, self.checkout)
         self.pane = (answer.get("value") or {}).get("pane") or self.pane_of(answer)
         self.opened.append(self.pane)

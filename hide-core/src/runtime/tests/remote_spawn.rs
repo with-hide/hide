@@ -2529,6 +2529,7 @@ fn an_ended_wait_says_what_became_of_the_spawns_brief() {
                 crate::coordination::identity_wait::AGENT_ENDED.to_owned(),
             ),
             1,
+            &crate::coordination::Held::default(),
         )
         .unwrap()
     };

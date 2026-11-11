@@ -249,6 +249,24 @@ impl ArchiveRecord {
         self.phase == ArchivePhase::Archived && !matches!(self.root().resume, Resume::Done { .. })
     }
 
+    /// Whether nothing is under way on this record, so it may go to make
+    /// room for a newer one: archived whole, every member closed and none
+    /// resumed or being resumed, and no delete out. A failed start that
+    /// made no pane is at rest too. A record still saving
+    /// or closing, one whose close failed or is unknown, and the record of
+    /// an agent end whose pane has not left yet are all still archiving.
+    fn at_rest(&self) -> bool {
+        self.phase == ArchivePhase::Archived
+            && !self.deleting
+            && self.members.iter().all(|member| {
+                member.closed
+                    && matches!(
+                        member.resume,
+                        Resume::Idle | Resume::Failed { pane_id: None, .. }
+                    )
+            })
+    }
+
     fn validate(&self) -> Result<(), &'static str> {
         let root = self
             .members
@@ -312,10 +330,9 @@ impl<'de> Deserialize<'de> for SessionArchive {
         // One unreadable record is dropped with a diagnostic rather than
         // emptying the archive, as the dormant store does.
         let raw = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
-        let mut records = BTreeMap::new();
-        let mut members = 0usize;
+        let mut parsed = Vec::new();
         for (id, value) in raw {
-            let parsed = ArchiveId::parse(&id)
+            let read = ArchiveId::parse(&id)
                 .ok_or("invalid archive identity")
                 .and_then(|id| {
                     let record = serde_json::from_value::<ArchiveRecord>(value)
@@ -323,19 +340,34 @@ impl<'de> Deserialize<'de> for SessionArchive {
                     record.validate()?;
                     Ok((id, record))
                 });
-            match parsed {
-                // Counted as `admit` counts: the sessions still archived.
-                Ok((id, record)) if members + record.held().count() <= MAX_ARCHIVED_SESSIONS => {
-                    members += record.held().count();
-                    records.insert(id, record);
-                }
-                Ok(_) => crate::diagnostic!(serde_json::json!({
-                    "component": "session_archive", "kind": "session_archive.load_over_cap",
-                })),
+            match read {
+                Ok(read) => parsed.push(read),
                 Err(reason) => crate::diagnostic!(serde_json::json!({
                     "component": "session_archive", "kind": "session_archive.load_dropped",
                     "reason": reason,
                 })),
+            }
+        }
+        // Past the cap, as a restart between an admission and the delete it
+        // started can leave it, the newest records are kept. Counted as
+        // `admit` counts: the sessions still archived.
+        parsed.sort_by(|(a, left), (b, right)| {
+            right
+                .archived_at_unix_ms
+                .cmp(&left.archived_at_unix_ms)
+                .then_with(|| b.cmp(a))
+        });
+        let mut records = BTreeMap::new();
+        let mut members = 0usize;
+        for (id, record) in parsed {
+            if members + record.held().count() <= MAX_ARCHIVED_SESSIONS {
+                members += record.held().count();
+                records.insert(id, record);
+            } else {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "session_archive", "kind": "session_archive.load_over_cap",
+                    "archive_id": id.as_str(),
+                }));
             }
         }
         Ok(Self { records })
@@ -361,21 +393,59 @@ impl SessionArchive {
             .sum()
     }
 
-    /// Admits a new record, or refuses before anything closes when it would
-    /// take the archive past its cap; nothing is evicted (B12).
-    pub fn admit(&mut self, id: ArchiveId, record: ArchiveRecord) -> Result<(), AdmitRefusal> {
+    /// Admits a new record, making room from the oldest records at rest
+    /// when it would take the archive past its cap (operator decision
+    /// 2026-11-11, replacing B12's refusal). `leaving` names the records
+    /// whose delete is already out: they count for nothing and are never
+    /// picked again. `pinned` names the records something else still needs
+    /// (an open mission or a plan that waits), which a delete would take
+    /// with it, so only the operator's own delete removes them. The answer
+    /// is the records to delete, oldest first, which the caller deletes
+    /// through the archive's own delete; it is refused, with nothing
+    /// admitted, only when what is at rest cannot make room.
+    pub fn admit(
+        &mut self,
+        id: ArchiveId,
+        record: ArchiveRecord,
+        leaving: &dyn Fn(&ArchiveId) -> bool,
+        pinned: &dyn Fn(&ArchiveRecord) -> bool,
+    ) -> Result<Vec<ArchiveId>, AdmitRefusal> {
         record.validate().map_err(AdmitRefusal::Fault)?;
-        let others = self
+        let staying = self
             .records
             .iter()
-            .filter(|(held, _)| **held != id)
-            .map(|(_, record)| record.held().count())
-            .sum::<usize>();
-        if others + record.members.len() > MAX_ARCHIVED_SESSIONS {
+            .filter(|(held, kept)| **held != id && !kept.deleting && !leaving(held))
+            .collect::<Vec<_>>();
+        // Count the whole excess, including earlier deletes that failed
+        // after enqueueing. The next admission repairs those as well as
+        // making room for this record; it never assumes count <= cap.
+        let mut over = (staying
+            .iter()
+            .map(|(_, kept)| kept.held().count())
+            .sum::<usize>()
+            + record.members.len())
+        .saturating_sub(MAX_ARCHIVED_SESSIONS);
+        let mut oldest = staying
+            .into_iter()
+            .filter(|(_, kept)| kept.at_rest())
+            .collect::<Vec<_>>();
+        oldest.sort_by_key(|(held, kept)| (kept.archived_at_unix_ms, *held));
+        let mut evicted = Vec::new();
+        for (held, kept) in oldest {
+            if over == 0 {
+                break;
+            }
+            if pinned(kept) {
+                continue;
+            }
+            over = over.saturating_sub(kept.held().count());
+            evicted.push(held.clone());
+        }
+        if over > 0 {
             return Err(AdmitRefusal::Full);
         }
         self.records.insert(id, record);
-        Ok(())
+        Ok(evicted)
     }
 
     /// The record and member holding this conversation, if any.
@@ -429,17 +499,16 @@ impl SessionArchive {
 /// Why the archive did not take a record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmitRefusal {
-    /// It would hold more than [`MAX_ARCHIVED_SESSIONS`] sessions, which
-    /// only deleting archived sessions cures.
+    /// It would hold more than [`MAX_ARCHIVED_SESSIONS`] sessions, and no
+    /// record that could make room is at rest.
     Full,
-    /// Hide could not form the record (its shape or its identity): a fault
-    /// of Hide's, never the operator's.
+    /// Hide could not form the record or start the deletes that make room:
+    /// a fault of Hide's, never the operator's.
     Fault(&'static str),
 }
 
-/// The refusal that only deleting archived sessions cures (B12).
-pub const ARCHIVE_FULL: &str =
-    "The archive is full; delete archived sessions first. Nothing was closed.";
+/// Protected sessions leave too little room for the incoming record.
+pub const ARCHIVE_FULL: &str = "The archive is full and cannot make enough room while sessions are still in use. Nothing was closed.";
 
 /// One archived root as the 태스크 list and the record draw it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -634,7 +703,12 @@ mod tests {
     fn archived_rows_list_newest_archived_first_with_one_row_per_root() {
         let mut archive = SessionArchive::default();
         archive
-            .admit(id(1), fixture_record(vec![fixture_member("a", None)], 10))
+            .admit(
+                id(1),
+                fixture_record(vec![fixture_member("a", None)], 10),
+                &|_| false,
+                &|_| false,
+            )
             .unwrap();
         archive
             .admit(
@@ -643,10 +717,17 @@ mod tests {
                     vec![fixture_member("b", None), fixture_member("c", Some("b"))],
                     30,
                 ),
+                &|_| false,
+                &|_| false,
             )
             .unwrap();
         archive
-            .admit(id(3), fixture_record(vec![fixture_member("d", None)], 20))
+            .admit(
+                id(3),
+                fixture_record(vec![fixture_member("d", None)], 20),
+                &|_| false,
+                &|_| false,
+            )
             .unwrap();
         let rows = archive.snapshots(&|_| None);
         let order = rows
@@ -658,23 +739,200 @@ mod tests {
         assert_eq!(archive.count(), 4);
     }
 
+    /// `n` archived records of one session each, archived at 1..=n, so
+    /// record 1 is the oldest.
+    fn full_of_singles(n: usize) -> SessionArchive {
+        let mut archive = SessionArchive::default();
+        for at in 1..=n as u64 {
+            let record = fixture_record(vec![fixture_member(&format!("s{at}"), None)], at);
+            assert_eq!(
+                archive.admit(id(at), record, &|_| false, &|_| false),
+                Ok(Vec::new())
+            );
+        }
+        archive
+    }
+
     #[test]
-    fn an_archive_past_the_cap_is_refused_and_nothing_is_evicted() {
+    fn a_full_archive_makes_room_from_its_oldest_records_at_rest() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
+        assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS);
+        let two = vec![fixture_member("x", None), fixture_member("y", Some("x"))];
+        assert_eq!(
+            archive.admit(id(1000), fixture_record(two, 1000), &|_| false, &|_| false),
+            Ok(vec![id(1), id(2)]),
+            "the two oldest go for a record of two"
+        );
+        assert!(archive.records.contains_key(&id(1000)));
+        // The caller deletes them; until then they are still held.
+        assert!(archive.records.contains_key(&id(1)));
+    }
+
+    #[test]
+    fn a_tree_is_evicted_whole_and_the_age_decides_not_the_identity() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS - 3);
+        let tree = vec![
+            fixture_member("t0", None),
+            fixture_member("t1", Some("t0")),
+            fixture_member("t2", Some("t1")),
+        ];
+        // The highest identity, archived before every other record.
+        archive
+            .admit(id(5000), fixture_record(tree, 0), &|_| false, &|_| false)
+            .unwrap();
+        assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS);
+        assert_eq!(
+            archive.admit(
+                id(6000),
+                fixture_record(vec![fixture_member("n", None)], 6000),
+                &|_| false,
+                &|_| false
+            ),
+            Ok(vec![id(5000)]),
+            "one eviction frees all three of its sessions"
+        );
+    }
+
+    #[test]
+    fn a_record_being_resumed_deleted_or_still_archiving_is_never_evicted() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
+        let busy: [fn(&mut ArchiveRecord); 6] = [
+            |record| record.members[0].resume = Resume::Queued { front: true },
+            |record| record.phase = ArchivePhase::Closing,
+            |record| record.phase = ArchivePhase::CloseUnknown,
+            // An agent end whose pane has not left its machine yet.
+            |record| record.members[0].closed = false,
+            |record| {
+                record.members[0].resume = Resume::Failed {
+                    reason: "start refused".into(),
+                    pane_id: Some("w3:p1".into()),
+                }
+            },
+            |record| record.deleting = true,
+        ];
+        for (index, make_busy) in busy.into_iter().enumerate() {
+            make_busy(archive.records.get_mut(&id(index as u64 + 1)).unwrap());
+        }
+        let leaving = |held: &ArchiveId| *held == id(7);
+        assert_eq!(
+            archive.admit(
+                id(1000),
+                fixture_record(vec![fixture_member("n", None)], 1000),
+                &leaving,
+                &|_| false
+            ),
+            Ok(Vec::new()),
+            "the records already being deleted make the room"
+        );
+        let three = (0..3)
+            .map(|n| fixture_member(&format!("m{n}"), (n > 0).then_some("m0")))
+            .collect();
+        assert_eq!(
+            archive.admit(id(1001), fixture_record(three, 1001), &leaving, &|_| false),
+            Ok(vec![id(8), id(9)]),
+            "the oldest at rest after the busy ones"
+        );
+    }
+
+    #[test]
+    fn a_pinned_record_is_passed_over_for_the_next_oldest() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
+        let pinned = |record: &ArchiveRecord| record.root().native_session_id == "s1";
+        assert_eq!(
+            archive.admit(
+                id(1000),
+                fixture_record(vec![fixture_member("n", None)], 1000),
+                &|_| false,
+                &pinned,
+            ),
+            Ok(vec![id(2)])
+        );
+        let mut only_pinned = SessionArchive::default();
+        let members = (0..MAX_ARCHIVED_SESSIONS)
+            .map(|n| fixture_member(&format!("s{n}"), (n > 0).then_some("s0")))
+            .collect();
+        only_pinned
+            .admit(id(1), fixture_record(members, 1), &|_| false, &|_| false)
+            .unwrap();
+        assert_eq!(
+            only_pinned.admit(
+                id(2),
+                fixture_record(vec![fixture_member("n", None)], 2),
+                &|_| false,
+                &|_| true,
+            ),
+            Err(AdmitRefusal::Full)
+        );
+    }
+
+    #[test]
+    fn a_failed_resume_that_made_no_pane_is_at_rest_and_can_make_room() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
+        archive.records.get_mut(&id(1)).unwrap().members[0].resume = Resume::Failed {
+            reason: "checkout_missing".into(),
+            pane_id: None,
+        };
+        assert_eq!(
+            archive.admit(
+                id(1000),
+                fixture_record(vec![fixture_member("new", None)], 1000),
+                &|_| false,
+                &|_| false,
+            ),
+            Ok(vec![id(1)]),
+        );
+    }
+
+    #[test]
+    fn an_archive_is_refused_only_when_nothing_at_rest_can_make_room() {
         let mut archive = SessionArchive::default();
         let members = (0..MAX_ARCHIVED_SESSIONS - 1)
             .map(|n| fixture_member(&format!("s{n}"), (n > 0).then_some("s0")))
             .collect();
-        archive.admit(id(1), fixture_record(members, 1)).unwrap();
+        let mut resuming = fixture_record(members, 1);
+        resuming.members[0].resume = Resume::Starting {
+            task: 1,
+            since_unix_ms: 1,
+            front: true,
+        };
+        archive
+            .admit(id(1), resuming, &|_| false, &|_| false)
+            .unwrap();
         let two = vec![fixture_member("x", None), fixture_member("y", Some("x"))];
         assert_eq!(
-            archive.admit(id(2), fixture_record(two, 2)),
+            archive.admit(id(2), fixture_record(two, 2), &|_| false, &|_| false),
             Err(AdmitRefusal::Full)
         );
-        assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS - 1);
-        archive
-            .admit(id(3), fixture_record(vec![fixture_member("z", None)], 3))
-            .unwrap();
+        assert_eq!(archive.records.len(), 1, "nothing admitted");
+        assert_eq!(
+            archive.admit(
+                id(3),
+                fixture_record(vec![fixture_member("z", None)], 3),
+                &|_| false,
+                &|_| false
+            ),
+            Ok(Vec::new()),
+            "what fits is admitted"
+        );
         assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS);
+    }
+
+    #[test]
+    fn a_load_past_the_cap_keeps_the_newest_records() {
+        let mut archive = full_of_singles(MAX_ARCHIVED_SESSIONS);
+        archive.records.insert(
+            id(1000),
+            fixture_record(vec![fixture_member("newest", None)], 1000),
+        );
+        let loaded =
+            serde_json::from_str::<SessionArchive>(&serde_json::to_string(&archive).unwrap())
+                .unwrap();
+        assert_eq!(loaded.count(), MAX_ARCHIVED_SESSIONS);
+        assert!(loaded.records.contains_key(&id(1000)));
+        assert!(
+            !loaded.records.contains_key(&id(1)),
+            "the oldest is dropped"
+        );
     }
 
     #[test]
@@ -689,7 +947,9 @@ mod tests {
             since_unix_ms: 5,
         };
         let mut archive = SessionArchive::default();
-        archive.admit(id(1), record).unwrap();
+        archive
+            .admit(id(1), record, &|_| false, &|_| false)
+            .unwrap();
         let text = serde_json::to_string(&archive).unwrap();
         let mut loaded = serde_json::from_str::<SessionArchive>(&text).unwrap();
         loaded.after_load();
@@ -707,10 +967,20 @@ mod tests {
     fn a_record_whose_delete_waits_on_the_save_is_not_written() {
         let mut archive = SessionArchive::default();
         archive
-            .admit(id(1), fixture_record(vec![fixture_member("a", None)], 1))
+            .admit(
+                id(1),
+                fixture_record(vec![fixture_member("a", None)], 1),
+                &|_| false,
+                &|_| false,
+            )
             .unwrap();
         archive
-            .admit(id(2), fixture_record(vec![fixture_member("b", None)], 2))
+            .admit(
+                id(2),
+                fixture_record(vec![fixture_member("b", None)], 2),
+                &|_| false,
+                &|_| false,
+            )
             .unwrap();
         archive.records.get_mut(&id(1)).unwrap().deleting = true;
         let loaded =
@@ -729,10 +999,17 @@ mod tests {
                     vec![fixture_member("a", None), fixture_member("b", Some("a"))],
                     1,
                 ),
+                &|_| false,
+                &|_| false,
             )
             .unwrap();
         archive
-            .admit(id(2), fixture_record(vec![fixture_member("c", None)], 2))
+            .admit(
+                id(2),
+                fixture_record(vec![fixture_member("c", None)], 2),
+                &|_| false,
+                &|_| false,
+            )
             .unwrap();
         let key = |id: &str| ("node-a".to_owned(), "claude".to_owned(), id.to_owned());
         assert!(archive.drop_pruned(&[key("b"), key("c")]));

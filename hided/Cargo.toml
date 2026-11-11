@@ -19,6 +19,9 @@ hide-agent-hooks = { path = "../hide-agent-hooks" }
 hide-core = { path = "../hide-core" }
 # Where Desk's Codex finds the operator's own sign-in (`hide_desk::codex`).
 hide-desk = { path = "../hide-desk" }
+# The one rule that cuts a styled read to a bound, which the holder's read
+# and the phone's terminal frame share (`hide_holder_protocol::styled`).
+hide-holder-protocol = { path = "../hide-holder-protocol" }
 hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }

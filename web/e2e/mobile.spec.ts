@@ -452,8 +452,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(rows).not.toContainText("line 001");
     const scrollback = phone.locator("[data-phone-scrollback]");
     expect(await scrollback.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(48);
-    // B24: a row as wide as the desktop pane wraps at the phone's width; nothing scrolls sideways.
-    await expect(rows).toContainText("wide www");
+    // B24: a line wider than the desktop pane comes as one line, which wraps at the phone's width
+    // rather than at the pane's; nothing scrolls sideways.
+    await expect(rows.locator("span", { hasText: `wide ${"w".repeat(300)}` }).first()).toBeVisible();
     expect(await scrollback.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
     expect(await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
     // B25: pulling to the top brings the older rows, up to what the pane holds.
@@ -663,7 +664,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         subject_mission_attention: "확인 필요",
         subject_mission_attention_close_refused: "작업은 끝남 · 확인 기록 빠짐",
         subject_mission_attention_conductor_failed: "Conductor가 실패로 기록함",
-        subject_mission_attention_merged_unproven: "PR 머지됨, 기준 기록이 없거나 실패",
+        subject_mission_attention_merged_unproven: "PR 머지됨, 통과 안 된 완료 기준이 있음",
         subject_mission_attention_pr_closed: "PR 머지 없이 닫힘",
         subject_mission_attention_unplanned_pr: "계획에 없던 PR",
         subject_mission_attention_wake_refused: "PR 일로 일꾼을 깨우지 못함",

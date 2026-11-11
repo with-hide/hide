@@ -110,10 +110,12 @@ pub use hide_agent_hooks::hook_request::workspace_bridges;
 /// none past a letter's deadline; named beside the hooks that keep them,
 /// which the kit's crates sit above (`docs/delivery.md`, A confirmation that
 /// missed its hook). `owed_confirmations` is the folder a hook writes, for
-/// its own installation, and `owed_confirmations_of` the one a node reads,
-/// for the installation it runs.
+/// its own pane, and `owed_confirmations_in` the one a node reads, under the
+/// records folder it already resolved from the state folder and installation
+/// it serves, so the route decides that folder once and this only names what
+/// sits below it.
 pub use hide_agent_hooks::owed::{
-    folder as owed_confirmations, folder_of as owed_confirmations_of,
+    folder as owed_confirmations, folder_in as owed_confirmations_in,
 };
 
 /// The daemon's lifetime lock, shared with the account kit's route ownership check.
@@ -153,10 +155,36 @@ pub fn composer_checks(state_dir: &Path) -> PathBuf {
     state_dir.join("composer-checks.json")
 }
 
-/// Each Conductor's mission: its plan, nodes, reasons and report, kept
-/// across a restart; its owner is the core's mission store.
+/// Every Conductor's missions in one book, as builds before the mission
+/// folder kept them: read once to move them into [`missions_dir`], never
+/// written again, and left for a downgrade; its owner is the core's mission
+/// store.
 pub fn missions(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.json")
+}
+
+/// The folder of each Conductor's mission, one file per mission (its plan,
+/// nodes, reasons and report) beside [`mission_index`]; its owner is the
+/// core's mission store.
+pub const MISSIONS_DIR: &str = "missions";
+
+pub fn missions_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(MISSIONS_DIR)
+}
+
+/// The mission folder's index: the next mission id and one line per
+/// mission, written last when the folder is first filled, so a folder
+/// without it is a move that did not finish.
+pub fn mission_index(missions_dir: &Path) -> PathBuf {
+    missions_dir.join(MISSION_INDEX)
+}
+
+pub const MISSION_INDEX: &str = "index.json";
+
+/// One mission's file in the mission folder. A mission id is a key
+/// (`hide_core::missions::valid_key`), so it names one file there.
+pub fn mission_file(missions_dir: &Path, id: &str) -> PathBuf {
+    missions_dir.join(format!("{id}.json"))
 }
 
 /// The schema 1 mission book as it was before its first conversion to
@@ -180,12 +208,26 @@ pub fn missions_before_gates(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.v3.json")
 }
 
-/// The folder of each mission's event history, one file per mission, deleted
-/// with its mission; its owner is the core's mission event store.
+/// The legacy book's histories, retained unchanged for a downgrade after
+/// migration. Only the first migration reads these files.
 pub const MISSION_EVENTS: &str = "mission-events";
 
 pub fn mission_events(state_dir: &Path) -> PathBuf {
     state_dir.join(MISSION_EVENTS)
+}
+
+/// Histories owned by the folder book, isolated from a downgraded build's
+/// sweep and reused mission ids; the mission event store owns them.
+pub fn mission_histories(state_dir: &Path) -> PathBuf {
+    missions_dir(state_dir).join(MISSION_HISTORIES)
+}
+
+pub const MISSION_HISTORIES: &str = "events";
+
+pub fn mission_history(missions_dir: &Path, id: &str) -> PathBuf {
+    missions_dir
+        .join(MISSION_HISTORIES)
+        .join(format!("{id}.json"))
 }
 
 /// The last GitHub answer per project, restored when the daemon starts; its

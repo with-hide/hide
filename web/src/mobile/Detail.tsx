@@ -10,7 +10,7 @@ import { OfflineText } from "./OfflineText";
 // reply are on every detail, whatever its group.
 
 import { AnsiUp } from "ansi_up";
-import { ArrowLeftIcon, CircleAlertIcon, ImageIcon, MoonIcon } from "lucide-react";
+import { ArrowLeftIcon, CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -23,7 +23,7 @@ import { renderMarkdown } from "./markdown";
 import { AgentHead, DETAIL_INSET, PhoneHumanTurn, Place } from "./parts";
 import { appHost } from "./appHost";
 import { push } from "./appBridge";
-import { closeLook, currentHost, loadMore, loadOlder, onReplyResult, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { closeDetail, closeLook, currentHost, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
   MAX_MESSAGES,
@@ -42,7 +42,12 @@ import {
   type DetailTab,
   type LookKind,
 } from "./protocol";
-import { agentOf, usePhone } from "./store";
+import { agentOf, openMission, usePhone } from "./store";
+import { agentLinks, progress } from "./missionModel";
+import { TONE_TEXT } from "../components/mission-tone";
+import { missionToneOf } from "../missions";
+import { PR_LOOK } from "../prMark";
+import { cn } from "../lib/utils";
 
 const PULL_EDGE = 48;
 
@@ -135,6 +140,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
         ) : agent ? (
           <div className="mt-xs flex flex-col gap-xs">
             <AgentHead agent={agent} large />
+            {detail ? <DetailLinks agentKey={detail.key} /> : null}
             <Place agent={agent} inset={DETAIL_INSET} />
             <PhoneHumanTurn agent={agent} inset={DETAIL_INSET} />
           </div>
@@ -168,6 +174,53 @@ export function Detail({ onBack }: { onBack: () => void }) {
       )}
       <ReplyBar disabled={gone || !connected || sleep !== null} about={viewing?.row.name ?? null} keys={tab !== "looks"} />
     </main>
+  );
+}
+
+/**
+ * The missions and pull requests this agent belongs to, one chip each under its title: a mission's title with `n/m` for its
+ * Conductor or the step's title for a worker, a pull request's state mark and `#number`. A chip closes the detail and opens that
+ * page on its tab, whose back goes to that tab's list.
+ */
+function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
+  const { t } = useInterfaceTranslation();
+  const missions = usePhone((s) => s.missions);
+  const prs = usePhone((s) => s.prs?.items ?? null);
+  const links = useMemo(() => agentLinks(agentKey, missions, prs), [agentKey, missions, prs]);
+  if (links.missions.length === 0 && links.prs.length === 0) return null;
+  // Each chip is a small pill inside a press area of a touch target's height, so a row of them stays light.
+  const chip = "h-auto min-h-(--size-touch-target) max-w-full px-none py-none font-normal hover:bg-transparent";
+  const pill = "flex min-w-0 items-center gap-xs rounded-full border border-border bg-secondary px-sm py-xxs text-body text-foreground";
+  return (
+    <div className={`-my-sm flex flex-wrap gap-x-sm ${DETAIL_INSET}`} data-phone-detail-links="true">
+      {links.missions.map(({ mission, node, turn }) => {
+        const { done, total } = progress(mission);
+        return (
+          <Button key={mission.id} variant="ghost" className={chip} data-phone-detail-mission={mission.id}
+            aria-label={`${t("mobile.tab.missions")} · ${mission.title}`} onClick={() => { closeDetail(); openMission(mission.id); }}>
+            <span className={pill}>
+              <FlagIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", TONE_TEXT[missionToneOf(mission.status, turn)])} />
+              <span className="min-w-0 truncate">{mission.title}</span>
+              <span aria-hidden="true" className="shrink-0 text-muted-foreground">·</span>
+              {node ? <span className="min-w-0 truncate text-subtle-foreground">{node.title}</span>
+                : <span className="shrink-0 font-mono text-subtle-foreground">{done}/{total}</span>}
+            </span>
+          </Button>
+        );
+      })}
+      {links.prs.map((pr) => {
+        const { icon: Icon, tone } = PR_LOOK[pr.state];
+        return (
+          <Button key={pr.key} variant="ghost" className={chip} data-phone-detail-pr={pr.key}
+            aria-label={`#${pr.number} ${pr.title}`} onClick={() => { closeDetail(); openPrPage(pr.key); }}>
+            <span className={pill}>
+              <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
+              <span className="font-mono">#{pr.number}</span>
+            </span>
+          </Button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -255,7 +308,9 @@ function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey
 }
 
 /**
- * Keeps the newest line in view while the reader is at the bottom; when older
+ * Keeps the newest line in view while the reader is at the bottom, when lines
+ * arrive and when the view itself grows or shrinks (the keyboard coming up
+ * over the reply bar); a reader scrolled up stays where they were. When older
  * lines arrive on top (`top` changes), keeps the line they were on where it
  * was (B24, B25). A scroll near the top calls `onTop`.
  */
@@ -272,6 +327,16 @@ function usePinnedScroll(content: unknown, top: number, onTop: () => void) {
     heightBefore.current = element.scrollHeight;
     topBefore.current = top;
   }, [content, top]);
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) element.scrollTop = element.scrollHeight;
+      heightBefore.current = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
     pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < PULL_EDGE;
@@ -291,7 +356,7 @@ function Scrollback({ text, more, lines, loading }: { text: string; more: boolea
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-scrollback={lines} onScroll={onScroll}>
       {more ? <p className="pb-sm text-center text-body text-muted-foreground">{t("mobile.pullOlder")}</p> : null}
       {loading ? <p className="text-body text-muted-foreground">{t("mobile.loading")}</p> : null}
-      <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-body leading-normal text-foreground">
+      <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-caption leading-normal text-foreground">
         {rows.map((row, index) => (
           <span
             key={index}
