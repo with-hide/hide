@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -28,7 +28,7 @@ export function MissionSummary({ mission, onSelect }: { mission: Mission; onSele
     <section aria-label={t("mission.summary")} className="flex min-w-0 flex-col px-md py-sm" data-mission-side="summary">
       <dl className="flex min-w-0 flex-col gap-md text-body">
         {rows}
-        <DecidedRow mission={mission} onSelect={onSelect} />
+        <DecidedRow key={mission.id} mission={mission} onSelect={onSelect} />
       </dl>
     </section>
   );
@@ -42,12 +42,21 @@ export function MissionSummary({ mission, onSelect }: { mission: Mission; onSele
  */
 function DecidedRow({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
   const skips = mission.skipped_alone ?? [];
   if (skips.length === 0) return null;
   return (
-    <SummaryRow name={t("mission.decided", { count: skips.length })} field="decided">
-      {skips.map((skip) => <SkipLine key={`${skip.node}:${skip.line}`} mission={mission} skip={skip} onSelect={onSelect} />)}
-    </SummaryRow>
+    <div className="flex min-w-0 flex-col gap-xxs" data-mission-summary-row="decided">
+      <dt className="flex items-center justify-between gap-sm text-caption text-muted-foreground">
+        <span>{t("mission.decided", { count: skips.length })}</span>
+        <Button variant="text" size="inline" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? t("missionScreen.fewer") : t("mobile.mission.unfold")}
+        </Button>
+      </dt>
+      {open ? <dd className="flex min-w-0 flex-col gap-xxs">
+        {skips.map((skip) => <SkipLine key={`${skip.node}:${skip.line}`} mission={mission} skip={skip} onSelect={onSelect} />)}
+      </dd> : null}
+    </div>
   );
 }
 

@@ -11228,6 +11228,15 @@ fn a_safety_net_is_told_to_the_operator_once() {
     );
     runtime.delivery_observations.remove("sender");
     runtime.snapshot.navigator.agents.clear();
+    // Begin with A alone; B joins an already announced net, then A resolves.
+    let later = {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let later = mission.nodes[1].attention.take().unwrap();
+        for node in &mut mission.nodes[2..] {
+            node.attention = None;
+        }
+        later
+    };
     let notices = runtime.claim_mission_notices();
     assert_eq!(
         notices
@@ -11235,6 +11244,16 @@ fn a_safety_net_is_told_to_the_operator_once() {
             .map(|notice| (notice.kind, notice.id.as_str(), notice.about.as_str()))
             .collect::<Vec<_>>(),
         [(HumanNoticeKind::MissionAttention, "mission-1", "Node 1")]
+    );
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[1].attention = Some(later);
+    assert!(
+        runtime.claim_mission_notices().is_empty(),
+        "A+B inherits the notice"
+    );
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].attention = None;
+    assert!(
+        runtime.claim_mission_notices().is_empty(),
+        "B alone was already told"
     );
     assert!(runtime.claim_mission_notices().is_empty(), "told once");
 }
@@ -11426,8 +11445,8 @@ fn the_conductor_skips_a_line_alone_unless_its_ci_failed() {
                 let report = crate::runtime::mission_health::closing_report(mission);
                 assert!(
                     report.contains(&format!(
-                        "Fix it (fix) · {}: main merged, CI proved it · sender",
-                        row.line
+                        "Fix it (fix) · {}: main merged, CI proved it · sender · at {} Unix ms",
+                        row.line, view.skipped_alone[0].at_unix_ms
                     )),
                     "{named}: {report}"
                 );

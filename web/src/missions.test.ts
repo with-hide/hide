@@ -5,6 +5,9 @@ import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { missionEntry } from "./missionList";
+import { missionEntries } from "./mobile/missionModel";
+import type { PhoneMission } from "./mobile/protocol";
 import { forgetCatalogs } from "./agentPicker";
 import { MISSION_ATTENTION_REASONS, type AgentRow, type BackgroundAi, type Device, type Mission, type MissionAttention, type MissionAttentionReason, type MissionCriterion, type MissionEvent, type MissionLanding, type MissionNode, type PullRequest, type SnapshotRest } from "./snapshot";
 
@@ -704,6 +707,38 @@ describe("missionTurn", () => {
     expect(missionTone(mission("m", { nodes: [raised("operator")] }))).toBe("hold");
     expect(missionTurn(mission("m", { nodes: [raised("conductor")] }))).toBeNull();
     expect(missionTurn(mission("m", { status: "cancelled", nodes: [raised("operator")] }))).toBeNull();
+  });
+
+  it("gives chips, the map and desktop/phone lists the same turn reason", () => {
+    const gate = node("gate", { attention: { ...raised("operator").attention!, reason: "human_gate" } });
+    const cases = [
+      { name: "held letters alone", extra: { conductor_letters: { count: 2, reason: "draft" as const, since_unix_ms: 1 } }, kind: "letters", turn: "attention" },
+      { name: "decision", extra: { decision: "Which?" }, kind: "decision", turn: "decision" },
+      { name: "safety net", extra: { safety_net: { conductor_present: true, since_unix_ms: 1, nodes: [{ key: "a", title: "A", reason: "worker_ended" as const, pr: null, since_unix_ms: 1 }] } }, kind: "safety_net", turn: "attention" },
+      { name: "gate", extra: { nodes: [gate] }, kind: "attention", turn: "attention" },
+    ] as const;
+    for (const row of cases) {
+      const one = mission("m", row.extra);
+      expect(missionTurn(one), row.name).toBe(row.turn);
+      expect(paneChipWords(one).turn, row.name).toBe(row.turn);
+      expect(missionTone(one), row.name).toBe("hold");
+      expect(turnItems(one, () => null).map((item) => item.kind), row.name).toEqual([row.kind]);
+      const entry = missionEntry(one, () => null);
+      expect(entry.group, row.name).toBe("turn");
+      expect(entry.turn.map((item) => item.kind), row.name).toEqual([row.kind]);
+      const phone: PhoneMission = {
+        ...one, device_label: null,
+        conductor: { ...one.conductor, agent: null },
+        nodes: one.nodes.map((node) => ({ ...node, agent_runtime: null, worker_agent: null, agent: null, escalation: null })),
+      };
+      const [phoneEntry] = missionEntries([phone]);
+      expect(phoneEntry?.group, row.name).toBe("turn");
+      expect(phoneEntry?.turn.map((item) => item.kind), row.name).toEqual([row.kind]);
+      const closed = { ...one, status: "done" as const };
+      expect(missionTurn(closed), row.name).toBeNull();
+      expect(turnItems(closed, () => null), row.name).toEqual([]);
+      expect(missionEntry(closed, () => null).group, row.name).toBe("closed");
+    }
   });
 
   it("names a delay only while the mission is open", () => {

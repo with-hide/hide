@@ -480,8 +480,8 @@ pub(super) fn closing_report(mission: &Mission) -> String {
         ));
         for skip in alone {
             lines.push(format!(
-                "- {} ({}) · {}: {} · {}",
-                skip.title, skip.node, skip.line, skip.reason, skip.by
+                "- {} ({}) · {}: {} · {} · at {} Unix ms",
+                skip.title, skip.node, skip.line, skip.reason, skip.by, skip.at_unix_ms
             ));
         }
     }
@@ -1704,6 +1704,9 @@ impl Runtime {
         let ledger = self.delivery_state().ok();
         // Per claim, the mission and the nodes it tells of, the first named.
         let mut claims: Vec<(usize, Vec<usize>, &'static str)> = Vec::new();
+        // A standing net owns one notice. A new raise inherits that notice
+        // before an earlier raise can leave it, even if this pass is capped.
+        let mut inherited = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {
             if !mission.status.asks() || self.mission_stale(mission) {
                 continue;
@@ -1719,9 +1722,6 @@ impl Runtime {
                     claims.push((at, vec![index], "mission.attention_noticed"));
                 }
             }
-            if claims.len() == MISSION_NOTICE_LIMIT {
-                continue;
-            }
             let Some(net) = self.mission_safety_net(mission, now) else {
                 continue;
             };
@@ -1731,12 +1731,30 @@ impl Runtime {
                     .as_ref()
                     .is_some_and(|attention| attention.notified)
             });
-            if !told {
+            if told {
+                for index in net.nodes {
+                    if mission.nodes[index]
+                        .attention
+                        .as_ref()
+                        .is_some_and(|attention| !attention.notified)
+                    {
+                        inherited.push((at, index));
+                    }
+                }
+            } else if claims.len() < MISSION_NOTICE_LIMIT {
                 claims.push((at, net.nodes, "mission.safety_net_noticed"));
             }
         }
-        if claims.is_empty() {
+        if claims.is_empty() && inherited.is_empty() {
             return Vec::new();
+        }
+        for (at, index) in inherited {
+            if let Some(attention) = self.missions.book.missions[at].nodes[index]
+                .attention
+                .as_mut()
+            {
+                attention.notified = true;
+            }
         }
         let mut notices = Vec::new();
         for (at, nodes, kind) in claims {

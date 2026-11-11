@@ -202,19 +202,10 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
 /** The Conductor pane's chip (PRD mission-pane-chip B2): the state it reads as, its word and its count. */
 export type PaneChipState = "planning" | "running" | "turn" | "merge_wait" | "done" | "cancelled";
 
-/**
- * Whether an open mission is the operator's turn, which its chips mark `!`
- * in 내 차례's colour while keeping their progress: its decision first, else
- * its safety net (the raises its Conductor has not settled, one for the
- * mission however many nodes it holds) or a raise only the operator settles
- * (a gate with no Conductor to ask it, a failure from before). Never a node
- * raised to the Conductor. Null otherwise, and for a mission that ended.
- */
+/** The chips read the same operator-turn reasons as the map and both lists. */
 export function missionTurn(mission: Mission): MissionTurn | null {
-  if (missionDeciding(mission)) return "decision";
-  if (!missionOpen(mission)) return null;
-  if (mission.safety_net) return "attention";
-  return mission.nodes.some((node) => openAttention(mission, node)?.to === "operator") ? "attention" : null;
+  const [first] = turnItems(mission, () => null);
+  return first ? (first.kind === "decision" ? "decision" : "attention") : null;
 }
 
 /** The words a chip's name says for its `!`. */

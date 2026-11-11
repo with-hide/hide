@@ -925,6 +925,8 @@ it("draws the raises its Conductor has not settled as one safety net card in 내
 });
 
 it("lists beside the map what the Conductor decided on its own: each skipped line with its node, why, who and when, open or closed", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-11T00:00:00Z"));
   const now = Date.now();
   const skips = [
     { node: "api", title: "Node api", line: "check", kind: "check" as const, reason: "no check command in this repo", by: "conductor", at_unix_ms: now - 5 * 60_000 },
@@ -934,11 +936,19 @@ it("lists beside the map what the Conductor decided on its own: each skipped lin
     const map = await mount({ items: [mission({ status, closed_at_unix_ms: status === "done" ? now : null, nodes: [node("api", { status: "working" })], skipped_alone: skips })] });
     try {
       const row = map.q('[data-mission-summary-row="decided"]')!;
-      expect(row.querySelector("dt")?.textContent).toBe("Decided by the Conductor 2");
+      expect(row.querySelector("dt span")?.textContent).toBe("Decided by the Conductor 2");
+      const toggle = row.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(row.querySelectorAll("[data-mission-skip]")).toHaveLength(0);
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
       expect([...row.querySelectorAll("[data-mission-skip]")].map((one) => one.textContent)).toEqual([
         "Node apicheck skipped · no check command in this repoconductor · 5m",
         "Node apiThe OS table matches skipped · covered by c1conductor · 3m",
       ]);
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(row.querySelectorAll("[data-mission-skip]")).toHaveLength(0);
       // Nothing it lists is the operator's turn.
       expect(map.q("[data-mission-turn]")).toBeNull();
     } finally { await map.unmount(); }
