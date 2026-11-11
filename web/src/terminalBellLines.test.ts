@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Terminal } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
 import { AGENT_ADAPTERS } from "./agentAdapters";
 import { bellRows, bellScan, dimBellLines, forgetBellLines, queueBellLines, type ScreenRow } from "./terminalBellLines";
 
@@ -29,9 +29,18 @@ describe("bellRows", () => {
     expect(bellRows(rows, 100)).toEqual([0]);
   });
 
-  it("leaves a person's own words alone", () => {
+  it("leaves an owl glued to a word, or with no prompt glyph before it, alone", () => {
     const rows = screen(["❯ 🦉가 뭐야?", "❯ fix the bell", "🦉 no prompt glyph in front", "● 🦉 reply"]);
     expect(bellRows(rows, 100)).toEqual([]);
+  });
+
+  // Accepted limits (PR review): the scan reads the row's shape, never who typed it.
+  it("also dims a line a person typed in the same shape, such as a composer draft", () => {
+    expect(bellRows(screen(["❯ 🦉 hello", "› 🦉 hello"]), 100)).toEqual([0, 1]);
+  });
+
+  it("does not match a Grok row its keyboard focus frames", () => {
+    expect(bellRows(screen(["│   ❯ 🦉 a 보고: 끝       │"]), 100)).toEqual([]);
   });
 
   // The three below are the screens a 52-column pane showed when the line
@@ -95,13 +104,12 @@ describe("the echo each agent declares", () => {
   for (const echo of echoes) {
     for (const margin of ["", "     "]) {
       for (const glyph of echo.prompt) {
-        it(`${echo.id}: a bell line led by ${JSON.stringify(margin + glyph)} wraps onto indented rows and stops at its chrome`, () => {
+        it(`${echo.id}: a bell line led by ${JSON.stringify(margin + glyph)} wraps onto indented rows`, () => {
           const indent = " ".repeat((margin + glyph + " ").length);
           const rows = screen([
             `${margin}${glyph} 🦉 sender-agent-long-name-xyz 보고: 시험 줄입니다`,
             `${indent}아무것도 하지 말고 한 줄로만 답하세요 감사합니다`,
             `${indent}· hide inbox`,
-            ...echo.chrome.map((chrome) => `${indent}${chrome} the agent's own output`),
           ]);
           expect(bellRows(rows, 52)).toEqual([0, 1, 2]);
         });
@@ -137,13 +145,13 @@ function fakeTerminal(text: string[]) {
         },
       },
     },
-    registerMarker: () => {
+    registerMarker: (offset: number) => {
       counts.markers += 1;
-      return { dispose: () => {} };
+      return { line: offset, isDisposed: false, dispose: () => {} };
     },
     registerDecoration: () => {
       counts.decorations += 1;
-      return { dispose: () => (counts.disposed += 1) };
+      return { isDisposed: false, dispose: () => (counts.disposed += 1) };
     },
   };
   return { term: term as unknown as Terminal, counts, text };
@@ -181,5 +189,80 @@ describe("reading the screen", () => {
     expect(counts).toMatchObject({ decorations: 2, disposed: 1 });
     forgetBellLines(term);
     expect(counts.disposed).toBe(2);
+  });
+});
+
+// Rows as the agents drew them, not built from a declaration, so a declaration
+// that drifts from the screen fails here. Claude Code's are from its captured
+// screen `hide-agent-adapter/tests/fixtures/composer/claude-2.1.314-coloured-0-answered.ansi`
+// (the `⎿` row the agent draws under a prompt row), Codex's from a Codex pane
+// (`└` under a prompt row), Grok's from a Grok pane's unframed letter rows.
+describe("rows as the agents drew them", () => {
+  it("Claude Code: the `⎿` row under a full-width letter row is its own output, not the letter's", () => {
+    const rows = screen(["❯ 🦉 a 진행: 끝", "  ⎿  Session color set to: green", "", "❯ Reply with only the word ok", "⏺ ok"]);
+    expect(bellRows(rows, 24)).toEqual([0]);
+  });
+
+  it("Codex: the `└` row under a full-width letter row is its own output, not the letter's", () => {
+    const rows = screen(["› 🦉 a 보고: 끝", '  └ {"type":"workspace_result"}', "", "• ok"]);
+    expect(bellRows(rows, 24)).toEqual([0]);
+  });
+
+  it("Grok: the wrapped rows of an unframed letter row, up to its output", () => {
+    const rows = screen([
+      "     ❯ 🦉 m58-conductor 보고: 시험 줄입니다. 아무것도 하지 말고 ok 한 단어로만 답하세요. 이 줄은 pane 폭을 넘겨 여",
+      "       러 줄로 꺾이도록 길게 씁니다 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게 길게",
+      "       길게 길게 길게 길게 길게 길게 길게 길게 길게 · hide inbox",
+      "",
+      "     ◆ Thought for 0.6s",
+      "     ok",
+    ]);
+    expect(bellRows(rows, rows[0]!.used)).toEqual([0, 1, 2]);
+  });
+});
+
+/** Each marker xterm holds for the terminal, which a decoration's disposal does not release. */
+function markersHeld(term: Terminal): number {
+  return (term as unknown as { _core: { buffer: { markers: unknown[] } } })._core.buffer.markers.length;
+}
+
+const written = (term: Terminal, data: string) => new Promise<void>((done) => term.write(data, done));
+
+describe("what is drawn on a real terminal", () => {
+  it("holds one marker for the row however often its color changes, and none once forgotten", async () => {
+    const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
+    await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
+    for (let i = 0; i < 100; i += 1) dimBellLines(term, i % 2 === 0 ? "#666666" : "#777777");
+    expect(markersHeld(term)).toBe(1);
+    forgetBellLines(term);
+    expect(markersHeld(term)).toBe(0);
+    term.dispose();
+  });
+
+  it("draws again after a resize and the holder's redraw leave the same row", async () => {
+    const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
+    await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
+    dimBellLines(term, "#666666");
+    expect(markersHeld(term)).toBe(1);
+    term.resize(80, 5);
+    expect(markersHeld(term)).toBe(0);
+    await written(term, "\x1bc\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[5;1H");
+    dimBellLines(term, "#666666");
+    expect(markersHeld(term)).toBe(1);
+    forgetBellLines(term);
+    term.dispose();
+  });
+
+  it("draws again when its marker was disposed under it and the row is the same", async () => {
+    const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
+    await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
+    dimBellLines(term, "#666666");
+    const [marker] = (term as unknown as { _core: { buffer: { markers: Array<{ dispose(): void }> } } })._core.buffer.markers;
+    marker!.dispose();
+    expect(markersHeld(term)).toBe(0);
+    dimBellLines(term, "#666666");
+    expect(markersHeld(term)).toBe(1);
+    forgetBellLines(term);
+    term.dispose();
   });
 });

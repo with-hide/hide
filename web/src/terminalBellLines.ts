@@ -11,9 +11,14 @@
 // The pane keeps no scrollback and the holder redraws its screen rows in place,
 // so a marker on a row says nothing about what the row shows next. After a
 // frame the screen is read again and the decorations are replaced only when the
-// rows that carry a bell line moved.
+// rows that carry a bell line moved or a decoration or marker was disposed.
+//
+// Only the shape of the row is read, never who typed it, so a line a person
+// typed that begins with the prompt glyph and an owl is dimmed too, and a Grok
+// row its keyboard focus frames (`│ ❯ 🦉 … │`) is not. Telling them apart needs
+// the core to mark the line it typed; that is a follow-up, not this file.
 
-import type { IBufferLine, IDecoration, Terminal } from "@xterm/xterm";
+import type { IBufferLine, IDecoration, IMarker, Terminal } from "@xterm/xterm";
 import { AGENT_ADAPTERS } from "./agentAdapters";
 
 /** The echo each agent that types the line declares (`hide-agent-adapter`, `BellEcho`). */
@@ -77,7 +82,10 @@ export function bellRows(rows: readonly ScreenRow[], cols: number, scan = declar
   return found;
 }
 
-type Drawn = { rows: number[]; color: string; cols: number; decorations: IDecoration[] };
+/** A decoration and the marker it hangs on: disposing a decoration leaves its marker registered in the buffer. */
+type Item = { y: number; marker: IMarker; decoration: IDecoration };
+
+type Drawn = { rows: number[]; color: string; cols: number; height: number; items: Item[] };
 
 const drawn = new WeakMap<Terminal, Drawn>();
 const waiting = new WeakMap<Terminal, number>();
@@ -110,35 +118,43 @@ function readRows(term: Terminal): ScreenRow[] {
 function dispose(term: Terminal) {
   const was = drawn.get(term);
   if (!was) return;
-  for (const decoration of was.decorations) decoration.dispose();
+  for (const { marker, decoration } of was.items) {
+    decoration.dispose();
+    marker.dispose();
+  }
   drawn.delete(term);
 }
 
-/** Reads the screen now and draws the bell rows in `color`; nothing changes when they did not move. */
+/**
+ * Whether what was drawn still holds for the rows now: the same rows, width,
+ * height and color, and every decoration and marker alive on the line it was
+ * made for. A resize, a reset the holder redraws after, or a trim disposes a
+ * marker, and the rows read afterwards can be the same ones.
+ */
+function holds(term: Terminal, was: Drawn, rows: readonly number[], color: string): boolean {
+  if (was.color !== color || was.cols !== term.cols || was.height !== term.rows) return false;
+  if (was.rows.length !== rows.length || !was.rows.every((row, i) => row === rows[i])) return false;
+  const top = term.buffer.active.viewportY;
+  return was.items.every(({ y, marker, decoration }) => !decoration.isDisposed && !marker.isDisposed && marker.line === top + y);
+}
+
+/** Reads the screen now and draws the bell rows in `color`; nothing changes while what is drawn holds. */
 export function dimBellLines(term: Terminal, color: string) {
   const rows = bellRows(readRows(term), term.cols);
   const was = drawn.get(term);
-  if (
-    was &&
-    was.color === color &&
-    was.cols === term.cols &&
-    was.rows.length === rows.length &&
-    was.rows.every((row, i) => row === rows[i])
-  ) {
-    return;
-  }
+  if (was && holds(term, was, rows, color)) return;
   dispose(term);
   if (rows.length === 0) return;
   const buffer = term.buffer.active;
-  const decorations: IDecoration[] = [];
+  const items: Item[] = [];
   for (const y of rows) {
     const marker = term.registerMarker(buffer.viewportY + y - (buffer.baseY + buffer.cursorY));
     if (!marker) continue;
     const decoration = term.registerDecoration({ marker, x: 0, width: term.cols, foregroundColor: color, layer: "top" });
-    if (decoration) decorations.push(decoration);
+    if (decoration) items.push({ y, marker, decoration });
     else marker.dispose();
   }
-  drawn.set(term, { rows, color, cols: term.cols, decorations });
+  drawn.set(term, { rows, color, cols: term.cols, height: term.rows, items });
 }
 
 /** Asks for the screen to be read once at the next animation frame, however many frames came before it. */
