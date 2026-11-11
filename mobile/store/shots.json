@@ -110,7 +110,8 @@
       "steps": [
         "[data-phone-demo-entry]",
         "[data-phone-tab=\"missions\"]",
-        "[data-phone-mission=\"mission-release\"]"
+        "[data-phone-mission=\"mission-release\"]",
+        "[data-phone-mission-steps]::^"
       ],
       "settleSeconds": 10,
       "text": {
