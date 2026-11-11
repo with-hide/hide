@@ -628,11 +628,15 @@ pub(crate) fn warn_acts(
 }
 
 /// How long a node that could start stays unstarted before its Conductor
-/// is asked; the raise reaches the operator `RAISE_TO_OPERATOR_MS` later.
+/// is asked.
 pub(crate) const UNSTARTED_THAT_STALLS_MS: u64 = 20 * 60_000;
-/// How long a warning its Conductor was told stands before it reaches the
-/// operator.
+/// How long a warning its Conductor was told stands before the Conductor is
+/// asked again, as a stall.
 pub(crate) const WARNING_THAT_STALLS_MS: u64 = 30 * 60_000;
+/// How long the Conductor's oldest standing raise stays as it is before the
+/// mission is the operator's (the safety net, hide-private docs/missions.md,
+/// the principle of 2026-11-11).
+pub(crate) const SAFETY_NET_AFTER_MS: u64 = 20 * 60_000;
 /// How long a pull request waits on CI, a review or the merge before its
 /// Conductor is asked: twice the slowest CI run of this repository's own
 /// `verify` (30 minutes, 2026-11-10).
@@ -713,9 +717,99 @@ pub(crate) fn stalls(
 /// Whether no move is owed now: a delay holds the mission or the node, a
 /// decision waits on the operator, or the node waits on the operator's
 /// answer to its gate or to a question about it. The one rule raising and
-/// settling a stall read.
+/// settling a stall, and holding a node in the safety net, read.
 fn stall_excused(mission: &Mission, node: &MissionNode, operator_waits: bool) -> bool {
     mission.delay.is_some() || node.hold.is_some() || mission.decision.is_some() || operator_waits
+}
+
+/// A mission whose raises its Conductor has not settled, the operator's one
+/// card for them (the safety net, hide-private docs/missions.md, the
+/// principle of 2026-11-11): every node it holds and since when the oldest
+/// of them, or the Conductor's arrival if later, has stood as it is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SafetyNet {
+    pub conductor_present: bool,
+    /// What the card counts its minutes from: the oldest held raise, or the
+    /// Conductor's arrival when that is later.
+    pub since_unix_ms: u64,
+    /// The held nodes, oldest raise first.
+    pub nodes: Vec<usize>,
+}
+
+/// The raises of `mission` that wait on its Conductor and owe it a move now:
+/// on a node not dropped, of a reason the Conductor settles (not
+/// `operator_first`), and not excused where a stall is (`stall_excused`), so
+/// a node whose only wait is its gate, or a mission held or asking the
+/// operator, holds none. Oldest first.
+pub(crate) fn held_nodes(mission: &Mission, operator_waits: &[bool]) -> Vec<usize> {
+    if operator_waits.len() != mission.nodes.len() {
+        return Vec::new();
+    }
+    let mut held: Vec<(u64, usize)> = mission
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(at, node)| {
+            node.status != NodeStatus::Dropped
+                && node
+                    .attention
+                    .as_ref()
+                    .is_some_and(|attention| !attention.reason.operator_first())
+                && !stall_excused(mission, node, operator_waits[*at])
+        })
+        .filter_map(|(at, node)| Some((node.attention.as_ref()?.since_unix_ms, at)))
+        .collect();
+    held.sort_unstable();
+    held.into_iter().map(|(_, at)| at).collect()
+}
+
+/// The mission's safety net now, the one derived state the view, Needs You,
+/// the notice and the handover read: with no Conductor present it holds as
+/// soon as one raise is held (`held_nodes`); with one present, once the
+/// oldest held raise, counted from the Conductor's arrival when that is
+/// later (`present_since`), stood `SAFETY_NET_AFTER_MS`. None for a mission
+/// that asks no one (`MissionStatus::asks`). A closed mission's Conductor
+/// has finished with it, so the caller passes `present` false for it.
+pub(crate) fn safety_net(
+    mission: &Mission,
+    present: bool,
+    present_since: u64,
+    operator_waits: &[bool],
+    now: u64,
+) -> Option<SafetyNet> {
+    if !mission.status.asks() {
+        return None;
+    }
+    let nodes = held_nodes(mission, operator_waits);
+    let oldest = mission.nodes[*nodes.first()?].attention.as_ref()?.since_unix_ms;
+    let since = if present {
+        oldest.max(present_since)
+    } else {
+        oldest
+    };
+    (!present || now.saturating_sub(since) >= SAFETY_NET_AFTER_MS).then_some(SafetyNet {
+        conductor_present: present,
+        since_unix_ms: since,
+        nodes,
+    })
+}
+
+/// When a mission whose raises stand now has its safety net come up with a
+/// Conductor present, if it has not: the time a view made now must be made
+/// again at. None when nothing is held or the net already holds.
+pub(crate) fn safety_net_due(
+    mission: &Mission,
+    present_since: u64,
+    operator_waits: &[bool],
+    now: u64,
+) -> Option<u64> {
+    if !mission.status.asks() {
+        return None;
+    }
+    let nodes = held_nodes(mission, operator_waits);
+    let oldest = mission.nodes[*nodes.first()?].attention.as_ref()?.since_unix_ms;
+    let due = oldest.max(present_since).saturating_add(SAFETY_NET_AFTER_MS);
+    (due > now).then_some(due)
 }
 
 /// Whether `node` could start and was not: not started (`started`), the
@@ -875,7 +969,6 @@ mod tests {
             agent: None,
             key: 1,
             since_unix_ms: 1,
-            operator_at_unix_ms: None,
             notified: false,
         }
     }

@@ -271,8 +271,8 @@ pub enum AttentionReason {
     /// (`mission_health::stall_acts`).
     NotStarted,
     /// A warning its Conductor was sent stood with nothing moving
-    /// (`mission_health::stall_acts`): the Conductor already had its letter,
-    /// so it reaches the operator at once.
+    /// (`mission_health::stall_acts`): raised to the Conductor as every
+    /// other stall is.
     WarningStood,
     /// The node's pull request waited on CI, a review or the merge for longer
     /// than any of those takes (`mission_health::stall_acts`).
@@ -280,13 +280,16 @@ pub enum AttentionReason {
 }
 
 impl AttentionReason {
-    /// A reason only the operator can settle goes to them at once (B26);
-    /// the others ask the Conductor first (D-05).
+    /// A reason only the operator can settle reaches them at once (B26): a
+    /// planned human gate with no Conductor to ask it (PRD
+    /// mission-human-gate) and a failure recorded before schema 3. Every
+    /// other raise is the Conductor's to settle and never reaches the
+    /// operator by itself; a mission whose Conductor does not settle its
+    /// raises is the operator's once, through the safety net
+    /// (`mission_health::safety_net`, hide-private docs/missions.md, the
+    /// principle of 2026-11-11).
     pub fn operator_first(self) -> bool {
-        matches!(
-            self,
-            Self::ConductorFailed | Self::HumanGate | Self::WarningStood
-        )
+        matches!(self, Self::ConductorFailed | Self::HumanGate)
     }
 
     /// The operator's choices for a raise of this reason, in the order the
@@ -349,9 +352,11 @@ impl AttentionReason {
     }
 }
 
-/// What waits on someone for a node (D-02, D-05): raised to the Conductor
-/// at `since`, and to the operator at `operator_at` once it stood ten
-/// minutes, or at once with no Conductor there.
+/// What waits on someone for a node (D-02, D-05): raised at `since` to the
+/// Conductor, or to the operator for a reason only they settle
+/// (`AttentionReason::operator_first`). A book from before keeps an
+/// `operator_at_unix_ms` on a raise its ten minutes handed to the operator;
+/// it is not read, so that raise is the Conductor's again.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Attention {
     pub reason: AttentionReason,
@@ -363,10 +368,9 @@ pub struct Attention {
     /// The mission's count of raises, which names this one in its letters.
     pub key: u64,
     pub since_unix_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator_at_unix_ms: Option<u64>,
     /// The operator was told outside Needs You, because no row stood to lay
-    /// it on: once per cause, kept across a restart.
+    /// it on, or the safety net it holds up was: once per cause, kept
+    /// across a restart.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notified: bool,
 }
@@ -3267,7 +3271,7 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_skip_reason_missing" => "Give the reason with --reason <text>",
         "mission_criteria_protected" => {
-            "The check command and CI are skipped only on the operator's answer: ask with hide mission decide --line <question> --node <key>, and once answered skip with --decision <its key>"
+            "A failed CI line is skipped only on the operator's answer: run the CI again, or ask with hide mission decide --line <question> --node <key> and once answered skip with --decision <its key>"
         }
         "mission_criteria_unmet" => {
             "Finish the remaining lines first: have the owner finish the check and record it, skip a line with hide mission skip <node> <line> --reason <text>, or ask the operator with hide mission decide --node <key>"
@@ -3500,7 +3504,6 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
                     agent: None,
                     key: seq,
                     since_unix_ms: at,
-                    operator_at_unix_ms: Some(at),
                     notified: false,
                 };
                 node.insert(
@@ -4325,9 +4328,10 @@ pub(crate) mod tests {
             .as_ref()
             .expect("a failed node asks the operator");
         assert_eq!(
-            (failed.reason, failed.operator_at_unix_ms, failed.key),
-            (AttentionReason::ConductorFailed, Some(50), 1)
+            (failed.reason, failed.since_unix_ms, failed.key),
+            (AttentionReason::ConductorFailed, 50, 1)
         );
+        assert!(failed.reason.operator_first());
         assert_eq!(read.attention_seq, 1);
         assert!(
             read.nodes

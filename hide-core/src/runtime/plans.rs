@@ -1203,9 +1203,10 @@ impl Runtime {
             .collect()
     }
 
-    /// The mission nodes that wait on the operator (PRD mission-node-simple
-    /// D-05, B14), each laid on the Conductor's row while it holds the
-    /// mission, else on the node worker's row while one runs or sleeps.
+    /// The mission nodes that wait on the operator, a raise only they settle
+    /// (`AttentionReason::operator_first`; PRD mission-node-simple D-05,
+    /// B14), each laid on the Conductor's row while it holds the mission,
+    /// else on the node worker's row while one runs or sleeps.
     fn mission_attention_asks(&self) -> Vec<CoreAsk> {
         let ledger = self.delivery_state().ok();
         let mut out = Vec::new();
@@ -1217,9 +1218,13 @@ impl Runtime {
                 let Some(attention) = &node.attention else {
                     continue;
                 };
-                let Some(since) = attention.operator_at_unix_ms else {
+                // Only a raise the operator settles is laid on a row: a raise
+                // of the Conductor's is never the operator's per node, and the
+                // safety net is the mission's own item.
+                if !attention.reason.operator_first() {
                     continue;
-                };
+                }
+                let since = attention.since_unix_ms;
                 let subject = AskSubject::MissionAttention {
                     node: node.title.clone(),
                     reason: attention.reason,

@@ -67,6 +67,14 @@ pub struct PhoneMission {
     /// The Conductor's letters only the operator can let through
     /// (`MissionView::conductor_letters`), which the shared 내 차례 rule reads.
     pub conductor_letters: Option<PhoneHeldLetters>,
+    /// The mission's one card for the raises its Conductor has not settled
+    /// (`MissionView::safety_net`), which the shared 내 차례 rule reads.
+    pub safety_net: Option<PhoneSafetyNet>,
+    /// The lines the Conductor skipped on its own (`MissionView::skipped_alone`):
+    /// the detail's `Conductor가 정한 것`. Left out with the steps of a
+    /// finished mission that has no room for them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped_alone: Vec<PhoneSkip>,
     pub nodes: Vec<PhoneNode>,
     /// The steps a finished mission left behind on the Mac because the frame
     /// had no room for them; `nodes` and `landing_order` are empty then.
@@ -87,6 +95,37 @@ pub struct PhoneHeldLetters {
     pub count: u32,
     pub reason: String,
     pub since_unix_ms: u64,
+}
+
+/// The safety net as its card draws it (`SafetyNetView`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneSafetyNet {
+    pub conductor_present: bool,
+    pub since_unix_ms: u64,
+    pub nodes: Vec<PhoneHeldNode>,
+}
+
+/// One node the safety net holds (`HeldNodeView`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneHeldNode {
+    pub key: String,
+    pub title: String,
+    pub reason: String,
+    #[serde(default)]
+    pub pr: Option<u32>,
+    pub since_unix_ms: u64,
+}
+
+/// One line the Conductor skipped on its own (`SkippedAloneView`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneSkip {
+    pub node: String,
+    pub title: String,
+    pub line: String,
+    pub kind: String,
+    pub reason: String,
+    pub by: String,
+    pub at_unix_ms: u64,
 }
 
 /// Where the operator's answer is: `sending`, `waiting` or `unconfirmed`.
@@ -269,6 +308,10 @@ struct MissionIn {
     #[serde(default)]
     conductor_letters: Option<PhoneHeldLetters>,
     #[serde(default)]
+    safety_net: Option<PhoneSafetyNet>,
+    #[serde(default)]
+    skipped_alone: Vec<PhoneSkip>,
+    #[serde(default)]
     nodes: Vec<NodeIn>,
     #[serde(default)]
     landing_order: Vec<String>,
@@ -428,6 +471,7 @@ fn fit(open: &mut Vec<PhoneMission>, closed: &mut Vec<PhoneMission>, budget: usi
         mission.nodes_omitted = mission.nodes.len();
         mission.nodes.clear();
         mission.landing_order.clear();
+        mission.skipped_alone.clear();
         let stripped = wire_len(mission);
         total -= *size - stripped;
         *size = stripped;
@@ -531,6 +575,27 @@ fn phone_mission(
             .collect(),
         conductor,
         conductor_letters: mission.conductor_letters,
+        safety_net: mission.safety_net.map(|net| PhoneSafetyNet {
+            nodes: net
+                .nodes
+                .into_iter()
+                .map(|node| PhoneHeldNode {
+                    title: cut(&node.title),
+                    ..node
+                })
+                .collect(),
+            ..net
+        }),
+        skipped_alone: mission
+            .skipped_alone
+            .into_iter()
+            .map(|skip| PhoneSkip {
+                title: cut(&skip.title),
+                reason: cut(&skip.reason),
+                by: cut(&skip.by),
+                ..skip
+            })
+            .collect(),
         nodes,
         nodes_omitted: 0,
         landing_order: mission.landing_order,

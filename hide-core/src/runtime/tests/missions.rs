@@ -6351,16 +6351,15 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
         !crate::runtime::mission_health::raise(
             mission,
             "fix",
-            AttentionReason::PrClosed,
-            Some(7),
+            AttentionReason::ConductorFailed,
+            None,
             now
         )
         .is_empty()
     );
     runtime.save_missions();
-    // Past ten minutes the raise reaches the operator, laid on the
+    // A raise only the operator settles reaches them at once, laid on the
     // Conductor's row while it is there.
-    runtime.raise_to_operator(now + 10 * 60 * 1000);
     assert_eq!(
         node_view(&runtime, "fix")
             .attention
@@ -6409,14 +6408,13 @@ fn a_mission_no_row_carries_is_counted_in_its_devices_needs_you() {
         !crate::runtime::mission_health::raise(
             mission,
             "fix",
-            AttentionReason::PrClosed,
-            Some(7),
+            AttentionReason::ConductorFailed,
+            None,
             now
         )
         .is_empty()
     );
     runtime.save_missions();
-    runtime.raise_to_operator(now + 10 * 60 * 1000);
     let device = runtime
         .snapshot
         .missions
@@ -6510,14 +6508,13 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         !crate::runtime::mission_health::raise(
             mission,
             "fix",
-            AttentionReason::PrClosed,
-            Some(7),
+            AttentionReason::ConductorFailed,
+            None,
             now
         )
         .is_empty()
     );
     runtime.save_missions();
-    runtime.raise_to_operator(now + 10 * 60 * 1000);
     let shown = |runtime: &mut Runtime| {
         runtime.snapshot_delta_payload(0);
         let on_row = node_view(runtime, "fix")
@@ -6539,7 +6536,7 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         runtime.snapshot.navigator.agents[0].ask_subject,
         Some(crate::model::AskSubject::MissionAttention {
             node: "Fix it".into(),
-            reason: AttentionReason::PrClosed,
+            reason: AttentionReason::ConductorFailed,
             unmet: 0,
         })
     );
@@ -6644,12 +6641,12 @@ fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
     };
     let raise = |runtime: &mut Runtime, node: &str, now: u64| {
         let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-        let reason = AttentionReason::WorkerEnded;
+        // A raise only the operator settles is laid on the Conductor's row.
+        let reason = AttentionReason::ConductorFailed;
         assert!(
             !crate::runtime::mission_health::raise(mission, node, reason, None, now).is_empty()
         );
         runtime.save_missions();
-        runtime.raise_to_operator(now + 10 * 60 * 1000);
     };
     shown(&mut runtime);
     let now = crate::runtime::unix_milliseconds();
@@ -6875,12 +6872,15 @@ fn a_node_taken_back_to_work_is_finished_again_only_on_its_next_pull_request() {
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
 }
 
-/// PRD mission-node-simple B15: a Conductor still there may be taken over
-/// once a raise it was asked first reached the operator, and not while it
-/// has its ten minutes or for a raise that goes to the operator at once.
+/// PRD mission-node-simple B15, narrowed by the principle of 2026-11-11: a
+/// Conductor still there may be taken over with the operator's handover only
+/// while its mission's safety net holds (a raise of its own unsettled 20
+/// minutes), and not before or for a raise that is the operator's anyway.
+/// The new Conductor is told the raise and its own 20 minutes start.
 #[test]
 fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     use crate::missions::{Attention, AttentionReason, WakeEvent};
+    const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -6890,14 +6890,16 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     )
     .unwrap();
     command(&mut runtime, "sender", criteria_plan()).unwrap();
-    let raise = |runtime: &mut Runtime, reason, operator_at_unix_ms| {
+    let now = crate::runtime::unix_milliseconds();
+    // The Conductor has been there 21 minutes.
+    runtime.drive_mission_health(now - 21 * MINUTE);
+    let raise = |runtime: &mut Runtime, reason, since_unix_ms| {
         runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].attention = Some(Attention {
             reason,
             pr: None,
             agent: None,
             key: 1,
-            since_unix_ms: 1,
-            operator_at_unix_ms,
+            since_unix_ms,
             notified: false,
         });
     };
@@ -6914,20 +6916,20 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
             .to_owned()
     };
     let token = "0f8e2b9c-4c1d-4b7a-9e3f-5a6b7c8d9e0f";
-    // No raise reached the operator: no handover is made, and a take is
-    // refused while the Conductor is there.
-    raise(&mut runtime, AttentionReason::WorkerEnded, None);
+    // A raise of the Conductor's under 20 minutes: no handover is made, and a
+    // take is refused while the Conductor is there.
+    raise(&mut runtime, AttentionReason::WorkerEnded, now - 5 * MINUTE);
     assert!(!runtime.mission_handover_event("mission-1", token));
     assert_eq!(
         refused(take(&mut runtime, "recipient", Some(token))),
         "mission_conducted"
     );
-    // One the operator settles first is no reason either.
-    raise(&mut runtime, AttentionReason::ConductorFailed, Some(1));
+    // One the operator settles is no reason either, however old.
+    raise(&mut runtime, AttentionReason::ConductorFailed, now - 30 * MINUTE);
     assert!(!runtime.mission_handover_event("mission-1", token));
-    // Ten minutes unanswered reached the operator, but a take without the
+    // Unsettled 20 minutes, the safety net holds, but a take without the
     // operator's handover is still refused (B15).
-    raise(&mut runtime, AttentionReason::WorkerEnded, Some(2));
+    raise(&mut runtime, AttentionReason::WorkerEnded, now - 20 * MINUTE - 1_000);
     assert_eq!(
         refused(take(&mut runtime, "recipient", None)),
         "mission_conducted"
@@ -6940,19 +6942,22 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     let (taken, changed) = take(&mut runtime, "recipient", Some(token)).unwrap();
     assert!(changed);
     assert_eq!(taken["mission"]["conductor"]["name"], "recipient");
-    // The handover is spent, and what reached the operator because the old
-    // Conductor did not answer goes to the new one first, with its own ten
-    // minutes, so the old timeout hands it on to no one else.
+    // The handover is spent; the new Conductor is told the raise, which
+    // keeps when it was raised, and its own 20 minutes start now, so the
+    // safety net is down.
     let mission = runtime.missions.book.get("mission-1").unwrap();
     assert!(mission.handover.is_none());
     let attention = mission.nodes[0].attention.clone().unwrap();
-    assert_eq!(attention.operator_at_unix_ms, None);
-    assert!(attention.since_unix_ms > 2);
+    assert_eq!(attention.since_unix_ms, now - 20 * MINUTE - 1_000);
     assert!(
         mission
             .wakes
             .iter()
             .any(|wake| wake.event == WakeEvent::Attention)
+    );
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().safety_net,
+        None
     );
     assert!(!runtime.mission_handover_event("mission-1", token));
     assert_eq!(
@@ -7154,14 +7159,14 @@ fn the_same_facts_evaluated_twice_write_one_event_and_one_letter() {
     assert_eq!(raised, 1);
 }
 
-/// PRD mission-node-simple B27, review 4 P2-1: a raise that reaches the
-/// operator, written by the missions' one writer to real files, is in the
+/// PRD mission-node-simple B27, review 4 P2-1: a raise, written by the
+/// missions' one writer to real files, is in the
 /// history once across a restart whichever save failed: a book that failed
 /// after its history is made again under the same keys, and a history that
 /// failed holds the book back, so no restart reads a change its history
 /// lost.
 #[test]
-fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a_restart() {
+fn a_raise_is_in_the_history_once_whichever_save_failed_before_a_restart() {
     use crate::mission_events::{EventKind, MissionEventStore};
     use crate::missions::{AttentionReason, MissionStore, Restored};
     let fixture = conducting();
@@ -7176,8 +7181,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
         let logs = store.restore(["mission-1"].into_iter());
         runtime.install_mission_events(store, logs);
     };
-    // One evaluation: the Conductor is asked, and ten minutes later the
-    // operator.
+    // One evaluation: the Conductor is asked.
     let evaluate = |runtime: &mut Runtime, now: u64| {
         let mission = runtime.missions.book.get_mut("mission-1").unwrap();
         let events = crate::runtime::mission_health::raise(
@@ -7188,7 +7192,6 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
             now,
         );
         runtime.record_mission_events("mission-1", events);
-        runtime.raise_to_operator(now + 10 * 60 * 1000);
     };
     let stop = |runtime: &mut Runtime| drop(runtime.missions.event_store.take());
     let written = || {
@@ -7211,7 +7214,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
     start(&mut runtime);
     evaluate(&mut runtime, 1_000);
     stop(&mut runtime);
-    assert_eq!(written(), (1, 1));
+    assert_eq!(written(), (1, 0));
     assert!(saved_book().is_none());
     // A restart reads the book from before the raise and makes it again,
     // later: the history keeps one of each, and the book is written now.
@@ -7220,7 +7223,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
     start(&mut runtime);
     evaluate(&mut runtime, 5_000);
     stop(&mut runtime);
-    assert_eq!(written(), (1, 1));
+    assert_eq!(written(), (1, 0));
     let saved = saved_book().expect("the book is written once its folder can be");
     let attention = saved
         .get("mission-1")
@@ -7229,7 +7232,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
         .iter()
         .find(|node| node.key == "fix")
         .and_then(|node| node.attention.clone());
-    assert!(attention.is_some_and(|attention| attention.operator_at_unix_ms.is_some()));
+    assert!(attention.is_some_and(|attention| attention.reason == AttentionReason::PrClosed));
 
     // The other order: the history cannot be written, so the book waits
     // and the restart finds neither.
@@ -7248,7 +7251,7 @@ fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a
     start(&mut runtime);
     evaluate(&mut runtime, 12_000);
     stop(&mut runtime);
-    assert_eq!(written(), (1, 1));
+    assert_eq!(written(), (1, 0));
     assert!(saved_book().is_some());
 }
 
@@ -7874,10 +7877,9 @@ fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
     let shown = runtime.mission_view_of("mission-1").unwrap();
     assert_eq!(shown.nodes[0].review_fails, 2);
     assert_eq!(shown.nodes[0].warnings.len(), 1);
-    // It is no attention: the operator is never asked, however long it
-    // stands.
+    // It is no attention: the operator is never asked by it.
     assert!(shown.nodes[0].attention.is_none());
-    assert!(!runtime.raise_to_operator(now + 3 * 60 * 60_000));
+    assert_eq!(shown.safety_net, None);
     // The same plan applied again keeps the review line, so the count and
     // the warning stand, with no second letter.
     command(&mut runtime, "sender", criteria_plan()).unwrap();
