@@ -127,7 +127,7 @@ const HELD_MAX_AGE: Duration = Duration::from_secs(60);
 struct Held {
     payload: Value,
     /// A waiting root's notice's serial (`LiveNotices`); `None` for a human delivery notice.
-    generation: Option<u64>,
+    generation: Option<NoticeGeneration>,
     at: std::time::Instant,
 }
 
@@ -136,7 +136,7 @@ struct Held {
 fn hold_in(
     held: &mut VecDeque<Held>,
     payload: Value,
-    generation: Option<u64>,
+    generation: Option<NoticeGeneration>,
     at: std::time::Instant,
 ) {
     let tag = payload.get("tag").cloned();
@@ -168,39 +168,57 @@ struct LiveNotices {
 /// phone map is pruned against Phones::current before every admission.
 struct LiveNotice {
     serial: u64,
+    start: u64,
     attempts: HashMap<String, Attempt>,
 }
 
 struct Attempt {
-    cause: push::Cause,
-    /// False means one particular job owns this attempt; only rested ones drain.
+    consumed: u64,
+    /// Only rested responsibilities drain; queued or consumed ones do not.
     rested: bool,
+}
+
+/// A queued waiting notice's owner and the settled observation it represents.
+/// The root lifetime prevents an old transport from consuming its next wait.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NoticeGeneration {
+    serial: u64,
+    start: u64,
+    through: u64,
 }
 
 impl LiveNotices {
     #[cfg(test)]
-    fn stamp(&mut self, tag: String) -> u64 {
-        self.admit(tag, push::Cause::Root(None), &["phone".to_owned()])
+    fn stamp(&mut self, tag: String) -> NoticeGeneration {
+        self.admit(
+            tag,
+            push::Settled {
+                before: 0,
+                through: self.serial + 1,
+            },
+            &["phone".to_owned()],
+        )
     }
 
-    fn admit(&mut self, tag: String, cause: push::Cause, phones: &[String]) -> u64 {
+    fn admit(
+        &mut self,
+        tag: String,
+        settled: push::Settled,
+        phones: &[String],
+    ) -> NoticeGeneration {
         self.serial += 1;
-        let mut attempts = self
-            .current
-            .remove(&tag)
-            .map_or_else(HashMap::new, |old| old.attempts);
+        let old = self.current.remove(&tag);
+        let start = old.as_ref().map_or(self.serial, |old| old.start);
+        let mut attempts = old.map_or_else(HashMap::new, |old| old.attempts);
         attempts.retain(|phone, _| phones.contains(phone));
         for phone in phones {
-            let owed = attempts.remove(phone).map(|attempt| attempt.cause);
-            // An unsent initial wait survives a later declaration coming and going.
-            let cause = match owed {
-                Some(push::Cause::Root(id)) => push::Cause::Root(id),
-                _ => cause.clone(),
-            };
+            let consumed = attempts
+                .remove(phone)
+                .map_or(settled.before, |attempt| attempt.consumed);
             attempts.insert(
                 phone.clone(),
                 Attempt {
-                    cause,
+                    consumed,
                     rested: false,
                 },
             );
@@ -209,10 +227,15 @@ impl LiveNotices {
             tag,
             LiveNotice {
                 serial: self.serial,
+                start,
                 attempts,
             },
         );
-        self.serial
+        NoticeGeneration {
+            serial: self.serial,
+            start,
+            through: settled.through,
+        }
     }
 
     fn prune_phones(&mut self, phones: &BTreeSet<String>) {
@@ -225,14 +248,14 @@ impl LiveNotices {
         self.current.remove(tag);
     }
 
-    fn is_current(&self, payload: &Value, generation: Option<u64>) -> bool {
+    fn is_current(&self, payload: &Value, generation: Option<NoticeGeneration>) -> bool {
         generation.is_none_or(|generation| {
             payload
                 .get("tag")
                 .and_then(Value::as_str)
                 .and_then(|tag| self.current.get(tag))
                 .map(|notice| notice.serial)
-                == Some(generation)
+                == Some(generation.serial)
         })
     }
 }
@@ -249,7 +272,7 @@ pub(crate) enum Handoff {
 }
 
 /// One notice for one phone, and its serial (`LiveNotices`).
-type Job = (String, Route, Value, u64);
+type Job = (String, Route, Value, NoticeGeneration);
 
 /// Withdraws the waiting notices a follower handed out when it ends, on every path (`Mobile::withdraw_waiting`).
 struct WithdrawOnExit(Arc<Mobile>);
@@ -2223,7 +2246,12 @@ impl Mobile {
     /// Sends one notice to an iOS app phone, or keeps it when the relay link is not up yet. Blocking, like
     /// `push_to_app`; the outcome is a diagnostic naming the reason, never the notice. `generation` is a waiting
     /// root's notice's serial (`LiveNotices`), which a hold checks; `None` is a notice no close withdraws.
-    pub fn push_or_hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) {
+    pub fn push_or_hold(
+        &self,
+        phone_id: &str,
+        payload: Value,
+        generation: Option<NoticeGeneration>,
+    ) {
         match self.push_to_app(phone_id, &payload) {
             Ok(()) => {
                 self.finish_attempt(
@@ -2264,7 +2292,7 @@ impl Mobile {
 
     /// Keeps a notice for `phone_id` until the relay link is up, replacing the one held for the same agent tag and
     /// dropping the oldest past `HELD_PER_PHONE`; a waiting notice whose root stopped waiting is not kept (`false`).
-    fn hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) -> bool {
+    fn hold(&self, phone_id: &str, payload: Value, generation: Option<NoticeGeneration>) -> bool {
         let mut inner = self.lock();
         if !inner.live.is_current(&payload, generation) {
             return false;
@@ -2276,7 +2304,7 @@ impl Mobile {
 
     /// Whether a notice is still worth sending: always for a human delivery notice, and for a waiting root's only
     /// while its serial is current. Asked right before each send, under the lock a close takes.
-    fn is_current(&self, payload: &Value, generation: Option<u64>) -> bool {
+    fn is_current(&self, payload: &Value, generation: Option<NoticeGeneration>) -> bool {
         self.lock().live.is_current(payload, generation)
     }
 
@@ -2734,9 +2762,9 @@ impl Mobile {
             }
             let generation = {
                 let mut inner = self.lock();
-                let cause = inner.phone_notices.cause(&notice.key);
+                let settled = inner.phone_notices.settled(&notice.key);
                 let ids: Vec<_> = targets.iter().map(|(id, _)| id.clone()).collect();
-                inner.live.admit(notice.key.tag(), cause, &ids)
+                inner.live.admit(notice.key.tag(), settled, &ids)
             };
             for (phone_id, route) in &targets {
                 // A withdrawable job or held notice must never own a close.
@@ -2796,7 +2824,6 @@ impl Mobile {
                     pane_id: pane.to_owned(),
                 };
                 let present = projection.find(&key).is_some();
-                let mut ended = Vec::new();
                 for (phone, attempt) in &mut live.attempts {
                     if !attempt.rested {
                         continue;
@@ -2806,17 +2833,19 @@ impl Mobile {
                         continue;
                     }
                     // Queued now has one owner, even if another away wake follows.
-                    if phone_notices.waits(&key)
-                        && let Some(notice) = attempt.cause.notice(&key, projection)
+                    if let Some((notice, through)) =
+                        phone_notices.waiting_after(&key, attempt.consumed, projection)
                     {
                         attempt.rested = false;
-                        jobs.push((phone.clone(), routes[phone].clone(), notice, live.serial));
+                        let generation = NoticeGeneration {
+                            serial: live.serial,
+                            start: live.start,
+                            through,
+                        };
+                        jobs.push((phone.clone(), routes[phone].clone(), notice, generation));
                         continue;
                     }
-                    ended.push(phone.clone());
-                }
-                for phone in ended {
-                    live.attempts.remove(&phone);
+                    attempt.rested = false;
                 }
             }
             live.rested = missing;
@@ -2923,21 +2952,30 @@ impl Mobile {
         outcomes
     }
 
-    fn finish_attempt(&self, phone: &str, tag: &str, generation: Option<u64>) {
+    fn finish_attempt(&self, phone: &str, tag: &str, generation: Option<NoticeGeneration>) {
         let Some(generation) = generation else {
             return;
         };
         let mut inner = self.lock();
         if let Some(notice) = inner.live.current.get_mut(tag)
-            && notice.serial == generation
+            && notice.start == generation.start
+            && let Some(attempt) = notice.attempts.get_mut(phone)
         {
-            notice.attempts.remove(phone);
+            attempt.consumed = attempt.consumed.max(generation.through);
+            if notice.serial == generation.serial {
+                attempt.rested = false;
+            }
         }
     }
 
     /// The same decision gates both a new job and a relay reconnect. A hold
     /// wakes the follower too, so an away report racing this worker is not lost.
-    fn rest_job(&self, phone_id: &str, payload: &Value, generation: Option<u64>) -> bool {
+    fn rest_job(
+        &self,
+        phone_id: &str,
+        payload: &Value,
+        generation: Option<NoticeGeneration>,
+    ) -> bool {
         // Human delivery notices are admitted separately and never acquire a wait's responsibility.
         let Some(generation) = generation else {
             return false;
@@ -2967,6 +3005,9 @@ impl Mobile {
         else {
             return true; // This phone's responsibility already ended; an old job cannot recreate it.
         };
+        if attempt.consumed >= generation.through {
+            return true;
+        }
         if resting {
             attempt.rested = true;
             if !inner.live.rested {
@@ -3317,7 +3358,7 @@ mod tests {
         assert!(mobile.hold("phone", tagged(gone), Some(again)));
         assert!(mobile.hold("other", tagged(gone), None));
         Mobile::close_waiting(&mut mobile.lock(), &closed(gone));
-        let held = |phone: &str| -> Vec<Option<u64>> {
+        let held = |phone: &str| -> Vec<Option<NoticeGeneration>> {
             mobile
                 .lock()
                 .held

@@ -2080,7 +2080,7 @@ The app icon sums root agents in every enabled notification group across every d
 Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
 macOS draws it on the Dock once it lets Hide notify, Linux where the desktop shows launcher counts, and Windows as a dot on the taskbar button whose description gives the count.
 With both switches off nothing is sent and the app icon has no count; with Done alone on, it counts unread Done.
-The phone's push follows its own settings whatever these switches say (B36, B38).
+The phone's own settings decide whether it receives pushes; computer-use resting applies only while an attached window enables Needs You notices (Notifications).
 
 Settings > Devices keeps its own description.
 The persisted `screen_intros_seen` field remains readable for older builds; this release has no Factory introduction.

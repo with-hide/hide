@@ -982,9 +982,12 @@ The projection and push regression tests remain in `hided/src/mobile/{projection
 With the phone-rest switch on, an attached host reporting computer use rests pushes only if an attached desktop window enables Needs You notices.
 Ten minutes without system input, screen lock, suspend, the last active host disconnecting, or all desktop Needs You switches turning off releases each still-current rested wait once.
 A wait that ended first is withdrawn by its notice serial.
-Rested responsibility lives in each existing current-root notice entry, at most one per currently paired phone (four), with its serial and the cause that phone has not received; it stores no payload and evicts no live wait.
-An added declaration that disappears cancels only its own responsibility: an initial wait that phone never received still stands, and an initial wait already sent never repeats.
-A freshly judged projection rebuilds only rested attempts; admission marks them queued before releasing the Mobile mutex, and transport completion can consume only that serial.
+Rested responsibility lives in each existing current-root notice entry, at most one per currently paired phone (four), with only a consumed-observation watermark and a rested bit per phone; it stores no payload or declaration ID and evicts no live wait.
+The common transition ledger keeps observation order in its existing current declaration-ID entries, plus the start of the current wait; its current/grace cardinality is unchanged.
+Replay asks for a current wait after the phone's consumed boundary and through the last settled boundary.
+An added declaration that disappears cannot erase an earlier current unconsumed declaration; when all additions disappear an initial wait already consumed never repeats.
+A freshly judged projection rebuilds only rested attempts; admission marks them queued before releasing the Mobile mutex.
+A job captures its root lifetime and settled boundary, so an older transport can finish consuming its own boundary while a newer job is admitted, without consuming the newer boundary or a later lifetime.
 Revocation, phone inactivity expiry, pairing-scope changes and follower reset or end release the corresponding responsibility.
 Relay-only holds keep their eight-per-phone payload cap and sixty-second expiry, and recheck resting before transport on reconnect.
 The desktop app's agent notifications run the same transitions on their own ledger (`hided/src/desktop_notices.rs`, PRD first-run-onboarding D-09), so a desktop notification and a phone push agree on what is new without either one's seed or mode moving the other.

@@ -527,7 +527,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
     await ask(fixture, daemon!, two, "브라우저가 열려 있을 때");
-    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2);
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2); // wait-ok: the browser-open question reaches the phone push endpoint
     await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);

@@ -442,42 +442,23 @@ pub const SETTLE_CAP: usize = 64;
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
-    standing: BTreeMap<AgentKey, Cause>,
+    standing: BTreeMap<AgentKey, Settled>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
 }
 
-/// Why a phone still owes a notice. An initial wait may fall back to the
-/// row's current ask; an added declaration must still exist by its identity.
-#[derive(Clone, Debug)]
-pub(super) enum Cause {
-    Root(Option<String>),
-    Added(String),
-}
-
-impl Cause {
-    pub(super) fn notice(&self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
-        let agent = projection.find(key)?;
-        let declared = match self {
-            Self::Root(id) => id.as_ref().and_then(|id| agent.human_turns.get(id)),
-            Self::Added(id) => Some(agent.human_turns.get(id)?),
-        };
-        Some(hide_core::agent_state::push::waiting_notice(
-            key, agent, declared,
-        ))
-    }
+/// The observation covered by the last settle, and where a phone first
+/// joining that notice starts. No declaration identities live per phone.
+#[derive(Clone, Copy)]
+pub(super) struct Settled {
+    pub before: u64,
+    pub through: u64,
 }
 
 struct Pending {
     due: Instant,
-    /// The newest notice the ledger announced for the root, whose person's
-    /// turn the notice says while it still stands on the row.
-    newest: Notice,
-    /// A person's turn added to a wait whose notice already stands: it is
-    /// sent only while that turn stands, never in favour of the row's older
-    /// ask. A root that entered the operator's turn says its row's latest ask.
-    added: bool,
+    observed: u64,
 }
 
 impl PhoneNotices {
@@ -502,7 +483,16 @@ impl PhoneNotices {
                 .ledger
                 .waiting()
                 .cloned()
-                .map(|key| (key, Cause::Root(None)))
+                .map(|key| {
+                    let through = self.ledger.observation();
+                    (
+                        key,
+                        Settled {
+                            before: through,
+                            through,
+                        },
+                    )
+                })
                 .collect();
         }
         judged
@@ -537,15 +527,15 @@ impl PhoneNotices {
                 continue;
             }
             match self.pending.get_mut(&notice.key) {
-                Some(pending) => pending.newest = notice,
+                Some(pending) => {
+                    pending.observed = self.ledger.observation();
+                }
                 None => {
-                    let added = self.standing.contains_key(&notice.key);
                     self.pending.insert(
                         notice.key.clone(),
                         Pending {
                             due: at + SETTLE,
-                            newest: notice,
-                            added,
+                            observed: self.ledger.observation(),
                         },
                     );
                 }
@@ -596,20 +586,34 @@ impl PhoneNotices {
             .collect()
     }
 
-    pub(super) fn cause(&self, key: &AgentKey) -> Cause {
-        self.standing
+    pub(super) fn settled(&self, key: &AgentKey) -> Settled {
+        *self
+            .standing
             .get(key)
             .expect("a delivered notice passed settle")
-            .clone()
     }
 
-    pub(super) fn waits(&self, key: &AgentKey) -> bool {
-        self.ledger.waits_on_operator(key)
+    pub(super) fn waiting_after(
+        &self,
+        key: &AgentKey,
+        after: u64,
+        projection: &Projection,
+    ) -> Option<(Notice, u64)> {
+        let through = self.standing.get(key)?.through;
+        self.ledger
+            .waiting_between(key, after, through, projection)
+            .map(|notice| (notice, through))
     }
 
     #[cfg(test)]
     pub(super) fn stand(&mut self, key: AgentKey) {
-        self.standing.insert(key, Cause::Root(None));
+        self.standing.insert(
+            key,
+            Settled {
+                before: 0,
+                through: 1,
+            },
+        );
     }
 
     /// When the next pending notice is due.
@@ -619,31 +623,19 @@ impl PhoneNotices {
 
     fn send(&mut self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
         let pending = self.pending.remove(key)?;
-        let agent = projection.find(key)?;
-        let declared = pending.newest.subject.as_ref();
-        if pending.added
-            && !agent
-                .human_turns
-                .values()
-                .any(|turn| Some(turn) == declared)
-        {
-            // The turn added to a standing wait is gone: nothing new to say.
-            return None;
-        }
-        let id = agent
-            .human_turns
-            .iter()
-            .find(|(_, turn)| Some(*turn) == declared)
-            .map(|(id, _)| id.clone());
-        let cause = if pending.added {
-            Cause::Added(id.expect("an added declaration was checked above"))
-        } else {
-            Cause::Root(id)
-        };
-        self.standing.insert(key.clone(), cause);
-        Some(hide_core::agent_state::push::waiting_notice(
-            key, agent, declared,
-        ))
+        projection.find(key)?;
+        let before = self.standing.get(key).map_or(0, |old| old.through);
+        // A cancelled newest declaration still settles this observed range.
+        // Earlier current declarations in it can remain owed to a phone.
+        self.standing.insert(
+            key.clone(),
+            Settled {
+                before,
+                through: pending.observed,
+            },
+        );
+        self.ledger
+            .waiting_between(key, before, pending.observed, projection)
     }
 }
 
