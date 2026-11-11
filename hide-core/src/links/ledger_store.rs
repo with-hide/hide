@@ -1172,7 +1172,13 @@ impl LinkStore {
                 if turn_recorded(&tx, session, *offset)? {
                     return Ok(());
                 }
-                if judgment.missed.len() > NEW_MISSED_LIMIT
+                if judgment.missed.len() > TURN_MISSED_LIMIT
+                    || judgment
+                        .missed
+                        .iter()
+                        .filter(|missed| missed.same_as.is_none())
+                        .count()
+                        > NEW_MISSED_LIMIT
                     || judgment.resolved.len() > MISSED_LIMIT
                     || judgment.artifacts.len() > ARTIFACTS_PER_TURN
                 {
@@ -1254,6 +1260,31 @@ impl LinkStore {
                 for (index, missed) in judgment.missed.iter().enumerate() {
                     if missed.text.trim().is_empty() || missed.text.chars().count() > MISSED_CHARS {
                         return Err("ledger_missed_invalid".to_owned());
+                    }
+                    // A question the turn names as one still open stays that
+                    // one line, however the turn worded it. One a reply just
+                    // closed above is not open, so it is listed anew.
+                    if missed.kind == MissedKind::Ask
+                        && let Some(same_as) = &missed.same_as
+                        && tx
+                            .query_row(
+                                "SELECT 1 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 \
+                                AND missed=?4 AND kind=?5 AND status=?6",
+                                params![
+                                    session.device_id,
+                                    session.agent,
+                                    session.session_id,
+                                    same_as,
+                                    encoded(&MissedKind::Ask)?,
+                                    encoded(&MissedStatus::Open)?
+                                ],
+                                |_| Ok(()),
+                            )
+                            .optional()
+                            .map_err(failed)?
+                            .is_some()
+                    {
+                        continue;
                     }
                     // A turn a letter woke repeats a question still open, or one
                     // the operator put away: one line, and a put-away one stays put away.
