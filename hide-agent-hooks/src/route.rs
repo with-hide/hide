@@ -233,13 +233,21 @@ pub fn records_folder_of(home: &Path, state: &Path) -> std::io::Result<PathBuf> 
     // answers, and the sentence beside the kind is what names the folder
     // `doctor` and the log show (engineering rules 4 and 10).
     //
-    // The folder is entered, not only stat'ed: a mode that denies this
-    // process its contents still lets `metadata` succeed on macOS and Linux,
-    // because stat needs the parent's search bit and not the folder's read
-    // bit, so a hook and a `doctor` asked that folder would answer a records
-    // path they cannot read and then lose every read below it. Opening it is
-    // what turns that into this process's own `PermissionDenied` here, where
-    // every reader keeps it as `records_error`.
+    // The records folder below it is looked at, not only the state folder: a
+    // mode that denies this process its contents still lets `metadata`
+    // succeed on the state folder alone on macOS and Linux, because stat
+    // needs the parent's search bit and not the folder's own read bit, so a
+    // hook and a `doctor` asked that folder would answer a records path they
+    // cannot read and then lose every read below it.
+    //
+    // What is looked at is the records folder and never a listing of the
+    // state folder: a hook may run where the state folder is searchable and
+    // its records folder is granted while the state folder's own contents
+    // are not readable, which is how the agent journey's write sandbox hands
+    // a pane's hook exactly the folder its records live in. Listing the state
+    // folder refused every hook in that run, so this asks only for the one
+    // entry it names. A folder nothing made yet is `NotFound` and is the
+    // records path; every other refusal is kept as this process's own error.
     let metadata = std::fs::metadata(state).map_err(|error| {
         std::io::Error::new(
             error.kind(),
@@ -258,25 +266,30 @@ pub fn records_folder_of(home: &Path, state: &Path) -> std::io::Result<PathBuf> 
             ),
         ));
     }
-    let mut entries = std::fs::read_dir(state).map_err(|error| {
-        std::io::Error::new(
-            error.kind(),
-            format!(
-                "the hooks' state folder {} could not be read: {error}",
-                state.display()
-            ),
-        )
-    })?;
-    if let Some(Err(error)) = entries.next() {
-        return Err(std::io::Error::new(
-            error.kind(),
-            format!(
-                "the hooks' state folder {} could not be read: {error}",
-                state.display()
-            ),
-        ));
+    let records = records_in(state);
+    match std::fs::metadata(&records) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                format!(
+                    "the hooks' records folder {} is not a folder",
+                    records.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "the hooks' records folder {} could not be read: {error}",
+                    records.display()
+                ),
+            ));
+        }
     }
-    Ok(records_in(state))
+    Ok(records)
 }
 
 /// [`records_folder_of`] for the daemon this process asks ([`state_dir`]):
@@ -626,6 +639,41 @@ mod tests {
             std::io::ErrorKind::PermissionDenied,
             "the folder's own kind, not the account's folder and not NotFound"
         );
+    }
+
+    /// A state folder this process may search but not list still answers its
+    /// records folder, which is what a hook inside the agent journey's write
+    /// sandbox is handed: the profile grants reading the state folder's own
+    /// metadata and reading and writing below `<state>/agent-hooks`, and
+    /// listing the state folder itself is refused. Asking for a listing there
+    /// refused every hook in that run, so this asks only for the one entry the
+    /// route names.
+    #[cfg(unix)]
+    #[test]
+    fn a_state_folder_that_may_be_searched_and_not_listed_still_answers_its_records() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path();
+        let limited = home_path.join("limited");
+        let records = records_in(&limited);
+        std::fs::create_dir_all(&records).unwrap();
+        // Search without read: a name below it resolves, its own entries do
+        // not list, the way the sandbox's rules leave the state folder.
+        std::fs::set_permissions(&limited, std::fs::Permissions::from_mode(0o111)).unwrap();
+        let listed = std::fs::read_dir(&limited).is_ok();
+        let answer = records_folder_of(home_path, &limited);
+        std::fs::set_permissions(&limited, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // An account that may list it anyway (root) cannot meet the refused
+        // listing at all, and is told so rather than counted as proof.
+        if listed {
+            eprintln!(
+                "not proved here: this account may list a mode 111 folder, so the search-without-\
+                 listing case is unproven in this run"
+            );
+        }
+        assert_eq!(answer.expect("the records folder is answered"), records);
     }
 
     /// The one rule a hook and the daemon that reads what it wrote both
