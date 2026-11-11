@@ -504,10 +504,8 @@ pub enum AdmitRefusal {
     Fault(&'static str),
 }
 
-/// The refusal of an archive whose every record is still in use (archiving,
-/// resuming, deleting, or needed by an open mission or a waiting plan), so
-/// none could make room.
-pub const ARCHIVE_FULL: &str = "The archive is full and every archived session is still in use, so none could make room. Nothing was closed.";
+/// Protected sessions leave too little room for the incoming record.
+pub const ARCHIVE_FULL: &str = "The archive is full and cannot make enough room while sessions are still in use. Nothing was closed.";
 
 /// One archived root as the 태스크 list and the record draw it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
