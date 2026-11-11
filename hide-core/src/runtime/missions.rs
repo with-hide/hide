@@ -2180,21 +2180,13 @@ impl Runtime {
             }
             MissionCommand::Show { mission, node } => {
                 let ledger = self.delivery_state().ok();
-                // A shelved mission is shown from its file, as it was read.
-                let shelved = match (&mission, visiting) {
-                    (Some(id), Some(read)) if self.missions.book.shelf(id).is_some() => Some(
-                        read.map_err(|reason| self.shelved_unreadable(id, &reason))?
-                            .mission,
-                    ),
-                    _ => None,
-                };
                 let (id, node, caller) = match mission {
                     Some(id) => (
                         self.missions
                             .book
                             .get(&id)
-                            .or(shelved.as_ref())
                             .map(|mission| mission.id.clone())
+                            .or_else(|| self.missions.book.shelf(&id).map(|line| line.id.clone()))
                             .ok_or("mission_unknown")?,
                         node,
                         None,
@@ -2208,6 +2200,17 @@ impl Runtime {
                         let (id, node) = self.shown_mission(&caller, node)?;
                         (id, node, Some(caller))
                     }
+                };
+                // Resolve node-key precedence before using an off-lock shelf read.
+                let shelved = if self.missions.book.shelf(&id).is_some() {
+                    Some(
+                        visiting
+                            .ok_or("mission_unavailable")?
+                            .map_err(|reason| self.shelved_unreadable(&id, &reason))?
+                            .mission,
+                    )
+                } else {
+                    None
                 };
                 // One pass over the ledger's agents serves the view and both
                 // letter lists: the one that found the caller's mission, else
@@ -2337,9 +2340,9 @@ impl Runtime {
         let taken = self.mission_meant(caller);
         if let Some(key) = &node
             && !matches!(&taken, Ok(Some(mission)) if mission.node(key).is_some())
-            && let Some(named) = self.missions.book.get(key)
+            && (self.missions.book.get(key).is_some() || self.missions.book.shelf(key).is_some())
         {
-            return Ok((named.id.clone(), None));
+            return Ok((key.clone(), None));
         }
         let mission = taken?.ok_or("mission_none")?;
         Ok((mission.id.clone(), node))
@@ -2401,9 +2404,7 @@ impl Runtime {
         command: &MissionCommand,
     ) -> Option<crate::mission_store::ShelfRead> {
         let (id, history) = match command {
-            MissionCommand::Show {
-                mission: Some(id), ..
-            } => (id, false),
+            MissionCommand::Show { mission, node } => (mission.as_ref().or(node.as_ref())?, false),
             MissionCommand::Reopen { mission: Some(id) } => (id, true),
             _ => return None,
         };

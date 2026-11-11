@@ -10883,6 +10883,9 @@ fn a_129th_mission_is_created_and_a_shelved_mission_is_found_shown_and_reopened(
     };
     let (shown, _) = execute("sender", json!({"op": "show", "mission": "mission-1"})).unwrap();
     assert_eq!(shown["mission"]["title"], "Work 1");
+    let (positional, _) = execute("sender", json!({"op": "show", "node": "mission-1"})).unwrap();
+    assert_eq!(positional["mission"]["id"], "mission-1");
+    assert_eq!(positional["mission"]["title"], "Work 1");
     assert!(
         fixture
             .runtime
