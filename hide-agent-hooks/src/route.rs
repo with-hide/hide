@@ -612,7 +612,7 @@ mod tests {
         // folder. A run whose account may read its own locked folder cannot
         // see this failure at all, and the test says so rather than passing
         // for the wrong reason: the check that proves it for a real caller is
-        // `records_route::a_route_that_cannot_be_read_is_the_readers_own_error`.
+        // `records_route::each_way_a_state_route_fails_is_the_diagnosiss_own_error_and_never_the_accounts_folder`.
         let locked = home_path.join("locked");
         std::fs::create_dir_all(&locked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();

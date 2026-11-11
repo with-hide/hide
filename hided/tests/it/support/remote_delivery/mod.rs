@@ -240,8 +240,14 @@ pub fn hook_diagnostics(environment: &Environment) -> String {
         environment.var("HIDE_STATE_DIR").as_deref(),
         environment.var("XDG_STATE_HOME").as_deref(),
     );
-    let records = hide_agent_hooks::route::records_of_state(&environment.home, Some(&state), None)
-        .unwrap_or_else(|_| hide_agent_hooks::route::account_records(&environment.home));
+    // A records folder that does not read is that answer, never the account's
+    // folder: a record read past a refusal would be one this run's daemon
+    // never wrote (docs/agent-hooks.md, Where the hooks keep their records).
+    let records =
+        match hide_agent_hooks::route::records_of_state(&environment.home, Some(&state), None) {
+            Ok(records) => records,
+            Err(error) => return format!("the records folder could not be read: {error}"),
+        };
     find(&records, 2)
         .or_else(|| find(&environment.home.join(".hide"), 4))
         .map_or_else(
