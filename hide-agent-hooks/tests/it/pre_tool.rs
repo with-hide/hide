@@ -251,9 +251,13 @@ impl Machine {
         }
     }
 
+    /// The hooks' records folder of the daemon this machine stands in for.
+    pub(crate) fn records(&self) -> PathBuf {
+        self.daemon.records()
+    }
+
     pub(crate) fn guard_log(&self) -> String {
-        std::fs::read_to_string(self.home.join(".hide/agent-hooks/spawn-guard.log"))
-            .unwrap_or_default()
+        std::fs::read_to_string(self.records().join("spawn-guard.log")).unwrap_or_default()
     }
 
     pub(crate) fn reason(&self, run: &Run) -> String {

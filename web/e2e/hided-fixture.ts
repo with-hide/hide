@@ -126,6 +126,16 @@ export async function startHided(engine: DaemonEngine, label = "s2", homeOverrid
   return daemon;
 }
 
+/**
+ * Where `daemon`'s hooks keep their records (`hide_agent_hooks::route::records_root`): the account's
+ * `~/.hide/agent-hooks` while the daemon runs on the account's own state folder, and `<state>/agent-hooks` for a daemon
+ * whose state folder is elsewhere, as a fixture's is (docs/agent-hooks.md, Where the hooks keep their records).
+ */
+export function hookRecords(daemon: Pick<Daemon, "home" | "stateDir">): string {
+  const account = path.join(daemon.home, ".hide", "agent-hooks");
+  return daemon.stateDir === path.join(daemon.home, ".hide", "state") ? account : path.join(daemon.stateDir, "agent-hooks");
+}
+
 /** Where the daemon keeps Hide AI's choice under a home: the platform's state folder, `hide/ai.json`. */
 /**
  * The same daemon started again as on a first run, with no Workspace in

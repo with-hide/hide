@@ -717,7 +717,7 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_home: Some(home.clone()),
+            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
             windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
@@ -877,7 +877,7 @@ fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_home: Some(home.clone()),
+            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
             windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
@@ -1338,7 +1338,7 @@ fn resumes_through_the_nodes_file(shell: &str) {
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_home: Some(home.clone()),
+            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::new(AnsweringStart {
                 node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
                 program: "standin",
@@ -1500,7 +1500,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_home: Some(home.clone()),
+            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
             windows: false,
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),

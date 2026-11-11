@@ -30,7 +30,7 @@ use std::time::Instant;
 
 use hide_shell::{Syntax, command_words, simple_commands};
 
-use crate::hook_log::{append_line, log_path, now_ms};
+use crate::hook_log::{append, now_ms};
 use crate::pre_tool::Registration;
 
 /// What Hide's View shows a target as, and so which `hide` command shows it.
@@ -525,7 +525,7 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, openings: &[Openin
     })
     .to_string();
     eprintln!("{line}");
-    let _ = append_line(&log_path(home), &line);
+    append(home, &line);
 }
 
 /// The opener guard's decision for one shell call made in the pane `pane`,
@@ -864,7 +864,8 @@ mod tests {
             Syntax::Posix,
         );
         record_refusal(home.path(), "codex", "w1:p2", &openings);
-        let text = std::fs::read_to_string(log_path(home.path())).unwrap();
+        let text =
+            std::fs::read_to_string(crate::hook_log::log_path(home.path()).unwrap()).unwrap();
         let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(line["kind"], "opener.refused");
         assert_eq!(line["pane"], "w1:p2");

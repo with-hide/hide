@@ -740,7 +740,7 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>, refusal: &
         "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
+    crate::hook_log::append(home, &line);
 }
 
 /// A shell call named more words than the files protection checks, so the
@@ -754,7 +754,7 @@ fn record_word_limit(home: &Path) {
             "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
+        crate::hook_log::append(home, &line);
     }
 }
 
@@ -771,7 +771,7 @@ pub fn record_unreadable(home: &Path, runtime: &str, failure: PolicyFailure) {
             "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
+        crate::hook_log::append(home, &line);
     }
 }
 
@@ -791,7 +791,7 @@ pub fn record_failure(home: &Path, runtime: &str, cause: &str) {
             "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
+        crate::hook_log::append(home, &line);
     }
 }
 

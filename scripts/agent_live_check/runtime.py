@@ -84,10 +84,20 @@ PRIVATE_ENV = frozenset(("PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", 
 def clean_env(*, private=False) -> dict[str, str]:
     if private:
         return {key: value for key, value in os.environ.items() if key in PRIVATE_ENV}
+    # `ANTHROPIC_*` goes whole, not only the provider keys: a Claude Code run
+    # under a gateway profile carries `ANTHROPIC_BASE_URL` and a model name
+    # beside the token, and with the token stripped the CLI sends the
+    # gateway's model to the gateway and answers 401 instead of using the
+    # account's own login. Measured on this Mac 2026-11-11: with those three
+    # removed `claude -p` succeeds, and with either left the same CLI answers
+    # `401 Invalid or missing API key`, so the journey measured a signed-out
+    # CLI rather than the agent's own login. The same holds for
+    # `CLAUDE_CODE_*`: a child session's socket, entry point and model are the
+    # operator's toolbar, not the agent's.
     return {key: value for key, value in os.environ.items()
-            if not key.startswith(("HERDR_", "HIDE_", "HCOORD_"))
+            if not key.startswith(("HERDR_", "HIDE_", "HCOORD_", "ANTHROPIC_", "CLAUDE_"))
             and not key.endswith("_API_KEY") and key not in PROVIDER_KEYS
-            and key not in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR",
+            and key not in ("CODEX_HOME", "PI_CODING_AGENT_DIR",
                             "PI_CODING_AGENT_SESSION_DIR", "OPENCODE_CONFIG",
                             "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "PI_CONFIG_DIR",
                             "GROK_HOME", "GROK_CONFIG_DIR", "CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
