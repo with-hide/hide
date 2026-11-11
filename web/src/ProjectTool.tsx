@@ -152,7 +152,7 @@ function Counts({ project, status, actions }: { project: Workspace; status: Proj
   if (missed > 0) {
     items.push(
       <Hint key="missed" label={t("projectTool.sessions.missedHint")}>
-        <Button variant="text" size="inline" className="text-caption text-warning hover:text-warning" onClick={() => actions.openProjectMissed(project.device_id, project.id)} data-project-count="missed" data-count-value={missed}>
+        <Button variant="text" size="inline" className="text-caption text-missed hover:text-missed" onClick={() => actions.openProjectMissed(project.device_id, project.id)} data-project-count="missed" data-count-value={missed}>
           {t("projectTool.sessions.missed", { count: missed })}
         </Button>
       </Hint>,

@@ -693,7 +693,9 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
 
 /**
  * An open problem or follow-up (PRD overview-device-tasks B43-B46; PRD
- * session-record-goal-flow D-13): one warning line with `백로그로 · 무시` at its
+ * session-record-goal-flow D-13): one line led by its kind in the missed-work
+ * colour (`--missed`), never the warning colour a Needs You ask wears, with
+ * `백로그로 · 무시` at its
  * end. `백로그로` makes the item at once in the project the session works in
  * and shows `만드는 중` meanwhile; the line then leaves, as one dismissed does.
  * A failure keeps the line with its reason and a retry that converges on one
@@ -718,8 +720,8 @@ function MissedLine({ missed, session, cwd, actions, className }: { missed: Miss
   };
   const small = "h-auto shrink-0 px-xs py-0 text-micro";
   return <div className={cn("flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xs border-b border-border py-sm last:border-b-0", className)} data-missed-work={missed.id}>
-    <span className={cn("inline-flex shrink-0 items-center gap-xxs text-micro", missed.kind === "problem" ? "text-warning" : "text-muted-foreground")}>
-      {missed.kind === "problem" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <LightbulbIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+    <span className="inline-flex shrink-0 items-center gap-xxs text-micro text-missed" data-missed-kind={missed.kind}>
+      {missed.kind === "problem" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : missed.kind === "ask" ? <CircleHelpIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <LightbulbIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
       {t(`sessionWork.kind.${missed.kind}`)}
     </span>
     <span className="min-w-0 flex-1 basis-1/2 whitespace-normal text-foreground [overflow-wrap:anywhere]" title={missed.text}>{missed.text}</span>

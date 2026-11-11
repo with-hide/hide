@@ -984,7 +984,7 @@ The left of the screen is state and the middle is work under way; this column is
 Under the head one line counts `세션 N · PR N · 워크트리 N` (B1, B2).
 세션 turns the sidebar to 태스크 narrowed to the project, PR to the PR list narrowed the same way, and 워크트리 opens the worktree table in the viewing column, reading pressed while the table shows, when a second press folds it.
 A project with no GitHub remote has no PR item, and after a failed read a ⚠ and the last read's age stand beside its number (B3).
-While Hide AI's summaries are on and the project has open missed work, `놓친 일 N` in the warning colour ends the line and opens the Overview's backlog with the project's 놓친 일 unfolded (B4).
+While Hide AI's summaries are on and the project has open missed work, `놓친 일 N` in the missed-work colour (`--missed`) ends the line and opens the Overview's backlog with the project's 놓친 일 unfolded (B4).
 A number is a quiet bar until the core has answered, and a 0 is drawn as 0 (B5).
 
 `흘린 것 N` lists the worktrees where work ended unfinished: changes not committed, commits not pushed, or a pull request whose CI failed, where no agent works or waits on the operator (B6, B7).
@@ -1346,7 +1346,7 @@ A project's source defaults to GitHub when its repository reads as a GitHub repo
 The core hands the web a source-neutral task (the id the source shows, URL, title, open or closed, labels, when it was made and last changed), so no view reads a GitHub shape, and a new source is one more adapter in `hide-core/src/tasks.rs`.
 A GitHub project can therefore keep Local issues beside its GitHub issues.
 
-Above the projects, while the device has open missed work and Hide AI's summaries are on, one folded line `놓친 일 N ›` in the warning colour gathers it (PRD sidebar-task-lens D-52, B52).
+Above the projects, while the device has open missed work and Hide AI's summaries are on, one folded line `놓친 일 N ›` in the missed-work colour (`--missed`) gathers it (PRD sidebar-task-lens D-52, B52); missed work never takes the warning colour, which marks only an agent that waits on the operator now, and the same colour marks each item's kind, the Project tool's `놓친 일 N` and a backlog item made from missed work.
 It opens in place to every open missed item of the device's sessions, live or ended, newest first: the missed sentence with `백로그로 · 무시`, and under it the session's title and the item's kind, which open that session's record in the panel; the questions an agent asked the operator are not missed work and stay in that session's `나를 기다리는 것` (PRD session-record-goal-flow D-12, D-13).
 With no open missed item, or with summaries off, the line is not drawn.
 
