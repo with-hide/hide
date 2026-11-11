@@ -11,8 +11,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // The notification center's delegate and the categories (and so the actions) a notification may carry are in
         // place before any notification is delivered, including the one that launches the app in the background.
         PushCenter.shared.install()
-        // A Reply typed on a notification is sent from here, with the app closed or in the background.
-        PushCenter.shared.actions = PushActions.live()
         return true
     }
 

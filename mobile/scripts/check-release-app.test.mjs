@@ -12,7 +12,6 @@ const expectFile = resolve(here, '../release-expect.json');
 const want = JSON.parse(readFileSync(expectFile, 'utf8'));
 
 const PAGE = '<html>app</html>';
-const DIGEST = 'f'.repeat(64);
 const APPEX = 'HideNotification.appex';
 const extension = want.appExtensions[0];
 let root;
@@ -23,7 +22,7 @@ const write = (path, content) => { mkdirSync(dirname(path), { recursive: true })
 /** A signed app as the build machine reads it, in the form check-release-app.sh takes: good until a test spoils one fact. */
 function fixture() {
   const app = join(root, 'Payload/App.app');
-  write(join(app, 'App'), `binary text BridgeGate hide-relay-ios-source:${DIGEST} more binary text`);
+  write(join(app, 'App'), 'binary text BridgeGate more binary text');
   write(join(app, 'PlugIns', APPEX, 'HideNotification'), 'extension code with only CryptoKit and Foundation');
   write(join(app, 'PlugIns', APPEX, 'PrivacyInfo.xcprivacy'), 'plist');
   write(join(app, 'PrivacyInfo.xcprivacy'), 'plist');
@@ -49,7 +48,7 @@ function fixture() {
   return app;
 }
 
-const run = (app, options = {}) => spawnSync('bash', [script, app, facts, options.expect ?? expectFile, join(root, 'manifest.json'), '1.2.5', '20261110120000', options.digest ?? DIGEST], { encoding: 'utf8' });
+const run = (app, options = {}) => spawnSync('bash', [script, app, facts, options.expect ?? expectFile, join(root, 'manifest.json'), '1.2.5', '20261110120000'], { encoding: 'utf8' });
 const edit = (name, change) => { const path = join(facts, name); const value = JSON.parse(readFileSync(path, 'utf8')); change(value); writeFileSync(path, JSON.stringify(value)); };
 
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'release-check-')); });
@@ -97,9 +96,6 @@ describe('the release gate on the signed app', () => {
     'a keychain group nobody listed': [(app) => edit('entitlements.json', (v) => { v['keychain-access-groups'].push('GH6F6ZA497.other'); }), 'entitlements differ'],
     'a background mode besides notifications': [(app) => edit('info.json', (v) => { v.UIBackgroundModes = ['remote-notification', 'fetch']; }), 'background mode'],
     'no background mode': [(app) => edit('info.json', (v) => { delete v.UIBackgroundModes; }), 'background mode'],
-    'a relay library from other sources': [(app) => write(join(app, 'App'), `BridgeGate hide-relay-ios-source:${'0'.repeat(64)}`), 'relay library'],
-    'a relay library built by hand': [(app) => write(join(app, 'App'), 'BridgeGate hide-relay-ios-source:unrecorded'), 'relay library'],
-    'no relay library': [(app) => write(join(app, 'App'), 'BridgeGate'), 'relay library'],
     'an extension that is missing': [(app) => rmSync(join(app, 'PlugIns', APPEX), { recursive: true }), 'different extensions'],
     'an extension nobody named': [(app) => write(join(app, 'PlugIns', 'Other.appex', 'Other'), 'x'), 'different extensions'],
     'an extension of another bundle id': [(app) => edit(`appex/${APPEX}/info.json`, (v) => { v.CFBundleIdentifier = 'me.grab.hide.ios.other'; }), `${APPEX}: bundle id`],
@@ -131,13 +127,6 @@ describe('the release gate on the signed app', () => {
       expect(result.stdout).not.toContain('release checks passed');
     });
   }
-
-  it('refuses a release that is given no relay source digest to check the library against', () => {
-    const app = fixture();
-    const result = spawnSync('bash', [script, app, facts, expectFile, join(root, 'manifest.json'), '1.2.5', '20261110120000'], { encoding: 'utf8' });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('no relay source digest');
-  });
 
   it('holds the entitlements to the list a node extends', () => {
     const app = fixture();

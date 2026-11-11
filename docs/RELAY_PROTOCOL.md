@@ -240,25 +240,17 @@ When no key is left the app also unregisters from Apple (`unregisterForRemoteNot
 A computer removed while it is offline keeps sending until Apple reports the token gone or someone unpairs the phone on the computer; the phone has no key for it by then, so only the fixed text appears.
 Hiding even that would need Apple's notification-filtering entitlement, which the app does not ask for.
 
-### Replying from a notification
+### Notification taps and older reply clients
 
-A question notice (`ask.kind` is `question`) carries a Reply action, which asks for Face ID or the passcode first (`authenticationRequired`): the pairing credential is readable only while the phone is unlocked, and that class is never lowered for this.
-The notice's encrypted JSON carries `ask {kind, turn}` for a notice that sends the person to an agent waiting on a question or an approval: `turn` is the agent's last change of state in Unix milliseconds, as a decimal string.
-An approval notice has no action: a tap opens the agent, and the person approves there.
-The action runs in the app's own process (launched in the background if it was gone), over a relay connection of its own: join the room, the Noise handshake, `{client_kind: "phone", token}`, wait for `hello`, send `input {request_id, device_id, pane_id, text, turn}`, wait for `input_result`.
-The connection is made with the relay protocol library (`hide-relay-ios`, the same Rust code as the web app's WebAssembly, behind a C interface), and the app refuses a computer whose `phone_protocol` is not the one it speaks.
-`input` with a `turn` is answered `stale` unless the agent is still waiting on a question or an approval and its `changed_at_unix_ms` is that turn, so a Reply written for one question can never type into a later prompt.
-`input` without a `turn` is the phone screen's own and is unchanged.
-The request id is a hash of the notification's id and the action, so a repeat of the same action is the same request: hided's claim on the id answers a repeat `ok` without writing the reply again, and `uncertain` is told as such and never sent again.
-Known limitation: hided keeps its claims on request ids in memory only, so a repeat of an action that arrives right after hided restarted is no longer recognized and its `turn` is checked as new, usually answering `stale`.
-Delivery is proved only by `input_result {ok: true}`, the same proof the phone screen uses.
-A reply has three ends and one rule decides them (`ReplyRule`): not sent only when the failure is certain to have come before anything was handed to the connection; sent only when `input_result` says `ok: true`; and not confirmed for every other end, such as a peer that left after the send, an answer that could not be read, the deadline or a closed socket.
-The text goes back to the reply box only for an end that certainly wrote nothing (not sent, a refusal as unknown, `stale`, `gone`, another `ok: false`), never for a reply that most likely arrived.
-hided answers a request id it already holds before it judges the agent, the ask or the text again, so a written reply that is sent again after the agent moved on, or its pane closed, is answered `ok` and written once.
-Before sending, the app schedules a local notice for about 40 seconds later (`Could not confirm your reply reached the computer`), which a definitive answer cancels or replaces by the exact outcome: not sent, no longer waiting (`stale`), update Hide on the computer (`refused_request`), or could not confirm.
-It fires even when the app was ended in the middle of the send.
-The text of a reply that did not arrive is kept for one hour in the app's own Keychain group and put back in the reply box when the notice of that agent is opened; it is never logged.
-iOS gives an action only a short time (about 30 seconds in practice, not stated in Apple's documents); what a real phone allows is measured on a phone, not on the simulator.
+The iOS app offers no notification actions: a tap opens the named conversation, where the person can reply.
+The encrypted notification still carries `ask {kind, turn}` for older phones that offer Reply.
+`turn` is the agent's last change of state in Unix milliseconds, as a decimal string.
+The computer retains `input` with a `turn` for those older phones: it answers `stale` unless the agent is still waiting on a question or an approval and its `changed_at_unix_ms` matches.
+This prevents a reply written for one question from typing into a later prompt.
+`input` without a `turn` remains the conversation's own input.
+The computer's request-id claims are shared by those clients and the in-app conversation, so a confirmed write is answered `ok` without being written twice, and an ambiguous write is answered `uncertain`.
+The claims live in memory only, so a repeat right after the computer restarts is checked as new.
+These wire fields and checks remain compatibility paths; the current iOS app has no native reply sender, reply ledger or held replies.
 
 ### Compatibility and deploy order
 

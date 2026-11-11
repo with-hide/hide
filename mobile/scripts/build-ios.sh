@@ -26,8 +26,7 @@
 #          app in a simulator of its own runs each shot of mobile/store/shots.json in demo mode (fixed status bar and clock,
 #          the simulator in the shot's language), and the raw captures come back here to be framed with their headlines
 #          by mobile/scripts/store-shots.mjs into 1206x2622 PNGs without alpha: HIDE_STORE_SHOTS_OUT=<folder>, default
-#          agents/runs/ios-mission/store-assets/ (never committed). No tests run; HIDE_IOS_SKIP_PHONE_BUILD and
-#          HIDE_IOS_SKIP_RELAY_BUILD work as for `build`
+#          agents/runs/ios-mission/store-assets/ (never committed). No tests run; HIDE_IOS_SKIP_PHONE_BUILD works as for `build`.
 #   clean  delete that simulator and this branch's whole folder on the mini
 #
 # Every command ends what it started on the mini: its simulator is shut down and deleted, on any way out (the pairing
@@ -41,8 +40,6 @@
 #
 # HIDE_IOS_BUILD_HOST     ssh name of the build machine (default: mini)
 # HIDE_IOS_SKIP_PHONE_BUILD=1   (build only) reuse web/phone-dist instead of building it (it needs the Rust wasm toolchain)
-# HIDE_IOS_SKIP_RELAY_BUILD=1   (build only) reuse mobile/ios/relay (the relay protocol library for the two iOS targets) instead of
-#                        building it (scripts/build-relay-ios.sh; it needs the rustup targets on this Mac, never the mini)
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -80,9 +77,6 @@ case "$command" in
         fi
         if [[ "${HIDE_IOS_SKIP_PHONE_BUILD:-}" != 1 ]]; then
             bash scripts/verify-web.sh web build:phone
-        fi
-        if [[ "${HIDE_IOS_SKIP_RELAY_BUILD:-}" != 1 ]]; then
-            bash scripts/build-relay-ios.sh
         fi
         node mobile/scripts/check-versions.mjs
         # A running release owns the machine's release folders: a build of its branch would copy a project under its
@@ -131,9 +125,6 @@ if [[ "$command" == release ]]; then
     trap 'rm -rf "$inputs"' EXIT
     node mobile/scripts/bundle-manifest.mjs "$inputs/bundle-manifest.json"
     cp mobile/release-env.json mobile/release-expect.json mobile/scripts/check-release-app.sh "$inputs/"
-    # The digest of the relay protocol sources of this checkout, taken now and not from the library's own folder: the
-    # release check compares it with the one inside the signed app, so a library built from other sources is refused.
-    bash scripts/build-relay-ios.sh --digest > "$inputs/relay-source.txt"
     rsync -a --delete "$inputs/" "$host:$remote/release-inputs/"
     # The time is taken here, after the tests, so the number is as close to the upload as the command can make it.
     read -r version build < <(node mobile/scripts/release-version.mjs)

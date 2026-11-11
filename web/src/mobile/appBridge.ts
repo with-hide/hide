@@ -114,11 +114,6 @@ export const push = {
     return typeof answer.room === "string" && typeof answer.device_id === "string" && typeof answer.pane_id === "string"
       ? { room: answer.room, deviceId: answer.device_id, paneId: answer.pane_id } : null;
   },
-  /** The text of a reply to this agent that did not arrive (kept an hour), once, to put back in the box it was typed in. */
-  async takeReply(room: string, key: { device_id: string; pane_id: string }): Promise<string | null> {
-    const answer = await bridge().nativePromise("HidePush", "takeReply", { room, device_id: key.device_id, pane_id: key.pane_id }) as { found?: boolean; text?: unknown };
-    return answer.found && typeof answer.text === "string" ? answer.text : null;
-  },
   /** The demo's sample notification: a local one, with no token, key or network, worded by the app from a real notice's fields. */
   async demoSample(words: { title: string; status_code: string; state: string; detail: string; place: string }): Promise<void> {
     await bridge().nativePromise("HidePush", "demoSample", { words });

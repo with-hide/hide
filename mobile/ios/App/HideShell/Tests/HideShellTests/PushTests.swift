@@ -89,16 +89,11 @@ final class PushTests: XCTestCase {
         #endif
     }
 
-    /// The Reply action is the only one, it asks for Face ID or the passcode first, and it takes text; a notification that is
-    /// not a question has no action.
-    func testTheCategoriesOfferOnlyAReplyThatNeedsAnUnlock() throws {
+    func testNewAndAlreadyDeliveredNotificationsOfferNoActions() throws {
         let categories = Dictionary(uniqueKeysWithValues: PushCategories.all().map { ($0.identifier, $0) })
-        XCTAssertEqual(Set(categories.keys), [NoticeCategory.reply, NoticeCategory.open])
-        XCTAssertTrue(try XCTUnwrap(categories[NoticeCategory.open]).actions.isEmpty)
-        let actions = try XCTUnwrap(categories[NoticeCategory.reply]).actions
-        XCTAssertEqual(actions.map(\.identifier), [PushCategories.replyAction])
-        XCTAssertTrue(actions[0].options.contains(.authenticationRequired))
-        XCTAssertFalse(actions[0].options.contains(.foreground), "the app does not open")
-        XCTAssertTrue(actions[0] is UNTextInputNotificationAction)
+        XCTAssertEqual(Set(categories.keys), [NoticeCategory.open, "hide.reply"])
+        for category in categories.values {
+            XCTAssertTrue(category.actions.isEmpty, "a notification opens its conversation; it offers no Reply action")
+        }
     }
 }
