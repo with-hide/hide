@@ -1595,6 +1595,98 @@ fn a_done_nodes_merged_worktree_is_retired_only_on_githubs_answer_and_with_the_s
     assert!(targets(&mut runtime, github(merged(), false)).is_empty());
 }
 
+/// A mission whose node `fix` is a done direct change on branch `fix`,
+/// read in the destination at `HEAD` when `landed`.
+fn done_direct(runtime: &mut Runtime, landed: bool) {
+    command(runtime, "sender", json!({"op": "create", "title": "Fix"})).unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "direct"},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "branch": "fix"}}),
+    )
+    .unwrap();
+    if landed {
+        let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+        node.in_main = Some(crate::missions::Landed {
+            branch: "fix".into(),
+            commit: HEAD.into(),
+        });
+    }
+}
+
+/// The fixture mission's first node.
+fn first_node(runtime: &mut Runtime) -> &mut crate::missions::MissionNode {
+    &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0]
+}
+
+/// PRD mission-destination D-48, B51: with the switch on, a done direct
+/// change's worktree is retired once Hide read its branch in the
+/// destination, with no GitHub answer needed; not before, not for a branch
+/// it no longer names, not while it works again, and nothing while the
+/// switch is off.
+#[test]
+fn a_direct_changes_worktree_is_retired_once_its_branch_is_read_in_the_destination() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_direct(&mut runtime, false);
+    assert!(runtime.github.projects.is_empty(), "no GitHub answer at all");
+    assert!(runtime.mission_cleanup_targets().is_empty(), "not read in yet");
+
+    first_node(&mut runtime).in_main = Some(crate::missions::Landed {
+        branch: "fix".into(),
+        commit: HEAD.into(),
+    });
+    assert_eq!(runtime.mission_cleanup_targets(), [merged_fix()]);
+
+    // A branch the node no longer names was read for another.
+    first_node(&mut runtime).branch = Some("fix-2".into());
+    assert!(runtime.mission_cleanup_targets().is_empty());
+    first_node(&mut runtime).branch = Some("fix".into());
+
+    runtime.snapshot.ui_state.conductor_settings.clean_merged = false;
+    assert!(runtime.mission_cleanup_targets().is_empty(), "switched off");
+    runtime.snapshot.ui_state.conductor_settings.clean_merged = true;
+
+    first_node(&mut runtime).status = NodeStatus::Working;
+    assert!(runtime.mission_cleanup_targets().is_empty(), "back at work");
+}
+
+/// B51: a direct change's worktree that holds changes stays for the run;
+/// one an agent or a program is in stays and is tried again.
+#[test]
+fn a_direct_changes_worktree_in_use_is_tried_again_and_one_with_changes_is_kept() {
+    use crate::runtime::worktree_retire::{Kept, Outcome, Retirement};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_direct(&mut runtime, true);
+    for (outcome, again) in [
+        (Outcome::Kept(Kept::AgentInside), true),
+        (Outcome::Kept(Kept::ProgramRunning), true),
+        (Outcome::Kept(Kept::Uncommitted), false),
+    ] {
+        let retirement = Retirement {
+            path: Some(format!("{PROJECT}-fix")),
+            outcome: outcome.clone(),
+        };
+        runtime.note_mission_cleanup(vec![(merged_fix(), retirement)], false);
+        assert_eq!(
+            runtime.mission_cleanup_targets() == [merged_fix()],
+            again,
+            "{outcome:?}"
+        );
+    }
+}
+
 /// A worktree kept for what the operator settles (changes) is not tried
 /// again this run; one kept for an agent or a program, or refused, is
 /// tried again on the next pass.
