@@ -571,7 +571,8 @@ const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// and once more when the store stops, so a disk that recovers loses
 /// nothing; the book is not written while a history is failing. Each
 /// failure is logged once until a write succeeds. What it holds is one log
-/// per mission and one book, so a failing disk grows nothing.
+/// per loaded mission and one latest book; shelved bodies awaiting a save
+/// remain owned here until the disk takes them.
 fn run(
     shared: &(Mutex<Pending>, Condvar),
     dir: &Path,

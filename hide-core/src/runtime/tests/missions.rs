@@ -10875,12 +10875,8 @@ fn a_129th_mission_is_created_and_a_shelved_mission_is_found_shown_and_reopened(
     }
     let execute = |pane: &str, value: Value| {
         let command: MissionCommand = serde_json::from_value(value).unwrap();
-        let read = fixture
-            .runtime
-            .lock()
-            .unwrap()
-            .shelved_files(&command)
-            .map(|read| read.read());
+        let read = fixture.runtime.lock().unwrap().shelved_files(&command);
+        let read = read.map(|read| read.read());
         let actor = Actor {
             pane_id: pane.into(),
             name: pane.into(),
@@ -10909,7 +10905,7 @@ fn a_129th_mission_is_created_and_a_shelved_mission_is_found_shown_and_reopened(
             .is_none()
     );
     assert_eq!(
-        execute("receiver", json!({"op": "reopen", "mission": "mission-1"})).unwrap_err(),
+        execute("recipient", json!({"op": "reopen", "mission": "mission-1"})).unwrap_err(),
         "mission_not_conductor"
     );
     {
