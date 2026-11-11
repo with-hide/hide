@@ -267,6 +267,7 @@ fn mission(
         device_id: crate::node::TEST_NODE.into(),
         status: MissionStatus::Running,
         scope: MissionScope::Pr,
+        destination: None,
         cap: 2,
         exempt: false,
         strength: None,

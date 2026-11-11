@@ -57,6 +57,11 @@ pub struct MissionView {
     pub device_id: String,
     pub status: MissionStatus,
     pub scope: MissionScope,
+    /// The branch the mission's results go to (`Mission::destination`);
+    /// absent for a mission that records none, whose destination is the
+    /// project's default branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub cap: u8,
     /// Made before node criteria: its nodes show their sentence only and
     /// nothing is gated (PRD mission-map-git-criteria B23).
@@ -581,6 +586,11 @@ pub(crate) struct SpawnWorker<'a> {
 pub struct MissionAdmission {
     pub mission: String,
     pub cap: u8,
+    /// The mission's destination, where a new worktree of its starts (PRD
+    /// mission-destination D-04); none for a mission that records none,
+    /// which starts from the branch the repository's own folder has out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     /// The registrations closed now, which Reopen closed holds and which
     /// hold no place under the cap (`closed_registrations.rs`).
     #[serde(default)]
@@ -1802,6 +1812,8 @@ impl Runtime {
                 if !(1..=crate::missions::CAP_LIMIT).contains(&cap) {
                     return Err("mission_cap_out_of_range".into());
                 }
+                let destination =
+                    self.checkout_destination(device, &project, &context.checkout_path);
                 let id = self.missions.book.allocate();
                 let mission = Mission {
                     id: id.clone(),
@@ -1813,6 +1825,7 @@ impl Runtime {
                     conductor: self.conductor_of(device, &pane, actor),
                     status: MissionStatus::Planning,
                     scope: scope.unwrap_or(settings.default_scope),
+                    destination,
                     cap,
                     candidates: settings.candidates.clone(),
                     strength: Some(settings.default_strength),
@@ -2310,17 +2323,21 @@ impl Runtime {
                 let mut shown = json!(view);
                 self.name_worker_items(mission, &view, &mut shown);
                 let node = mission.node(&key).ok_or("mission_node_unknown")?;
-                Ok((
-                    json!({
-                        "mission_id": id,
-                        "node": shown,
-                        "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
-                        "checker_letters": ledger
-                            .as_deref()
-                            .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
-                    }),
-                    false,
-                ))
+                let mut answer = json!({
+                    "mission_id": id,
+                    "node": shown,
+                    "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
+                    "checker_letters": ledger
+                        .as_deref()
+                        .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
+                });
+                // Where the node's change goes, which its worker reads here
+                // for its pull request's base; a mission that records none
+                // answers as it did.
+                if let Some(destination) = &mission.destination {
+                    answer["destination"] = json!(destination);
+                }
+                Ok((answer, false))
             }
             MissionCommand::List => {
                 let mut lines: Vec<_> = self
@@ -2888,6 +2905,22 @@ impl Runtime {
             .is_some_and(|node| node.hold.is_some())
     }
 
+    /// The branch a mission made in `checkout` of `project` sends its
+    /// results to (PRD mission-destination D-02, D-42): the branch that
+    /// checkout has out, as the worktree catalog last read it; for a
+    /// detached checkout, or one the catalog does not list, the project's
+    /// default branch; none while even that is not read, which stands for
+    /// the default branch whenever it is asked.
+    fn checkout_destination(&self, device: &str, project: &str, checkout: &str) -> Option<String> {
+        let listed = self.project_worktrees_on(device, project)?;
+        listed
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.path == checkout)
+            .and_then(|worktree| worktree.branch.clone())
+            .or_else(|| listed.base_branch.clone())
+    }
+
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
@@ -2930,6 +2963,7 @@ impl Runtime {
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
+            destination: mission.destination.clone(),
             closed: self.closed_registration_ids().into_iter().collect(),
         }))
     }
@@ -4119,6 +4153,7 @@ impl Runtime {
             device_id: mission.device_id.clone(),
             status: mission.status,
             scope: mission.scope,
+            destination: mission.destination.clone(),
             cap: mission.cap,
             exempt: mission.exempt,
             strength: mission.strength,

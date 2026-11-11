@@ -4301,6 +4301,7 @@ fn landing_ask(runtime: &Runtime, node: &str) -> crate::runtime::mission_outside
         node: node.into(),
         watch: Watch::Landing {
             branch: row.branch.clone(),
+            base: mission.destination.clone(),
             reopens: runtime.missions.outside.reopens_of("mission-1"),
             done: row.finished_at_unix_ms,
         },
@@ -4326,6 +4327,18 @@ fn answer(
 /// `recipient` and `b` on `feat/b` worked by `reviewer`, each done with its
 /// line met and waiting on its branch.
 fn waiting_on_branches(runtime: &mut Runtime) {
+    two_done_branches(runtime);
+    let (closed, _) = command(
+        runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+}
+
+/// The same mission still running, each change done with its line met.
+fn two_done_branches(runtime: &mut Runtime) {
     command(
         runtime,
         "sender",
@@ -4358,13 +4371,6 @@ fn waiting_on_branches(runtime: &mut Runtime) {
         )
         .unwrap();
     }
-    let (closed, _) = command(
-        runtime,
-        "sender",
-        json!({"op": "close", "end": "merge_wait"}),
-    )
-    .unwrap();
-    assert_eq!(closed["mission"]["status"], "merge_wait");
 }
 
 fn mission_status(runtime: &Runtime) -> MissionStatus {
@@ -12602,4 +12608,471 @@ fn replanning_keeps_existing_ended_or_missing_workers_and_checkers() {
                 .any(|checker| checker.agent_id.as_deref() == Some("agent-3"))
         );
     }
+}
+
+// PRD mission-destination: the branch a mission's results go to.
+
+/// The fixture's checkout as the worktree catalog read it: on `branch`
+/// (none when detached), in a project whose default branch is `default`.
+fn checkout_on(runtime: &mut Runtime, branch: Option<&str>, default: Option<&str>) {
+    let project = runtime
+        .worktree_catalog
+        .projects
+        .iter_mut()
+        .find(|project| project.root_path == PROJECT)
+        .unwrap();
+    project.base_branch = default.map(str::to_owned);
+    project.worktrees = vec![crate::model::WorktreeSnapshot {
+        path: PROJECT.into(),
+        branch: branch.map(str::to_owned),
+        is_main: true,
+        ..Default::default()
+    }];
+}
+
+/// B1, B3, B15: a mission records the branch its checkout is on when it is
+/// made, the project's default branch when that checkout is detached, and
+/// nothing while the project's branches were never read; `hide mission
+/// show` and the view name it, and a mission that records none publishes
+/// none, as one written before destinations does.
+#[test]
+fn a_mission_records_the_branch_its_checkout_is_on_as_its_destination() {
+    for (branch, default, expected) in [
+        (Some("feat/login"), Some("main"), Some("feat/login")),
+        (None, Some("main"), Some("main")),
+        (None, None, None),
+    ] {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        if branch.is_some() || default.is_some() {
+            checkout_on(&mut runtime, branch, default);
+        }
+        let (created, _) = command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        assert_eq!(
+            created["mission"].get("destination"),
+            expected.map(|name| json!(name)).as_ref(),
+            "{branch:?} {default:?}"
+        );
+        let view = runtime.mission_view_of("mission-1").unwrap();
+        assert_eq!(view.destination.as_deref(), expected);
+        let (shown, _) = command(
+            &mut runtime,
+            "sender",
+            json!({"op": "show", "mission": "mission-1"}),
+        )
+        .unwrap();
+        assert_eq!(
+            shown["mission"].get("destination"),
+            expected.map(|name| json!(name)).as_ref()
+        );
+        // The record keeps it, and one without it keeps no key for it.
+        let record = serde_json::to_value(&runtime.missions.book.missions[0]).unwrap();
+        assert_eq!(
+            record.get("destination"),
+            expected.map(|name| json!(name)).as_ref()
+        );
+    }
+}
+
+/// B5: a worker of the mission starts its worktree from the destination,
+/// which its admission carries off the lock; a mission that records none
+/// names none, so its worktree starts as it always did.
+#[test]
+fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from() {
+    for (branch, expected) in [(Some("feat/login"), Some("feat/login")), (None, None)] {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        if branch.is_some() {
+            checkout_on(&mut runtime, branch, Some("main"));
+        }
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        command(&mut runtime, "sender", plan()).unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        let admission = runtime
+            .mission_spawn_admission(
+                &fixture.conductor,
+                &worker(None, "codex", &Default::default()),
+                &mut None,
+                "plain",
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(admission.destination.as_deref(), expected);
+    }
+}
+
+/// A running mission of one direct change, `fix` on `feat/fix`, done.
+fn done_direct_change(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(runtime, "sender", direct_plan(None)).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "branch": "feat/fix"}}),
+    )
+    .unwrap();
+}
+
+fn direct_plan(destination: Option<&str>) -> Value {
+    let mut plan = json!({"op": "plan", "plan": {"nodes": [
+        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct", "criteria": ["it works"]},
+    ]}});
+    if let Some(destination) = destination {
+        plan["plan"]["destination"] = json!(destination);
+    }
+    plan
+}
+
+/// B2, D-03: the plan names another destination; what Hide read against
+/// the one before proves nothing for it, an answer asked before the change
+/// is dropped when it comes back, and a name Git would not take as one
+/// branch is refused with the destination kept.
+#[test]
+fn a_plan_names_another_destination_and_drops_what_was_read_against_the_one_before() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    checkout_on(&mut runtime, Some("main"), Some("main"));
+    done_direct_change(&mut runtime);
+    land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
+    assert_eq!(in_main(&node_view(&runtime, "fix")).as_deref(), Some(HEAD));
+    let asked_before = landing_ask(&runtime, "fix");
+
+    for name in ["-b", "release 1.3", "main..next", "HEAD", " "] {
+        assert_eq!(
+            command(&mut runtime, "sender", direct_plan(Some(name))).unwrap_err(),
+            "mission_destination_invalid",
+            "{name:?}"
+        );
+    }
+    // The same destination again changes nothing it read.
+    command(&mut runtime, "sender", direct_plan(Some("main"))).unwrap();
+    assert_eq!(in_main(&node_view(&runtime, "fix")).as_deref(), Some(HEAD));
+
+    let (planned, _) = command(&mut runtime, "sender", direct_plan(Some("release/1.3"))).unwrap();
+    assert_eq!(planned["mission"]["destination"], "release/1.3");
+    let fix = node_view(&runtime, "fix");
+    assert_eq!((fix.status, in_main(&fix)), (NodeStatus::Done, None));
+    answer(&mut runtime, asked_before, Found::InMain(Some(HEAD.into())));
+    assert_eq!(in_main(&node_view(&runtime, "fix")), None);
+    // A plan that names none keeps the one it has.
+    let (planned, _) = command(&mut runtime, "sender", direct_plan(None)).unwrap();
+    assert_eq!(planned["mission"]["destination"], "release/1.3");
+    land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
+    assert_eq!(in_main(&node_view(&runtime, "fix")).as_deref(), Some(HEAD));
+}
+
+/// A link that counts the refs each read resolves.
+struct Counting {
+    host: Host,
+    resolved: Mutex<Vec<String>>,
+}
+
+impl Counting {
+    /// How often the last reads resolved `name`, since the count was taken.
+    fn take(&self, name: &str) -> usize {
+        let mut resolved = self.resolved.lock().unwrap();
+        let count = resolved.iter().filter(|seen| *seen == name).count();
+        resolved.retain(|seen| seen != name);
+        count
+    }
+}
+
+impl crate::node_access::NodeLink for Counting {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        if let hide_node_link::protocol::Call::Git {
+            command: hide_node_link::git::GitCommand::RefCommit { name },
+            ..
+        } = &call
+        {
+            self.resolved.lock().unwrap().push(name.clone());
+        }
+        self.host.call(call, timeout)
+    }
+}
+
+/// A repository whose default branch is `trunk`, with `branches` cut from
+/// it, each but `trunk` holding one commit of its own, and `trunk` out.
+fn repository(branches: &[&str]) -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+    ] {
+        git_in(&repo, args);
+    }
+    for branch in branches {
+        git_in(&repo, &["checkout", "-q", "-b", branch, "trunk"]);
+        git_in(&repo, &["commit", "-q", "--allow-empty", "-m", branch]);
+    }
+    git_in(&repo, &["checkout", "-q", "trunk"]);
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+    (folder, repo, root)
+}
+
+/// Merges `branch` into `into` and leaves `trunk` out again.
+fn merge_into(repo: &std::path::Path, into: &str, branch: &str) {
+    git_in(repo, &["checkout", "-q", into]);
+    git_in(repo, &["merge", "-q", "--no-ff", "-m", branch, branch]);
+    git_in(repo, &["checkout", "-q", "trunk"]);
+}
+
+/// Makes the repository at `root`, whose default branch is `trunk`, the
+/// project of the fixture's mission.
+fn in_repository(runtime: &mut Runtime, root: &str) {
+    runtime.missions.book.missions[0].project = root.to_owned();
+    runtime
+        .worktree_catalog
+        .projects
+        .push(crate::model::ProjectWorktreesSnapshot {
+            root_path: root.to_owned(),
+            base_branch: Some("trunk".into()),
+            ..Default::default()
+        });
+}
+
+/// B7, B9, B10, B43: with a destination other than the default branch, a
+/// direct change is in once its branch is in the destination, never
+/// because it is in the default branch; an outside branch is still judged
+/// against the default branch; a done node stays done through every read;
+/// the mission closes as waiting while a branch is not in the destination
+/// and is done by itself once the last one is. Each base is resolved once a
+/// read, however many nodes are judged against it.
+#[test]
+fn a_mission_with_another_destination_lands_its_changes_there_and_outside_branches_in_the_default_branch()
+ {
+    let (_folder, repo, root) = repository(&["feat/x", "feat/a", "feat/b", "feat/lib"]);
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"destination": "feat/x", "nodes": [
+            {"key": "lib", "title": "The library branch", "kind": "external", "external": {"branch": "feat/lib"}},
+            {"key": "a", "title": "A", "kind": "change", "delivery": "direct", "criteria": ["a works"]},
+            {"key": "b", "title": "B", "kind": "change", "delivery": "direct", "criteria": ["b works"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(&mut runtime);
+    for node in ["a", "b"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "done", "branch": format!("feat/{node}")}}),
+        )
+        .unwrap();
+    }
+    in_repository(&mut runtime, &root);
+    let link = Counting {
+        host: Host(hide_host::serve::Env::standalone(Some(repo.clone()))),
+        resolved: Mutex::default(),
+    };
+    let device = crate::node::TEST_NODE;
+    let read = |runtime: &mut Runtime| {
+        runtime.read_outside_through(device, &root, &link);
+        // Two changes are judged against the destination, and the outside
+        // branch against the default branch until it is done: each base is
+        // resolved once.
+        for base in ["feat/x", "origin/feat/x"] {
+            assert_eq!(link.take(base), 1, "{base}");
+        }
+        let outside = usize::from(node_view(runtime, "lib").status != NodeStatus::Done);
+        for base in ["trunk", "origin/trunk"] {
+            assert!(link.take(base) <= outside.max(1), "{base}");
+        }
+        let landed = |key: &str| {
+            let node = node_view(runtime, key);
+            assert_eq!(node.status, NodeStatus::Done, "{key} stays done");
+            in_main(&node)
+        };
+        (
+            landed("a"),
+            landed("b"),
+            node_view(runtime, "lib").status,
+            mission_status(runtime),
+        )
+    };
+    let head = |branch: &str| git_in(&repo, &["rev-parse", branch]);
+    let (running, working) = (MissionStatus::Running, NodeStatus::Working);
+
+    assert_eq!(read(&mut runtime), (None, None, working, running));
+    // In the default branch is not in the destination.
+    merge_into(&repo, "trunk", "feat/a");
+    assert_eq!(read(&mut runtime), (None, None, working, running));
+    // An outside branch in the destination is not in the default branch.
+    merge_into(&repo, "feat/x", "feat/lib");
+    assert_eq!(read(&mut runtime), (None, None, working, running));
+    merge_into(&repo, "feat/x", "feat/a");
+    let a = Some(head("feat/a"));
+    assert_eq!(read(&mut runtime), (a.clone(), None, working, running));
+    merge_into(&repo, "trunk", "feat/lib");
+    assert_eq!(
+        read(&mut runtime),
+        (a.clone(), None, NodeStatus::Done, running)
+    );
+
+    // `b` is not in the destination yet, so the close waits on it alone.
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+    assert_eq!(closed["mission"]["landing_order"], json!(["b"]));
+    // The destination moving on takes nothing back.
+    git_in(&repo, &["checkout", "-q", "feat/x"]);
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "more"]);
+    git_in(&repo, &["checkout", "-q", "trunk"]);
+    assert_eq!(
+        read(&mut runtime),
+        (a.clone(), None, NodeStatus::Done, MissionStatus::MergeWait)
+    );
+    merge_into(&repo, "feat/x", "feat/b");
+    runtime.read_outside_through(device, &root, &link);
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert_eq!(
+        (
+            in_main(&node_view(&runtime, "a")),
+            in_main(&node_view(&runtime, "b"))
+        ),
+        (a, Some(head("feat/b")))
+    );
+}
+
+/// B8: a branch squashed into the destination is in by the head of the
+/// pull request GitHub merged into that branch; the same head merged into
+/// the default branch proves nothing for another destination.
+#[test]
+fn a_pull_request_squashed_into_the_destination_proves_its_branch_there() {
+    let (_folder, repo, root) = repository(&["feat/x", "feat/fix"]);
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_direct_change(&mut runtime);
+    command(&mut runtime, "sender", direct_plan(Some("feat/x"))).unwrap();
+    in_repository(&mut runtime, &root);
+    let host = Host(hide_host::serve::Env::standalone(Some(repo.clone())));
+    let device = crate::node::TEST_NODE;
+    let head = git_in(&repo, &["rev-parse", "feat/fix"]);
+    let merged_into = |runtime: &mut Runtime, base: &str| {
+        let mut merged = pull(7, &head, PullRequestBadge::Merged, None);
+        merged.base_branch = base.into();
+        runtime.github = GithubSnapshot {
+            projects: vec![GithubProjectSnapshot {
+                pull_requests_read: true,
+                root_path: root.clone(),
+                pull_requests: vec![merged],
+                ..Default::default()
+            }],
+        };
+        runtime.read_outside_through(device, &root, &host);
+        in_main(&node_view(runtime, "fix"))
+    };
+    assert_eq!(merged_into(&mut runtime, "trunk"), None);
+    assert_eq!(merged_into(&mut runtime, "feat/x"), Some(head.clone()));
+}
+
+/// B11: a destination Hide cannot find, locally or as last fetched, lands
+/// nothing: the node reads unread, with the reason naming the branch in the
+/// log, what was read before is not kept as proof, and Hide does not close
+/// the mission by itself, though every node is done. Once a read finds the
+/// destination again the mission closes as it would have.
+#[test]
+fn a_destination_hide_cannot_find_lands_nothing_and_holds_the_missions_own_close() {
+    let (_folder, repo, root) = repository(&["feat/x", "feat/a", "feat/b"]);
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    two_done_branches(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"destination": "feat/x", "nodes": [
+            {"key": "a", "title": "A", "kind": "change", "delivery": "direct", "criteria": ["a works"]},
+            {"key": "b", "title": "B", "kind": "change", "delivery": "direct", "criteria": ["b works"]},
+        ]}}),
+    )
+    .unwrap();
+    in_repository(&mut runtime, &root);
+    let host = Host(hide_host::serve::Env::standalone(Some(repo.clone())));
+    let device = crate::node::TEST_NODE;
+    for branch in ["feat/a", "feat/b"] {
+        merge_into(&repo, "feat/x", branch);
+    }
+    runtime.read_outside_through(device, &root, &host);
+    assert!(in_main(&node_view(&runtime, "a")).is_some());
+
+    // The destination is deleted (merged into the default branch first, or
+    // not): the next read finds neither it nor its last fetched copy.
+    git_in(&repo, &["branch", "-q", "-D", "feat/x"]);
+    let ((), records) = crate::diagnostics::capture(|| {
+        runtime.read_outside_through(device, &root, &host);
+    });
+    let reason = records
+        .iter()
+        .find(|record| record["kind"] == "mission.outside_unread")
+        .and_then(|record| record["reason"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(reason.contains("feat/x"), "{reason}");
+    for key in ["a", "b"] {
+        let node = node_view(&runtime, key);
+        assert_eq!(
+            (node.status, node.unread, in_main(&node)),
+            (NodeStatus::Done, true, None),
+            "{key}"
+        );
+    }
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+
+    // The plan names a destination that holds the work: nothing is lost.
+    git_in(&repo, &["branch", "-q", "release", "feat/a"]);
+    merge_into(&repo, "release", "feat/b");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"destination": "release", "nodes": [
+            {"key": "a", "title": "A", "kind": "change", "delivery": "direct", "criteria": ["a works"]},
+            {"key": "b", "title": "B", "kind": "change", "delivery": "direct", "criteria": ["b works"]},
+        ]}}),
+    )
+    .unwrap();
+    runtime.read_outside_through(device, &root, &host);
+    runtime.drive_mission_health(now);
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
 }

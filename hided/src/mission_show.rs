@@ -227,6 +227,11 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         nodes.iter().map(warning_count).sum::<usize>(),
     );
     let mut out = format!("{head}\n");
+    // Where the results go; a mission from before destinations names none
+    // and reads as it did.
+    if let Some(destination) = mission["destination"].as_str() {
+        let _ = writeln!(out, "도착 · {destination}");
+    }
     if let Some(decision) = mission["decision"].as_str() {
         let _ = writeln!(out, "결정 · {decision}");
     }
@@ -391,7 +396,10 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(delivery) = node["delivery"].as_str() {
         state.push(match delivery {
             "pr" => "PR로".to_owned(),
-            "direct" => "main에 바로".to_owned(),
+            "direct" => format!(
+                "{}에 바로",
+                result["destination"].as_str().unwrap_or("main")
+            ),
             other => other.to_owned(),
         });
     }
@@ -400,6 +408,11 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
         state.extend(waits_on(node)?);
     }
     let _ = writeln!(out, "상태 {}", state.join(" · "));
+    // A change's pull request takes this branch as its base, unless it is
+    // stacked on another.
+    if let (Some(destination), "change") = (result["destination"].as_str(), text(node, "kind")) {
+        let _ = writeln!(out, "도착 {destination}");
+    }
     if let Some(worker) = worker_words(node) {
         let _ = writeln!(out, "작업자 {worker}");
     }
@@ -803,6 +816,41 @@ mod tests {
             text.contains("상태 작업 중 · change · PR로 · 기다림 운영자 결정\n"),
             "{text}"
         );
+    }
+
+    /// PRD mission-destination B1, B15: a mission that records where its
+    /// results go says so under its head, and a change node says it too,
+    /// where its worker reads the base of its pull request; a mission from
+    /// before destinations reads line for line as it did.
+    #[test]
+    fn a_destination_is_named_under_the_head_and_on_a_change_node() {
+        let mut value = mission();
+        let before = draw(&value, NOW).unwrap();
+        value["mission"]["destination"] = json!("feat/login");
+        let text = draw(&value, NOW).unwrap();
+        let (head, rest) = before.split_once('\n').unwrap();
+        assert_eq!(text, format!("{head}\n도착 · feat/login\n{rest}"));
+
+        let alone = |node: &Value, destination: Option<&str>| {
+            let mut answer = json!({"mission_id": "mission-33", "node": node, "letters": []});
+            if let Some(destination) = destination {
+                answer["destination"] = json!(destination);
+            }
+            draw(&answer, NOW).unwrap()
+        };
+        let mut direct = mission()["mission"]["nodes"][1].clone();
+        direct["delivery"] = json!("direct");
+        let old = alone(&direct, None);
+        assert!(old.contains("· main에 바로 ·"), "{old}");
+        assert!(!old.contains("도착"), "{old}");
+        let text = alone(&direct, Some("feat/login"));
+        assert!(
+            text.contains("· feat/login에 바로 ·") && text.contains("\n도착 feat/login\n"),
+            "{text}"
+        );
+        // A node that changes no code goes to no branch.
+        let research = mission()["mission"]["nodes"][3].clone();
+        assert!(!alone(&research, Some("feat/login")).contains("도착"));
     }
 
     /// A `waiting_on` this build does not read refuses the text, so the

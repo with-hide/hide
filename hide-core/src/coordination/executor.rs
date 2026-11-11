@@ -1151,7 +1151,7 @@ fn spawn(
         profile,
         task,
         brief,
-        mission: _,
+        mission,
         plan_node,
         plan,
         beside,
@@ -1547,11 +1547,20 @@ fn spawn(
                 // now; a spawn beside never makes one.
                 return Err("beside_other_checkout".into());
             } else {
-                // A device whose helper is not connected leaves the start to
-                // the engine, the folder's own HEAD.
-                let start = node
-                    .as_deref()
-                    .and_then(|node| crate::worktree_control::new_branch_start(node, repo, None));
+                // A mission's worktree starts from its destination's newest
+                // commit (PRD mission-destination D-04); any other from the
+                // branch the repository's own folder has out. A device whose
+                // helper is not connected leaves the start to the engine: the
+                // destination as named, or the folder's own HEAD.
+                let destination = mission
+                    .as_ref()
+                    .and_then(|admission| admission.destination.clone());
+                let start = match node.as_deref() {
+                    Some(node) => {
+                        crate::worktree_control::new_branch_start(node, repo, destination)
+                    }
+                    None => destination,
+                };
                 let created = engine
                     .create_worktree(
                         Wait::Each(WORKTREE_CREATE_TIMEOUT),
