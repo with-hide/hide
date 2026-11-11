@@ -605,18 +605,21 @@ it("draws `👤 머지는 내가` as the card's second-line strip only where the
   } finally { await scoped.unmount(); }
 });
 
-it("keeps the lines a card draws at the regular weight inside the shared card, a medium-weight button, the other base bold and the title semibold (PRD mission-destination B16)", async () => {
+it("draws a card's text at the regular weight, though the card is a medium-weight button, with the title semibold, the other base bold and a due strip semibold (PRD mission-destination B16)", async () => {
   const nodes = [
     node("core", { title: "Schema", status: "working", pr: 41, pr_state: "pending", prs: [{ number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", state: "ahead", prs: [41] } }),
+    node("deploy", { title: "Deploy", status: "done", pr: 42, pr_state: "mergeable", merge: { by: "operator", state: "due", prs: [42] } }),
     node("cause", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
   ];
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
     const weight = (element: Element | null | undefined) => (element?.getAttribute("class")?.match(/\bfont-(?:normal|medium|semibold|bold)\b/g) ?? []).join(" ");
     const core = card(map, "core");
-    expect(["[data-node-stations]", "[data-node-run]", "[data-node-row]", "[data-node-merge-strip]"].map((part) => weight(core.querySelector(part)))).toEqual(["font-normal", "font-normal", "font-normal", "font-normal"]);
-    expect(weight(card(map, "cause").querySelector("[data-node-row]"))).toBe("font-normal");
-    expect([weight([...core.querySelectorAll("[data-station-label]")].at(-1)), weight(core.querySelector("[data-node-title]"))]).toEqual(["font-bold", "font-semibold"]);
+    // One default on the card: every line it draws takes it rather than naming a weight of its own.
+    expect(["core", "deploy", "cause"].map((key) => weight(card(map, key)))).toEqual(["font-normal", "font-normal", "font-normal"]);
+    expect(["[data-node-stations]", "[data-node-run]", "[data-node-row]", "[data-node-merge-strip]"].map((part) => weight(core.querySelector(part)))).toEqual(["", "", "", ""]);
+    expect(weight(card(map, "cause").querySelector("[data-node-row]"))).toBe("");
+    expect([weight(core.querySelector("[data-node-title]")), weight([...core.querySelectorAll("[data-station-label]")].at(-1)), weight(card(map, "deploy").querySelector("[data-node-merge-strip]"))]).toEqual(["font-semibold", "font-bold", "font-semibold"]);
   } finally { await map.unmount(); }
 });
 

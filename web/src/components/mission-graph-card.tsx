@@ -39,7 +39,7 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
       data-mission-node={node.key} data-node-status={node.status} data-node-look={look}
       data-node-blocked={node.blocked ?? undefined} data-node-dimmed={dimmed || undefined}
       className={cn(
-        "relative flex h-auto w-(--size-mission-node) min-w-0 min-h-(--size-touch-target) flex-col items-stretch gap-xxs rounded-md border bg-card px-sm py-xs text-left text-foreground hover:text-foreground whitespace-normal outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
+        "relative flex h-auto w-(--size-mission-node) min-w-0 min-h-(--size-touch-target) flex-col items-stretch gap-xxs rounded-md border bg-card px-sm py-xs text-left font-normal text-foreground hover:text-foreground whitespace-normal outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
         yours ? ATTENTION_CARD : LOOK_CARD[look], node.kind === "external" && "border-dotted",
         selected && "outline-2 outline-offset-2 outline-primary", dimmed && "opacity-(--opacity-dimmed)",
       )}
