@@ -392,7 +392,8 @@ class Scenario:
         one closed done and one with its nodes at work, stacked on another
         pull request, behind a gate asked and a gate passed, waiting on an
         outside branch, verified, and held, conducted on the core; one
-        waiting for its direct change's branch, conducted on the device.
+        waiting for its direct change's branch, conducted by a second agent
+        on the core.
         With the device mission above (a research node worked on the
         device), these are the states the upgrade test holds every later
         build to. A part the release does not have is named in the answer
@@ -468,13 +469,27 @@ class Scenario:
         shown(running, lambda row: any(node.get("key") == "out" and node.get("line") for node in row.get("nodes") or []),
               "the outside branch read")
 
-        branch("feat/wait", DEVICE_REPO, True)
-        waiting = mission("dev-b", "States waiting", {"nodes": [
+        # A pane conducts one open mission, and a release reads a branch
+        # only where it knows the default branch, which it does not for a
+        # device project it never listed the branches of: a second agent on
+        # the core conducts the waiting one.
+        rest = self.daemon.snapshot()
+        workspace, checkout = self.checkout(rest, False, str(CORE_REPO))
+        before = {row["id"] for tab in checkout["tabs"] for row in tab["panes"]}
+        self.send("create_tab", {"workspace_id": workspace["id"], "checkout_id": checkout["id"],
+                                 "label": checkout.get("next_tab_label") or "Tab", "request_id": self.rid("tab")})
+        pane = self.wait(lambda rest: next((row["id"] for tab in self.tabs(rest, False, str(CORE_REPO))
+                                            for row in tab["panes"] if row["id"] not in before), None), "a new core pane")
+        time.sleep(2)
+        self.start_agent(pane, "core-b", str(STATE / "engine"), pane)
+        branch("feat/wait", CORE_REPO, False)
+        waiting = mission("core-b", "States waiting", {"nodes": [
             {"key": "join", "title": "Join it", "kind": "change", "delivery": "direct", "criteria": ["it works"]}]})
-        met("dev-b", "join")
-        self.checked("dev-b", "hide mission node join --status done --branch feat/wait")
-        self.checked("dev-b", "hide mission close --as merge_wait --report 'feat/wait is left to join.'")
-        shown(waiting, lambda row: any(node.get("landing") for node in row.get("nodes") or []), "the waiting branch read")
+        met("core-b", "join")
+        self.checked("core-b", "hide mission node join --status done --branch feat/wait")
+        self.checked("core-b", "hide mission close --as merge_wait --report 'feat/wait is left to join.'")
+        shown(waiting, lambda row: any((node.get("landing") or {}).get("state") == "left" for node in row.get("nodes") or []),
+              "the waiting branch read as left to join")
         return {"done": done, "running": running, "waiting": waiting, "not_in_release": skipped}
 
     def published(self):
