@@ -384,6 +384,11 @@ pub mod phone {
         /// D-10).
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         pub read: bool,
+        /// The operator's ★ to revisit the task (PRD revisit-group D-03),
+        /// which the phone draws where the desktop row does; absent when the
+        /// row carries none, so a phone that predates it reads nothing new.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        pub starred: bool,
         /// The row's mark (`RowMark`): `turn`, `going`, `waiting`, `done`, `unread`, `quiet` or `asleep`.
         pub mark: String,
         /// What an in-progress row waits on (`AgentWait`), which its line
@@ -1003,6 +1008,7 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .and_then(crate::agent_state::first_line_cut),
                 read: read_ask,
+                starred,
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),
                 descendants_working: agent

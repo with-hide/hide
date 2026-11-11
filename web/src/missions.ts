@@ -183,7 +183,7 @@ export function nodeMark(node: Pick<MissionNode, "status" | "blocked" | "agent_r
 }
 
 /** The Conductor row's mark (B14): `미션 n/m` while it runs, its plan or its wait otherwise. */
-export function chipWords(mission: Mission): { key: MessageKey; counts: string | null } {
+export function chipWords(mission: MissionBrief): { key: MessageKey; counts: string | null } {
   const { done, total } = missionCounts(mission);
   switch (mission.status) {
     case "planning":

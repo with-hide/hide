@@ -6,6 +6,7 @@ import { ServerIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { StatusMark } from "../components/status-mark";
+import { RevisitStarShape } from "../components/revisit-mark";
 import { DeviceChip } from "../components/device-chip";
 import { HumanTurnCopy } from "../components/human-turn-copy";
 import { browserClipboard } from "../clipboard";
@@ -29,7 +30,8 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
   return (
     <span className={`flex min-w-0 gap-sm ${large ? "items-start" : "items-center"}`}>
       {/* The desktop row's mark; a read turn is dimmed as it is there. */}
-      {agent.read ? <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" /> : <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />}
+      {/* A starred row waiting in 다시 볼 것 wears its ★ in the mark's place, as the desktop's does (PRD revisit-group D-03). */}
+      {agent.starred && agent.group === "revisit" ? <RevisitStarShape slot data-phone-mark="star" /> : agent.read ? <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" /> : <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />}
       {large ? <AgentMark kind={agent.agent_kind} /> : null}
       <span
         className={`min-w-0 ${large ? "whitespace-normal break-keep text-title font-medium wrap-anywhere" : "truncate text-title font-medium"} ${
@@ -38,6 +40,8 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
       >
         {agent.title}
       </span>
+      {/* Anywhere else the ★ is small after the title. */}
+      {agent.starred && agent.group !== "revisit" ? <RevisitStarShape className={large ? "mt-sm" : undefined} /> : null}
     </span>
   );
 }
