@@ -25,10 +25,10 @@ import { missionFixture } from "./MissionScene";
 import { planFixture } from "./PlanScene";
 
 const AT = new Date(2026, 9, 22, 15, 30).getTime();
-const MISSION_STATES = ["running", "decision", "done", "cancelled"] as const;
+const MISSION_STATES = ["running", "decision", "stall", "delay", "done", "cancelled"] as const;
 const PR_STATES: PrState[] = ["pending", "failed", "mergeable", "draft", "merged", "closed"];
 
-/** One mission per chip state, each conducted by its own session, so one store draws all four. */
+/** One mission per chip state, each conducted by its own session, so one store draws them all. */
 function missions(): Mission[] {
   return MISSION_STATES.map((state) => {
     const { mission } = missionFixture(state, AT);

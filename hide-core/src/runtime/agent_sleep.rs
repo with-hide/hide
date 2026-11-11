@@ -98,6 +98,9 @@ impl Runtime {
         // warns its Conductor (with-hide/hide-private#552).
         let changed = self.raise_to_operator(now_unix_ms) | changed;
         let changed = self.warn_missions(now_unix_ms) | changed;
+        // A delay that ran out ends, and a node whose move did not come is
+        // raised as stalled.
+        let changed = self.stall_missions(now_unix_ms) | changed;
         self.sleep_finished_mission_agents(now_unix_ms) | changed
     }
 

@@ -50,7 +50,7 @@ export const OUTPUTS = {
   pr: { ...output("o-pr-41", "pr", "PR #41 자막 수정", true), pr_state: "merged" },
 };
 
-export const MISSION: DeskMission = { id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 6, deciding: false };
+export const MISSION: DeskMission = { id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 6, turn: null, delay: null };
 
 /** Sessions as the chips inside a line name them. */
 export const SESSIONS = {
@@ -123,7 +123,7 @@ export function everyStateJobs(now: number): { label: string; job: DeskJob }[] {
     { label: "허락 기다림 (터미널의 권한 질문)", job: job("c-permission", "record-now", { state: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex" }) },
     { label: "끝남 · PR", job: job("c-done", "pane header @ hover", { state: "done", location: { kind: "worktree", label: "desk/pane-mention" }, summary: "PR을 열었고 CI 통과", pull_requests: [{ number: 1910, state: "mergeable" }] }) },
     { label: "미션 (Conductor)", job: job("c-conductor", "Desk 1차", { now: "Conductor · 지금 ui 다듬기 외 1", mission: MISSION }) },
-    { label: "미션 판단", job: job("c-decision", "Desk 1차", { state: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, deciding: true } }) },
+    { label: "미션 판단", job: job("c-decision", "Desk 1차", { state: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, turn: "decision" } }) },
     { label: "작업 단계 검토", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5 }, agent_kind: "codex" }) },
     { label: "다른 기기", job: job("c-mini", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", now: "자막 타이밍 맞추는 중", agent_kind: "codex" }) },
     { label: "다른 기기, 연결 끊김 (흐림)", job: job("c-mini-off", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", disconnected: true, now: "12분 전까지의 기록", agent_kind: "codex" }) },

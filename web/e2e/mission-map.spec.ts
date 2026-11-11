@@ -204,7 +204,7 @@ test("the mission's card closes and opens again from the sidebar, the screen kee
     // The Conductor's row carries the mission mark, and pressing it leaves the screen for the card beside the pane.
     // Its open decision also lifts the row into the tree's 내 차례, so the row stands there and in its
     // project, each chip keeping its progress with the decision's `!` (needs-you-cleanup B1, B5).
-    const chip = page.locator('nav[data-sidebar] [data-mission-chip][data-mission-chip-decision="true"]').first();
+    const chip = page.locator('nav[data-sidebar] [data-mission-chip][data-mission-chip-turn="decision"]').first();
     await expect(chip).toHaveAttribute("data-mission-chip-status", "running");
     await expect(chip).toContainText("0/4");
     await chip.click();

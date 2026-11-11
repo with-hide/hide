@@ -123,7 +123,7 @@ impl Runtime {
 
     /// Whether `node`'s gate waits on the operator now: reached, or asked by
     /// the open decision, in a mission that runs.
-    fn gate_open(&self, mission: &Mission, node: &MissionNode) -> bool {
+    pub(super) fn gate_open(&self, mission: &Mission, node: &MissionNode) -> bool {
         matches!(
             mission.status,
             MissionStatus::Running | MissionStatus::MergeWait

@@ -183,7 +183,7 @@ pub enum DeskOutputKind {
 }
 
 /// The mission a job conducts, as its card's `미션 k/n` chip draws it; the
-/// chip's colour is the screen's, from `status` and `deciding`, by the rule
+/// chip's colour is the screen's, from `status` and `turn`, by the rule
 /// every mission chip follows.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeskJobMission {
@@ -192,7 +192,20 @@ pub struct DeskJobMission {
     pub status: crate::missions::MissionStatus,
     pub done: usize,
     pub total: usize,
-    pub deciding: bool,
+    /// What of the open mission waits on the operator, the chip's `!`.
+    pub turn: Option<DeskMissionTurn>,
+    /// The delay holding the open mission, the chip's grey pause.
+    pub delay: Option<String>,
+}
+
+/// What of an open mission waits on the operator, as every mission chip
+/// marks it (`web/src/missions.ts` `missionTurn`): its decision, else a node
+/// raised to the operator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskMissionTurn {
+    Decision,
+    Attention,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

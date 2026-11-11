@@ -1,10 +1,10 @@
-import { CogIcon, GitBranchIcon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
+import { CogIcon, GitBranchIcon, KeyRoundIcon, PauseIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
-import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
+import { formatElapsed, useElapsed, useMinuteClock, useRemaining } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
 import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
@@ -44,6 +44,7 @@ import {
   missionOf,
   missionOpen,
   neighbours,
+  nodeHold,
   nodeLook,
   nodeSteps,
   nodeWork,
@@ -57,7 +58,7 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionMapFlow, MissionNode } from "./snapshot";
+import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionNodeHold } from "./snapshot";
 import { useShellStore } from "./store";
 import type { TFunction } from "i18next";
 
@@ -131,7 +132,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
       <ConductorRow mission={mission} actions={actions} />
       <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
       <GatePlan mission={mission} onSelect={select} />
-      {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
+      {mission.delay && open ? <DelayLine line={mission.delay} until={mission.delay_until_unix_ms} /> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       {mission.nodes.length === 0 ? (
         <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
@@ -376,6 +377,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // What its worker does now (hide-private issue 680): a resting or absent worker stops the ring and says so under the title; a working one needs no words.
   const doing = nodeWork(mission, node);
   const doingLine = doing && doing.state !== "working" ? nodeWorkWords(doing, t) : null;
+  const hold = nodeHold(mission, node);
+  const holdLine = useHoldWords(hold);
   // A worker's person's turn is the step's waiting reason, a key and what and where (PRD ask-human D-18, B25); the Conductor's row carries Done.
   const escalationOf = useWorkerEscalation();
   const human = node.status === "working" ? escalationOf(node)?.human ?? null : null;
@@ -406,6 +409,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
         ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
+        ...(holdLine ? [holdLine] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
@@ -438,6 +442,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {doingLine ? (
         <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
           {doingLine}
+        </span>
+      ) : null}
+      {/* A node its Conductor holds back says why and how long in grey under the title, with the pause mark the list's `⏸N` uses. */}
+      {holdLine ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={holdLine} data-node-hold="true">
+          <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <span className="min-w-0 truncate">{holdLine}</span>
         </span>
       ) : null}
       {humanLine ? (
@@ -581,4 +592,20 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
       <span className="text-caption text-muted-foreground">{note}</span>
     </div>
   );
+}
+
+/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
+/** A held node's line: why, and how long it still holds while the core has not lifted it yet. */
+function useHoldWords(hold: MissionNodeHold | null): string | null {
+  const { t } = useInterfaceTranslation();
+  const left = useRemaining(hold?.until_unix_ms);
+  if (!hold) return null;
+  return left && left !== "past" ? t("mission.holdLeft", { why: hold.why, left: left.text }) : t("mission.hold", { why: hold.why });
+}
+
+function DelayLine({ line, until }: { line: string; until: number | null | undefined }) {
+  const { t } = useInterfaceTranslation();
+  const left = useRemaining(until);
+  const text = left && left !== "past" ? t("mission.delayLeft", { line, left: left.text }) : t("mission.delay", { line });
+  return <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{text}</p>;
 }

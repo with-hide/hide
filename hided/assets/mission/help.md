@@ -14,13 +14,14 @@ hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base
                         [--commit <sha>] [--verdict pass|fail] [--checks <passed>/<total>]
                         [--no-agent-id] [--no-pr] [--no-base-pr] [--no-branch] [--no-line] [--no-change] [--no-review]
                         [--no-commit] [--no-verdict] [--no-checks] [--reviewer <agent-id>] [--verifier <agent-id>]
+                        [--hold <why> --for <30m|2h>] [--no-hold]
 hide mission record <node> <line> (--pass | --fail) --evidence <text> [--summary <text>] [--commit <sha>] [--rerun]
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
 hide mission gate <node> (--pass | --fix) --said <the operator's words>
 hide mission start
 hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)
-hide mission delay (--line <text> | --clear)
+hide mission delay (--line <text> --for <30m|2h> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
 hide mission take <id> [--handover <token>]
@@ -211,7 +212,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - When a node is done or dropped, every pull request it holds merges or closes, or the mission closes, Hide puts that node's worker and checkers to sleep once they rest and are off the operator's screen (never you); a sleeping worker still counts against the cap until you end it, and `hide agent list` and `hide ps` show it `asleep` until it wakes.
   A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
-- When the usage `hide agent catalog` reports is close to a limit, start nothing new, say why with `hide mission delay --line <why>`, and tell the operator in conversation if it holds for long. Clear it when you go on.
+- When the usage `hide agent catalog` reports is close to a limit, or the machine cannot take another build, start nothing new, say why and for how long with `hide mission delay --line <why> --for <30m|2h>` (at most 24h; the delay ends by itself then, and you set it again if the reason still holds), and tell the operator in conversation if it holds for long. Clear it when you go on.
+- A node that waits on a pull request outside the mission waits on it as an `external` node it depends on, never on a delay: the map shows what it waits for, and Hide wakes you when it is in main.
 
 ## 4. While it runs
 
@@ -274,10 +276,26 @@ The same cause is raised once.
 CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, is not warned for being quiet, neither by the no-push warning nor by its watch's no-activity letter.
 A failed CI is its worker's to run again or fix, so it is no wait: put a wait on the operator that is not a merge on the map with `decide --node`, or the quiet worker is warned.
 
-Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet).
+Two signs that a worker is stuck are told to you first: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet).
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
 The two thresholds are fixed: two failed reviews in a row and 90 minutes with no push.
+
+### A move that did not come
+
+Every node not finished is someone's move, and a move that does not come is raised as stalled (`not_started`, `warning_stood`, `wait_stood`), so a mission never rests unseen:
+
+| Whose move | Raised to you | Reaches the operator |
+| --- | --- | --- |
+| Yours: start a node whose dependencies are all done | 20 minutes after it could start | 10 minutes later |
+| The worker's, after a warning above | never: you already have the warning's letter | 30 minutes after the warning, if it still stands |
+| Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push | 10 minutes later |
+
+No move is owed while a delay holds the mission, a decision waits on the operator, or the node's gate waits on the operator's answer; a node not started also waits while the mission has as many workers as its cap, a warning stands only once its letter reached you, and a pull request's wait is judged only on GitHub's current answer.
+A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
+Each clock starts when Hide first sees the node stand there, so lifting a delay, freeing a place, answering a decision or restarting Hide starts it again, and an update raises nothing at once.
+Each stall is raised once while it stands and goes when its move comes or none is owed; if it stands again later, that is a new one.
+To hold on purpose: a node that waits on a pull request outside the mission depends on an `external` node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started and not `external`, at most 24h; neither it nor its worker's spawn starts until `--no-hold` or its end, and no stall is raised on it; the stall clock starts again when the hold ends); the whole mission is held with `hide mission delay`. There is no silent wait.
 
 ### Finish lines
 

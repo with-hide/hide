@@ -1,4 +1,4 @@
-import { CheckIcon, WaypointsIcon } from "lucide-react";
+import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
 import type { Actions } from "./actions";
 import { formatElapsed } from "./components/elapsed";
 import { ProgressCells, TONE_TEXT } from "./components/mission-tone";
@@ -11,7 +11,7 @@ import { cn } from "./lib/utils";
 import { markdownPlainText } from "./markdownPlain";
 import { MissionNumber, useWorkerRow, ResultTail } from "./missionParts";
 import { allAgents } from "./paneAgents";
-import { liveNodes, missionCells, missionNumber, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, type PaneChipState } from "./missions";
+import { liveNodes, missionCells, missionDelay, missionNumber, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, TURN_WORDS, type PaneChipState } from "./missions";
 import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";
 import { machineName } from "./screenMachine";
 import type { Mission, MissionNode } from "./snapshot";
@@ -46,7 +46,7 @@ const CHIP_TONE: Record<PaneChipState, string> = {
   planning: "",
   running: "text-foreground",
   // The state keeps its colour while the popover is open, over the open chip's ring (approved board 3).
-  decision: "border-mission-hold text-mission-hold data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold",
+  turn: "border-mission-hold text-mission-hold data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold",
   merge_wait: "text-foreground",
   done: "text-mission-done data-[state=open]:text-mission-done",
   cancelled: "text-mission-cancelled",
@@ -58,7 +58,8 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
   const words = paneChipWords(mission);
   const number = missionNumber(mission.id);
   const [first] = liveNodes(mission);
-  const state = [words.state === "decision" ? t("mission.askDecision") : null, t(words.key), words.counts, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
+  const delay = missionDelay(mission);
+  const state = [words.turn ? t(TURN_WORDS[words.turn]) : null, t(words.key), words.counts, delay ? t("mission.delay", { line: delay }) : null, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
   const label = t("mission.pane.label", { title: mission.title, state });
   const Mark = words.state === "done" ? CheckIcon : WaypointsIcon;
   return (
@@ -81,7 +82,9 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
           )}
         >
           <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          {words.state === "decision" ? <span aria-hidden="true" className="font-semibold" data-mission-chip-decision="true">!</span> : null}
+          {words.turn ? <span aria-hidden="true" className="font-semibold" data-mission-chip-turn={words.turn}>!</span> : null}
+          {/* A mission delay holds every new start: a grey pause, said by the chip's name with its reason. */}
+          {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-mission-chip-delay="true" /> : null}
           {/* A narrow pane keeps the mark and the count; the word and the cells come back as it widens, and the chip's name always says them. */}
           {/* The mission's number stands where the word "mission" stood (`⚑ M39 · ●●●●● 1/6`): quiet, as a name, then a dot, then the progress in bold, so the two never read as one number. A state word (계획 중, 머지 대기) follows the dot; the chip's name keeps the title. */}
           {number ? <MissionNumber mission={mission} /> : null}
@@ -151,7 +154,7 @@ export function MissionPopover({ paneId, mission, onOpen, onConversation }: { pa
 const HEAD_WORD = {
   planning: "mission.pill.planning",
   running: "mission.pill.running",
-  decision: "mission.pill.running",
+  turn: "mission.pill.running",
   merge_wait: "mission.pill.mergeWait",
   done: "mission.pill.done",
   cancelled: "mission.pill.cancelled",

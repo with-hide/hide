@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, PauseIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -37,7 +37,7 @@ import {
   type MissionGroup,
   type MissionProject,
 } from "./missionList";
-import { gatesAhead, missionCells, missionCounts, type TurnItem } from "./missions";
+import { gatesAhead, heldNodes, missionCells, missionCounts, missionDelay, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
@@ -366,6 +366,27 @@ function Steps({ mission, onOpen }: { mission: Mission; onOpen: () => void }) {
       <ProgressCells tones={missionCells(mission)} size="chip" className="min-w-0 overflow-hidden" />
       <span className="shrink-0 font-mono tabular-nums" data-mission-row-counts={`${done}/${total}`}>{done}/{total}</span>
       <GateCount mission={mission} onOpen={onOpen} />
+      <HoldCount mission={mission} />
+    </span>
+  );
+}
+
+/**
+ * What holds the mission back, a quiet grey pause mark at the row's end: the
+ * mission's delay, named by its reason, and how many nodes its Conductor
+ * holds back as a number (`보류한 노드 N개`); never in 내 차례's colour or
+ * count. None when nothing is held.
+ */
+function HoldCount({ mission }: { mission: Mission }) {
+  const { t } = useInterfaceTranslation();
+  const held = heldNodes(mission);
+  const delay = missionDelay(mission);
+  if (held === 0 && !delay) return null;
+  const name = [delay ? t("mission.delay", { line: delay }) : null, held > 0 ? t("mission.holdCount", { count: held }) : null].filter(Boolean).join(" · ");
+  return (
+    <span className="flex shrink-0 items-center gap-xxs" role="img" aria-label={name} title={name} data-mission-row-held={held} data-mission-row-delay={delay ? "true" : undefined}>
+      <PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      {held > 0 ? <span className="font-mono tabular-nums">{held}</span> : null}
     </span>
   );
 }
