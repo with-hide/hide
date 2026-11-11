@@ -1370,7 +1370,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     revokePhone(phoneId: string) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
     },
-    setPushMode(mode: "off" | "app_closed" | "always") {
+    setPushMode(mode: "app_closed" | "always") {
       dispatch({ schema_version: 2, kind: "mobile_push_mode", payload: { mode } });
     },
     observeAgents(observing: boolean) {

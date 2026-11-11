@@ -38,8 +38,9 @@ import { confirmOf, holds, prOf } from "./prModel";
 import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
+import { appHost } from "./appHost";
 import { appPushRefused, syncAppPush } from "./appPush";
-import { forgetPush, syncPush } from "./push";
+import { browserPushResult, forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
@@ -338,8 +339,9 @@ function connect(): void {
       openPending();
       openStarted();
     }
-    // hided sends the push mode right after hello; the subscription follows it.
+    // Reconcile this phone's receiving choice after hello.
     if (frame.type === "meta") { void syncPush(); void syncAppPush(); }
+    if (frame.type === "push_state" && !appHost()) browserPushResult(frame.notifications);
     if (frame.type === "refused_request" && frame.request === "apns_registration") appPushRefused();
   };
   ws.onclose = () => settleLoss(ws, refused);

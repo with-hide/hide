@@ -110,7 +110,7 @@ it("stays connected while hided answers, whether with a pong or any other frame"
     const pings = socket.pings();
     if (pings.length > answered) {
       answered = pings.length;
-      socket.receive(second % 2 === 0 ? { type: "pong", id: pings[pings.length - 1] } : { type: "meta", push_mode: "off", other_phones: 0 });
+      socket.receive(second % 2 === 0 ? { type: "pong", id: pings[pings.length - 1] } : { type: "meta", push_mode: "app_closed", other_phones: 0 });
     }
   }
   expect(usePhone.getState().connected).toBe(true);

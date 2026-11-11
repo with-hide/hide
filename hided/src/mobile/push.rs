@@ -391,11 +391,10 @@ impl Prepared {
     }
 }
 
-/// Whether a notification may go out under the operator's mode: Off never,
+/// Whether a notification may go out under the operator's mode:
 /// app-closed-only while no desktop or web shell is connected, Always always.
 pub fn mode_allows(mode: PushMode, renderers: usize) -> bool {
     match mode {
-        PushMode::Off => false,
         PushMode::AppClosed => renderers == 0,
         PushMode::Always => true,
     }
@@ -403,7 +402,7 @@ pub fn mode_allows(mode: PushMode, renderers: usize) -> bool {
 
 /// Whether an operator notice can reach a phone at all, judged before any
 /// send is tried. `Err` is the first reason it cannot, as the code the log
-/// records: `mode_off`, `app_open` (app-closed mode with a desktop or web
+/// records: `app_open` (app-closed mode with a desktop or web
 /// shell connected), `mobile_off` or `no_subscription` (no phone has a Web
 /// Push subscription or an app registration). The mode is checked before the
 /// Mobile switch because it is the setting an operator changes to receive
@@ -415,11 +414,7 @@ pub fn notice_route(
     subscriptions: usize,
 ) -> Result<(), &'static str> {
     if !mode_allows(mode, renderers) {
-        return Err(if mode == PushMode::Off {
-            "mode_off"
-        } else {
-            "app_open"
-        });
+        return Err("app_open");
     }
     if !mobile_on {
         return Err("mobile_off");
@@ -1806,7 +1801,6 @@ mod tests {
 
     #[test]
     fn the_mode_decides_by_renderer_count() {
-        assert!(!mode_allows(PushMode::Off, 0));
         assert!(mode_allows(PushMode::AppClosed, 0));
         assert!(!mode_allows(PushMode::AppClosed, 1));
         assert!(mode_allows(PushMode::Always, 3));
@@ -1817,12 +1811,11 @@ mod tests {
         let route = notice_route;
         assert_eq!(route(PushMode::Always, true, 3, 1), Ok(()));
         assert_eq!(route(PushMode::AppClosed, true, 0, 1), Ok(()));
-        assert_eq!(route(PushMode::Off, true, 0, 1), Err("mode_off"));
         assert_eq!(route(PushMode::AppClosed, true, 1, 1), Err("app_open"));
         assert_eq!(route(PushMode::Always, false, 0, 1), Err("mobile_off"));
         assert_eq!(route(PushMode::Always, true, 0, 0), Err("no_subscription"));
         // Several causes at once report the first in the documented order.
-        assert_eq!(route(PushMode::Off, false, 0, 0), Err("mode_off"));
+        assert_eq!(route(PushMode::AppClosed, false, 1, 0), Err("app_open"));
         assert_eq!(route(PushMode::Always, false, 0, 0), Err("mobile_off"));
     }
 }

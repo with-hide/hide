@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
@@ -125,7 +125,6 @@ type PhoneState = {
   interfaceLanguage: string | null;
   /** The operator's color theme as the last `agents` frame carried it; null before the first frame (drawn as Hide). */
   colorTheme: string | null;
-  pushMode: PushMode;
   notifications: Notifications;
   vapidKey: string | null;
   /** Null until the first list arrives; kept across a lost connection. */
@@ -202,7 +201,6 @@ const initial: PhoneState = {
   otherPhones: 0,
   interfaceLanguage: null,
   colorTheme: null,
-  pushMode: "off",
   notifications: "unasked",
   vapidKey: null,
   groups: null,
@@ -264,7 +262,7 @@ export function applyFrame(frame: ServerFrame): void {
       });
       return;
     case "meta":
-      patch({ pushMode: frame.push_mode, otherPhones: frame.other_phones });
+      patch({ otherPhones: frame.other_phones });
       return;
     case "agents":
       patch({

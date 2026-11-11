@@ -146,7 +146,7 @@ async fn the_record_names_the_skipped_channels() {
     assert_eq!(row["component"], "delivery");
     assert_eq!(row["notice"], "letter_undelivered");
     assert_eq!(row["letter_id"], "letter-7");
-    assert_eq!(row["push"], "mode_off");
+    assert_eq!(row["push"], "mobile_off");
 }
 
 /// A machine that was a device before its core moved there has the state
