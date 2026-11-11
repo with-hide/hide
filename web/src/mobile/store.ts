@@ -150,7 +150,7 @@ type PhoneState = {
   missionsFailed: boolean;
   /** The missions the last frame left out (its caps), shown as a line under the list. */
   missionsOmitted: number;
-  /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `done:<mission>` for a page's 끝남; only missions the record still has. */
+  /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `decided:<mission>` for its skipped lines; only missions the record still has. */
   missionFolds: Record<string, true>;
   /** What was typed for each mission's decision, kept until its answer is accepted (B35). */
   missionDrafts: Record<string, string>;
@@ -283,7 +283,7 @@ export function applyFrame(frame: ServerFrame): void {
         // A mission that left the record takes its page and its draft with it.
         missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
         missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),
-        missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("done:") || listed.has(key.slice("done:".length)))),
+        missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("decided:") || listed.has(key.slice("decided:".length)))),
       });
       return;
     }

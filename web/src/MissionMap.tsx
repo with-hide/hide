@@ -2,14 +2,11 @@ import { CogIcon, GitBranchIcon, KeyRoundIcon, PauseIcon, TriangleAlertIcon } fr
 import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
-import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
-import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock, useRemaining } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
 import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
 import { GatePlanList, GateStrip } from "./components/mission-gate";
-import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
@@ -24,6 +21,8 @@ import { cn } from "./lib/utils";
 import { MarkdownText } from "./MarkdownText";
 import { markdownPlainText } from "./markdownPlain";
 import { useMapPick } from "./mapPick";
+import { MissionGraph } from "./MissionGraph";
+import { MissionGraphCard, MissionGraphReport } from "./components/mission-graph-card";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
@@ -44,7 +43,6 @@ import {
   missionEventsOf,
   missionOf,
   missionOpen,
-  neighbours,
   nodeHold,
   nodeLook,
   nodeSteps,
@@ -58,9 +56,8 @@ import {
   warningWords,
   type NodeLook,
 } from "./missions";
-import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionNodeHold, MissionNodeWork } from "./snapshot";
+import type { Mission, MissionEvent, MissionNode, MissionNodeHold, MissionNodeWork } from "./snapshot";
 import { useShellStore } from "./store";
 import type { TFunction } from "i18next";
 
@@ -74,8 +71,6 @@ import type { TFunction } from "i18next";
 // lit and dims the rest (B30). Every value is the core's (`MissionView`, its
 // events); this page words and draws it and edits nothing.
 
-/** The card that stands for the report every node ends in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
-const REPORT = "#report";
 
 /**
  * `onNode` hears a node card picked, so a page that holds the map beside a
@@ -146,12 +141,12 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
           mapData={{ "data-mission-map": "true" }}
           map={
             <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
-              <Graph
-                actions={actions}
+              <MissionGraph
                 flow={flow}
                 mission={mission}
-                events={log?.events ?? null}
-                end={end}
+                defects={defectEdges(mission)}
+                drawNode={(item, picked, dimmed, pick) => <NodeCard mission={mission} node={item} events={log?.events ?? null} end={end} actions={actions} selected={picked} dimmed={dimmed} onSelect={pick} />}
+                report={(dimmed) => <ReportCard mission={mission} dimmed={dimmed} />}
                 selected={selected}
                 onSelect={(key) => {
                   select(selected === key ? null : key);
@@ -288,71 +283,6 @@ function ReportLine({ mission }: { mission: Mission }) {
   );
 }
 
-type GraphCard = { key: string; node: MissionNode | null };
-
-function Graph({ mission, flow, events, end, selected, onSelect, actions }: { mission: Mission; flow: MissionMapFlow; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
-  const nodes = mission.nodes;
-  const graph = useMemo(() => {
-    const shown = new Set(nodes.map((node) => node.key));
-    const cards: GraphCard[] = [...nodes.map((node) => ({ key: node.key, node })), { key: REPORT, node: null }];
-    const byKey = new Map(cards.map((card) => [card.key, card]));
-    const depended = new Set(nodes.flatMap((node) => node.depends_on));
-    const blockers = (card: GraphCard): GraphCard[] => {
-      // Every node no other node waits on ends in the report.
-      if (!card.node) return nodes.filter((node) => !depended.has(node.key)).map((node) => byKey.get(node.key)!);
-      return card.node.depends_on.filter((key) => shown.has(key)).map((key) => byKey.get(key)!);
-    };
-    return layerDependencies(cards, (card) => card.key, blockers);
-  }, [nodes]);
-  const defects = useMemo(() => defectEdges(mission), [mission]);
-  const byKey = useMemo(() => new Map(nodes.map((node) => [node.key, node])), [nodes]);
-  // A pick keeps itself and every card one edge away lit, the defect edges included (B30).
-  const lit = selected ? neighbours([...graph.edges, ...defects], selected) : null;
-  const away = (edge: GraphEdge) => selected !== null && edge.from !== selected && edge.to !== selected;
-  const edgeLook = (edge: GraphEdge): EdgeLook => {
-    const from = byKey.get(edge.from);
-    const to = byKey.get(edge.to);
-    const dimmed = away(edge);
-    // A stack is the one purple dashed edge: the pull request below is the one above's base (B27).
-    if (from && to && to.base_pr != null && from.prs.some((pr) => pr.number === to.base_pr)) return { tone: "text-mission-review", dashed: true, dimmed };
-    // A line from a node at work is lit only while the mission is open; a cancelled mission's work stopped.
-    if (from && from.status === "working" && missionOpen(mission)) return { tone: "text-mission-working", dimmed };
-    return { tone: "text-border", dimmed };
-  };
-  // A defect a later node found is a red dashed edge back to the node it opened, until its line passes (B21).
-  const overlay: OverlayEdge[] = defects.map((edge) => ({ ...edge, look: { tone: "text-mission-failed", dashed: true, dimmed: away(edge) } }));
-  return (
-    <DependencyGraphView
-      graph={graph}
-      idOf={(card) => card.key}
-      flow={flow}
-      gaps={{ layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" }}
-      edgeLook={edgeLook}
-      overlay={overlay}
-      draw={(card) =>
-        card.node ? (
-          <NodeCard key={card.key} mission={mission} node={card.node} events={events} end={end} actions={actions} selected={selected === card.key} dimmed={lit !== null && !lit.has(card.key)} onSelect={() => onSelect(card.key)} />
-        ) : (
-          <ReportCard key={card.key} mission={mission} dimmed={lit !== null && !lit.has(REPORT)} />
-        )
-      }
-    />
-  );
-}
-
-/** A card's border and surface by its look (B26): finished work a faint green surface inside its plain border, never a green border, in main or not. */
-const LOOK_CARD: Record<NodeLook, string> = {
-  waiting: "border-dashed border-mission-waiting bg-transparent",
-  working: "border-mission-working ring-2 ring-mission-working/20",
-  done: "border-border bg-mission-done/10",
-  external: "border-dotted border-mission-waiting bg-transparent",
-  cancelled: "border-dashed border-mission-cancelled bg-transparent",
-  dropped: "border-dashed border-border bg-transparent",
-};
-
-/** A card waiting on the operator wears 내 차례's card colour as a thick border and ring over its look, readable at the map's smallest zoom (PRD mission-node-simple B2). */
-const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20";
-
 /**
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
  * and border, its title on one line that ends in an ellipsis (the whole
@@ -406,9 +336,12 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     </span>
   );
   const card = (
-    <button
-      type="button"
-      onClick={onSelect}
+    <MissionGraphCard
+      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect}
+      still={doing != null && doing.state !== "working"}
+      title={node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
+      accessory={hide ? <HideMark words={hide} /> : null}
+      data-node-attention={attention ? node.attention!.to : undefined}
       aria-label={[
         node.title,
         word,
@@ -425,32 +358,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
-      aria-pressed={selected}
-      data-mission-node={node.key}
-      data-node-status={node.status}
-      data-node-look={look}
-      data-node-attention={attention ? node.attention!.to : undefined}
-      data-node-blocked={node.blocked ?? undefined}
-      data-node-dimmed={dimmed || undefined}
-      className={cn(
-        "relative flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
-        yours ? ATTENTION_CARD : LOOK_CARD[look],
-        // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
-        node.kind === "external" && "border-dotted",
-        selected && "outline-2 outline-offset-2 outline-primary",
-        dimmed && "opacity-(--opacity-dimmed)",
-      )}
     >
-      {/* A node that runs on another device wears that device's colour on its edge, the one the workspace's header band wears; a node here stays quiet. */}
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
-      {/* The operator's turn wears a dot on its corner in the colour of 내 차례's card. */}
-      {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
-      <span className="flex min-w-0 items-center gap-xs">
-        <MissionNodeMark look={look} label={word} still={doing != null && doing.state !== "working"} />
-        {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
-        {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
-        {hide ? <HideMark words={hide} /> : null}
-      </span>
       {doingLine ? (
         <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
           {doingLine}
@@ -525,7 +434,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-    </button>
+    </MissionGraphCard>
   );
   // The card and its satellites are one box to the layout, the card centred in it, so edges meet the card's middle.
   // An empty column as wide as the satellites' keeps the card in the middle of the box.
@@ -605,13 +514,7 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
   const stack = stackWaiting(mission);
   const note = mission.status === "done" ? t("mission.report.done") : mission.status === "merge_wait" && stack > 0 ? t("mission.report.stack") : mission.status === "cancelled" ? t("mission.cancelled") : t("mission.report.waiting");
   const look: NodeLook = mission.status === "done" ? "done" : mission.status === "cancelled" ? "cancelled" : "waiting";
-  return (
-    <div data-dependency-node={REPORT} data-mission-report={mission.status} className={cn("flex w-(--size-mission-node) items-center justify-center gap-xs rounded-xl border px-md py-sm transition-opacity", LOOK_CARD[look], dimmed && "opacity-(--opacity-dimmed)")}>
-      <MissionNodeMark look={look} label={note} />
-      <span className="text-body font-semibold">{t("mission.report")}</span>
-      <span className="text-caption text-muted-foreground">{note}</span>
-    </div>
-  );
+  return <MissionGraphReport status={mission.status} note={note} look={look} dimmed={dimmed} />;
 }
 
 /** A stopped worker's line: why first, then how long ago it stopped; `full` is the whole sentence, the agent's own line included, for the hover and the card's name. */

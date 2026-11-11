@@ -48,6 +48,7 @@ function mission(id: string, over: Partial<PhoneMission> = {}): PhoneMission {
 /** A phone paired and connected to a fake hided that has listed the given missions. */
 async function connect(items: PhoneMission[]) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
   vi.stubGlobal("WebSocket", FakeSocket);
   FakeSocket.instances = [];
   vi.resetModules();
@@ -114,13 +115,12 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
 
     await click('[data-phone-mission="m-run"]');
     expect(container.querySelector("[data-mission-gates]")).toBeNull();
-    expect(container.querySelector('[data-phone-step="b"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("open");
-    expect(container.querySelector('[data-phone-step="b"] [data-phone-step-gate-long]')?.textContent).toBe("Needs you · Waiting long");
-    expect(container.querySelector('[data-phone-step="c"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("ahead");
-    expect(container.querySelector('[data-phone-step="c"] [data-phone-step-gate-long]')).toBeNull();
-    await click('[data-phone-fold^="done:"]');
-    expect(container.querySelector('[data-phone-step="a"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("passed");
-    expect(container.querySelector('[data-phone-step="a"] [data-phone-step-gate-via="phone"]')?.textContent).toBe("Answered on the phone · “Go on”");
+    expect(container.querySelector('[data-mission-node="b"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("open");
+    expect(container.querySelector('[data-mission-node="b"] [data-node-gate-long]')?.textContent).toBe("· Waiting long");
+    expect(container.querySelector('[data-mission-node="c"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("ahead");
+    expect(container.querySelector('[data-mission-node="c"] [data-node-gate-long]')).toBeNull();
+    expect(container.querySelector('[data-mission-node="a"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("passed");
+    expect(container.querySelector('[data-mission-node="a"] [data-phone-node-gate-via="phone"]')?.textContent).toBe("Answered on the phone · “Go on”");
   } finally {
     await unmount();
   }
@@ -140,12 +140,12 @@ it("keeps the later planned review visible after a two-step plan starts, without
       { ...planned.nodes[0]!, status: "working" },
       planned.nodes[1]!,
     ] }] });
-    const later = container.querySelector('[data-phone-step="later"]');
+    const later = container.querySelector('[data-mission-node="later"]');
     expect(later?.textContent).toContain("Step later");
     expect(later?.querySelector('[data-node-gate="ahead"]')?.textContent).toBe("the finished screen");
     // It is not begun: it says what it waits for, not where its work stands.
-    expect(later?.getAttribute("data-phone-step-kind")).toBe("planned");
-    expect(later?.querySelector('[data-phone-step-line="planned"]')?.textContent).toBe("waiting for Step first");
+    expect(later?.getAttribute("data-node-status")).toBe("planned");
+    expect(container.querySelector("[data-dependency-graph]")?.getAttribute("data-dependency-edges")).toBe("2");
     await click('[data-phone-back="missions"]');
     expect(container.querySelector('[data-phone-tab="missions"]')!.getAttribute("data-phone-tab-count")).toBeNull();
     expect(container.querySelector('[data-phone-mission="m-start"] [data-mission-row-gates]')?.textContent).toBe("1");
