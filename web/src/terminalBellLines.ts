@@ -5,9 +5,9 @@
 // it as a prompt row, `❯ 🦉 …` in Claude Code and `› 🦉 …` in Codex, and it is
 // a letter between agents, not something the operator has to act on; what the
 // operator owes an answer to is Needs You. The row is quieted, never hidden or
-// rewritten: the agent's own TUI draws it, so the shell only lays a foreground
-// and a background color over its cells, and the text, the selection and the
-// copy stay as drawn.
+// rewritten: the agent's own TUI draws it, so the shell only lays a band (bottom layer,
+// under the pane's drag selection) and a foreground color (top layer) over its
+// cells, and the text and the copy stay as drawn.
 //
 // The pane keeps no scrollback and the holder redraws its screen rows in place,
 // so a marker on a row says nothing about what the row shows next. After a
@@ -87,7 +87,7 @@ export function bellRows(rows: readonly ScreenRow[], cols: number, scan = declar
 export type BellColors = { foreground: string; background: string };
 
 /** A decoration and the marker it hangs on: disposing a decoration leaves its marker registered in the buffer. */
-type Item = { y: number; marker: IMarker; decoration: IDecoration };
+type Item = { y: number; marker: IMarker; decorations: IDecoration[] };
 
 type Drawn = { rows: number[]; colors: BellColors; cols: number; height: number; items: Item[] };
 
@@ -122,8 +122,8 @@ function readRows(term: Terminal): ScreenRow[] {
 function dispose(term: Terminal) {
   const was = drawn.get(term);
   if (!was) return;
-  for (const { marker, decoration } of was.items) {
-    decoration.dispose();
+  for (const { marker, decorations } of was.items) {
+    for (const decoration of decorations) decoration.dispose();
     marker.dispose();
   }
   drawn.delete(term);
@@ -139,7 +139,7 @@ function holds(term: Terminal, was: Drawn, rows: readonly number[], colors: Bell
   if (was.colors.foreground !== colors.foreground || was.colors.background !== colors.background || was.cols !== term.cols || was.height !== term.rows) return false;
   if (was.rows.length !== rows.length || !was.rows.every((row, i) => row === rows[i])) return false;
   const top = term.buffer.active.viewportY;
-  return was.items.every(({ y, marker, decoration }) => !decoration.isDisposed && !marker.isDisposed && marker.line === top + y);
+  return was.items.every(({ y, marker, decorations }) => decorations.every((decoration) => !decoration.isDisposed) && !marker.isDisposed && marker.line === top + y);
 }
 
 /** Reads the screen now and draws the bell rows in `colors`; nothing changes while what is drawn holds. */
@@ -154,9 +154,17 @@ export function dimBellLines(term: Terminal, colors: BellColors) {
   for (const y of rows) {
     const marker = term.registerMarker(buffer.viewportY + y - (buffer.baseY + buffer.cursorY));
     if (!marker) continue;
-    const decoration = term.registerDecoration({ marker, x: 0, width: term.cols, foregroundColor: colors.foreground, backgroundColor: colors.background, layer: "top" });
-    if (decoration) items.push({ y, marker, decoration });
-    else marker.dispose();
+    // The band is on the bottom layer, under the selection the pane draws with
+    // `term.select`, and the words on the top layer: a top layer that carries a
+    // background color is painted over the selection, a foreground-only one is not.
+    const band = term.registerDecoration({ marker, x: 0, width: term.cols, backgroundColor: colors.background, layer: "bottom" });
+    const words = term.registerDecoration({ marker, x: 0, width: term.cols, foregroundColor: colors.foreground, layer: "top" });
+    const decorations = [band, words].filter((decoration): decoration is IDecoration => decoration !== undefined);
+    if (decorations.length === 2) items.push({ y, marker, decorations });
+    else {
+      for (const decoration of decorations) decoration.dispose();
+      marker.dispose();
+    }
   }
   drawn.set(term, { rows, colors, cols: term.cols, height: term.rows, items });
 }

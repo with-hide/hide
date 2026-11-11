@@ -186,11 +186,11 @@ describe("reading the screen", () => {
     const { term, counts } = fakeTerminal(["❯ 🦉 a 진행: 끝", "⏺ ok"]);
     dimBellLines(term, colors("#666"));
     dimBellLines(term, colors("#666"));
-    expect(counts).toMatchObject({ markers: 1, decorations: 1, disposed: 0 });
+    expect(counts).toMatchObject({ markers: 1, decorations: 2, disposed: 0 });
     dimBellLines(term, colors("#777"));
-    expect(counts).toMatchObject({ decorations: 2, disposed: 1 });
+    expect(counts).toMatchObject({ decorations: 4, disposed: 2 });
     forgetBellLines(term);
-    expect(counts.disposed).toBe(2);
+    expect(counts.disposed).toBe(4);
   });
 });
 
@@ -246,7 +246,7 @@ describe("what is drawn on a real terminal", () => {
 
   it("draws each letter row with the words and the band together, and again when only the band changes", async () => {
     const term = new Terminal({ rows: 10, cols: 80, scrollback: 0, allowProposedApi: true });
-    const registered: Array<{ foregroundColor?: string; backgroundColor?: string; width?: number }> = [];
+    const registered: Array<{ foregroundColor?: string; backgroundColor?: string; width?: number; layer?: string }> = [];
     const register = term.registerDecoration.bind(term);
     term.registerDecoration = ((options: Parameters<Terminal["registerDecoration"]>[0]) => {
       registered.push(options);
@@ -254,12 +254,18 @@ describe("what is drawn on a real terminal", () => {
     }) as Terminal["registerDecoration"];
     await written(term, "\x1b[3;1H❯ 🦉 a 진행: 끝\x1b[10;1H");
     dimBellLines(term, colors("#8fb4c8", "#1a252a"));
-    expect(registered).toEqual([expect.objectContaining({ foregroundColor: "#8fb4c8", backgroundColor: "#1a252a", width: 80 })]);
+    // The band under the selection, the words over it, each across the whole row.
+    expect(registered).toEqual([
+      expect.objectContaining({ backgroundColor: "#1a252a", layer: "bottom", width: 80 }),
+      expect.objectContaining({ foregroundColor: "#8fb4c8", layer: "top", width: 80 }),
+    ]);
+    expect(registered[0]).not.toHaveProperty("foregroundColor");
+    expect(registered[1]).not.toHaveProperty("backgroundColor");
     dimBellLines(term, colors("#8fb4c8", "#1a252a"));
-    expect(registered).toHaveLength(1);
-    dimBellLines(term, colors("#8fb4c8", "#e3edf1"));
     expect(registered).toHaveLength(2);
-    expect(registered[1]!.backgroundColor).toBe("#e3edf1");
+    dimBellLines(term, colors("#8fb4c8", "#e3edf1"));
+    expect(registered).toHaveLength(4);
+    expect(registered[2]!.backgroundColor).toBe("#e3edf1");
     forgetBellLines(term);
     term.dispose();
   });

@@ -916,7 +916,8 @@ The shell reads only the shape of a row: it begins with the agent's prompt glyph
 It does not know who typed the row, so two limits stand: a line a person types in the same shape (`❯ 🦉 hello`, also while it is still a draft in the composer) is marked too, and a Grok row that its keyboard focus frames (`│ ❯ 🦉 … │`) is not marked until focus moves.
 A line that does not match the shape, such as `❯ 🦉가 뭐야?` or one with no prompt glyph, is drawn as the agent drew it.
 Telling a typed line from a letter needs the core to mark the line it typed, which is not built.
-The text, the selection and the copy are unchanged: the shell lays a foreground and a background color over the agent's own cells and rewrites nothing; where the agent paints its own background on a row, the band replaces it for that row.
+The text and the copy are unchanged: the shell lays two decorations over the agent's own cells and rewrites nothing; where the agent paints its own background on a row, the band replaces it for that row.
+The band is a bottom-layer decoration, so a drag selection (`term.select`) is painted over it and stays visible on a letter row, and the words are a top-layer foreground-only decoration, which the selection does not hide; `web/src/terminalBellLines.selection.test.ts` holds this against the WebGL addon's own cell color resolver.
 The prompt glyphs and the output marks that end a wrapped line are the agents' declarations (`BellEcho`, [delivery.md](delivery.md#the-bell-line)), not a list in the web shell.
 Web owner: `web/src/terminalBellLines.ts`, read after a frame by `web/src/terminals.ts`; cost contract: [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-doorbells-lines-in-a-terminal).
 
