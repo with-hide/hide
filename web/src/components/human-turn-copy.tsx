@@ -15,6 +15,15 @@ export type CopyText = (text: string, what: string) => Promise<boolean>;
 const COPIED_MS = 1500;
 
 /**
+ * A surface with a pointer shows Copy only under the pointer, on keyboard
+ * focus and while it says it took the place (operator decision 2026-11-11):
+ * the place's line is the `group/turn` it answers to, and a list row names
+ * itself one too, so the whole row reveals it. It keeps its width at rest,
+ * so the place never moves, and its box stays out of the line's height.
+ */
+const REVEALED = "-my-xxs opacity-0 group-hover/turn:opacity-100 focus-visible:opacity-100 data-copied:opacity-100 hoverless:opacity-100";
+
+/**
  * Copy beside a person's turn's place (operator decision 2026-11-08): one
  * icon on every surface that draws Done, which puts the place on the
  * clipboard exactly as the agent wrote it, a URL's query included, and turns
@@ -43,7 +52,7 @@ export function HumanTurnCopy({ turn, copy, touch = false, className }: { turn: 
       aria-label={copied ? label : t("agents.human.copyPlaceName", { place: turn.place })}
       data-human-turn-copy={turn.id}
       data-copied={copied ? "true" : undefined}
-      className={cn("pointer-events-auto relative z-10 shrink-0 self-center", touch && "size-(--size-touch-target)", className)}
+      className={cn("pointer-events-auto relative z-10 shrink-0 self-center", touch ? "size-(--size-touch-target)" : REVEALED, className)}
       onMouseDown={(event) => event.preventDefault()}
       onClick={(event) => {
         event.stopPropagation();

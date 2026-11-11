@@ -50,7 +50,13 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     await expect(task).toHaveAttribute("data-task-state", "needs_you");
     await expect(task.locator('[data-mark-human="true"]')).toHaveCount(1);
     await expect(task.locator("[data-human-turn-place]")).toHaveText(`Sign-in · ${place}`);
+    // Copy is drawn only while the pointer is on the row (operator decision 2026-11-11).
+    const copy = task.locator("[data-human-turn-copy]");
+    await expect(copy).toHaveCSS("opacity", "0");
     await screenshot(page, "ask-human-task-row");
+    await task.hover();
+    await expect(copy).toHaveCSS("opacity", "1");
+    await screenshot(page, "ask-human-task-row-hover");
 
     // The child's own pane head, in its own tab, says it with Done (B15).
     await withControl(daemon, async (control) => {
