@@ -205,8 +205,8 @@ export function browserPushResult(notifications: "on" | "refused"): void {
 
 /** After each meta: honor this phone's choice even when a computer has an older global mode. */
 export async function syncPush(): Promise<void> {
-  if (!pushSupported()) return;
   const state = usePhone.getState();
+  if (state.demo || !pushSupported()) return;
   const current = permission();
   setPush({ permission: current });
   if (!enabled() || current === "denied") {

@@ -15,7 +15,7 @@ import { appPushRow, refreshAppPush, turnOffAppPush, turnOnAppPush, useAppPush }
 import { DemoHostRows } from "./Demo";
 import { HostList } from "./HostList";
 import { disableNotifications, enableNotifications, pushSupported, refreshBrowserPush, syncPush, useBrowserPush } from "./push";
-import { AboutSection, DisplaySection, ROW_INSET, Section } from "./SettingsParts";
+import { AboutSection, DisplaySection, ROW_INSET, Section, ValueRow } from "./SettingsParts";
 import { usePhone } from "./store";
 import { TabBar } from "./TabBar";
 
@@ -107,7 +107,9 @@ export function SettingsScreen({ openSheet = null }: { /** The gallery's: the sh
         {demo ? <DemoHostRows /> : <HostList t={t} machines={devices} active={{ online: connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} />}
       </Section>
       <Section title={t("mobile.settings.notifications")} data-phone-settings-section="notifications">
-        {inApp ? <AppNotifications /> : <BrowserNotifications />}
+        {inApp ? <AppNotifications /> : demo
+          ? <ValueRow label={t("mobile.settings.notifications")} value={t("mobile.demo.sample")} marker="notifications" />
+          : <BrowserNotifications />}
       </Section>
       <DisplaySection t={t} openSheet={openSheet} />
       <AboutSection t={t} />
