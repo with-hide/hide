@@ -3646,9 +3646,11 @@ The Electron main host owns one one-second timer reading `powerMonitor.getSystem
 `COMPUTER_AWAY_SECONDS` is the single ten-minute threshold for input anywhere on the system; lock or suspend immediately reports away where Electron emits that event, and unsupported idle sources retain in-use behavior (the Linux limit is in `INSTALL.md`, What each system supports).
 The preload replays current use when the shell connects, then forwards transitions only as the typed `desktop_activity` message (`{in_use}`); hided accepts it only from a desktop connection, never dispatches it under the runtime lock, and releases its entry on disconnect.
 Connection admission bounds the per-connection activity and notification demand sets; a web tab contributes neither.
-A rested waiting notice shares the existing held queue: at most eight per phone across rest and relay outage, at most four phones, replacing the same agent tag and dropping the oldest at the cap.
-When resting ends the follower reads the current projection before draining those holds once, off the runtime lock; the existing notice serial withdraws an agent that stopped waiting.
-Resting holds have no age deadline; relay-outage holds retain their sixty-second expiry and recheck resting on reconnect.
+Computer rest records no payload queue: each existing `LiveNotices` root entry remembers at most one responsibility per currently paired phone (the existing four-phone cap), together with that notice's serial and cause.
+The shared phone ledger owns the latest settled cause; a per-phone responsibility distinguishes an initial wait from a later added declaration, so cancelling that declaration neither repeats an older notice already sent to that phone nor loses an initial notice it never received.
+When resting ends the follower judges the current projection before rebuilding each rested phone's notice once, off the runtime lock; marking it queued under the Mobile mutex and checking the serial before transport prevent duplicate wakes or an old job from consuming a newer wait.
+A close, follower reset or end, revocation, inactivity expiry or pairing-scope change withdraws its responsibility.
+Rest has no age deadline and does not evict still-waiting roots; the relay-only payload queue retains its existing eight-per-phone cap and sixty-second expiry, and reconnect rechecks computer use before transport, waking the follower if it rests again.
 A phone viewing that agent’s detail is skipped in both modes.
 Receiving is a separate phone-owned choice: the browser’s `web/src/mobile/push.ts` keeps `hide.phone.web-push` on this browser, independent of the computer’s mode, including an older computer’s `off` meta value.
 Off is persisted before cleanup, sends the existing denied permission frame, and unsubscribes all paired-computer scopes (at most 16, the host-store cap), retaining their workers and the root offline worker.

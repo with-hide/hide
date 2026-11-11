@@ -982,7 +982,11 @@ The projection and push regression tests remain in `hided/src/mobile/{projection
 With the phone-rest switch on, an attached host reporting computer use rests pushes only if an attached desktop window enables Needs You notices.
 Ten minutes without system input, screen lock, suspend, the last active host disconnecting, or all desktop Needs You switches turning off releases each still-current rested wait once.
 A wait that ended first is withdrawn by its notice serial.
-Rested waits reuse the relay-held queues (eight per phone, four phones, same-tag replacement, oldest dropped at the cap), with no age deadline while resting; relay-only holds still expire after sixty seconds.
+Rested responsibility lives in each existing current-root notice entry, at most one per currently paired phone (four), with its serial and the cause that phone has not received; it stores no payload and evicts no live wait.
+An added declaration that disappears cancels only its own responsibility: an initial wait that phone never received still stands, and an initial wait already sent never repeats.
+A freshly judged projection rebuilds only rested attempts; admission marks them queued before releasing the Mobile mutex, and transport completion can consume only that serial.
+Revocation, phone inactivity expiry, pairing-scope changes and follower reset or end release the corresponding responsibility.
+Relay-only holds keep their eight-per-phone payload cap and sixty-second expiry, and recheck resting before transport on reconnect.
 The desktop app's agent notifications run the same transitions on their own ledger (`hided/src/desktop_notices.rs`, PRD first-run-onboarding D-09), so a desktop notification and a phone push agree on what is new without either one's seed or mode moving the other.
 A Hide AI row for a home is on the phone's list, and in these transitions, only while it is in Needs You, so the notification follows the group: one notice when it enters, none when the home's turn changes inside it, and none for its progress (PRD hide-ai-work-home B2, B10); the phone opens the agent's detail from it.
 

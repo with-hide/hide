@@ -442,10 +442,31 @@ pub const SETTLE_CAP: usize = 64;
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
-    standing: BTreeSet<AgentKey>,
+    standing: BTreeMap<AgentKey, Cause>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
+}
+
+/// Why a phone still owes a notice. An initial wait may fall back to the
+/// row's current ask; an added declaration must still exist by its identity.
+#[derive(Clone, Debug)]
+pub(super) enum Cause {
+    Root(Option<String>),
+    Added(String),
+}
+
+impl Cause {
+    pub(super) fn notice(&self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
+        let agent = projection.find(key)?;
+        let declared = match self {
+            Self::Root(id) => id.as_ref().and_then(|id| agent.human_turns.get(id)),
+            Self::Added(id) => Some(agent.human_turns.get(id)?),
+        };
+        Some(hide_core::agent_state::push::waiting_notice(
+            key, agent, declared,
+        ))
+    }
 }
 
 struct Pending {
@@ -471,18 +492,18 @@ impl PhoneNotices {
         self.ledger.seeded()
     }
 
-    /// Whether it holds anything a reset would drop.
-    pub fn tracking(&self) -> bool {
-        self.ledger.seeded() || !self.pending.is_empty() || !self.standing.is_empty()
-    }
-
     /// One ledger pass. The pass that seeds it announces nothing and makes
     /// every root then waiting standing, whichever path seeds it.
     fn judge(&mut self, projection: &Projection, at: Instant) -> (Vec<Notice>, BTreeSet<AgentKey>) {
         let seeding = !self.ledger.seeded();
         let judged = self.ledger.observe_at(projection, at);
         if seeding {
-            self.standing = self.ledger.waiting().cloned().collect();
+            self.standing = self
+                .ledger
+                .waiting()
+                .cloned()
+                .map(|key| (key, Cause::Root(None)))
+                .collect();
         }
         judged
     }
@@ -503,11 +524,11 @@ impl PhoneNotices {
         // `close` itself.
         close.extend(
             self.standing
-                .iter()
+                .keys()
                 .filter(|key| ledger.present(key) && !ledger.waits_on_operator(key))
                 .cloned(),
         );
-        self.standing.retain(|key| !close.contains(key));
+        self.standing.retain(|key, _| !close.contains(key));
         self.pending.retain(|key, _| ledger.waits_on_operator(key));
         for notice in announced {
             // A finished turn, a View to look at or anything else the ledger
@@ -518,7 +539,7 @@ impl PhoneNotices {
             match self.pending.get_mut(&notice.key) {
                 Some(pending) => pending.newest = notice,
                 None => {
-                    let added = self.standing.contains(&notice.key);
+                    let added = self.standing.contains_key(&notice.key);
                     self.pending.insert(
                         notice.key.clone(),
                         Pending {
@@ -575,6 +596,22 @@ impl PhoneNotices {
             .collect()
     }
 
+    pub(super) fn cause(&self, key: &AgentKey) -> Cause {
+        self.standing
+            .get(key)
+            .expect("a delivered notice passed settle")
+            .clone()
+    }
+
+    pub(super) fn waits(&self, key: &AgentKey) -> bool {
+        self.ledger.waits_on_operator(key)
+    }
+
+    #[cfg(test)]
+    pub(super) fn stand(&mut self, key: AgentKey) {
+        self.standing.insert(key, Cause::Root(None));
+    }
+
     /// When the next pending notice is due.
     pub fn next_due(&self) -> Option<Instant> {
         self.pending.values().map(|pending| pending.due).min()
@@ -593,7 +630,17 @@ impl PhoneNotices {
             // The turn added to a standing wait is gone: nothing new to say.
             return None;
         }
-        self.standing.insert(key.clone());
+        let id = agent
+            .human_turns
+            .iter()
+            .find(|(_, turn)| Some(*turn) == declared)
+            .map(|(id, _)| id.clone());
+        let cause = if pending.added {
+            Cause::Added(id.expect("an added declaration was checked above"))
+        } else {
+            Cause::Root(id)
+        };
+        self.standing.insert(key.clone(), cause);
         Some(hide_core::agent_state::push::waiting_notice(
             key, agent, declared,
         ))

@@ -35,6 +35,9 @@ fn notice(pane: &str) -> push::Notice {
 }
 
 fn deliver(mobile: &Arc<Mobile>, notices: Vec<push::Notice>, closed: &[&str]) {
+    for notice in &notices {
+        mobile.lock().phone_notices.stand(notice.key.clone());
+    }
     mobile.deliver(
         notices,
         closed.iter().map(|pane| key(pane)).collect(),
@@ -398,144 +401,401 @@ async fn web_preflight() {
     running.stop();
 }
 
-/// The host speaks the public socket protocol; the phone decrypts the actual
-/// local push request. Fences prove absence without guessing a quiet interval.
-#[test]
-fn computer_use_rests_then_releases_only_current_waits() {
-    with_runtime(computer_use());
+/// The follower's shared judge/settle pass and actual HTTP push boundary,
+/// with a stand-in host. A bare core keeps the automatic follower parked;
+/// the fixture supplies projections and a monotonic clock explicitly.
+type SendHook = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+
+struct RestFixture {
+    mobile: Arc<Mobile>,
+    received: tokio::sync::mpsc::UnboundedReceiver<(String, String, axum::body::Bytes)>,
+    on_send: SendHook,
+    server: tokio::task::JoinHandle<()>,
+    phone_key: Option<AppKey>,
+    _directory: tempfile::TempDir,
 }
 
-async fn computer_use() {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let directory = tempfile::tempdir().unwrap();
-    let phone_key = AppKey::new();
-    let registration = phone_key.registration(&"ab".repeat(32));
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let state = directory.path().join("state");
-    assert!(store::write_logged(
-        &store::settings_path(&state),
-        &json!({
-            "enabled": true, "method": "relay", "push_mode": "app_closed",
-        })
-    ));
-    assert!(store::write_logged(
-        &store::phones_path(&state),
-        &json!({"phones": [{
-            "id": PHONE, "name": "Phone", "credential_sha256": "0".repeat(64),
-            "paired_at_ms": now_ms(), "last_seen_ms": now_ms(),
-            "notifications": "on", "origin": "relay",
-            "push": {"endpoint": format!("http://{}/push", listener.local_addr().unwrap()),
-                "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"]},
-        }]})
-    ));
-    let (sent, mut received) = tokio::sync::mpsc::channel(16);
-    let app = axum::Router::new().route(
-        "/push",
-        axum::routing::post(move |body: axum::body::Bytes| {
-            let sent = sent.clone();
-            async move {
-                sent.send(body).await.unwrap();
-                axum::http::StatusCode::NO_CONTENT
-            }
-        }),
-    );
-    let server = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let running = start(directory.path(), relay.local_addr().unwrap().port()).await;
-    let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
-        .into_client_request()
-        .unwrap();
-    request.headers_mut().insert(
-        "origin",
-        format!("http://127.0.0.1:{}", running.port)
-            .parse()
-            .unwrap(),
-    );
-    let (mut host, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-    host.send(Message::Text(
-        json!({"token":running.token,"schema_version":2,"client_kind":"desktop"})
-            .to_string()
-            .into(),
-    ))
-    .await
-    .unwrap();
-
-    // The deliberate malformed frame is an ordered acknowledgement: every
-    // earlier valid report has been consumed when its error comes back.
-    macro_rules! report {
-        ($kind:expr, $payload:expr) => {{
-            for event in [json!({"schema_version":2,"kind":$kind,"payload":$payload}),
-                json!({"schema_version":2,"kind":"desktop_activity","payload":{"in_use":"invalid"}})] {
-                host.send(Message::Text(event.to_string().into())).await.unwrap();
-            }
-            loop {
-                if let Message::Text(text) = host.next().await.unwrap().unwrap() {
-                    let frame: Value = serde_json::from_str(&text).unwrap();
-                    if frame["type"] == "error" {
-                        assert_eq!(frame["message"], "desktop_activity.in_use must be a boolean");
-                        break;
+impl RestFixture {
+    async fn new(phones: usize) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, received) = tokio::sync::mpsc::unbounded_channel();
+        let on_send: SendHook = Arc::default();
+        let hook = Arc::clone(&on_send);
+        let app = axum::Router::new().route(
+            "/{phone}",
+            axum::routing::post(
+                move |axum::extract::Path(phone): axum::extract::Path<String>,
+                      headers: axum::http::HeaderMap,
+                      body: axum::body::Bytes| {
+                    let sent = sent.clone();
+                    let hook = Arc::clone(&hook);
+                    async move {
+                        sent.send((phone, headers["topic"].to_str().unwrap().to_owned(), body))
+                            .unwrap();
+                        if let Some(hook) = hook.lock().unwrap().take() {
+                            hook();
+                        }
+                        axum::http::StatusCode::NO_CONTENT
                     }
-                }
-            }
-        }};
+                },
+            ),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let phone_key = AppKey::new();
+        let registration = phone_key.registration(&"ab".repeat(32));
+        let state = directory.path().join("state");
+        assert!(store::write_logged(
+            &store::settings_path(&state),
+            &json!({
+                "enabled": true, "method":"relay", "push_mode":"app_closed",
+            })
+        ));
+        let phones: Vec<_> = (0..phones).map(|index| json!({
+            "id":format!("phone-{index}"), "name":"Phone", "credential_sha256":"0".repeat(64),
+            "paired_at_ms":now_ms(), "last_seen_ms":now_ms(), "notifications":"on", "origin":"relay",
+            "push":{"endpoint":format!("http://{address}/phone-{index}"),
+                "p256dh":registration["key"]["p256dh"], "auth":registration["key"]["auth"]},
+        })).collect();
+        assert!(store::write_logged(
+            &store::phones_path(&state),
+            &json!({"phones":phones})
+        ));
+        let mobile = test_mobile(directory.path(), &Arc::default());
+        mobile.relay_keys().unwrap();
+        mobile.config.desktop.set_waiting(1, true);
+        mobile.config.desktop.activity(1, true);
+        Self {
+            mobile,
+            received,
+            on_send,
+            server,
+            phone_key: Some(phone_key),
+            _directory: directory,
+        }
     }
-    let mobile = &running.mobile;
-    report!("desktop_notices", json!({"wanted":true,"needs_you":true}));
-    report!("desktop_activity", json!({"in_use":true}));
-    deliver(mobile, vec![notice("waiting"), notice("answered")], &[]);
-    fence().await;
-    assert!(
-        received.try_recv().is_err(),
-        "input anywhere on the computer rests phone pushes"
-    );
-    deliver(mobile, vec![], &["answered"]);
-    report!("desktop_activity", json!({"in_use":false}));
-    mobile.flush_rested();
-    let body = received.recv().await.unwrap();
-    let payload: Value = serde_json::from_slice(&phone_key.decrypt(&body)).unwrap();
-    assert_eq!(payload["tag"], "node|waiting");
-    mobile.flush_rested();
-    fence().await;
-    assert!(
-        received.try_recv().is_err(),
-        "away sends once, and never sends the answered agent"
-    );
 
-    // Lock/suspend is an immediate away report from the host: a new wait is
-    // sent even though its desktop window is still attached.
-    deliver(mobile, vec![notice("locked")], &[]);
-    let body = received.recv().await.unwrap();
-    assert!(!body.is_empty(), "locked sends immediately");
-    report!("desktop_activity", json!({"in_use":true}));
-    report!("desktop_notices", json!({"wanted":true,"needs_you":false}));
-    deliver(mobile, vec![notice("desktop-off")], &[]);
-    let body = received.recv().await.unwrap();
-    assert!(
-        !body.is_empty(),
-        "Done alone cannot replace a Needs You notice"
-    );
-    report!("desktop_notices", json!({"wanted":true,"needs_you":true}));
-    report!("mobile_push_mode", json!({"mode":"always"}));
-    deliver(mobile, vec![notice("rest-off")], &[]);
-    let body = received.recv().await.unwrap();
-    assert!(!body.is_empty(), "rest switch off always sends");
-    fence().await;
-    assert!(received.try_recv().is_err());
-    report!("mobile_push_mode", json!({"mode":"app_closed"}));
-    deliver(mobile, vec![notice("last-host-closes")], &[]);
-    fence().await;
-    assert!(received.try_recv().is_err());
-    host.close(None).await.unwrap();
-    let body = received.recv().await.unwrap();
-    assert!(
-        !body.is_empty(),
-        "disconnect releases the last active host's hold"
-    );
-    fence().await;
-    assert!(received.try_recv().is_err());
-    running.stop();
-    server.abort();
-    let _ = server.await;
+    fn queue_pass(&self, projection: &Projection, at: std::time::Instant, changed: bool) {
+        let judged = judge_pass(
+            &mut self.mobile.lock().phone_notices,
+            true,
+            &self.mobile.config.desktop,
+            projection,
+            changed,
+            true,
+            at,
+        );
+        if let Some((notices, closed)) = judged {
+            self.mobile.deliver(notices, closed, projection);
+        }
+        self.mobile.flush_rested(projection);
+    }
+
+    async fn pass(&self, projection: &Projection, at: std::time::Instant, changed: bool) {
+        self.queue_pass(projection, at, changed);
+        fence().await;
+    }
+
+    fn take(&mut self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        while let Ok((phone, topic, body)) = self.received.try_recv() {
+            assert!(!body.is_empty(), "the phone receives an encrypted request");
+            out.push((phone, topic));
+        }
+        out.sort();
+        out
+    }
+}
+
+impl Drop for RestFixture {
+    fn drop(&mut self) {
+        self.mobile.stopping.send_replace(true);
+        self.server.abort();
+    }
+}
+
+fn roots(count: usize, working: &[usize], turns: &[&str]) -> Projection {
+    let agents: Vec<_> = (0..count).map(|index| {
+        let mut row = json!({"pane_id":format!("root-{index}"), "group":if working.contains(&index) { "working" } else { "needs_you" },
+            "mark":"going", "identity_label":format!("Task {index}"), "agent_kind":"claude", "demand":if working.contains(&index) { "none" } else { "question" },
+            "status_code":if working.contains(&index) { "working" } else { "question" }, "unread":true});
+        if !turns.is_empty() {
+            row["raised"] = json!(turns.iter().map(|id| json!({"subject":{
+                "cause":"human_turn", "id":id, "kind":"auth", "place":"login", "device":"mini",
+            }})).collect::<Vec<_>>());
+            row["human_turn"] = json!({"id":turns[0],"own":false});
+        }
+        row
+    }).collect();
+    projection::project(
+        &json!({"navigator":{"agents":agents,"workspaces":[],"devices":[{"id":"node","label":null}]}}),
+        "node",
+    )
+}
+
+// Web Push's public collapse topic identifies each received root without
+// needing a reusable private ECDH key in this fixture.
+fn topic(index: usize) -> String {
+    URL_SAFE_NO_PAD.encode(
+        &ring::digest::digest(
+            &ring::digest::SHA256,
+            format!("node|root-{index}").as_bytes(),
+        )
+        .as_ref()[..24],
+    )
+}
+
+#[test]
+fn computer_use_rests_then_releases_all_nine_current_waits_once() {
+    with_runtime(async {
+        let mut fixture = RestFixture::new(1).await;
+        let t = std::time::Instant::now();
+        fixture
+            .pass(&roots(10, &(0..10).collect::<Vec<_>>(), &[]), t, true)
+            .await;
+        fixture.pass(&roots(10, &[], &[]), t, true).await;
+        fixture
+            .pass(&roots(10, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(fixture.take().is_empty(), "system input rests every root");
+        fixture
+            .pass(&roots(10, &[0], &[]), t + push::SETTLE, true)
+            .await;
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture
+            .pass(&Projection::default(), t + push::SETTLE, true)
+            .await;
+        assert!(
+            fixture.take().is_empty(),
+            "a brief list absence preserves, but cannot word, the wait"
+        );
+        fixture
+            .pass(&roots(10, &[0], &[]), t + push::SETTLE, true)
+            .await;
+        let mut expected: Vec<_> = (1..10)
+            .map(|index| ("phone-0".to_owned(), topic(index)))
+            .collect();
+        expected.sort();
+        assert_eq!(
+            fixture.take(),
+            expected,
+            "nine still-current roots, no answered root"
+        );
+        fixture
+            .pass(&roots(10, &[0], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(
+            fixture.take().is_empty(),
+            "an unchanged away pass never repeats"
+        );
+    });
+}
+
+#[test]
+fn desktop_notice_off_rest_off_lock_and_disconnect_release_current_waits() {
+    with_runtime(async {
+        let mut fixture = RestFixture::new(1).await;
+        let t = std::time::Instant::now();
+        fixture.pass(&roots(1, &[0], &[]), t, true).await;
+        fixture.pass(&roots(1, &[], &[]), t, true).await;
+        fixture.mobile.config.desktop.activity(1, false); // The host's lock/suspend report.
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE / 2, false)
+            .await;
+        assert!(
+            fixture.take().is_empty(),
+            "away never bypasses the existing settle window"
+        );
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
+        for release in 0..3 {
+            let t = t + push::SETTLE * (release * 2 + 2);
+            fixture.mobile.config.desktop.activity(1, true);
+            fixture.mobile.config.desktop.set_waiting(1, true);
+            fixture.mobile.lock().settings.push_mode = PushMode::AppClosed;
+            fixture.pass(&roots(1, &[0], &[]), t, true).await;
+            fixture.pass(&roots(1, &[], &[]), t, true).await;
+            fixture
+                .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+                .await;
+            assert!(fixture.take().is_empty());
+            match release {
+                0 => fixture.mobile.config.desktop.set_waiting(1, false),
+                1 => fixture.mobile.lock().settings.push_mode = PushMode::Always,
+                _ => fixture.mobile.config.desktop.release(1),
+            }
+            fixture
+                .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+                .await;
+            assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
+        }
+    });
+}
+
+#[test]
+fn added_turn_withdrawal_preserves_only_the_unsent_root_responsibility() {
+    with_runtime(async {
+        for initial_rested in [false, true] {
+            let mut fixture = RestFixture::new(1).await;
+            let t = std::time::Instant::now();
+            fixture.mobile.config.desktop.activity(1, initial_rested);
+            fixture.pass(&roots(1, &[0], &[]), t, true).await;
+            fixture.pass(&roots(1, &[], &["A"]), t, true).await;
+            fixture
+                .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
+                .await;
+            assert_eq!(fixture.take().len(), usize::from(!initial_rested));
+            fixture.mobile.config.desktop.activity(1, true);
+            fixture
+                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE, true)
+                .await;
+            fixture
+                .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
+                .await;
+            assert!(fixture.take().is_empty());
+            fixture
+                .pass(&roots(1, &[], &["A"]), t + push::SETTLE * 2, true)
+                .await;
+            fixture.mobile.config.desktop.activity(1, false);
+            fixture
+                .pass(&roots(1, &[], &["A"]), t + push::SETTLE * 2, false)
+                .await;
+            assert_eq!(
+                fixture.take().len(),
+                usize::from(initial_rested),
+                "A owed only when it was never sent; cancelled B never becomes A"
+            );
+        }
+    });
+}
+
+#[test]
+fn only_the_phone_whose_attempt_rested_is_resumed() {
+    with_runtime(async {
+        let mut fixture = RestFixture::new(2).await;
+        let t = std::time::Instant::now();
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture.pass(&roots(1, &[0], &[]), t, true).await;
+        fixture.pass(&roots(1, &[], &["A"]), t, true).await;
+        let desktop = Arc::clone(&fixture.mobile.config.desktop);
+        *fixture.on_send.lock().unwrap() = Some(Box::new(move || desktop.activity(1, true)));
+        fixture
+            .pass(&roots(1, &[], &["A"]), t + push::SETTLE, false)
+            .await;
+        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
+        fixture
+            .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE, true)
+            .await;
+        fixture
+            .pass(&roots(1, &[], &["A", "B"]), t + push::SETTLE * 2, false)
+            .await;
+        fixture
+            .pass(&roots(1, &[], &["A"]), t + push::SETTLE * 2, true)
+            .await;
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture
+            .pass(&roots(1, &[], &["A"]), t + push::SETTLE * 2, false)
+            .await;
+        assert_eq!(
+            fixture.take(),
+            [("phone-1".into(), topic(0))],
+            "A phone never repeats; B phone's original wait survives cancelled added B"
+        );
+    });
+}
+
+#[test]
+fn a_queued_rested_wait_withdraws_before_transport_and_its_clear_survives() {
+    with_runtime(async {
+        let mut fixture = RestFixture::new(1).await;
+        let t = std::time::Instant::now();
+        fixture.pass(&roots(2, &[0, 1], &[]), t, true).await;
+        fixture.pass(&roots(2, &[1], &[]), t, true).await;
+        fixture
+            .pass(&roots(2, &[1], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(fixture.take().is_empty());
+        let gate = block_jobs().await;
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture.queue_pass(&roots(2, &[1], &[]), t + push::SETTLE, false);
+        fixture.queue_pass(&roots(2, &[0, 1], &[]), t + push::SETTLE, true);
+        fixture.queue_pass(&roots(2, &[0], &[]), t + push::SETTLE, true);
+        fixture.queue_pass(&roots(2, &[0], &[]), t + push::SETTLE * 2, false);
+        drop(gate);
+        fence().await;
+        let (phone, received_topic, body) = fixture.received.try_recv().unwrap();
+        assert_eq!((phone, received_topic), ("phone-0".into(), topic(1)));
+        let received: Value =
+            serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body)).unwrap();
+        assert_eq!(received["clear"], json!(["node|root-0"]));
+        assert!(
+            fixture.take().is_empty(),
+            "withdrawn root never posts a request"
+        );
+    });
+}
+
+#[test]
+fn a_relay_reconnect_rests_again_before_the_transport_handoff() {
+    with_runtime(async {
+        let mut fixture = RestFixture::new(1).await;
+        let registration = AppKey::new().registration(&"ab".repeat(32));
+        let web = fixture
+            .mobile
+            .lock()
+            .phones
+            .get("phone-0")
+            .unwrap()
+            .push
+            .clone()
+            .unwrap();
+        fixture.mobile.lock().phones.set_apns(
+            "phone-0",
+            Some(
+                serde_json::from_value(json!({
+                    "token":registration["token"], "environment":"sandbox",
+                    "p256dh":registration["key"]["p256dh"], "auth":registration["key"]["auth"],
+                }))
+                .unwrap(),
+            ),
+        );
+        let t = std::time::Instant::now();
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture.pass(&roots(1, &[0], &[]), t, true).await;
+        fixture.pass(&roots(1, &[], &[]), t, true).await;
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        // The actual app route is held while its relay is away.
+        fixture.mobile.config.desktop.activity(1, true);
+        assert_eq!(
+            fixture.mobile.flush_held().unwrap().await.unwrap(),
+            [],
+            "reconnect admits no transport handoff while the computer is in use"
+        );
+        // The same paired phone registers its Web Push route before the next away.
+        fixture
+            .mobile
+            .lock()
+            .phones
+            .set_subscription("phone-0", Some(web));
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(fixture.take().is_empty());
+        fixture.mobile.config.desktop.activity(1, false);
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert_eq!(fixture.take(), [("phone-0".into(), topic(0))]);
+        fixture
+            .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
+            .await;
+        assert!(fixture.take().is_empty());
+    });
 }

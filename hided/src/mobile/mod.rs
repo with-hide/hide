@@ -129,8 +129,6 @@ struct Held {
     /// A waiting root's notice's serial (`LiveNotices`); `None` for a human delivery notice.
     generation: Option<u64>,
     at: std::time::Instant,
-    /// Computer-use holds have no age deadline; the serial withdraws stale waits.
-    resting: bool,
 }
 
 /// Puts a notice at the end of a phone's held queue: it replaces the one held for the same agent tag, and the oldest
@@ -147,7 +145,6 @@ fn hold_in(
         payload,
         generation,
         at,
-        resting: false,
     });
     while held.len() > HELD_PER_PHONE {
         held.pop_front();
@@ -161,15 +158,67 @@ fn hold_in(
 /// with a notice out, taken out by its close or by `clear` when the follower stops tracking.
 #[derive(Default)]
 struct LiveNotices {
-    current: HashMap<String, u64>,
+    current: HashMap<String, LiveNotice>,
     serial: u64,
+    /// One coalesced debt, so an ordinary follower pass scans no roots.
+    rested: bool,
+}
+
+/// Per-phone responsibility, within an existing current root entry. The
+/// phone map is pruned against Phones::current before every admission.
+struct LiveNotice {
+    serial: u64,
+    attempts: HashMap<String, Attempt>,
+}
+
+struct Attempt {
+    cause: push::Cause,
+    /// False means one particular job owns this attempt; only rested ones drain.
+    rested: bool,
 }
 
 impl LiveNotices {
+    #[cfg(test)]
     fn stamp(&mut self, tag: String) -> u64 {
+        self.admit(tag, push::Cause::Root(None), &["phone".to_owned()])
+    }
+
+    fn admit(&mut self, tag: String, cause: push::Cause, phones: &[String]) -> u64 {
         self.serial += 1;
-        self.current.insert(tag, self.serial);
+        let mut attempts = self
+            .current
+            .remove(&tag)
+            .map_or_else(HashMap::new, |old| old.attempts);
+        attempts.retain(|phone, _| phones.contains(phone));
+        for phone in phones {
+            let owed = attempts.remove(phone).map(|attempt| attempt.cause);
+            // An unsent initial wait survives a later declaration coming and going.
+            let cause = match owed {
+                Some(push::Cause::Root(id)) => push::Cause::Root(id),
+                _ => cause.clone(),
+            };
+            attempts.insert(
+                phone.clone(),
+                Attempt {
+                    cause,
+                    rested: false,
+                },
+            );
+        }
+        self.current.insert(
+            tag,
+            LiveNotice {
+                serial: self.serial,
+                attempts,
+            },
+        );
         self.serial
+    }
+
+    fn prune_phones(&mut self, phones: &BTreeSet<String>) {
+        for notice in self.current.values_mut() {
+            notice.attempts.retain(|phone, _| phones.contains(phone));
+        }
     }
 
     fn close(&mut self, tag: &str) {
@@ -182,7 +231,8 @@ impl LiveNotices {
                 .get("tag")
                 .and_then(Value::as_str)
                 .and_then(|tag| self.current.get(tag))
-                == Some(&generation)
+                .map(|notice| notice.serial)
+                == Some(generation)
         })
     }
 }
@@ -234,6 +284,7 @@ struct Inner {
     held: HashMap<String, VecDeque<Held>>,
     /// Which waiting root's notice is current (`LiveNotices`).
     live: LiveNotices,
+    phone_notices: push::PhoneNotices,
     /// Input request ids each phone sent, and how each ended (PRD B27).
     inputs: HashMap<String, VecDeque<(String, InputState)>>,
     /// An exposed Mobile's last pass could not read Tailscale; one such miss
@@ -448,6 +499,7 @@ impl Mobile {
                 pending_clear: HashMap::new(),
                 held: HashMap::new(),
                 live: LiveNotices::default(),
+                phone_notices: push::PhoneNotices::default(),
                 inputs: HashMap::new(),
                 missed_check: false,
                 reconcile_owed: PassOwed(true),
@@ -778,6 +830,12 @@ impl Mobile {
                 return;
             }
             inner.phones.set_origin(dns_name);
+            let ids = inner
+                .phones
+                .current()
+                .map(|phone| phone.id.clone())
+                .collect();
+            inner.live.prune_phones(&ids);
             if inner.settings.last_tailnet.as_deref() != Some(dns_name) {
                 inner.settings.last_tailnet = Some(dns_name.to_owned());
                 self.save_settings(&inner);
@@ -1423,7 +1481,17 @@ impl Mobile {
             .values()
             .map(|phone| phone.phone_id.clone())
             .collect();
-        let revoked = self.lock().phones.sweep(now_ms(), &connected);
+        let revoked = {
+            let mut inner = self.lock();
+            let revoked = inner.phones.sweep(now_ms(), &connected);
+            let ids = inner
+                .phones
+                .current()
+                .map(|phone| phone.id.clone())
+                .collect();
+            inner.live.prune_phones(&ids);
+            revoked
+        };
         for phone in &revoked {
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
@@ -1498,6 +1566,12 @@ impl Mobile {
                             .map(|name| PhoneOrigin::Paired(name.clone())),
                     };
                     inner.phones.set_scope(scope);
+                    let ids = inner
+                        .phones
+                        .current()
+                        .map(|phone| phone.id.clone())
+                        .collect();
+                    inner.live.prune_phones(&ids);
                     inner.checklist = None;
                     inner.relay_cleanup_failure = None;
                     inner.exposure = if inner.settings.enabled {
@@ -1613,6 +1687,9 @@ impl Mobile {
             inner.pending_clear.remove(phone_id);
             inner.inputs.remove(phone_id);
             inner.held.remove(phone_id);
+            for notice in inner.live.current.values_mut() {
+                notice.attempts.remove(phone_id);
+            }
             inner.phones.revoke(phone_id)
         };
         if let Some(phone) = removed {
@@ -2149,6 +2226,11 @@ impl Mobile {
     pub fn push_or_hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) {
         match self.push_to_app(phone_id, &payload) {
             Ok(()) => {
+                self.finish_attempt(
+                    phone_id,
+                    payload["tag"].as_str().expect("a notice tag"),
+                    generation,
+                );
                 // A live send is newer than anything held for the tag.
                 self.forget_held(phone_id, &payload);
                 hide_core::diagnostic!(json!({
@@ -2166,10 +2248,17 @@ impl Mobile {
                     "component": "mobile_push", "kind": kind, "phone_id": phone_id, "route": "app",
                 }));
             }
-            Err(reason) => hide_core::diagnostic!(json!({
-                "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
-                "route": "app", "reason": reason,
-            })),
+            Err(reason) => {
+                self.finish_attempt(
+                    phone_id,
+                    payload["tag"].as_str().expect("a notice tag"),
+                    generation,
+                );
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                    "route": "app", "reason": reason,
+                }));
+            }
         }
     }
 
@@ -2177,13 +2266,7 @@ impl Mobile {
     /// dropping the oldest past `HELD_PER_PHONE`; a waiting notice whose root stopped waiting is not kept (`false`).
     fn hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) -> bool {
         let mut inner = self.lock();
-        let ids: BTreeSet<_> = inner
-            .phones
-            .current()
-            .map(|phone| phone.id.clone())
-            .collect();
-        inner.held.retain(|id, _| ids.contains(id));
-        if !ids.contains(phone_id) || !inner.live.is_current(&payload, generation) {
+        if !inner.live.is_current(&payload, generation) {
             return false;
         }
         let held = inner.held.entry(phone_id.to_owned()).or_default();
@@ -2213,6 +2296,8 @@ impl Mobile {
     fn withdraw_waiting(&self) {
         let mut inner = self.lock();
         inner.live.current.clear();
+        inner.live.rested = false;
+        inner.phone_notices.reset();
         for queue in inner.held.values_mut() {
             queue.retain(|held| held.generation.is_none());
         }
@@ -2232,19 +2317,10 @@ impl Mobile {
     pub(crate) fn flush_held(self: &Arc<Self>) -> Option<tokio::task::JoinHandle<Vec<Handoff>>> {
         let waiting: Vec<(String, Held)> = {
             let mut inner = self.lock();
-            let mut waiting = Vec::new();
-            for (phone, queue) in &mut inner.held {
-                let mut resting = VecDeque::new();
-                for held in queue.drain(..) {
-                    if held.resting {
-                        resting.push_back(held);
-                    } else {
-                        waiting.push((phone.clone(), held));
-                    }
-                }
-                *queue = resting;
-            }
-            waiting
+            std::mem::take(&mut inner.held)
+                .into_iter()
+                .flat_map(|(phone, held)| held.into_iter().map(move |held| (phone.clone(), held)))
+                .collect()
         };
         if waiting.is_empty() {
             return None;
@@ -2260,6 +2336,11 @@ impl Mobile {
                     hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.expired", "phone_id": phone_id,
                     }));
+                    mobile.finish_attempt(
+                        &phone_id,
+                        held.payload["tag"].as_str().expect("a notice tag"),
+                        held.generation,
+                    );
                     outcomes.push(Handoff::Expired);
                     continue;
                 }
@@ -2275,7 +2356,13 @@ impl Mobile {
                     continue;
                 }
                 outcomes.push(Handoff::Tried);
-                match mobile.push_to_app(&phone_id, &held.payload) {
+                let outcome = mobile.push_to_app(&phone_id, &held.payload);
+                mobile.finish_attempt(
+                    &phone_id,
+                    held.payload["tag"].as_str().expect("a notice tag"),
+                    held.generation,
+                );
+                match outcome {
                     Ok(()) => hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
                         "route": "app", "after": "held", "tag": held.payload.get("tag"),
@@ -2291,11 +2378,18 @@ impl Mobile {
     }
 
     pub fn set_notifications(&self, phone_id: &str, notifications: Notifications) {
-        if self
-            .lock()
-            .phones
-            .set_notifications(phone_id, notifications)
-        {
+        let changed = {
+            let mut inner = self.lock();
+            let changed = inner.phones.set_notifications(phone_id, notifications);
+            if notifications == Notifications::Off {
+                for notice in inner.live.current.values_mut() {
+                    notice.attempts.remove(phone_id);
+                }
+                inner.held.remove(phone_id);
+            }
+            changed
+        };
+        if changed {
             self.publish();
         }
     }
@@ -2398,7 +2492,6 @@ impl Mobile {
         let mut stopping = self.stopping.subscribe();
         let mut cursor = 0_u64;
         let mut rest = Value::Null;
-        let mut phone_notices = push::PhoneNotices::default();
         // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
         let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
@@ -2408,10 +2501,7 @@ impl Mobile {
             if !self.follower_active() {
                 cursor = 0;
                 rest = Value::Null;
-                if phone_notices.tracking() {
-                    phone_notices.reset();
-                    self.withdraw_waiting();
-                }
+                self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
                 self.answers.send_replace(Arc::new(Vec::new()));
@@ -2539,29 +2629,32 @@ impl Mobile {
             }
             let current = Arc::clone(&self.projection.borrow());
             let phone_on = self.keep_alive();
-            if !phone_on && phone_notices.tracking() {
-                phone_notices.reset();
+            if !phone_on {
                 self.withdraw_waiting();
             }
-            if let Some((notices, seen)) = judge_pass(
-                &mut phone_notices,
-                phone_on,
-                &self.config.desktop,
-                &current,
-                changed,
-                cursor != 0,
-                std::time::Instant::now(),
-            ) {
+            let judged = {
+                let mut inner = self.lock();
+                judge_pass(
+                    &mut inner.phone_notices,
+                    phone_on,
+                    &self.config.desktop,
+                    &current,
+                    changed,
+                    cursor != 0,
+                    std::time::Instant::now(),
+                )
+            };
+            if let Some((notices, seen)) = judged {
                 self.deliver(notices, seen, &current);
             }
-            self.flush_rested();
+            self.flush_rested(&current);
             // A phone notice waiting out its moment wakes the follower when it
             // is due. A change already there goes first, so the snapshot is
             // read and judged before any deadline (whose notice that pass also
             // sends); a deadline alone reads no core and runs the due pass on
             // the projection this follower already holds.
             loop {
-                let settle = phone_notices.next_due();
+                let settle = self.lock().phone_notices.next_due();
                 tokio::select! {
                     biased;
                     _ = stopping.changed() => return,
@@ -2580,7 +2673,7 @@ impl Mobile {
                             break;
                         }
                         let current = Arc::clone(&self.projection.borrow());
-                        let notices = phone_notices.due(&current, std::time::Instant::now());
+                        let notices = self.lock().phone_notices.due(&current, std::time::Instant::now());
                         if !notices.is_empty() {
                             self.deliver(notices, BTreeSet::new(), &current);
                         }
@@ -2639,7 +2732,12 @@ impl Mobile {
                 }));
                 continue;
             }
-            let generation = self.lock().live.stamp(notice.key.tag());
+            let generation = {
+                let mut inner = self.lock();
+                let cause = inner.phone_notices.cause(&notice.key);
+                let ids: Vec<_> = targets.iter().map(|(id, _)| id.clone()).collect();
+                inner.live.admit(notice.key.tag(), cause, &ids)
+            };
             for (phone_id, route) in &targets {
                 // A withdrawable job or held notice must never own a close.
                 match self.push_payload(&notice, &BTreeSet::new()) {
@@ -2649,9 +2747,12 @@ impl Mobile {
                         }
                         jobs.push((phone_id.clone(), route.clone(), payload, generation));
                     }
-                    Err(reason) => hide_core::diagnostic!(json!({
-                        "component":"mobile_push", "kind":"push.failed", "reason":reason,
-                    })),
+                    Err(reason) => {
+                        self.finish_attempt(phone_id, &notice.key.tag(), Some(generation));
+                        hide_core::diagnostic!(json!({
+                            "component":"mobile_push", "kind":"push.failed", "reason":reason,
+                        }));
+                    }
                 }
             }
         }
@@ -2662,51 +2763,98 @@ impl Mobile {
         tokio::task::spawn_blocking(move || mobile.send_jobs(jobs, &subject));
     }
 
-    /// Drains computer-use holds once the route opens. The existing queues cap
-    /// this at eight per phone and four phones; a close removes them by serial.
-    fn flush_rested(self: &Arc<Self>) {
-        let (jobs, subject) = {
+    /// Rebuilds only rested phone attempts from the freshly judged projection.
+    /// Memory follows existing current roots, with at most four phone attempts
+    /// each; the relay's bounded payload queue is not used for computer rest.
+    fn flush_rested(self: &Arc<Self>, projection: &Projection) {
+        let mut jobs = Vec::new();
+        {
             let mut inner = self.lock();
-            if !push::mode_allows(inner.settings.push_mode, self.config.desktop.rests_phone()) {
+            if !inner.live.rested
+                || !push::mode_allows(inner.settings.push_mode, self.config.desktop.rests_phone())
+            {
                 return;
             }
+            inner.live.rested = false;
             let routes: HashMap<_, _> = inner
                 .phones
                 .current()
                 .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
                 .collect();
-            let mut jobs = Vec::new();
-            inner.held.retain(|id, _| routes.contains_key(id));
-            for (phone, queue) in &mut inner.held {
-                let mut relay = VecDeque::new();
-                for held in queue.drain(..) {
-                    if held.resting {
-                        if let Some(generation) = held.generation {
-                            jobs.push((
-                                phone.clone(),
-                                routes[phone].clone(),
-                                held.payload,
-                                generation,
-                            ));
-                        }
-                    } else {
-                        relay.push_back(held);
+            let ids = routes.keys().cloned().collect();
+            inner.live.prune_phones(&ids);
+            let Inner {
+                live,
+                phone_notices,
+                ..
+            } = &mut *inner;
+            let mut missing = false;
+            for (tag, live) in &mut live.current {
+                let (device, pane) = tag.split_once('|').expect("an agent tag");
+                let key = AgentKey {
+                    device_id: device.to_owned(),
+                    pane_id: pane.to_owned(),
+                };
+                let present = projection.find(&key).is_some();
+                let mut ended = Vec::new();
+                for (phone, attempt) in &mut live.attempts {
+                    if !attempt.rested {
+                        continue;
                     }
+                    if !present {
+                        missing = true; // Keep the existing disappearance grace.
+                        continue;
+                    }
+                    // Queued now has one owner, even if another away wake follows.
+                    if phone_notices.waits(&key)
+                        && let Some(notice) = attempt.cause.notice(&key, projection)
+                    {
+                        attempt.rested = false;
+                        jobs.push((phone.clone(), routes[phone].clone(), notice, live.serial));
+                        continue;
+                    }
+                    ended.push(phone.clone());
                 }
-                *queue = relay;
+                for phone in ended {
+                    live.attempts.remove(&phone);
+                }
             }
-            let subject = inner
-                .settings
-                .serve
-                .as_ref()
-                .map(|serve| format!("https://{}", serve.dns_name))
-                .unwrap_or_else(|| "mailto:hide@localhost".to_owned());
-            (jobs, subject)
-        };
-        if !jobs.is_empty() {
-            let mobile = Arc::clone(self);
-            tokio::task::spawn_blocking(move || mobile.send_jobs(jobs, &subject));
+            live.rested = missing;
         }
+        // Encryption and payload preparation stay outside the Mobile mutex too.
+        let mut prepared = Vec::new();
+        for (phone, route, notice, serial) in jobs {
+            if self.viewed(&notice.key, projection) {
+                self.finish_attempt(&phone, &notice.key.tag(), Some(serial));
+                continue;
+            }
+            match self.push_payload(&notice, &BTreeSet::new()) {
+                Ok(mut payload) => {
+                    if let Some(agent) = projection.find(&notice.key) {
+                        push::with_ask(&mut payload, agent);
+                    }
+                    prepared.push((phone, route, payload, serial));
+                }
+                Err(reason) => {
+                    self.finish_attempt(&phone, &notice.key.tag(), Some(serial));
+                    hide_core::diagnostic!(
+                        json!({"component":"mobile_push", "kind":"push.failed", "reason":reason})
+                    );
+                }
+            }
+        }
+        if prepared.is_empty() {
+            return;
+        }
+        let subject = self
+            .lock()
+            .settings
+            .serve
+            .as_ref()
+            .map(|serve| format!("https://{}", serve.dns_name))
+            .unwrap_or_else(|| "mailto:hide@localhost".to_owned());
+        let mobile = Arc::clone(self);
+        tokio::task::spawn_blocking(move || mobile.send_jobs(prepared, &subject));
     }
 
     /// Sends the jobs of one burst in order, on a blocking thread. Each is
@@ -2738,9 +2886,20 @@ impl Mobile {
                     "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
                     "reason": "no_vapid",
                 }));
+                self.finish_attempt(
+                    &phone_id,
+                    payload["tag"].as_str().expect("a notice tag"),
+                    Some(generation),
+                );
                 continue;
             };
-            match self.send_web(&phone_id, vapid, subject, &subscription, &payload) {
+            let outcome = self.send_web(&phone_id, vapid, subject, &subscription, &payload);
+            self.finish_attempt(
+                &phone_id,
+                payload["tag"].as_str().expect("a notice tag"),
+                Some(generation),
+            );
+            match outcome {
                 push::SendOutcome::Delivered => hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
                     "tag": payload.get("tag"),
@@ -2764,34 +2923,58 @@ impl Mobile {
         outcomes
     }
 
+    fn finish_attempt(&self, phone: &str, tag: &str, generation: Option<u64>) {
+        let Some(generation) = generation else {
+            return;
+        };
+        let mut inner = self.lock();
+        if let Some(notice) = inner.live.current.get_mut(tag)
+            && notice.serial == generation
+        {
+            notice.attempts.remove(phone);
+        }
+    }
+
     /// The same decision gates both a new job and a relay reconnect. A hold
     /// wakes the follower too, so an away report racing this worker is not lost.
     fn rest_job(&self, phone_id: &str, payload: &Value, generation: Option<u64>) -> bool {
-        let mut inner = self.lock();
-        if push::mode_allows(inner.settings.push_mode, self.config.desktop.rests_phone()) {
+        // Human delivery notices are admitted separately and never acquire a wait's responsibility.
+        let Some(generation) = generation else {
             return false;
+        };
+        let mut inner = self.lock();
+        if !inner.live.is_current(payload, Some(generation)) {
+            return true;
         }
-        let ids: BTreeSet<_> = inner
-            .phones
-            .current()
-            .map(|phone| phone.id.clone())
-            .collect();
-        inner.held.retain(|id, _| ids.contains(id));
-        if generation.is_some()
-            && ids.contains(phone_id)
-            && inner.live.is_current(payload, generation)
-        {
-            let queue = inner.held.entry(phone_id.to_owned()).or_default();
-            hold_in(
-                queue,
-                payload.clone(),
-                generation,
-                std::time::Instant::now(),
-            );
-            queue.back_mut().expect("just held").resting = true;
-            self.wake.notify_one();
+        let resting =
+            !push::mode_allows(inner.settings.push_mode, self.config.desktop.rests_phone());
+        if resting {
+            let ids = inner
+                .phones
+                .current()
+                .map(|phone| phone.id.clone())
+                .collect();
+            inner.live.prune_phones(&ids);
         }
-        true
+        let tag = payload["tag"]
+            .as_str()
+            .expect("a current waiting notice tag");
+        let Some(attempt) = inner
+            .live
+            .current
+            .get_mut(tag)
+            .and_then(|notice| notice.attempts.get_mut(phone_id))
+        else {
+            return true; // This phone's responsibility already ended; an old job cannot recreate it.
+        };
+        if resting {
+            attempt.rested = true;
+            if !inner.live.rested {
+                inner.live.rested = true;
+                self.wake.notify_one();
+            }
+        }
+        resting
     }
 }
 
