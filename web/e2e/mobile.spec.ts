@@ -662,7 +662,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         subject_mission_attention: "확인 필요",
         subject_mission_attention_close_refused: "작업은 끝남 · 확인 기록 빠짐",
         subject_mission_attention_conductor_failed: "Conductor가 실패로 기록함",
-        subject_mission_attention_merged_unproven: "PR 머지됨, 기준 기록이 없거나 실패",
+        subject_mission_attention_merged_unproven: "PR 머지됨, 통과 안 된 완료 기준이 있음",
         subject_mission_attention_pr_closed: "PR 머지 없이 닫힘",
         subject_mission_attention_unplanned_pr: "계획에 없던 PR",
         subject_mission_attention_wake_refused: "PR 일로 일꾼을 깨우지 못함",

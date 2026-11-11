@@ -26,7 +26,7 @@ describe("a mission node raised to the operator, laid on its Conductor's row (PR
     const { t: ko } = await createInterfaceI18n("ko");
     const { t: en } = await createInterfaceI18n("en");
     const raised = { cause: "mission_attention", node: "device-row-simple", reason: "merged_unproven" } as const;
-    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: raised })).toEqual({ lead: null, text: "device-row-simple · PR 머지됨, 기준 기록이 없거나 실패", tail: null });
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: raised })).toEqual({ lead: null, text: "device-row-simple · PR 머지됨, 통과 안 된 완료 기준이 있음", tail: null });
     expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...raised, reason: "worker_ended" } })).toEqual({ lead: null, text: "device-row-simple · Worker ended with work left", tail: null });
   });
 
