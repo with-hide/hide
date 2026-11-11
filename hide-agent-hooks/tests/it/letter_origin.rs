@@ -100,6 +100,12 @@ impl Machine {
         String::from_utf8(output.stdout).unwrap()
     }
 
+    /// The hooks' records folder of the daemon this machine stands in for,
+    /// where a hook of the daemon keeps what it writes.
+    fn records(&self) -> PathBuf {
+        self.daemon.records()
+    }
+
     /// The `hide inbox` calls the hook made; the guidance asks `hide` other
     /// things (the Workspace, which the stand-in does not answer).
     fn calls(&self) -> Vec<String> {
@@ -111,20 +117,12 @@ impl Machine {
             .collect()
     }
 
-    /// Every file Hide's hook left under the home, with its bytes.
+    /// Every file Hide's hook left under the home and in the daemon's
+    /// records, with its bytes.
     fn files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
-        fn walk(dir: &Path, found: &mut BTreeMap<PathBuf, Vec<u8>>) {
-            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, found);
-                } else {
-                    found.insert(path.clone(), std::fs::read(&path).unwrap_or_default());
-                }
-            }
-        }
         let mut found = BTreeMap::new();
         walk(&self.home, &mut found);
+        walk(&self.records(), &mut found);
         found
     }
 }
@@ -228,4 +226,17 @@ fn cursor_silences_claude_aliases_before_any_hook_effect() {
     }
     assert!(machine.calls().is_empty());
     assert!(machine.files().is_empty());
+}
+
+/// Every file below `dir`, with its bytes; a folder that does not exist holds
+/// none.
+fn walk(dir: &Path, found: &mut BTreeMap<PathBuf, Vec<u8>>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(&path, found);
+        } else {
+            found.insert(path.clone(), std::fs::read(&path).unwrap_or_default());
+        }
+    }
 }

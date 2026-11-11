@@ -629,6 +629,19 @@ pub fn diagnose(home: &Path, cause: &'static str) -> bool {
 
 pub fn diagnose_failure(home: &Path, failure: &Failure) -> bool {
     let cause = failure.code;
+    // A route that does not resolve is a cause nothing can be written for:
+    // the account's folder belongs to another daemon, and a hook that
+    // recorded there would hide the failure in a file its own `doctor` never
+    // reads (engineering rule 4). The line still reaches the agent on
+    // standard error, and `Diagnosis::records_error` names the same folder,
+    // so the failure is not silent (rule 10).
+    if let Err(error) = diagnostic_path(home) {
+        eprintln!(
+            "{}",
+            serde_json::json!({"component":"delivery_hook","kind":"intake.failed","code":cause,"cause":error.to_string(),"diagnostic_saved":false})
+        );
+        return false;
+    }
     // Emit only after the cross-process claim is persisted. Damaged or
     // unavailable throttle storage cannot authorize an unthrottled log.
     if claim(home, cause) {
@@ -661,8 +674,8 @@ pub(crate) fn claim_at(
     if !CAUSES.contains(&cause) || step.is_some_and(|step| !CAUSES.contains(&step)) {
         return false;
     }
-    let path = diagnostic_path(home);
     let result = (|| -> std::io::Result<bool> {
+        let path = diagnostic_path(home)?;
         let parent = path
             .parent()
             .ok_or_else(|| std::io::Error::other("diagnostic parent unavailable"))?;
@@ -726,11 +739,16 @@ pub(crate) fn claim_at(
     matches!(result, Ok(true))
 }
 
-fn diagnostic_path(home: &Path) -> PathBuf {
-    crate::counters::state_directory(home)
+/// The hook's delivery diagnostics, beside the pane records of the daemon
+/// this process asks. A state route that does not resolve is that error, so
+/// a hook never records another daemon's failure inside this one's folder
+/// (engineering rule 4); the cause then reaches the agent on standard error
+/// where [`diagnose_failure`] says it.
+fn diagnostic_path(home: &Path) -> std::io::Result<PathBuf> {
+    Ok(crate::counters::state_directory(home)?
         .parent()
         .expect("counter directory has a parent")
-        .join("delivery-diagnostics.json")
+        .join("delivery-diagnostics.json"))
 }
 
 #[cfg(test)]
@@ -938,10 +956,12 @@ mod tests {
         assert!(diagnose(home.path(), "cli"));
         assert!(!diagnose(home.path(), "cli"));
         assert!(diagnose(home.path(), "deadline"));
-        let stored = std::fs::read(diagnostic_path(home.path())).unwrap();
+        let stored = std::fs::read(diagnostic_path(home.path()).unwrap()).unwrap();
         let state: Diagnostics = serde_json::from_slice(&stored).unwrap();
         assert_eq!(state.last.len(), 2);
-        assert!(hide_platform::fs::private::is_private(&diagnostic_path(home.path())).unwrap());
+        assert!(
+            hide_platform::fs::private::is_private(&diagnostic_path(home.path()).unwrap()).unwrap()
+        );
         assert!(
             !String::from_utf8(stored)
                 .unwrap()
@@ -994,7 +1014,7 @@ mod tests {
     #[test]
     fn a_step_is_kept_beside_its_cause_and_an_earlier_file_still_reads() {
         let home = tempfile::tempdir().unwrap();
-        let path = diagnostic_path(home.path());
+        let path = diagnostic_path(home.path()).unwrap();
         private::create_dir_all(path.parent().unwrap()).unwrap();
         fs::atomic::write_file(&path, br#"{"last":{"cli":0}}"#, fs::Access::Private).unwrap();
         assert!(claim_at(
@@ -1024,7 +1044,7 @@ mod tests {
             b"{\"last\":{},\"step\":{\"memory_unavailable\":\"unknown\"}}".as_slice(),
         ] {
             let home = tempfile::tempdir().unwrap();
-            let path = diagnostic_path(home.path());
+            let path = diagnostic_path(home.path()).unwrap();
             private::create_dir_all(path.parent().unwrap()).unwrap();
             fs::atomic::write_file(&path, damaged, fs::Access::Private).unwrap();
             for _ in 0..3 {
@@ -1033,7 +1053,7 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), damaged);
         }
         let home = tempfile::tempdir().unwrap();
-        let path = diagnostic_path(home.path());
+        let path = diagnostic_path(home.path()).unwrap();
         private::create_dir_all(path.parent().unwrap()).unwrap();
         // A real invalid store shape fails before an output claim.
         private::create_dir_all(&path).unwrap();

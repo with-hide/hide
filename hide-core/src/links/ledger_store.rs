@@ -1,6 +1,6 @@
 //! The work ledger shares the link writer, version, size cap and retention.
 
-use super::{LinkStore, ProjectPass, SessionKey, failed};
+use super::{LinkStore, ProjectPass, SessionKey, SessionRow, failed};
 use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
 use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, MADE_BEFORE_MS, SUMMARY_SESSION_LIMIT};
@@ -1964,97 +1964,92 @@ impl LinkStore {
         pass: &ProjectPass,
     ) -> Result<Vec<SessionWorkSummary>, String> {
         let paths = &pass.paths;
-        // A summary never loads request bodies or record trees. It reads
-        // bounded counts once, then rolls each count along stored lineage.
+        // A summary never loads request bodies or record trees. A project
+        // with more sessions than the limit is summarized by its newest
+        // ones, a running session before an ended one: what is counted and
+        // rolled along lineage below is read for those sessions alone, so
+        // no table's size can fail the summary.
+        let mut sessions = self
+            .all_sessions()?
+            .into_iter()
+            .filter(|session| session.inside(paths))
+            .collect::<Vec<_>>();
+        if sessions.len() > SUMMARY_SESSION_LIMIT {
+            let recency = |session: &SessionRow| {
+                (session.ended_at.is_none(), session.started_at.unwrap_or(0))
+            };
+            let mut newest: Vec<_> = sessions.iter().map(recency).collect();
+            newest.sort_unstable_by(|left, right| right.cmp(left));
+            let floor = newest[SUMMARY_SESSION_LIMIT - 1];
+            let mut room = SUMMARY_SESSION_LIMIT;
+            sessions.retain(|session| {
+                let kept = room > 0 && recency(session) >= floor;
+                room -= usize::from(kept);
+                kept
+            });
+        }
         // An ask waits on the operator in its session's record and is no
         // missed work of the backlog's (D-12, D-13).
-        let mut statement = self
+        let mut open_lines = self
             .connection
-            .prepare(
-                "SELECT device,agent,id,count(*) FROM ledger_missed \
-            WHERE status=?1 AND kind!=?3 GROUP BY device,agent,id LIMIT ?2",
+            .prepare_cached(
+                "SELECT count(*) FILTER (WHERE kind!=?5), count(*) FILTER (WHERE kind=?5) \
+                 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 AND status=?4",
             )
             .map_err(failed)?;
-        let counts = statement
-            .query_map(
-                params![
-                    encoded(&MissedStatus::Open)?,
-                    SUMMARY_SESSION_LIMIT as i64 + 1,
-                    encoded(&MissedKind::Ask)?
-                ],
-                |r| {
-                    Ok((
-                        SessionIdentity {
+        let mut parent_of = self
+            .connection
+            .prepare_cached(
+                "SELECT parent_device,parent_agent,parent_id FROM session_parents \
+                 WHERE device=?1 AND agent=?2 AND id=?3",
+            )
+            .map_err(failed)?;
+        let open = encoded(&MissedStatus::Open)?;
+        let ask = encoded(&MissedKind::Ask)?;
+        let mut counts = BTreeMap::new();
+        // The sessions with an open question to the operator: the row's
+        // turn reads them (status-model.md, A question still waiting).
+        let mut asking = BTreeSet::new();
+        let mut parents = BTreeMap::new();
+        for session in &sessions {
+            let identity = identity(&session.key);
+            let (missed, asks) = open_lines
+                .query_row(
+                    params![
+                        identity.device_id,
+                        identity.agent,
+                        identity.session_id,
+                        open,
+                        ask
+                    ],
+                    |r| Ok((r.get::<_, usize>(0)?, r.get::<_, usize>(1)?)),
+                )
+                .map_err(failed)?;
+            let parent = parent_of
+                .query_row(
+                    params![identity.device_id, identity.agent, identity.session_id],
+                    |r| {
+                        Ok(SessionIdentity {
                             device_id: r.get(0)?,
                             agent: r.get(1)?,
                             session_id: r.get(2)?,
-                        },
-                        r.get::<_, usize>(3)?,
-                    ))
-                },
-            )
-            .map_err(failed)?
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(failed)?;
-        if counts.len() > SUMMARY_SESSION_LIMIT {
-            return Err("ledger_summary_capacity".into());
-        }
-        // The sessions with an open question to the operator: the row's
-        // turn reads them (status-model.md, A question still waiting).
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT DISTINCT device,agent,id FROM ledger_missed \
-            WHERE status=?1 AND kind=?2 LIMIT ?3",
-            )
-            .map_err(failed)?;
-        let asking = statement
-            .query_map(
-                params![
-                    encoded(&MissedStatus::Open)?,
-                    encoded(&MissedKind::Ask)?,
-                    SUMMARY_SESSION_LIMIT as i64 + 1
-                ],
-                |r| {
-                    Ok(SessionIdentity {
-                        device_id: r.get(0)?,
-                        agent: r.get(1)?,
-                        session_id: r.get(2)?,
-                    })
-                },
-            )
-            .map_err(failed)?
-            .collect::<Result<BTreeSet<_>, _>>()
-            .map_err(failed)?;
-        if asking.len() > SUMMARY_SESSION_LIMIT {
-            return Err("ledger_summary_capacity".into());
-        }
-        let mut statement = self
-            .connection
-            .prepare("SELECT device,agent,id,parent_agent,parent_id,parent_device FROM session_parents LIMIT ?1")
-            .map_err(failed)?;
-        let parents = statement
-            .query_map([SUMMARY_SESSION_LIMIT as i64 + 1], |r| {
-                let device: String = r.get(0)?;
-                Ok((
-                    SessionIdentity {
-                        device_id: device.clone(),
-                        agent: r.get(1)?,
-                        session_id: r.get(2)?,
+                        })
                     },
-                    SessionIdentity {
-                        device_id: r.get(5)?,
-                        agent: r.get(3)?,
-                        session_id: r.get(4)?,
-                    },
-                ))
-            })
-            .map_err(failed)?
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(failed)?;
-        if parents.len() > SUMMARY_SESSION_LIMIT {
-            return Err("ledger_summary_capacity".into());
+                )
+                .optional()
+                .map_err(failed)?;
+            if let Some(parent) = parent {
+                parents.insert(identity.clone(), parent);
+            }
+            if asks > 0 {
+                asking.insert(identity.clone());
+            }
+            if missed > 0 {
+                counts.insert(identity, missed);
+            }
         }
+        drop(open_lines);
+        drop(parent_of);
         let mut subtree = counts.clone();
         for (child, count) in &counts {
             let mut held = child;
@@ -2067,15 +2062,6 @@ impl LinkStore {
                 held = parent;
             }
         }
-        let sessions = self
-            .all_sessions()?
-            .into_iter()
-            .filter(|session| session.inside(paths))
-            .take(SUMMARY_SESSION_LIMIT + 1)
-            .collect::<Vec<_>>();
-        if sessions.len() > SUMMARY_SESSION_LIMIT {
-            return Err("ledger_summary_capacity".into());
-        }
         let mut statement=self.connection.prepare("SELECT \
             (SELECT goal FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC LIMIT 1), \
             (SELECT native_title FROM ledger_titles WHERE device=?1 AND agent=?2 AND id=?3), \
@@ -2083,7 +2069,7 @@ impl LinkStore {
             (SELECT line FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND line<>'' ORDER BY offset DESC LIMIT 1), \
             (SELECT at FROM ledger_sightings WHERE device=?1 AND agent=?2 AND id=?3 AND kind='commit')").map_err(failed)?;
         let mut summaries = Vec::new();
-        let mut missed_count = 0;
+        let mut lines = 0;
         for session in sessions {
             let identity = identity(&session.key);
             let (goal, native, manual, last_line, committed_at) = statement
@@ -2118,10 +2104,15 @@ impl LinkStore {
                     missed.status == MissedStatus::Open && missed.kind != MissedKind::Ask
                 })
                 .collect();
-            missed_count += missed.len() + asks.len();
-            if missed_count > SUMMARY_SESSION_LIMIT {
-                return Err("ledger_summary_capacity".into());
-            }
+            // The lines of all sessions share one budget: past it a
+            // session keeps its count and names no more lines, its
+            // questions first.
+            let mut asks = asks;
+            let mut missed = missed;
+            asks.truncate(SUMMARY_SESSION_LIMIT - lines);
+            lines += asks.len();
+            missed.truncate(SUMMARY_SESSION_LIMIT - lines);
+            lines += missed.len();
             summaries.push(SessionWorkSummary {
                 fallback_title: crate::sidebar::provider_name(Some(&identity.agent)),
                 title: goal

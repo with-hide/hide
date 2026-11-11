@@ -178,11 +178,19 @@ def refusal(answer):
             error.get("message") or answer.get("message"))
 
 
-def spawn_verdict(answer):
-    """What `hide agent spawn` answered: registered, running, connected, with a native session."""
+def spawn_verdict(answer, cause=None):
+    """What `hide agent spawn` answered: registered, running, connected, with a native session.
+
+    A refusal on the agent's session (`native_identity_unavailable`) is the
+    one the journey can explain from the candidate's own hook records, which
+    `cause` carries: it is named after the product's own sentence, so the
+    cell says which hook outcome left Hide without an identity rather than
+    only that the start was refused (engineering rules 4 and 10).
+    """
     if not isinstance(answer, dict) or answer.get("ok") is not True:
         code, message = refusal(answer)
-        return FAIL, f"spawn refused: {code}" + (f": {message}" if message else "")
+        named = f"; {cause}" if cause and code == "native_identity_unavailable" else ""
+        return FAIL, f"spawn refused: {code}" + (f": {message}" if message else "") + named
     view = answer.get("value") or {}
     missing = [what for what, ok in (("registered", view.get("registered") is True),
                                      ("running", view.get("runtime") == "running"),

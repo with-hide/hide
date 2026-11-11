@@ -100,6 +100,7 @@ pub(super) fn diagnosis(claude: HookStatus, codex: HookStatus) -> hide_agent_hoo
             row(AgentRuntime::Codex, codex),
         ],
         last_report_failure: None,
+        records_error: None,
     }
 }
 
@@ -1422,6 +1423,46 @@ fn turns_a_hook_reports_ask_for_one_read_of_each_open_pane() {
         runtime.take_session_rereads(),
         vec!["w1:p1".to_owned()],
         "the closed pane left the list"
+    );
+}
+
+/// A records folder the diagnosis could not resolve is logged once, with the
+/// machine and the cause, so the operator can act on it: the snapshot's
+/// "nothing failed" note is not the whole answer when the failure record was
+/// never read (engineering rules 4 and 10).
+#[test]
+fn a_hook_diagnosis_whose_records_folder_did_not_read_is_logged_once() {
+    let mut runtime = runtime();
+    let unreadable = hide_agent_hooks::Diagnosis {
+        records_error: Some(
+            "the hooks' records folder could not be read: \
+             the hooks' state folder /nowhere does not exist"
+                .to_owned(),
+        ),
+        ..diagnosis(installed(), installed())
+    };
+    let ((), records) = crate::diagnostics::capture(|| {
+        runtime.ingest_hook_diagnosis(unreadable.clone());
+        runtime.ingest_hook_diagnosis(unreadable);
+    });
+    let logged: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "records.unreadable")
+        .collect();
+    assert_eq!(logged.len(), 1, "{records:?}");
+    assert_eq!(logged[0]["component"], "agent_hooks");
+    assert_eq!(logged[0]["node"], crate::node::TEST_NODE);
+    assert!(
+        logged[0]["cause"]
+            .as_str()
+            .is_some_and(|cause| cause.contains("/nowhere")),
+        "{:?}",
+        logged[0]["cause"]
+    );
+    assert_eq!(
+        diagnostic_count(&runtime, "records.unreadable"),
+        0,
+        "the operator's status list carries the note, not this"
     );
 }
 

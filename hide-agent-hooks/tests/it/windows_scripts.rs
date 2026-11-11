@@ -38,12 +38,17 @@ struct Answered {
     tool_result: String,
 }
 
-/// Writes the agent's files and names the one the host loads first.
+/// Writes the agent's files and names the one the host loads first. The
+/// route names the home's own state folder, as the kit writes it: a hook
+/// whose route named a folder nothing made would write nothing anywhere,
+/// and these tests read what the helper recorded in the home.
 fn write(agent: &str, files: &[&PluginFile], home: &Path, helper: &Path) -> PathBuf {
+    let state = crate::state_of(home);
+    let target = crate::hook_target_at(helper, &state);
     if let [file] = files {
         // `.mjs`: Node reads the file as the ES module each host loads.
         let script = home.join(format!("{agent}.mjs"));
-        std::fs::write(&script, file.text(crate::hook_target(helper))).unwrap();
+        std::fs::write(&script, file.text(target)).unwrap();
         return script;
     }
     // OpenCode 2's folder, whose halves import each other by name, read as ES
@@ -52,11 +57,7 @@ fn write(agent: &str, files: &[&PluginFile], home: &Path, helper: &Path) -> Path
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("package.json"), r#"{"type":"module"}"#).unwrap();
     for file in files {
-        std::fs::write(
-            folder.join(file.file_name),
-            file.text(crate::hook_target(helper)),
-        )
-        .unwrap();
+        std::fs::write(folder.join(file.file_name), file.text(target)).unwrap();
     }
     folder.join(files[0].file_name)
 }

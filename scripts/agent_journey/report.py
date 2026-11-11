@@ -82,6 +82,14 @@ def markdown(report):
     if report.get("hide_ai_requests"):
         lines.extend(["## Hide AI", "", "The candidate's own model requests, outside every agent's budget: "
                       + text(", ".join(f"{provider} {count}" for provider, count in report["hide_ai_requests"].items())), ""])
+    if report.get("hook_records"):
+        # The hook's own last outcome, which the run reads where the candidate
+        # keeps it: a turn that never read idle is explained here rather than
+        # by the reader going to the copied file (agent_journey/hook_records.py).
+        records = report["hook_records"]
+        lines.extend(["## Hook records", "",
+                      "The last report outcome the candidate's own hooks recorded, read where its state folder keeps"
+                      " it (`hook_records.folder`): " + text(records["cause"]), ""])
     if report.get("product_findings"):
         lines.extend(["## Product findings", ""])
         lines.extend(f"- {text(finding)}" for finding in report["product_findings"])

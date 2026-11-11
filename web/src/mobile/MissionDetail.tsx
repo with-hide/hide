@@ -1,13 +1,12 @@
 // One mission's page on the phone (PRD mobile-companion-ui B33-B36, B45,
 // D-14, doop final board F11): its title, its Conductor and the way to that
 // conversation, a cell per step, the decision the Conductor waits on with
-// its choices and a written answer, the safety net over the raises its
-// Conductor has not settled, what is happening now (a step that waits
-// on someone, a step at work, each with its pull request and what it follows)
-// the lines the Conductor skipped on its own and the steps that finished,
-// both folded. Which steps wait and the answer's
-// state are the shared rules (`missionSteps`, `missionAnswer.ts`); this draws
-// them.
+// its choices and a written answer, the safety net and the folded skips,
+// and every step on one rail, top down by
+// what it waits on: steps that run side by side bracketed together, a step
+// not begun saying what it waits for, and the finished ones folded. Which
+// steps wait and the answer's state are the shared rules (`stepRail`,
+// `missionAnswer.ts`); this draws them.
 
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIcon, GitPullRequestIcon, Loader2Icon, ThumbsUpIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -28,9 +27,9 @@ import { PR_LOOK } from "../prMark";
 import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, gateWaitedLong, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, openAttention, skipWords, stageWord } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
-import { missionSteps, progress, workerOf } from "./missionModel";
-import type { MissionHeldNode, MissionSafetyNet, MissionSkip, PrState } from "../snapshot";
-import { noticeText, type AgentKey, type PhoneDecisionView, type PhoneMission, type PhoneMissionNode } from "./protocol";
+import { progress, stepRail, workerOf, type RailStep, type StepKind } from "./missionModel";
+import type { MissionHeldNode, MissionSafetyNet, MissionSkip, PrState, RowMark } from "../snapshot";
+import { noticeText, type AgentKey, type PhoneDecisionView, type PhoneMission } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
 export function MissionDetail() {
@@ -46,8 +45,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
   const { t } = useInterfaceTranslation();
   const open = missionOpen(mission);
   const { done, total } = progress(mission);
-  const steps = missionSteps(mission);
-  const ahead = mission.status === "running" ? gatesAhead(mission).filter((node) => node.status === "planned") : [];
+  const rail = stepRail(mission);
   const foldKey = `done:${mission.id}`;
   const doneOpen = usePhone((s) => s.missionFolds[foldKey] === true);
   const stateWord = open ? (mission.conductor.present ? t("mobile.mission.conductor") : t("mission.noConductor")) : t(STATE_PILL[mission.status]);
@@ -94,44 +92,8 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
         {stepsOmitted > 0 ? (
           <p className="pt-lg text-body text-muted-foreground" data-phone-mission-steps-omitted={stepsOmitted}>{t("mobile.mission.stepsOmitted", { count: stepsOmitted })}</p>
         ) : null}
-        {steps.hold.length + steps.working.length > 0 ? (
-          <section className="pt-lg" data-phone-mission-now="true">
-            <h2 className="flex items-baseline justify-between gap-md pb-xs text-body text-muted-foreground">
-              <span>{t("mobile.mission.now")}</span>
-              <span className="text-subtle-foreground">
-                {[steps.working.length > 0 ? t("mobile.mission.working", { count: steps.working.length }) : null, steps.hold.length > 0 ? t("mobile.mission.hold", { count: steps.hold.length }) : null].filter(Boolean).join(" · ")}
-              </span>
-            </h2>
-            <ul className="divide-y divide-border border-b border-border">
-              {steps.hold.map((node) => <Step key={node.key} mission={mission} node={node} kind="hold" />)}
-              {steps.working.map((node) => <Step key={node.key} mission={mission} node={node} kind="working" />)}
-            </ul>
-          </section>
-        ) : null}
-        {ahead.length > 0 ? (
-          <section className="pt-lg" data-phone-mission-ahead="true">
-            <h2 className="pb-xs text-body text-muted-foreground">{t("mission.gate.planTitle", { count: ahead.length })}</h2>
-            <ul className="divide-y divide-border border-b border-border">
-              {ahead.map((node) => <Step key={node.key} mission={mission} node={node} kind="ahead" />)}
-            </ul>
-          </section>
-        ) : null}
+        {rail.length > 0 ? <StepRail mission={mission} rail={rail} foldKey={foldKey} doneOpen={doneOpen} /> : null}
         <Decided mission={mission} />
-        {steps.done.length > 0 ? (
-          <section className="pt-lg" data-phone-mission-done={doneOpen ? "open" : "folded"}>
-            <h2 className="flex items-center justify-between gap-md pb-xs text-body text-muted-foreground">
-              <span>{t("mobile.mission.finished", { count: steps.done.length })}</span>
-              <Button variant="text" size="inline" aria-expanded={doneOpen} className="min-h-(--size-touch-target)" data-phone-fold={foldKey} onClick={() => setMissionFold(foldKey, !doneOpen)}>
-                {doneOpen ? t("missionScreen.fewer") : t("mobile.mission.unfold")}
-              </Button>
-            </h2>
-            {doneOpen ? (
-              <ul className="divide-y divide-border border-b border-border">
-                {steps.done.map((node) => <Step key={node.key} mission={mission} node={node} kind="done" />)}
-              </ul>
-            ) : null}
-          </section>
-        ) : null}
       </div>
       {asking ? <WrittenAnswer mission={mission} connected={connected} /> : null}
     </main>
@@ -405,11 +367,12 @@ function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connecte
  * waits on or follows and its worker; pressing it opens the worker's detail
  * when the phone's list holds that agent.
  */
-function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissionNode; kind: "hold" | "working" | "done" | "ahead" }) {
+function Step({ mission, step, first, last, together }: { mission: PhoneMission; step: RailStep; first: boolean; last: boolean; /** Where the step stands in a run of steps side by side: their bracket, and the word on the first one. */ together: "first" | "next" | null }) {
   const { t } = useInterfaceTranslation();
-  // A step held by a raise its Conductor settles waits; only what the operator settles is their turn.
+  const { node, kind } = step;
+  // A raise the Conductor settles is waiting, not the operator's turn.
   const mark = kind === "hold" ? (openAttention(mission, node)?.to === "conductor" ? "waiting" : "turn") : nodeMark(node, null);
-  const detail = stepLine(mission, node, kind, t);
+  const detail = stepLine(mission, step, t);
   // The step's review gate, as the desktop's card draws it; reached past 24 hours it says so in grey (PRD mission-human-gate B13, B22).
   const minute = useMinuteClock();
   const long = gateWaitedLong(node.gate, minute);
@@ -418,9 +381,9 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
   const agent = usePhone((s) => (node.agent && agentOf(s.groups, node.agent) ? node.agent : null));
   const body: ReactNode = (
     <>
-      <span className="flex w-full min-w-0 items-start gap-sm">
-        <span className="flex h-(--size-touch-target) shrink-0 items-center"><StatusMark mark={mark} /></span>
-        <span className="flex min-w-0 flex-1 flex-col justify-center gap-xs py-sm">
+      <span className="flex w-full min-w-0 items-stretch gap-sm">
+        <RailMark mark={mark} first={first} last={last} />
+        <span className={cn("flex min-w-0 flex-1 flex-col justify-center gap-xs py-sm", together && "border-l-2 border-border pl-sm")} data-phone-step-together={together ?? undefined}>
           <span className={cn("break-keep text-title wrap-anywhere", kind === "done" ? "text-subtle-foreground" : "text-foreground")}>{node.title}</span>
           <span className="flex min-w-0 flex-wrap items-center gap-sm text-body text-muted-foreground">
             {node.pr != null ? <StepPr number={node.pr} state={node.pr_state} /> : null}
@@ -440,12 +403,12 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
             </span>
           ) : null}
         </span>
-        {agent ? <ChevronRightIcon aria-hidden="true" className="mt-md size-(--size-icon) shrink-0 text-muted-foreground" /> : null}
+        {agent ? <ChevronRightIcon aria-hidden="true" className="mt-md size-(--size-icon) shrink-0 self-start text-muted-foreground" /> : null}
       </span>
     </>
   );
   return (
-    <li data-phone-step={node.key} data-phone-step-kind={kind}>
+    <li data-phone-step={node.key} data-phone-step-kind={kind} data-phone-step-depth={step.depth}>
       {agent ? (
         <RowButton aria-label={`${node.title}${worker ? `, ${worker}` : ""}`} className="min-h-(--size-touch-target) flex-col items-stretch rounded-none px-none py-none hover:bg-transparent active:bg-accent" data-phone-step-open="true" onClick={() => openDetail(agent)}>
           {body}
@@ -454,6 +417,76 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
         body
       )}
     </li>
+  );
+}
+
+/**
+ * The steps on one rail (B36): a line joins every step's mark top down in the order they wait on each other, steps of
+ * one depth side by side carry a bracket and `동시에` on the first, and the finished ones fold into one row at the top
+ * of the rail that opens them in place.
+ */
+function StepRail({ mission, rail, foldKey, doneOpen }: { mission: PhoneMission; rail: RailStep[]; foldKey: string; doneOpen: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const count = (kind: StepKind) => rail.filter((step) => step.kind === kind).length;
+  const done = count("done");
+  const shown = rail.filter((step) => doneOpen || step.kind !== "done");
+  const width = (depth: number) => rail.filter((step) => step.depth === depth).length;
+  const summary = [count("working") > 0 ? t("mobile.mission.working", { count: count("working") }) : null, count("hold") > 0 ? t("mobile.mission.hold", { count: count("hold") }) : null].filter(Boolean).join(" · ");
+  return (
+    <section className="pt-lg" data-phone-mission-steps="true" data-phone-mission-done={done === 0 ? undefined : doneOpen ? "open" : "folded"}>
+      <h2 className="flex items-baseline justify-between gap-md pb-xs text-body text-muted-foreground">
+        <span>{t("mobile.mission.steps")}</span>
+        {summary ? <span className="text-subtle-foreground">{summary}</span> : null}
+      </h2>
+      <ol className="flex min-w-0 flex-col">
+        {done > 0 ? (
+          <li className="flex min-w-0 items-stretch gap-sm" data-phone-step-fold="true">
+            <RailMark mark="done" first last={shown.length === 0} />
+            <span className="flex min-w-0 flex-1 items-center justify-between gap-md text-body text-muted-foreground">
+              <span>{t("mobile.mission.finished", { count: done })}</span>
+              <Button variant="text" size="inline" aria-expanded={doneOpen} className="min-h-(--size-touch-target)" data-phone-fold={foldKey} onClick={() => setMissionFold(foldKey, !doneOpen)}>
+                {doneOpen ? t("missionScreen.fewer") : t("mobile.mission.unfold")}
+              </Button>
+            </span>
+          </li>
+        ) : null}
+        {shown.map((step, index) => {
+          const before = shown[index - 1];
+          const side = width(step.depth) > 1;
+          const together = side ? (before?.depth === step.depth ? "next" : "first") : null;
+          const row = <Step key={step.node.key} mission={mission} step={step} first={index === 0 && done === 0} last={index === shown.length - 1} together={together} />;
+          return together === "first" ? [<Together key={`together:${step.node.key}`} first={index === 0 && done === 0} />, row] : row;
+        })}
+      </ol>
+    </section>
+  );
+}
+
+/** `동시에` over steps that run side by side, where their bracket begins; the rail passes it with no mark. */
+function Together({ first }: { first: boolean }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <li className="flex min-w-0 items-stretch gap-sm" data-phone-step-together-head="true">
+      <span aria-hidden="true" className="flex w-(--size-agent-mark) shrink-0 justify-center">
+        <span className={cn("w-px bg-border", first && "invisible")} />
+      </span>
+      <span className="mt-sm flex-1 border-l-2 border-border pl-sm pt-xs text-caption text-muted-foreground">{t("mobile.mission.together")}</span>
+    </li>
+  );
+}
+
+/** A step's mark on the rail: the line comes down into it from the step above and goes on to the step below. */
+function RailMark({ mark, first, last }: { mark: RowMark; first: boolean; last: boolean }) {
+  const line = "w-px flex-1 bg-border";
+  return (
+    <span aria-hidden="true" className="flex w-(--size-agent-mark) shrink-0 flex-col items-center">
+      <span className="flex h-(--size-touch-target) shrink-0 flex-col items-center">
+        <span className={cn(line, first && "invisible")} />
+        <StatusMark mark={mark} />
+        <span className={cn(line, last && "invisible")} />
+      </span>
+      <span className={cn(line, last && "invisible")} />
+    </span>
   );
 }
 
@@ -469,9 +502,12 @@ function StepPr({ number, state }: { number: number; state: PrState | null | und
   );
 }
 
-/** What a step's second line says besides its pull request (B36): why it waits, what it follows, where its work stands, or how it ended. */
-function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | "working" | "done" | "ahead", t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
-  if (kind === "ahead") return t("mission.gate.when");
+/** What a step's second line says besides its pull request (B36): why it waits, what it follows, where its work stands, how it ended, or, for one not begun, what it waits for. */
+function stepLine(mission: PhoneMission, { node, kind, waits }: RailStep, t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+  if (kind === "planned") {
+    if (waits.length > 0) return t("mission.line.waitsFor", { names: waits.map((before) => (before.pr != null ? `#${before.pr}` : before.title)).join(", ") });
+    return node.gate ? t("mission.gate.when") : t("mission.steps.notStarted");
+  }
   if (kind === "hold") {
     const reason = holdReason(mission, node, workerOf);
     switch (reason?.kind) {

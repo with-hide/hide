@@ -5,7 +5,7 @@
 
 import { clientI18n, translate } from "../i18n/translator";
 import {
-  DEMO_DEVICE, LOOK_HTML, LOOK_IMAGE, START_STATE, TERMINAL_TEXT, agentsFrame, base64Of, conversation, looks, lookChart, lookHtml, missionsFrame, prsFrame, startCatalog,
+  DEMO_DEVICE, LOOK_HTML, LOOK_IMAGE, START_STATE, agentsFrame, terminalText, base64Of, conversation, looks, lookChart, lookHtml, missionsFrame, prsFrame, startCatalog,
   type DemoState, type Said,
 } from "./demoData";
 import type { PhoneMessage, ServerFrame } from "./protocol";
@@ -195,7 +195,8 @@ export class DemoSocket implements PhoneSocket {
   }
 
   private terminal(pane: string): void {
-    this.emit({ type: "rows", device_id: DEMO_DEVICE, pane_id: pane, state: "ok", text: TERMINAL_TEXT, lines: TERMINAL_TEXT.split("\n").length - 1, more: false });
+    const text = terminalText(translate, this.state, pane);
+    this.emit({ type: "rows", device_id: DEMO_DEVICE, pane_id: pane, state: "ok", text, lines: text.split("\n").length - 1, more: false });
     this.emit(this.conversationFrame(pane));
   }
 

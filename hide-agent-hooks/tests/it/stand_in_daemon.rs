@@ -122,6 +122,13 @@ impl StandInDaemon {
     pub fn route<'a>(&self, command: &'a mut Command) -> &'a mut Command {
         command.env("HIDE_STATE_DIR", &self.state)
     }
+
+    /// The folder the hooks of this service keep their records in, beside the
+    /// state folder it serves: where a test reads what a hook wrote for this
+    /// daemon rather than for the account's own.
+    pub fn records(&self) -> PathBuf {
+        hide_agent_hooks::route::records_in(&self.state)
+    }
 }
 
 impl Drop for StandInDaemon {

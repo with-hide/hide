@@ -1407,7 +1407,11 @@ fn local_engine(
     // leaves the built-in ones, and the core's read logs why.
     let definitions = hide_kit::agent_definitions::read(&home)
         .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
-    EngineHandle::own(node, state_dir.to_path_buf(), home, definitions)
+    // The installation whose panes this daemon starts, which its hooks' records
+    // folder is composed with; this process is where it is read, so the core
+    // is handed it rather than reaching for the machine itself.
+    let install = hide_host::kit::running_install().map(|install| install.id);
+    EngineHandle::own(node, state_dir.to_path_buf(), home, definitions, install)
 }
 
 /// This machine's terminal service over the pane holders, over the state

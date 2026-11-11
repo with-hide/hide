@@ -300,7 +300,8 @@ fn a_report_hide_does_not_take_is_recorded_and_the_next_one_clears_it() {
     let pane = Pane { machine: &machine };
     machine.status_down(true);
     pane.subagent("SubagentStart", PANE_SESSION, "a");
-    let failure = hide_agent_hooks::report::last_failure(&machine.home)
+    let failure = hide_agent_hooks::report::last_failure_at(&machine.records())
+        .expect("records read")
         .expect("the failure is the pane's last report failure");
     assert_eq!(
         (failure.pane_id.as_str(), failure.agent.as_str()),
@@ -312,7 +313,11 @@ fn a_report_hide_does_not_take_is_recorded_and_the_next_one_clears_it() {
     // carries the count the failed one could not.
     machine.status_down(false);
     pane.subagent("SubagentStart", PANE_SESSION, "b");
-    assert_eq!(hide_agent_hooks::report::last_failure(&machine.home), None);
+    assert!(
+        hide_agent_hooks::report::last_failure_at(&machine.records())
+            .expect("records read")
+            .is_none()
+    );
     assert_eq!(pane.counts(PANE_SESSION).last(), Some(&(2, 0)));
 }
 
