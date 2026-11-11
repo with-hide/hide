@@ -37,7 +37,6 @@ import {
   type Conversation,
   type ConversationMessage,
   sleepTarget,
-  supportsQuickKey,
   replyAbout,
   type AgentKey,
   type DetailTab,
@@ -455,7 +454,6 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
   const pending = usePhone((s) => s.pendingInput);
-  const pageKeys = usePhone((s) => s.pageKeys);
   const error = usePhone((s) => s.inputError);
   const key = usePhone((s) => s.detail?.key);
   // A reply typed on a notification that did not arrive comes back into the box, once, for an hour (the app only).
@@ -479,15 +477,15 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
       {keys ? (
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(var(--size-touch-target),1fr))] gap-xs" role="group" aria-label={t("mobile.quickKeys")}>
-        {QUICK_KEYS.filter((quick) => supportsQuickKey(quick.key, pageKeys)).map((quick) => (
+      <div className="grid grid-cols-5 gap-sm" role="group" aria-label={t("mobile.quickKeys")}>
+        {QUICK_KEYS.map((quick) => (
           <Button
             key={quick.key}
             variant="ghost"
             aria-label={t(quick.name)}
             disabled={blocked}
             data-phone-key={quick.key}
-            className="h-(--size-touch-target) min-w-0 rounded-md px-none font-mono text-body"
+            className="h-(--size-touch-target) rounded-md font-mono text-body"
             onClick={() => sendKey(quick.key)}
           >
             {quick.label}

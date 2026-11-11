@@ -263,7 +263,7 @@ export type StartCatalog = {
 
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
-  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; page_keys?: boolean }
+  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications }
   // Older computers still send off; new phone settings do not use this global mode.
   | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number }
   /**
@@ -383,21 +383,14 @@ export const GROUP_TITLE: Record<GroupId, MessageKey> = {
 };
 
 
-/** The quick keys (B26, B38): what hided sends the engine, the keycap, and the accessible name. */
-export type QuickKey = "enter" | "escape" | "up" | "down" | "page_up" | "page_down" | "ctrl_c";
-
-/** Older desktops keep their five keys; new controls require the hello's offer. */
-export function supportsQuickKey(key: QuickKey, pageKeys: boolean): boolean {
-  return pageKeys || (key !== "page_up" && key !== "page_down");
-}
+/** The five quick keys (B26, B38): what hided sends the engine, the keycap, and the accessible name. */
+export type QuickKey = "enter" | "escape" | "up" | "down" | "ctrl_c";
 
 export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageKey }[] = [
   { key: "enter", label: "⏎", name: "mobile.key.enter" },
   { key: "escape", label: "Esc", name: "mobile.key.escape" },
   { key: "up", label: "↑", name: "mobile.key.up" },
   { key: "down", label: "↓", name: "mobile.key.down" },
-  { key: "page_up", label: "PgUp", name: "mobile.key.pageUp" },
-  { key: "page_down", label: "PgDn", name: "mobile.key.pageDown" },
   { key: "ctrl_c", label: "^C", name: "mobile.key.ctrlC" },
 ];
 

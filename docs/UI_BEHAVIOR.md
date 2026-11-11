@@ -3085,7 +3085,7 @@ When the holder reports an alternate screen and there are no older rows to load,
 Korean words in this line wrap at spaces, with a long unbroken word allowed to wrap to fit the phone.
 The line opens Conversation when that tab exists, and is plain text otherwise; it scrolls with the output, so it appears only at the top.
 Primary-screen panes and computers that do not report the screen mode show no line, regardless of the agent kind.
-Pulling the phone's output never sends wheel or PageUp input to the program or moves the desktop's view.
+Pulling the phone's output never sends input to the program or moves the desktop's view.
 볼 것 is the third tab, `대화 | 터미널 | 볼 것` (`터미널 | 볼 것` for an agent with no conversation), and it is there only while the agent has a View open now; the number of Views not seen is on it.
 The list's eye row, the 볼 것 mark, opens the detail on this tab; a row that asks a question or needs an approval, and every other row, opens on the conversation as before, and 대화 goes straight to the agent's conversation.
 The tab lists the Views the agent opened, `안 본 것 N` above `본 것 N`, newest first: a tile with the kind's icon and a dot when the View is not seen, its name, its kind (변경 내용, 문서, 이미지, 웹 화면, 파일) and how long ago it was opened.
@@ -3113,10 +3113,7 @@ The reply bar is on the tab and on a View, and the quick keys are not.
 A reply sent while a View is open leaves with its name in front (`[경로 구분자 수정] …`), and the field's hint names the View it is about.
 While hided is out of reach the last list or content stays dimmed under the unreachable line, and nothing new can be opened.
 The phone asks for a View only by its id, and only for one open now; the rule that keeps it so is in [ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion).
-Every other detail view has the quick keys (Enter, Escape, 위 화살표, 아래 화살표, 이전 페이지, 다음 페이지, Ctrl-C by accessible name) and a one-line reply with 보내기; a reply is sent with Enter after it and clears on success, a failure keeps the text with the reason under it, and a reply over 2,000 characters is named before it is sent.
-The seven keys fit one row at 390 CSS pixels with full touch targets and wrap into another row on narrower phones.
-On a computer that offers page keys in its connection greeting, PgUp and PgDn are always present on these views, for primary and alternate screens alike; they send page keys to the program, which owns their meaning and may change the screen the desktop sees.
-An older computer that does not offer them keeps the original five quick keys.
+Every other detail view has the quick keys (Enter, Escape, 위 화살표, 아래 화살표, Ctrl-C by accessible name) and a one-line reply with 보내기; a reply is sent with Enter after it and clears on success, a failure keeps the text with the reason under it, and a reply over 2,000 characters is named before it is sent.
 When hide cannot tell whether a reply reached the pane, the line says so and asks the operator to check the terminal before sending it again.
 An agent whose process Hide ended and whose pane holds a bare shell (a keep-pane sleep, described with the pane body above) shows its state in the terminal's place, in the desktop pane's words: Sleeping with its last progress line and Wake agent; Waking… with how old the resumed conversation is; or `Couldn’t resume this conversation` with the core's reason, Retry and Start new session.
 The 대화 | 터미널 switch is not offered there, the reply bar and the quick keys are disabled, and the core refuses an input to such a pane at the write (`asleep`, drawn as one line under the bar), from the moment its end begins until the agent is back, so nothing a phone sends reaches the shell under the agent; a repeated request keeps the answer its first send recorded.

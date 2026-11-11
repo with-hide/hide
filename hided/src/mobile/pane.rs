@@ -70,16 +70,13 @@ pub fn read(engine: &EngineHandle, pane_id: &str, lines: u32) -> Result<Rows, Pa
     })
 }
 
-/// The phone's accepted quick keys. Page keys use fixed VT input rather
-/// than a new named key that an older device node cannot decode.
-pub fn quick_key(key: &str) -> Option<&'static str> {
+/// The keys a phone may send, as key-combo strings.
+pub fn engine_key(key: &str) -> Option<&'static str> {
     match key {
         "enter" => Some("enter"),
         "escape" => Some("esc"),
         "up" => Some("up"),
         "down" => Some("down"),
-        "page_up" => Some("page-up"),
-        "page_down" => Some("page-down"),
         "ctrl_c" => Some("ctrl+c"),
         _ => None,
     }
@@ -114,9 +111,9 @@ pub fn wait_for_input(
         // Reserve payload plus Enter; the bracketed-paste wrapper is
         // protocol framing and is not part of this held payload budget.
         Input::Reply(text) => text.len() + 1,
-        // Reserve their encoded bytes, not the length of the logical name.
+        // The supported quick keys encode as one byte or a three-byte
+        // cursor sequence (CSI/SS3), not the length of their logical name.
         Input::Key("up" | "down") => 3,
-        Input::Key("page-up" | "page-down") => 4,
         Input::Key("enter" | "esc" | "ctrl+c") => 1,
         Input::Key(_) => return Err(PaneError::InputRefused),
     };
@@ -130,8 +127,6 @@ pub fn wait_for_input(
 pub fn send(engine: &EngineHandle, pane_id: &str, input: Input<'_>) -> Result<(), PaneError> {
     match input {
         Input::Reply(text) => engine.submit_text(pane_id, text, TIMEOUT),
-        Input::Key("page-up") => engine.send_text(pane_id, "\x1b[5~", TIMEOUT),
-        Input::Key("page-down") => engine.send_text(pane_id, "\x1b[6~", TIMEOUT),
         Input::Key(key) => engine.press_key(pane_id, key, TIMEOUT),
     }
     .map_err(classify)
@@ -142,13 +137,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_quick_keys_are_accepted() {
-        assert_eq!(quick_key("escape"), Some("esc"));
-        assert_eq!(quick_key("ctrl_c"), Some("ctrl+c"));
-        assert_eq!(quick_key("page_up"), Some("page-up"));
-        assert_eq!(quick_key("page_down"), Some("page-down"));
-        assert_eq!(quick_key("ctrl_d"), None);
-        assert_eq!(quick_key("prefix+c"), None);
+    fn only_the_quick_keys_map_to_engine_keys() {
+        assert_eq!(engine_key("escape"), Some("esc"));
+        assert_eq!(engine_key("ctrl_c"), Some("ctrl+c"));
+        assert_eq!(engine_key("ctrl_d"), None);
+        assert_eq!(engine_key("prefix+c"), None);
     }
 
     #[test]

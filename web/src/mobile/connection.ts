@@ -22,7 +22,6 @@ import {
   replyProblem,
   sameKey,
   sleepTarget,
-  supportsQuickKey,
   type AgentKey,
   type DetailTab,
   type DetailView,
@@ -712,7 +711,7 @@ export function sendReply(text: string): boolean {
 export function sendKey(key: QuickKey): void {
   const state = usePhone.getState();
   const detail = state.detail;
-  if (!detail || state.pendingInput || !supportsQuickKey(key, state.pageKeys)) return;
+  if (!detail || state.pendingInput) return;
   const requestId = newRequestId();
   const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, key });
   patch(sent ? { pendingInput: { requestId, kind: "key" }, inputError: null } : { inputError: inputFailure("offline") });

@@ -821,7 +821,6 @@ async fn run(
         "phone_id": phone_id,
         "name": record.as_ref().map(|phone| phone.name.clone()),
         "vapid_public_key": mobile.vapid_public_key(),
-        "page_keys": true,
         "notifications": match record.as_ref().map(|phone| (phone.notifications, phone.reachable())) {
             Some((_, true)) => "on",
             Some((Notifications::Off, false)) => "off",
@@ -1878,7 +1877,7 @@ async fn input(
     let engine_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, engine_key) {
         (Some(text), None) => pane::reply_problem(text),
-        (None, Some(key)) => pane::quick_key(key).is_none().then_some("unknown_key"),
+        (None, Some(key)) => pane::engine_key(key).is_none().then_some("unknown_key"),
         _ => Some("invalid_request"),
     };
     if let Some(problem) = problem {
@@ -1896,7 +1895,7 @@ async fn input(
     let device_id = key.device_id.clone();
     let writer = Arc::clone(mobile);
     let text = text.map(str::to_owned);
-    let engine_key = engine_key.and_then(pane::quick_key);
+    let engine_key = engine_key.and_then(pane::engine_key);
     // The blocking write owns settlement even if its async caller is cancelled.
     // A panic or a queued closure dropped at shutdown conservatively settles Uncertain.
     struct Settlement {

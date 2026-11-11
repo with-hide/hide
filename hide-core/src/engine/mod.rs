@@ -748,11 +748,6 @@ impl EngineHandle {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 
-    /// Types `text` as input bytes, with no paste wrapper or Enter.
-    pub fn send_text(&self, pane: &str, text: &str, timeout: Duration) -> Result<(), EngineError> {
-        self.engine.send_text(Wait::Each(timeout), pane, text)
-    }
-
     /// Types `text` into a pane and submits it.
     pub fn submit_text(
         &self,
