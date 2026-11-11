@@ -617,10 +617,15 @@ function useHoldWords(hold: MissionNodeHold | null): { why: string; left: string
   };
 }
 
-/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). */
+/** A mission's delay and how long it still holds; every delay ends by itself (`hide mission delay --for`). Shaped as a held node's line: the why first and cut when it runs long, the remaining time whole at the end. */
 function DelayLine({ line, until }: { line: string; until: number | null | undefined }) {
   const { t } = useInterfaceTranslation();
   const left = useRemaining(until);
-  const text = left && left !== "past" ? t("mission.delayLeft", { line, left: left.text }) : t("mission.delay", { line });
-  return <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{text}</p>;
+  const still = left && left !== "past" ? left.text : null;
+  return (
+    <p className="flex min-w-0 gap-xxs px-md pb-xs text-caption text-muted-foreground" title={still ? t("mission.delayLeft", { line, left: still }) : t("mission.delay", { line })} data-mission-delay="true">
+      <span className="min-w-0 truncate">{t("mission.delay", { line })}</span>
+      {still ? <span className="shrink-0 whitespace-nowrap">· {still}</span> : null}
+    </p>
+  );
 }
