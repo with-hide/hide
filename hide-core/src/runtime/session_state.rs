@@ -28,7 +28,9 @@ impl Runtime {
             .collect()
     }
     /// Uses the existing runtime clock; idle ticks compare one deadline, the
-    /// moment the oldest Resolved row leaves the 24-hour window (PRD D-23).
+    /// moment the oldest Resolved row leaves the 24-hour window (PRD D-23) or
+    /// a blocked child's grace ends (`escalation::grace_end`), whichever is
+    /// first.
     pub(super) fn tick_session_window(&mut self, at: u64) -> bool {
         if at < self.session_window_deadline_unix_ms {
             return false;
@@ -468,12 +470,19 @@ impl Runtime {
         let mut rows = self.session_rows().cloned().collect::<Vec<_>>();
         let mut invalid = Vec::new();
         let mut deadline = u64::MAX;
+        self.blocked_children.observe(&mut rows, at);
         for row in &mut rows {
             row.escalation = escalation::of(
                 row,
                 self.delivery_ledger.as_ref().ok().map(AsRef::as_ref),
                 &self.delivery_holds,
+                at,
             );
+            // A blocked child's grace ends on the same clock as the
+            // Resolved window.
+            if let Some(end) = escalation::grace_end(row).filter(|&end| end > at) {
+                deadline = deadline.min(end);
+            }
             row.letters_waiting = self.letters_waiting.get(&row.pane_id).copied();
             let record = self.snapshot.ui_state.resolved_sessions.get(&row.pane_id);
             let pending = self.pending_session_resolutions.get(&row.pane_id);

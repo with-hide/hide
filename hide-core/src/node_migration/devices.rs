@@ -39,7 +39,7 @@ use super::reown::{self, Change, IdTable};
 use super::{
     BACKUP_DIR, Backup, COMPOSER_MARKS, CORE_STATE, DELIVERY_LEDGER, HOOK_FACTS, KEYS, LABELS,
     LINKS, LOCAL_ISSUES, MISSIONS, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
-    read_json, write,
+    mission_files, read_json, write,
 };
 use crate::address::{Kind, Scoped};
 use crate::node::NodeId;
@@ -294,6 +294,8 @@ fn now_ms() -> u128 {
 struct Stores {
     /// Each JSON store as it is, by file name.
     json: BTreeMap<&'static str, Value>,
+    /// Each mission's file in the mission folder, keyed as `MISSIONS`.
+    missions: Vec<(String, Value)>,
     /// The Project roots each device has in Project Memory, or why the
     /// store does not open, which holds every device: its Projects could
     /// not follow it.
@@ -312,6 +314,16 @@ impl Stores {
             let path = state_dir.join(file);
             if let Some(value) = read_json(&path).map_err(|reason| refuse(&path, reason))? {
                 stores.insert(*file, value);
+            }
+        }
+        let mut missions = Vec::new();
+        if json {
+            let files = mission_files(state_dir)
+                .map_err(|reason| refuse(&state_dir.join(super::MISSIONS_DIR), reason))?;
+            for (name, path) in files {
+                if let Some(value) = read_json(&path).map_err(|reason| refuse(&path, reason))? {
+                    missions.push((name, value));
+                }
             }
         }
         let memory = state_dir.join(PROJECT_MEMORY);
@@ -345,6 +357,7 @@ impl Stores {
         };
         Ok(Self {
             json: stores,
+            missions,
             memory,
             links,
             link_roots,
@@ -473,6 +486,11 @@ fn check(
         registrations: registrations.clone(),
         checkouts: BTreeMap::new(),
     };
+    for (name, value) in &stores.missions {
+        let mut value = value.clone();
+        rename_store(MISSIONS, &mut value, renames, &ids, named)
+            .map_err(|reason| format!("{name}: {reason}"))?;
+    }
     for (file, value) in &stores.json {
         let mut value = value.clone();
         rename_store(file, &mut value, renames, &ids, named)
@@ -702,6 +720,12 @@ fn apply_steps(
     };
     for file in STORES.iter().chain([&CORE_STATE]) {
         if *file == CORE_STATE {
+            // The mission folder's files, one step: a renaming stopped among
+            // them finds the renamed ones unchanged when it resumes.
+            if !next() {
+                return Ok(());
+            }
+            rename_mission_files(state_dir, &backup, renames, &ids, &journal.named, outcome)?;
             if !next() {
                 return Ok(());
             }
@@ -726,6 +750,40 @@ fn apply_steps(
             .map_err(|reason| refuse(&path, reason))?;
         write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
         outcome.files.push((*file).to_owned());
+    }
+    Ok(())
+}
+
+/// Renames every key of each mission's file in the mission folder, keyed
+/// as `MISSIONS`, keeping each original it changes once in the backup.
+fn rename_mission_files(
+    state_dir: &Path,
+    backup: &Backup,
+    renames: &BTreeMap<String, String>,
+    ids: &IdTable,
+    named: &[String],
+    outcome: &mut DeviceNames,
+) -> Result<(), Refusal> {
+    let files = mission_files(state_dir)
+        .map_err(|reason| refuse(&state_dir.join(super::MISSIONS_DIR), reason))?;
+    for (name, path) in files {
+        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+            continue;
+        };
+        let before = value.clone();
+        rename_store(MISSIONS, &mut value, renames, ids, named)
+            .map_err(|reason| refuse(&path, reason))?;
+        if value == before {
+            continue;
+        }
+        let bytes = serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
+        // The backup folder is flat: `missions/mission-3.json` is kept as
+        // `missions-mission-3.json`.
+        backup
+            .copy(&path, &name.replace('/', "-"))
+            .map_err(|reason| refuse(&path, reason))?;
+        write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
+        outcome.files.push(name);
     }
     Ok(())
 }
@@ -1368,6 +1426,40 @@ mod tests {
         assert!(backups[0].join(LINKS).is_file());
     }
 
+    /// The folder store, including shelved missions' index identity, moves
+    /// under the same machine-id rewrite as the legacy book.
+    #[test]
+    fn mission_files_and_their_index_follow_a_device_rename() {
+        let dir = folder();
+        let state = dir.path();
+        let mission = mission(ALIAS, &project(ALIAS));
+        let folder = hide_kit::layout::missions_dir(state);
+        std::fs::create_dir(&folder).unwrap();
+        write_json(
+            &folder,
+            "mission-1.json",
+            json!({"schema_version": 4, "missions": [mission.clone()]}),
+        );
+        let line = crate::missions::MissionLine::of(&serde_json::from_value(mission).unwrap());
+        write_json(
+            &folder,
+            "index.json",
+            json!({"schema_version": 1, "next": 1, "missions": [line]}),
+        );
+        name_devices(state, &node()).unwrap();
+        for name in ["mission-1.json", "index.json"] {
+            let value = read(&folder, name);
+            let mission = &value["missions"][0];
+            assert_eq!(mission["device_id"], MACHINE);
+            assert_eq!(mission["conductor"]["actor"]["device_id"], MACHINE);
+            assert_eq!(mission["conductor"]["session"]["device_id"], MACHINE);
+        }
+        assert_eq!(
+            name_devices(state, &node()).unwrap(),
+            DeviceNames::default()
+        );
+    }
+
     #[test]
     fn a_second_start_writes_nothing() {
         let dir = folder();
@@ -1387,7 +1479,7 @@ mod tests {
         let whole = folder();
         name_devices(whole.path(), &node()).unwrap();
         let expected = contents(whole.path());
-        let steps = 2 + STORES.len() + 2;
+        let steps = 2 + STORES.len() + 3;
         for stopped_after in 0..=steps {
             let dir = folder();
             let state = dir.path();

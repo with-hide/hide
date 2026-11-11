@@ -854,6 +854,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
             .and_then(|facts| facts.user_turn.clone()),
         ask_subject: None,
         laid_since_unix_ms: None,
+        blocked_since_unix_ms: None,
         laid_more: 0,
         laid_asks: BTreeSet::new(),
         open_asks: None,

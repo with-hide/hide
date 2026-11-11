@@ -1427,6 +1427,7 @@ dependencies = [
  "hide-agent-hooks",
  "hide-core",
  "hide-desk",
+ "hide-holder-protocol",
  "hide-host",
  "hide-kit",
  "hide-memory",

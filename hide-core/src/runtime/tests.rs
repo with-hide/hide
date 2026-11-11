@@ -38,6 +38,8 @@ mod backlog;
 mod beside_spawn;
 #[path = "tests/birth_cwd.rs"]
 mod birth_cwd;
+#[path = "tests/blocked_children.rs"]
+mod blocked_children;
 mod checkout_git;
 mod closed_registrations;
 #[path = "tests/control_order.rs"]
@@ -586,8 +588,8 @@ pub(crate) fn runtime() -> Runtime {
 pub(crate) fn ready_archive_protections(runtime: &mut Runtime) {
     runtime.ingest_plans(Ok(crate::links::ledger::LedgerAnswer::Plans(vec![])));
     runtime.install_mission_store(
-        crate::missions::MissionStore::new(runtime.state_path.with_file_name("missions.json")),
-        crate::missions::Restored::Fresh,
+        crate::mission_store::MissionStore::new(runtime.state_path.parent().unwrap()),
+        crate::mission_store::Restored::Fresh,
     );
 }
 

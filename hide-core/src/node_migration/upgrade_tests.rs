@@ -147,8 +147,8 @@ fn load_every_store(state: &Path, node: &NodeId) -> Vec<String> {
         if let Err(reason) = crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER)) {
             refused.push(format!("{DELIVERY_LEDGER}: {reason}"));
         }
-        if let crate::missions::Restored::Unreadable(reason) =
-            crate::missions::MissionStore::new(state.join(MISSIONS)).restore()
+        if let crate::mission_store::Restored::Unreadable(reason) =
+            crate::mission_store::MissionStore::new(state).restore()
         {
             refused.push(format!("{MISSIONS}: {reason}"));
         }

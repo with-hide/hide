@@ -344,6 +344,7 @@ impl Runtime {
     /// explicit unknown result at its deadline.
     pub(crate) fn tick_async_operations(&mut self, now_unix_ms: u64) -> bool {
         self.drive_unreadable_letters();
+        self.drive_blocked_notes();
         self.drive_spent_bells(now_unix_ms);
         self.drive_transition_letters(now_unix_ms);
         self.with_close_geometry(|runtime| runtime.tick_operations(now_unix_ms))

@@ -58,10 +58,27 @@ pub(crate) fn retain_raised_holds(
     current
 }
 
+/// How long a delegated child stays blocked before its lineage root is raised:
+/// its parent is told at once (`runtime/blocked_children.rs`) and handles
+/// what it can meanwhile. Two minutes would lose a prompt the native runtime
+/// times out at two minutes (Claude Code's `rm` check, 2026-10-16).
+pub(crate) const CHILD_BLOCKED_GRACE_MS: u64 = 60_000;
+
+/// When a blocked child's grace ends: its block's start as the core first
+/// read it (`SidebarAgentSnapshot::blocked_since_unix_ms`) plus the grace.
+/// `None` for a row that is not blocked or carries no start.
+pub(crate) fn grace_end(child: &SidebarAgentSnapshot) -> Option<u64> {
+    child
+        .blocked_since_unix_ms
+        .filter(|_| child.blocked)
+        .map(|since| since.saturating_add(CHILD_BLOCKED_GRACE_MS))
+}
+
 pub(crate) fn of(
     child: &SidebarAgentSnapshot,
     ledger: Option<&Ledger>,
     holds: &BTreeMap<String, Hold>,
+    now: u64,
 ) -> Option<Escalation> {
     let parent = child.lineage_parent_pane_id.as_deref()?;
     if !child.delegated {
@@ -75,11 +92,13 @@ pub(crate) fn of(
             human_notice: false,
         });
     }
-    if child.blocked {
+    // The parent has the grace to answer it; meanwhile the other causes keep
+    // their own clocks.
+    if grace_end(child).is_some_and(|end| now >= end) {
         return Some(Escalation {
             cause: Cause::ChildBlocked,
             letter_id: None,
-            since_unix_ms: child.changed_at_unix_ms,
+            since_unix_ms: child.blocked_since_unix_ms,
             human_notice: false,
         });
     }
@@ -462,6 +481,11 @@ mod tests {
     use crate::sidebar::{SessionSnapshotPayload, project_agents};
     use serde_json::json;
 
+    /// A time past every fixture's grace: a fixture child's block, when it
+    /// has one, started at 0, as the projection lays it
+    /// (`runtime/blocked_children.rs`).
+    const LATER: u64 = CHILD_BLOCKED_GRACE_MS;
+
     fn child() -> SidebarAgentSnapshot {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"pane_id":"child", "agent":"codex", "agent_status":"done", "state_change_seq":1}
@@ -472,6 +496,7 @@ mod tests {
         row.lineage_parent_pane_id = Some("parent".into());
         row.lineage_session = Some("child-session".into());
         row.declared_parent_session = Some("parent-session".into());
+        row.blocked_since_unix_ms = Some(0);
         row
     }
 
@@ -489,6 +514,7 @@ mod tests {
         let mut row = project_agents(payload).agents.remove(0);
         row.delegated = true;
         row.lineage_parent_pane_id = Some("parent".into());
+        row.blocked_since_unix_ms = Some(0);
         row
     }
 
@@ -499,23 +525,81 @@ mod tests {
     #[test]
     fn a_delegated_child_that_never_took_its_input_rises_as_an_answer() {
         let mut row = child();
-        assert_eq!(of(&row, None, &BTreeMap::new()), None);
+        assert_eq!(of(&row, None, &BTreeMap::new(), LATER), None);
         row.ask_subject = Some(crate::model::AskSubject::InputUnconfirmed {
             input: crate::delivery::typed::InputKind::Brief,
             spent: false,
             held: false,
         });
         row.laid_since_unix_ms = Some(42);
-        let raised = of(&row, None, &BTreeMap::new()).expect("it rises");
+        let raised = of(&row, None, &BTreeMap::new(), LATER).expect("it rises");
         assert_eq!(raised.cause, Cause::InputUnconfirmed);
         assert_eq!(raised.since_unix_ms, Some(42));
         assert_eq!(Cause::InputUnconfirmed.verb(), Some(Verb::Answer));
         row.activity = "working".into();
         assert_eq!(
-            of(&row, None, &BTreeMap::new()),
+            of(&row, None, &BTreeMap::new(), LATER),
             None,
             "a working child took it"
         );
+    }
+
+    /// docs/status-model.md, The mark, and docs/delivery.md, A blocked child:
+    /// the parent has the grace to answer a blocked child before its root is
+    /// raised, counted from the block's start the projection laid, and the
+    /// raise says that start; a child the projection laid no start on is not
+    /// raised.
+    #[test]
+    fn a_blocked_child_rises_only_once_its_grace_from_the_blocks_start_ends() {
+        let mut row = child();
+        row.activity = "stopped".into();
+        row.blocked = true;
+        row.changed_at_unix_ms = Some(1);
+        row.blocked_since_unix_ms = Some(500_000);
+        let end = 500_000 + CHILD_BLOCKED_GRACE_MS;
+        assert_eq!(grace_end(&row), Some(end));
+        assert_eq!(of(&row, None, &BTreeMap::new(), end - 1), None);
+        let raised = of(&row, None, &BTreeMap::new(), end).expect("the grace ended");
+        assert_eq!(
+            (raised.cause, raised.since_unix_ms),
+            (Cause::ChildBlocked, Some(500_000))
+        );
+        row.blocked_since_unix_ms = None;
+        assert_eq!(grace_end(&row), None);
+        assert_eq!(of(&row, None, &BTreeMap::new(), u64::MAX), None);
+        row.blocked = false;
+        row.blocked_since_unix_ms = Some(500_000);
+        assert_eq!(grace_end(&row), None, "only a blocked row has a grace");
+    }
+
+    /// During a blocked child's grace the other causes keep their own clocks:
+    /// a request the child sent its parent that never reached it rises as
+    /// undelivered at once, and a person's turn the child declared rises
+    /// before every other cause.
+    #[test]
+    fn within_its_grace_a_blocked_child_still_rises_for_another_cause() {
+        let mut row = child();
+        row.activity = "stopped".into();
+        row.blocked = true;
+        row.blocked_since_unix_ms = Some(1_000);
+        let mut ledger = Ledger::default();
+        mailbox::send(
+            &mut ledger,
+            &actor("child"),
+            &actor("parent"),
+            "help",
+            "Which branch?",
+            "request",
+            None,
+            1_000,
+        )
+        .unwrap();
+        ledger.letters[0].state = State::Undelivered;
+        let raised = of(&row, Some(&ledger), &BTreeMap::new(), 1_001).expect("undelivered");
+        assert_eq!(raised.cause, Cause::Undelivered);
+        declare(&mut row, human_turn("agent-3.1"), 1_000);
+        let raised = of(&row, Some(&ledger), &BTreeMap::new(), 1_001).expect("person's turn");
+        assert_eq!(raised.cause, Cause::HumanTurn);
     }
 
     /// The engine keeps Grok `working` while it waits for a plan approval or an
@@ -526,7 +610,7 @@ mod tests {
         for status in ["working", "idle"] {
             let row = waiting_child("grok", status);
             assert!(row.blocked, "{status}");
-            let escalation = of(&row, None, &BTreeMap::new()).expect("raised");
+            let escalation = of(&row, None, &BTreeMap::new(), LATER).expect("raised");
             assert_eq!(escalation.cause, Cause::ChildBlocked);
         }
     }
@@ -538,11 +622,11 @@ mod tests {
     fn a_codex_plan_menu_read_from_history_does_not_hold_a_working_child() {
         let working = waiting_child("codex", "working");
         assert!(!working.blocked);
-        assert!(of(&working, None, &BTreeMap::new()).is_none());
+        assert!(of(&working, None, &BTreeMap::new(), LATER).is_none());
         let stopped = waiting_child("codex", "idle");
         assert!(stopped.blocked);
         assert_eq!(
-            of(&stopped, None, &BTreeMap::new()).map(|raised| raised.cause),
+            of(&stopped, None, &BTreeMap::new(), LATER).map(|raised| raised.cause),
             Some(Cause::ChildBlocked)
         );
     }
@@ -611,7 +695,7 @@ mod tests {
         for (activity, blocked) in [("working", false), ("stopped", true), ("stopped", false)] {
             row.activity = activity.into();
             row.blocked = blocked;
-            let raised = of(&row, None, &BTreeMap::new()).expect("it rises");
+            let raised = of(&row, None, &BTreeMap::new(), LATER).expect("it rises");
             assert_eq!(
                 (raised.cause, raised.since_unix_ms, raised.human_notice),
                 (Cause::HumanTurn, Some(42), false),
@@ -637,11 +721,11 @@ mod tests {
         declared.blocked = false;
         declared.activity = "working".into();
         declare(&mut declared, human_turn("agent-4.10"), 10);
-        declared.escalation = of(&declared, None, &BTreeMap::new());
+        declared.escalation = of(&declared, None, &BTreeMap::new(), LATER);
         let mut later = declared.clone();
         later.pane_id = "later".into();
         declare(&mut later, human_turn("agent-5.20"), 20);
-        later.escalation = of(&later, None, &BTreeMap::new());
+        later.escalation = of(&later, None, &BTreeMap::new(), LATER);
         rows.extend([declared, later]);
         lift(&mut rows, |_| None);
         let causes: Vec<_> = rows[0]
@@ -727,7 +811,7 @@ mod tests {
                 row.lineage_parent_pane_id = Some("root".into());
                 row.activity = "working".into();
                 declare(&mut row, subject.clone(), *at);
-                row.escalation = of(&row, None, &BTreeMap::new());
+                row.escalation = of(&row, None, &BTreeMap::new(), LATER);
                 rows.push(row);
             }
             lift(&mut rows, |_| None);
@@ -899,7 +983,7 @@ mod tests {
                 holds,
                 "{hold:?} is the operator's to lift and stays until the letter rings"
             );
-            assert!(of(&child, Some(&ledger), &holds).is_none());
+            assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
         }
         for hold in [Hold::Working, Hold::Quiet, Hold::NotReady] {
             let holds = BTreeMap::from([(id.clone(), hold)]);
@@ -933,22 +1017,22 @@ mod tests {
             .unwrap();
             let id = ledger.letters[0].id.clone();
             let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert!(of(&child, Some(&ledger), &holds).is_some());
+            assert!(of(&child, Some(&ledger), &holds, LATER).is_some());
             for waiting in [Hold::Working, Hold::Quiet, Hold::NotReady] {
                 let retained = retain_raised_holds(&holds, BTreeMap::from([(id.clone(), waiting)]));
                 assert_eq!(
-                    of(&child, Some(&ledger), &retained),
-                    of(&child, Some(&ledger), &holds)
+                    of(&child, Some(&ledger), &retained, LATER),
+                    of(&child, Some(&ledger), &holds, LATER)
                 );
             }
             assert!(retain_raised_holds(&holds, BTreeMap::new()).is_empty());
             assert!(
-                of(&child, Some(&ledger), &BTreeMap::new()).is_none(),
+                of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
                 "a successful bell clears the hold"
             );
             for state in [State::Acknowledged, State::Cancelled, State::Expired] {
                 ledger.letters[0].state = state;
-                assert!(of(&child, Some(&ledger), &holds).is_none());
+                assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
             }
             ledger.letters[0].state = State::Pending;
             mailbox::send(
@@ -963,7 +1047,7 @@ mod tests {
             )
             .unwrap();
             assert!(
-                of(&child, Some(&ledger), &holds).is_none(),
+                of(&child, Some(&ledger), &holds, LATER).is_none(),
                 "a causal parent answer clears the request"
             );
         }
@@ -1021,27 +1105,27 @@ mod tests {
                 };
                 child.row_facts = Some(facts(90));
                 assert_eq!(
-                    of(&child, Some(&ledger), &holds).map(|raised| raised.cause),
+                    of(&child, Some(&ledger), &holds, LATER).map(|raised| raised.cause),
                     Some(cause),
                     "the turn that wrote the letter is still the one waiting"
                 );
                 child.row_facts = Some(facts(100));
                 assert_eq!(
-                    of(&child, Some(&ledger), &holds).map(|raised| raised.cause),
+                    of(&child, Some(&ledger), &holds, LATER).map(|raised| raised.cause),
                     Some(cause),
                     "a request no later than the letter is not a new turn"
                 );
                 child.row_facts = Some(facts(101));
                 child.activity = "working".into();
-                assert!(of(&child, Some(&ledger), &holds).is_none());
+                assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
                 child.activity = "stopped".into();
                 assert!(
-                    of(&child, Some(&ledger), &holds).is_none(),
+                    of(&child, Some(&ledger), &holds, LATER).is_none(),
                     "{cause:?} does not come back when the child stops again"
                 );
                 child.blocked = true;
                 assert_eq!(
-                    of(&child, Some(&ledger), &holds).map(|raised| raised.cause),
+                    of(&child, Some(&ledger), &holds, LATER).map(|raised| raised.cause),
                     Some(Cause::ChildBlocked),
                     "the child's own menu still raises it"
                 );
@@ -1071,13 +1155,13 @@ mod tests {
             ordinal: 1,
             parent_notified: false,
         });
-        assert!(of(&child, Some(&ledger), &BTreeMap::new()).is_none());
+        assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
         ledger.letters[0]
             .watch_warning
             .as_mut()
             .unwrap()
             .parent_notified = true;
-        let raised = of(&child, Some(&ledger), &BTreeMap::new()).unwrap();
+        let raised = of(&child, Some(&ledger), &BTreeMap::new(), LATER).unwrap();
         assert_eq!(raised.cause, Cause::ObserverUnconfirmed);
         assert!(
             raised.human_notice,
@@ -1085,13 +1169,13 @@ mod tests {
         );
         ledger.watches[0].last_activity_at_unix_ms = 300;
         assert!(
-            of(&child, Some(&ledger), &BTreeMap::new()).is_none(),
+            of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
             "new activity ends the episode"
         );
         ledger.watches[0].last_activity_at_unix_ms = 100;
         ledger.watches.clear();
         assert!(
-            of(&child, Some(&ledger), &BTreeMap::new()).is_none(),
+            of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
             "cancelling the watch clears the raise"
         );
     }
@@ -1119,7 +1203,7 @@ mod tests {
         )
         .unwrap();
         let id = ledger.letters[0].id.clone();
-        assert!(of(&child, Some(&ledger), &BTreeMap::new()).is_none());
+        assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
         for (hold, cause) in [
             (Hold::Blocked, Cause::ParentBlocked),
             (Hold::AwaitingOperator, Cause::ParentBlocked),
@@ -1127,22 +1211,25 @@ mod tests {
             (Hold::Exhausted, Cause::BellExhausted),
         ] {
             let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert_eq!(of(&child, Some(&ledger), &holds).unwrap().cause, cause);
+            assert_eq!(
+                of(&child, Some(&ledger), &holds, LATER).unwrap().cause,
+                cause
+            );
         }
         ledger.letters[0].state = State::Undelivered;
         assert!(
-            of(&child, Some(&ledger), &BTreeMap::new())
+            of(&child, Some(&ledger), &BTreeMap::new(), LATER)
                 .unwrap()
                 .human_notice
         );
         child.activity = "working".into();
-        assert!(of(&child, Some(&ledger), &BTreeMap::new()).is_none());
+        assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
         child.activity = "stopped".into();
         ledger.letters[0].recipient.session = Some("replacement-parent".into());
-        assert!(of(&child, Some(&ledger), &BTreeMap::new()).is_none());
+        assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
         child.blocked = true;
         assert_eq!(
-            of(&child, None, &BTreeMap::new()).unwrap().cause,
+            of(&child, None, &BTreeMap::new(), LATER).unwrap().cause,
             Cause::ChildBlocked
         );
     }

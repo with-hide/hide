@@ -59,6 +59,7 @@ pub mod memory_hook;
 pub mod mission_criteria;
 pub mod mission_events;
 mod mission_health;
+mod mission_store;
 pub mod missions;
 mod model;
 pub mod node;

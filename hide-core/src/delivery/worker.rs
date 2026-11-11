@@ -355,8 +355,6 @@ pub(crate) struct WatchWork {
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question.
     pub asking: bool,
-    /// The target's own row says the engine holds it at a blocked prompt.
-    pub blocked: bool,
     /// The target is a mission worker waiting on its pull request's CI,
     /// review or merge (PRD mission-node-simple D-06): it reads as active
     /// now, so its quiet is counted from when the wait ends.
@@ -394,7 +392,6 @@ fn read_session_activity(work: WatchWork) -> watch::Reading {
         gone: work.gone,
         inactivity_ms: work.inactivity_ms,
         asking: work.asking,
-        blocked: work.blocked,
     };
     if work.gone {
         return reading;
@@ -1695,7 +1692,6 @@ mod tests {
                     folder: None,
                     inactivity_ms: None,
                     asking: false,
-                    blocked: false,
                     waits: false,
                 })
                 .collect();
@@ -1884,21 +1880,22 @@ mod tests {
     }
 
     /// docs/delivery.md, Watch activity and completion: the watch reads the
-    /// child's own row, so a child stopped on a question, or one engine holds
-    /// at a blocked prompt with or without a question, tells its parent one
+    /// child's own row, so a child stopped on a question tells its parent one
     /// tick later with its own first line; one stopped without a question,
-    /// one working on an async question, and one whose row shows only Hide's
-    /// own question about input it typed (`InputUnconfirmed`, laid as the
-    /// core lays it, `Runtime::publish_input_asks`) wait as before.
+    /// one working on an async question, one whose row shows only Hide's own
+    /// question about input it typed (`InputUnconfirmed`, laid as the core
+    /// lays it, `Runtime::publish_input_asks`), and one the engine holds at a
+    /// blocked prompt, whose parent is told at once by its own note
+    /// (`runtime/blocked_children.rs`), wait the full window.
     #[test]
-    fn a_child_stopped_on_a_question_or_held_at_a_prompt_warns_its_parent_after_one_tick() {
+    fn only_a_child_stopped_on_its_own_question_warns_its_parent_after_one_tick() {
         for (status, question, laid_input, first_line) in [
             ("idle", true, false, Some("Stopped with a question")),
             ("idle", false, false, None),
             ("idle", false, true, None),
             ("working", true, false, None),
-            ("blocked", true, false, Some("Blocked at a prompt")),
-            ("blocked", false, false, Some("Blocked at a prompt")),
+            ("blocked", true, false, None),
+            ("blocked", false, false, None),
         ] {
             let root = tempfile::tempdir().unwrap();
             let (runtime, parent, observed, _) = fixture(root.path());
@@ -2439,7 +2436,6 @@ mod tests {
             gone: false,
             inactivity_ms: None,
             asking: false,
-            blocked: false,
         }
     }
 
