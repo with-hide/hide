@@ -716,7 +716,7 @@ describe("missionTurn", () => {
       { name: "decision", extra: { decision: "Which?" }, kind: "decision", turn: "decision" },
       { name: "safety net", extra: { safety_net: { conductor_present: true, since_unix_ms: 1, nodes: [{ key: "a", title: "A", reason: "worker_ended" as const, pr: null, since_unix_ms: 1 }] } }, kind: "safety_net", turn: "attention" },
       { name: "gate", extra: { nodes: [gate] }, kind: "attention", turn: "attention" },
-    ] as const;
+    ] satisfies { name: string; extra: Partial<Mission>; kind: string; turn: string }[];
     for (const row of cases) {
       const one = mission("m", row.extra);
       expect(missionTurn(one), row.name).toBe(row.turn);
