@@ -164,27 +164,12 @@ jobs:
           "first_ssh_connection_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
           Add-Content -Encoding utf8 -Path $env:GITHUB_ENV -Value "HIDE_E2E_WINDOWS_SSH_DIR=$dir"
       - name: Use a working resolver on the disposable runner
-        # Azure's default resolver returned SERVFAIL for both Ubuntu hosts
+        # Azure's default resolver returned SERVFAIL for Ubuntu package hosts
         # in Windows too, not only through WSL's DNS tunnel (#2460).
-        # Check the replacement from this runner before selecting it. Keep
-        # WSL's normal generated resolver and DNS tunnel for the device tests.
+        # The shared check leaves healthy defaults alone and validates the
+        # replacement before selecting it. WSL keeps its normal DNS tunnel.
         timeout-minutes: 2
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $hosts = @('archive.ubuntu.com', 'security.ubuntu.com')
-          foreach ($name in $hosts) {
-            Resolve-DnsName $name -Type A -Server 1.1.1.1 -DnsOnly -QuickTimeout | Out-Host
-          }
-          $interfaces = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -ExpandProperty InterfaceIndex -Unique)
-          if ($interfaces.Count -eq 0) { throw 'the runner has no default IPv4 route' }
-          foreach ($index in $interfaces) {
-            Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses '1.1.1.1'
-          }
-          Clear-DnsClientCache
-          foreach ($name in $hosts) {
-            Resolve-DnsName $name -Type A -DnsOnly -QuickTimeout | Out-Host
-          }
+        run: bash scripts/ci-apt-dns.sh
       - name: A fresh WSL 2 distribution
         # Its first-run setup is left undone (RunOOBE 1, default user root),
         # which the test reads as a distribution Hide must refuse before it
@@ -198,8 +183,8 @@ jobs:
         # setup-wsl's apt update can report DNS failures and still succeed,
         # leaving its one install attempt to fail before any product test.
         # Keep first-run setup undone; only root installs the prerequisites.
-        # DNS gets 120 s to become usable; the existing downloader then owns
-        # a 300 s network budget. Ten minutes also bounds WSL startup/dpkg.
+        # DNS and downloads share the existing 300 s network budget.
+        # Ten minutes also bounds WSL startup and offline installation.
         timeout-minutes: 10
         run: |
           diagnostics() {
@@ -214,17 +199,7 @@ jobs:
           }
           trap diagnostics ERR
           wsl.exe --version
-          wsl.exe --distribution Ubuntu-24.04 --user root -- bash -s <<'LINUX'
-          set -euo pipefail
-          cat /etc/resolv.conf
-          # Wait for both actual apt hosts, not a fixed startup delay.
-          timeout --kill-after=5 120 bash -c '
-            until getent ahostsv4 archive.ubuntu.com && getent ahostsv4 security.ubuntu.com; do
-              sleep 2
-            done
-          '
-          LINUX
-          wsl.exe --distribution Ubuntu-24.04 --user root -- env APT_BUDGET_SECONDS=300 bash -s -- git python3 openssh-server < scripts/ci-apt-install.sh
+          wsl.exe --distribution Ubuntu-24.04 --user root --cd "$GITHUB_WORKSPACE" -- env APT_BUDGET_SECONDS=300 RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" bash scripts/ci-apt-install.sh git python3 openssh-server
       - uses: actions/download-artifact@v8
         timeout-minutes: 5
         with:

@@ -21,7 +21,8 @@
 # (.github/actions/apt-install saves it with actions/cache); a hit leaves
 # phase 1 nothing to download, so a usual run does not reach the mirror.
 #
-# Exits 2 on a bad call, 1 when the packages could not be fetched or installed.
+# Arguments are apt install options and packages, including a local .deb.
+# Exits 2 on a bad call, 1 when DNS, fetching or installation fails.
 set -euo pipefail
 
 (( $# )) || { echo 'usage: APT_BUDGET_SECONDS=<n> [APT_CACHE_DIR=<dir>] ci-apt-install.sh <package>...' >&2; exit 2; }
@@ -32,20 +33,28 @@ cache=${APT_CACHE_DIR:-}
 [[ $budget =~ ^[0-9]+$ ]] && (( budget > 0 )) || { echo "APT_BUDGET_SECONDS must be a positive whole number, not '$budget'" >&2; exit 2; }
 packages="$*"
 
-apt=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+root=()
+(( EUID == 0 )) || root=(sudo)
+apt=("${root[@]}" apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
 if [[ -n $cache ]]; then
   mkdir -p "$cache"
   cache=$(cd "$cache" && pwd)
   apt+=(-o "Dir::Cache::archives=$cache")
   # apt runs as root. Hand the folder back to the runner user on every exit so
   # actions/cache can read it, and drop what is not a package.
-  trap 'sudo rm -rf "$cache/partial" "$cache/lock"; sudo chown -R "$(id -u):$(id -g)" "$cache"' EXIT
+  trap '"${root[@]}" rm -rf "$cache/partial" "$cache/lock"; "${root[@]}" chown -R "$(id -u):$(id -g)" "$cache"' EXIT
 fi
 
 left() { echo $(( budget - SECONDS )); }
 # What one wait may take: half of what is left, all of it when little is.
 slice() { local l; l=$(left); (( l > 0 )) || l=1; echo $(( l > 60 ? (l + 1) / 2 : l )); }
-bounded() { local limit=$1; shift; timeout --kill-after=10 "$limit" "$@"; }
+bounded() { local limit=$1; shift; (( limit > 0 )) || return 124; timeout --kill-after=10 "$limit" "$@"; }
+
+# DNS shares the same whole network budget, before any package is fetched.
+if ! bounded "$(left)" bash "$(dirname "${BASH_SOURCE[0]}")/ci-apt-dns.sh"; then
+  echo "could not prepare Ubuntu package DNS within $budget s" >&2
+  exit 1
+fi
 
 fetched=false
 attempt=0
