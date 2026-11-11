@@ -58,6 +58,7 @@ class Scenario:
         self.request = 0
         self.agents = {}
         self.device = None
+        self.missions = []
 
     # --- the shell's side -------------------------------------------------
 
@@ -191,7 +192,8 @@ class Scenario:
             self.save()
 
     def save(self):
-        self.report_path.write_text(json.dumps({"steps": self.steps, "agents": self.agents}, indent=1))
+        self.report_path.write_text(json.dumps({"steps": self.steps, "agents": self.agents, "missions": self.missions},
+                                               indent=1))
 
     def spawn(self, name, command):
         """A spawn, run again while it answers that it may still be running."""
@@ -384,6 +386,103 @@ class Scenario:
             return (not rows or any(row.get("closed") for row in rows)) and ("kept" if rows else "dropped")
         kept = self.wait(closed, "the decision's View closed")
         return f"{view} linked to the device mission's decision and closed ({kept})"
+
+    def mission_states(self):
+        """Missions in the states a later build has to read as they were:
+        one closed done and one with its nodes at work, stacked on another
+        pull request, behind a gate asked and a gate passed, waiting on an
+        outside branch, verified, and held, conducted on the core; one
+        waiting for its direct change's branch, conducted on the device.
+        With the device mission above (a research node worked on the
+        device), these are the states the upgrade test holds every later
+        build to. A part the release does not have is named in the answer
+        and left out."""
+        skipped = []
+
+        def branch(name, repo, device):
+            script = (f"cd {repo} && git branch {name} $(git -c user.name=fixture -c user.email=fixture@example.invalid "
+                      f"commit-tree 'HEAD^{{tree}}' -p HEAD -m {name})")
+            subprocess.run(["ssh", ALIAS, script] if device else ["bash", "-c", script], check=True)
+
+        def mission(agent, title, plan):
+            created = self.checked(agent, f"hide mission create --title '{title}'")
+            self.checked(agent, f"hide mission plan --json '{json.dumps(plan)}'")
+            self.checked(agent, "hide mission start")
+            return (created.get("result") or {}).get("mission", {}).get("id")
+
+        def met(agent, node):
+            self.checked(agent, f"hide mission record {node} c1 --pass --evidence 'read in notes.md'")
+
+        def optional(agent, command, what):
+            result = self.run(agent, command)
+            if (result.get("json") or {}).get("ok") is not True:
+                skipped.append(f"{what}: rc={result['rc']} {(result['err'] or result['out'])[-200:]}")
+                return False
+            return True
+
+        def shown(mission, predicate, what):
+            return self.wait(lambda rest: next((row for row in (rest.get("missions") or {}).get("items") or []
+                                                if row.get("id") == mission and predicate(row)), None), what)
+
+        done = mission("core-a", "States done", {"nodes": [
+            {"key": "find", "title": "Find it", "kind": "research", "criteria": ["the cause is named"]}]})
+        met("core-a", "find")
+        self.checked("core-a", "hide mission node find --status done")
+        self.checked("core-a", "hide mission close --as done --report 'The cause is named.'")
+
+        branch("feat/out", CORE_REPO, False)
+        nodes = [
+            {"key": "work", "title": "Change it", "kind": "change", "delivery": "pr", "criteria": ["it builds"]},
+            {"key": "top", "title": "Change on top", "kind": "change", "delivery": "pr", "criteria": ["it builds too"]},
+            {"key": "out", "title": "Outside branch", "kind": "external", "external": {"branch": "feat/out"}},
+            {"key": "check", "title": "Run it", "kind": "verify", "criteria": ["it runs"]},
+            {"key": "later", "title": "Later", "kind": "research", "criteria": ["it is written"]},
+            {"key": "seen", "title": "Looked at", "kind": "research", "criteria": ["the page is read"]},
+            {"key": "look", "title": "To look at", "kind": "research", "criteria": ["the list is read"]}]
+        gated = [dict(node, gate=f"the {node['key']} page") if node["key"] in ("seen", "look") else node for node in nodes]
+        # A release before gates refuses a plan that names one.
+        running = self.checked("core-a", "hide mission create --title 'States running'")
+        running = (running.get("result") or {}).get("mission", {}).get("id")
+        planned = self.run("core-a", f"hide mission plan --json '{json.dumps({'nodes': gated})}'")
+        gates = (planned.get("json") or {}).get("ok") is True
+        if not gates:
+            skipped.append(f"gates: rc={planned['rc']} {(planned['err'] or planned['out'])[-200:]}")
+            self.checked("core-a", f"hide mission plan --json '{json.dumps({'nodes': nodes})}'")
+        self.checked("core-a", "hide mission start")
+        self.checked("core-a", "hide mission node work --status working --pr 31 --branch feat/work")
+        self.checked("core-a", "hide mission node top --status working --pr 32 --base-pr 31")
+        met("core-a", "check")
+        self.checked("core-a", "hide mission node check --status done --verdict pass --checks 3/3")
+        optional("core-a", "hide mission node later --hold 'waits for the list' --for 2h", "hold")
+        if gates:
+            # A gate asks once its node works and its other lines are met,
+            # one at a time: the first is passed, the second stays asked.
+            for node in ("seen", "look"):
+                self.checked("core-a", f"hide mission node {node} --status working")
+            met("core-a", "seen")
+            shown(running, lambda row: row.get("decision"), "the first gate's question")
+            self.checked("core-a", "hide mission gate seen --pass --said 'looks right'")
+            self.checked("core-a", "hide mission node seen --status done")
+            met("core-a", "look")
+            shown(running, lambda row: row.get("decision"), "the second gate's question")
+        shown(running, lambda row: any(node.get("key") == "out" and node.get("line") for node in row.get("nodes") or []),
+              "the outside branch read")
+
+        branch("feat/wait", DEVICE_REPO, True)
+        waiting = mission("dev-b", "States waiting", {"nodes": [
+            {"key": "join", "title": "Join it", "kind": "change", "delivery": "direct", "criteria": ["it works"]}]})
+        met("dev-b", "join")
+        self.checked("dev-b", "hide mission node join --status done --branch feat/wait")
+        self.checked("dev-b", "hide mission close --as merge_wait --report 'feat/wait is left to join.'")
+        shown(waiting, lambda row: any(node.get("landing") for node in row.get("nodes") or []), "the waiting branch read")
+        return {"done": done, "running": running, "waiting": waiting, "not_in_release": skipped}
+
+    def published(self):
+        """Each mission as the release publishes it to the shell, cut to
+        what its record alone decides: the upgrade test compares a later
+        build's reading of the same records with this."""
+        return [published_mission(mission) for mission in
+                ((self.daemon.snapshot() or {}).get("missions") or {}).get("items") or []]
 
     def sleep(self):
         pane, session = self.agents["dev-b"]["pane"], self.agents["dev-b"]["session"]
@@ -596,6 +695,7 @@ class Scenario:
             self.step("plan step spawned from a device session", self.plan_spawn)
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("decision View opened by a device agent and closed", self.decision_view)
+            self.step("missions in each state a later build reads", self.mission_states)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)
             self.step("Pi on the core asleep with its pane closed", self.dormant)
@@ -604,6 +704,7 @@ class Scenario:
             self.step("a Home started on the core and the device", self.old_home)
             # Let the core write what it holds in memory before it stops.
             time.sleep(5)
+            self.missions = self.published()
         except Stop:
             pass
         finally:
@@ -611,6 +712,26 @@ class Scenario:
             self.save()
         needed = [step for step in self.steps if step["step"] in ("projects and device", "agents")]
         return 0 if len(needed) == 2 and all(step["ok"] for step in needed) else 1
+
+
+# What a mission's record alone decides of how it is published; the upgrade
+# test (`released_missions` in hide-core) cuts a later build's view the same way.
+MISSION_FIELDS = ("id", "title", "status", "scope", "decision", "landing_order", "stack_waiting", "report")
+NODE_FIELDS = ("key", "kind", "delivery", "status", "depends_on", "branch", "base_pr", "commit", "verdict", "checks",
+               "landing", "external", "line")
+
+
+def published_mission(mission):
+    cut = {field: mission.get(field) for field in MISSION_FIELDS}
+    cut["nodes"] = []
+    for node in mission.get("nodes") or []:
+        row = {field: node.get(field) for field in NODE_FIELDS}
+        row["prs"] = [pull.get("number") for pull in node.get("prs") or []]
+        row["criteria"] = [[line.get("key"), line.get("kind"), line.get("state")] for line in node.get("criteria") or []]
+        row["gate"] = (node.get("gate") or {}).get("state")
+        row["hold"] = (node.get("hold") or {}).get("why")
+        cut["nodes"].append(row)
+    return cut
 
 
 def _records(value):
