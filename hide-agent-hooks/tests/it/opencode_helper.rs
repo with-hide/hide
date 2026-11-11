@@ -417,7 +417,9 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         true,
     );
     assert_eq!(answer, json!({"reported": false}));
-    let failure = hide_agent_hooks::report::last_failure_at(&machine.records()).unwrap();
+    let failure = hide_agent_hooks::report::last_failure_at(&machine.records())
+        .expect("records read")
+        .expect("the failed report is recorded");
     assert_eq!(
         (
             failure.pane_id.as_str(),

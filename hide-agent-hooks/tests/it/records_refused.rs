@@ -55,6 +55,7 @@ fn a_refused_pane_record_still_reports_the_sessions_identity_and_is_recorded() {
     assert!(reports[0].get("counts").is_none(), "{reports:?}");
     // The refusal is a sentence `doctor` and Settings show, not a silence.
     let failure = hide_agent_hooks::report::last_failure_at(&machine.records())
+        .expect("records read")
         .expect("the refused record is the pane's last report failure");
     assert_eq!(failure.pane_id, PANE);
     assert_eq!(failure.event, "SessionStart");
@@ -62,6 +63,38 @@ fn a_refused_pane_record_still_reports_the_sessions_identity_and_is_recorded() {
         failure.error.contains("could not be changed"),
         "{}",
         failure.error
+    );
+
+    // The same record, read the way the daemon's node and `doctor` read it:
+    // the diagnosis resolves the daemon's own state folder and installation
+    // and finds what the hook wrote, with no `records_error`. A reader that
+    // fell back to the account's folder, or that applied an installation
+    // twice, would answer `None` here while the hook's file sat beside it.
+    let state = machine.records().parent().unwrap().to_path_buf();
+    let search = hide_platform::programs::account_path_now().unwrap_or_default();
+    let diagnosis = hide_agent_hooks::Diagnosis::read_at(
+        &machine.home,
+        &search,
+        hide_agent_hooks::route::records_of_state(&machine.home, Some(&state), None),
+    );
+    assert_eq!(
+        diagnosis.records_error, None,
+        "{:?}",
+        diagnosis.records_error
+    );
+    let read = diagnosis
+        .last_report_failure
+        .as_ref()
+        .expect("the node reads the hook's own failure record");
+    assert_eq!(read.pane_id, PANE);
+    assert_eq!(
+        read.kind,
+        Some(hide_agent_hooks::report::FailureKind::Record)
+    );
+    assert!(
+        diagnosis.render().contains("Last report failed:"),
+        "{}",
+        diagnosis.render()
     );
 }
 
@@ -87,6 +120,7 @@ fn a_plugins_refused_record_still_reports_its_session_start() {
     assert_eq!(reports[0]["session"], "ses_root");
     assert_eq!(reports[0]["session_start"], true);
     let failure = hide_agent_hooks::report::last_failure_at(&machine.records())
+        .expect("records read")
         .expect("the refused record is the pane's last report failure");
     assert_eq!(failure.event, "session start");
     assert!(
