@@ -10179,6 +10179,23 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_gate_state", &gate_states);
             checked.insert("mission_gate_state");
+            use crate::runtime::mission_landing::{MergeBy, MergeStep};
+            let merge_by = [MergeBy::Operator, MergeBy::Conductor];
+            for variant in merge_by {
+                match variant {
+                    MergeBy::Operator | MergeBy::Conductor => {}
+                }
+            }
+            assert_wire(&contract, "mission_merge_by", &merge_by);
+            checked.insert("mission_merge_by");
+            let merge_steps = [MergeStep::Ahead, MergeStep::Due, MergeStep::Merged];
+            for variant in merge_steps {
+                match variant {
+                    MergeStep::Ahead | MergeStep::Due | MergeStep::Merged => {}
+                }
+            }
+            assert_wire(&contract, "mission_merge_step", &merge_steps);
+            checked.insert("mission_merge_step");
             let criterion_states = [
                 CriterionState::Open,
                 CriterionState::Pass,

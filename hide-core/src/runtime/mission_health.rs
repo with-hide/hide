@@ -472,6 +472,34 @@ pub(super) fn closing_report(mission: &Mission) -> String {
             },
         ));
     }
+    // What is left for the operator to merge, so the report says it even
+    // when the map is not open (PRD mission-destination D-11, D-35).
+    let left: Vec<String> = mission
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                super::mission_landing::node_landing(mission, node, false),
+                Some(super::mission_landing::NodeLanding::Left {
+                    action: super::mission_landing::LandingAction::Merge
+                })
+            )
+        })
+        .map(|node| {
+            let pr = node
+                .current_pr()
+                .map_or_else(String::new, |pr| format!(" · PR #{pr}"));
+            let why = node
+                .operator_merge
+                .as_deref()
+                .map_or_else(String::new, |why| format!(" · {why}"));
+            format!("- {} ({}){pr}{why}", node.title, node.key)
+        })
+        .collect();
+    if !left.is_empty() {
+        lines.push(format!("Left for the operator to merge ({}):", left.len()));
+        lines.extend(left);
+    }
     // What the Conductor settled on its own is read with the close
     // (hide-private docs/missions.md, the principle of 2026-11-11).
     let alone = super::missions::skipped_alone(mission);
