@@ -3084,6 +3084,11 @@ Cursor uses its native graph units under the same page and text bounds; a record
 OpenCode uses its own messages from its database, paged by message with the same 30-message and text bounds; every page, idle poll and copied pager proves the root session and exact checkout again, and a session rewound under the phone is read anew.
 An unavailable or changed native source falls back through the existing feature-local refusal path; no transcript is borrowed from another session and no new banner is added.
 터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, in the monospace face at the caption text size (a step under the body text, so a row keeps more of its columns on a phone, as the desktop pane's smaller terminal text does), each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
+When the holder reports an alternate screen and there are no older rows to load, the top of the terminal says quietly, `전체 화면 프로그램이라 지난 줄은 여기 없어요. 지난 내용은 대화에서 보세요.`
+Korean words in this line wrap at spaces, with a long unbroken word allowed to wrap to fit the phone.
+The line opens Conversation when that tab exists, and is plain text otherwise; it scrolls with the output, so it appears only at the top.
+Primary-screen panes and computers that do not report the screen mode show no line, regardless of the agent kind.
+Pulling the phone's output never sends input to the program or moves the desktop's view.
 볼 것 is the third tab, `대화 | 터미널 | 볼 것` (`터미널 | 볼 것` for an agent with no conversation), and it is there only while the agent has a View open now; the number of Views not seen is on it.
 The list's eye row, the 볼 것 mark, opens the detail on this tab; a row that asks a question or needs an approval, and every other row, opens on the conversation as before, and 대화 goes straight to the agent's conversation.
 The tab lists the Views the agent opened, `안 본 것 N` above `본 것 N`, newest first: a tile with the kind's icon and a dot when the View is not seen, its name, its kind (변경 내용, 문서, 이미지, 웹 화면, 파일) and how long ago it was opened.
