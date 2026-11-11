@@ -758,10 +758,15 @@ fn styled(mut text: String, mut truncated: bool) -> Answer {
 /// CUT_SLACK` of them, so a reader whose own bound is smaller always cuts
 /// too.
 fn newest_rows(text: String, truncated: bool) -> Answer {
-    let (text, cut) = styled::newest_bytes(&text, MAX_READ_BYTES, &str::len);
+    // A read within the bound, every poll's usual case, is handed on as it
+    // is: no walk over it and no copy.
+    if text.len() <= MAX_READ_BYTES {
+        return Answer::Text { text, truncated };
+    }
+    let (text, _) = styled::newest_bytes(&text, MAX_READ_BYTES, &str::len);
     Answer::Text {
         text,
-        truncated: truncated || cut,
+        truncated: true,
     }
 }
 
