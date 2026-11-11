@@ -64,7 +64,7 @@ export function HumanTurnLine({ turn, copy, textHidden = false, className }: { t
   const device = useShellStore((state) => (turn.device_id ? machineName(state.rest?.navigator?.devices, turn.device_id, t) : null));
   const what = humanTurnText(t, turn);
   return (
-    <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-human-turn-line={turn.id}>
+    <span className={cn("group/turn flex min-w-0 items-baseline gap-xs text-caption", className)} data-human-turn-line={turn.id}>
       <span aria-hidden={textHidden || undefined} className="pointer-events-auto min-w-0 cursor-text truncate text-warning select-text" title={what} data-human-turn-place={turn.id}>{what}</span>
       {copy ? <HumanTurnCopy turn={turn} copy={copy} /> : null}
       {device ? <span aria-hidden={textHidden || undefined} className="contents"><DeviceChip label={device} variant="inline" className="shrink-0 self-center" /></span> : null}
