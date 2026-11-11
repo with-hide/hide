@@ -1604,8 +1604,6 @@ fn holder_key(key: PaneKey) -> HolderKey {
         PaneKey::ShiftTab => HolderKey::ShiftTab,
         PaneKey::Up => HolderKey::Up,
         PaneKey::Down => HolderKey::Down,
-        PaneKey::PageUp => HolderKey::PageUp,
-        PaneKey::PageDown => HolderKey::PageDown,
         PaneKey::Left => HolderKey::Left,
         PaneKey::Right => HolderKey::Right,
         PaneKey::Backspace => HolderKey::Backspace,

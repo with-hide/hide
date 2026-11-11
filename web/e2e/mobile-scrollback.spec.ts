@@ -2,7 +2,7 @@
 // A component test cannot tell whether styled, soft-wrapped PTY output is
 // still available at the phone's paging boundary.
 import fs from "node:fs";
-import { devices, expect, test } from "@playwright/test";
+import { devices, expect, test, type Browser, type Page } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { sendKeys, viewPane, withControl } from "./daemon-actions";
@@ -11,9 +11,9 @@ import { chord } from "./chords";
 import { screenshot } from "./wire";
 import { animationsFinished } from "./wait";
 
-// @platform: quick keys cross the operating system's real PTY or ConPTY holder.
-test("the phone reaches terminal history and explains an alternate screen", { tag: "@platform" }, async ({ browser, page }) => {
-  test.setTimeout(120_000); // wait-ok: pairing and two native agent starts precede four page reads.
+type PhoneFixture = { fixture: Awaited<ReturnType<typeof startFixture>>; daemon: Daemon; phone: Page; rowsFrames: Record<string, unknown>[] };
+
+async function withPhone(browser: Browser, page: Page, check: (fixture: PhoneFixture) => Promise<void>): Promise<void> {
   const fixture = await startFixture();
   const tailscale = new FakeTailscale();
   const context = await browser.newContext({ ...devices["iPhone 13"], locale: "ko-KR", colorScheme: "dark" });
@@ -35,9 +35,24 @@ test("the phone reaches terminal history and explains an alternate screen", { ta
     await expect(qr).toBeVisible();
     const address = (await qr.getAttribute("data-mobile-qr"))!;
     const phone = await context.newPage();
+    const rowsFrames: Record<string, unknown>[] = [];
+    phone.on("websocket", (socket) => socket.on("framereceived", (message) => {
+      const frame = JSON.parse(String(message.payload)) as Record<string, unknown>;
+      if (frame.type === "rows") rowsFrames.push(frame);
+    }));
     await phone.goto(`${daemon.origin}/m/${address.slice(address.indexOf("#"))}`);
     await phone.locator("[data-phone-pair]").tap();
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
+    await check({ fixture, daemon, phone, rowsFrames });
+  } finally {
+    await context.close(); daemon?.stop(); fixture.stop(); tailscale.remove();
+  }
+}
+
+// @platform: quick keys cross the operating system's real PTY or ConPTY holder.
+test("the phone reaches terminal history and explains an alternate screen", { tag: "@platform" }, async ({ browser, page }) => {
+  test.setTimeout(120_000); // wait-ok: pairing and two native agent starts precede four page reads.
+  await withPhone(browser, page, async ({ fixture, daemon, phone }) => {
     const pane = fixture.panes[0];
     await withControl(daemon, async (control) => {
       viewPane(control, pane, { cols: 80, rows: 24 });
@@ -126,7 +141,37 @@ test("the phone reaches terminal history and explains an alternate screen", { ta
     await expect.poll(async () => Math.min(...await phone.getByRole("group", { name: "Quick keys" }).getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().width))), { message: "the narrower phone keeps every quick key's touch width" }).toBeGreaterThanOrEqual(44);
     await hint.tap();
     await expect(phone.locator("[data-phone-conversation]")).toBeVisible();
-  } finally {
-    await context.close(); daemon?.stop(); fixture.stop(); tailscale.remove();
-  }
+  });
+});
+
+// @platform: the mode is read from each operating system's native pane holder.
+test("the phone updates its history explanation when only the screen mode changes", { tag: "@platform" }, async ({ browser, page }) => {
+  test.setTimeout(120_000); // wait-ok: pairing and two native agent starts precede three mode-only reads.
+  await withPhone(browser, page, async ({ fixture, daemon, phone, rowsFrames }) => {
+    const pane = fixture.panes[0];
+    await phone.locator(`[data-phone-agent$="|${pane}"]`).tap();
+    await phone.locator('[data-phone-view="terminal"]').tap();
+    const output = phone.locator("[data-phone-scrollback] pre");
+    const hint = phone.locator("[data-phone-screen-history]");
+    await withControl(daemon, async (control) => { sendKeys(control, pane, "MODE-ONLY-READY\r"); });
+    await expect(output).toContainText("MODE-ONLY-READY");
+    await withControl(daemon, async (control) => {
+      sendKeys(control, pane, "\x1b[?1049l\x1b[3J\x1b[2J\x1b[H");
+    });
+    await expect(output).toHaveText(/^\s*$/);
+    const primary = rowsFrames.at(-1)!;
+    const unchanged = (frame: Record<string, unknown>) => ({ text: frame.text, state: frame.state, lines: frame.lines, more: frame.more });
+    expect(primary.alternate_screen ?? false).toBe(false);
+    expect(primary.more).toBe(false);
+    // With no text, truncation or page demand moving, mode alone must
+    // publish a rows frame and show, then clear, the phone's explanation.
+    await withControl(daemon, async (control) => { sendKeys(control, pane, "\x1b[?1049h"); });
+    await expect(hint).toHaveCount(1);
+    expect(rowsFrames.at(-1)!.alternate_screen).toBe(true);
+    expect(unchanged(rowsFrames.at(-1)!)).toEqual(unchanged(primary));
+    await withControl(daemon, async (control) => { sendKeys(control, pane, "\x1b[?1049l"); });
+    await expect(hint).toHaveCount(0);
+    expect(rowsFrames.at(-1)!.alternate_screen ?? false).toBe(false);
+    expect(unchanged(rowsFrames.at(-1)!)).toEqual(unchanged(primary));
+  });
 });

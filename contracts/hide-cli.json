@@ -2732,8 +2732,6 @@
                         "shift-tab",
                         "up",
                         "down",
-                        "page-up",
-                        "page-down",
                         "left",
                         "right",
                         "backspace",
@@ -4914,8 +4912,6 @@
                             "shift-tab",
                             "up",
                             "down",
-                            "page-up",
-                            "page-down",
                             "left",
                             "right",
                             "backspace",
@@ -6670,7 +6666,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:83bdc978cb3bad423fb3c43fc3fe12b0dc10e654cb68946ad2e2e06fa8af476b",
+    "digest": "sha256:bd6f3bf5d5dab3562cd61dbc4d728294d64794293038588b63b1b03433304a2e",
     "envelopes": {
         "agent": {
             "answer": "value",

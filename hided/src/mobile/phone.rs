@@ -582,7 +582,7 @@ async fn conversation_step(
     (transcript, frame)
 }
 
-/// Reads the open pane's rows and answers only when their text or the asked
+/// Reads the open pane's rows and answers only when the rows or the asked
 /// line count changed. The engine's read `revision` counts pane state, not output,
 /// so it cannot say that new rows arrived.
 #[derive(Default)]
@@ -1878,7 +1878,7 @@ async fn input(
     let engine_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, engine_key) {
         (Some(text), None) => pane::reply_problem(text),
-        (None, Some(key)) => pane::engine_key(key).is_none().then_some("unknown_key"),
+        (None, Some(key)) => pane::quick_key(key).is_none().then_some("unknown_key"),
         _ => Some("invalid_request"),
     };
     if let Some(problem) = problem {
@@ -1896,7 +1896,7 @@ async fn input(
     let device_id = key.device_id.clone();
     let writer = Arc::clone(mobile);
     let text = text.map(str::to_owned);
-    let engine_key = engine_key.and_then(pane::engine_key);
+    let engine_key = engine_key.and_then(pane::quick_key);
     // The blocking write owns settlement even if its async caller is cancelled.
     // A panic or a queued closure dropped at shutdown conservatively settles Uncertain.
     struct Settlement {

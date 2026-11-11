@@ -277,7 +277,6 @@ fn open_watched(
             Capability::Screen,
             Capability::Notices,
             Capability::Keys,
-            Capability::PageKeys,
             Capability::Submit,
             Capability::Clipboard,
             Capability::MouseOutside,
@@ -299,7 +298,6 @@ fn open_watched(
         stream: stream.duplicate(),
         size: found,
         reads_outside: welcome.sends.contains(&Capability::MouseOutside),
-        reads_page_keys: welcome.sends.contains(&Capability::PageKeys),
     };
     if let Some(size) = size {
         writer.resize(size).map_err(|error| {
@@ -480,34 +478,6 @@ struct HolderWriter {
     /// ([`Capability::MouseOutside`]); an older one is told the grid's
     /// nearest cell alone.
     reads_outside: bool,
-    reads_page_keys: bool,
-}
-
-/// A holder predating page keys must never receive their new key codes.
-/// Unmodified PageUp/Down have the same CSI bytes in legacy and enhanced
-/// keyboard modes, so the existing raw input message preserves old holders.
-fn write_named_keys(
-    writer: &mut impl std::io::Write,
-    keys: &[Key],
-    page_keys: bool,
-) -> std::io::Result<()> {
-    let mut start = 0;
-    for (index, key) in keys.iter().enumerate() {
-        let bytes: &[u8] = match key {
-            Key::PageUp if !page_keys => b"\x1b[5~",
-            Key::PageDown if !page_keys => b"\x1b[6~",
-            _ => continue,
-        };
-        for chunk in keys[start..index].chunks(MAX_KEYS) {
-            write_client(writer, &ClientMessage::Key(chunk.to_vec()))?;
-        }
-        write_client(writer, &ClientMessage::Input(bytes.to_vec()))?;
-        start = index + 1;
-    }
-    for chunk in keys[start..].chunks(MAX_KEYS) {
-        write_client(writer, &ClientMessage::Key(chunk.to_vec()))?;
-    }
-    Ok(())
 }
 
 impl SessionWriter for HolderWriter {
@@ -532,7 +502,10 @@ impl SessionWriter for HolderWriter {
     }
 
     fn keys(&mut self, keys: &[Key]) -> std::io::Result<()> {
-        write_named_keys(&mut self.stream, keys, self.reads_page_keys)
+        for chunk in keys.chunks(MAX_KEYS) {
+            write_client(&mut self.stream, &ClientMessage::Key(chunk.to_vec()))?;
+        }
+        Ok(())
     }
 
     fn resize(&mut self, size: GridSize) -> std::io::Result<()> {
@@ -1732,29 +1705,6 @@ fn take_round(judged: &mut BTreeMap<String, Judgment>, round: BTreeMap<String, J
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn page_keys_reach_new_and_older_holders_in_order() {
-        use hide_holder_protocol::read_client;
-        let keys = [Key::Up, Key::PageUp, Key::PageDown, Key::Enter];
-        let mut bytes = Vec::new();
-        write_named_keys(&mut bytes, &keys, true).unwrap();
-        assert_eq!(
-            read_client(&mut bytes.as_slice()).unwrap(),
-            ClientMessage::Key(keys.to_vec())
-        );
-        bytes.clear();
-        write_named_keys(&mut bytes, &keys, false).unwrap();
-        let mut reader = bytes.as_slice();
-        for message in [
-            ClientMessage::Key(vec![Key::Up]),
-            ClientMessage::Input(b"\x1b[5~".to_vec()),
-            ClientMessage::Input(b"\x1b[6~".to_vec()),
-            ClientMessage::Key(vec![Key::Enter]),
-        ] {
-            assert_eq!(read_client(&mut reader).unwrap(), message);
-        }
-        assert!(reader.is_empty());
-    }
 
     /// The core's own engine draws a new tab or split before its holder
     /// starts, and the view attaches at once: that attach waits for the

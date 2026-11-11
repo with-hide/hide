@@ -70,8 +70,9 @@ pub fn read(engine: &EngineHandle, pane_id: &str, lines: u32) -> Result<Rows, Pa
     })
 }
 
-/// The keys a phone may send, as key-combo strings.
-pub fn engine_key(key: &str) -> Option<&'static str> {
+/// The phone's accepted quick keys. Page keys use fixed VT input rather
+/// than a new named key that an older device node cannot decode.
+pub fn quick_key(key: &str) -> Option<&'static str> {
     match key {
         "enter" => Some("enter"),
         "escape" => Some("esc"),
@@ -129,6 +130,8 @@ pub fn wait_for_input(
 pub fn send(engine: &EngineHandle, pane_id: &str, input: Input<'_>) -> Result<(), PaneError> {
     match input {
         Input::Reply(text) => engine.submit_text(pane_id, text, TIMEOUT),
+        Input::Key("page-up") => engine.send_text(pane_id, "\x1b[5~", TIMEOUT),
+        Input::Key("page-down") => engine.send_text(pane_id, "\x1b[6~", TIMEOUT),
         Input::Key(key) => engine.press_key(pane_id, key, TIMEOUT),
     }
     .map_err(classify)
@@ -139,13 +142,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_quick_keys_map_to_engine_keys() {
-        assert_eq!(engine_key("escape"), Some("esc"));
-        assert_eq!(engine_key("ctrl_c"), Some("ctrl+c"));
-        assert_eq!(engine_key("page_up"), Some("page-up"));
-        assert_eq!(engine_key("page_down"), Some("page-down"));
-        assert_eq!(engine_key("ctrl_d"), None);
-        assert_eq!(engine_key("prefix+c"), None);
+    fn only_the_quick_keys_are_accepted() {
+        assert_eq!(quick_key("escape"), Some("esc"));
+        assert_eq!(quick_key("ctrl_c"), Some("ctrl+c"));
+        assert_eq!(quick_key("page_up"), Some("page-up"));
+        assert_eq!(quick_key("page_down"), Some("page-down"));
+        assert_eq!(quick_key("ctrl_d"), None);
+        assert_eq!(quick_key("prefix+c"), None);
     }
 
     #[test]
