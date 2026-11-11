@@ -58,7 +58,7 @@ export function answerSentFor(sent: MissionAnswerSent | null, mission: string): 
   return sent?.mission === mission ? sent : null;
 }
 
-export type Rows = { state: RowsState; text: string; lines: number; more: boolean };
+export type Rows = { state: RowsState; text: string; lines: number; more: boolean; alternateScreen?: boolean };
 
 /** The agent's open Views, as the last `looks` frame carried them; `omitted` are the ones past hided's cap. */
 export type Looks = { rows: LookRow[]; omitted: number };
@@ -311,7 +311,7 @@ export function applyFrame(frame: ServerFrame): void {
       if (!detail || !sameKey(detail.key, frame)) return;
       const rows: Rows =
         frame.state === "ok"
-          ? { state: "ok", text: frame.text ?? "", lines: frame.lines ?? 0, more: frame.more ?? false }
+          ? { state: "ok", text: frame.text ?? "", lines: frame.lines ?? 0, more: frame.more ?? false, alternateScreen: frame.alternate_screen ?? false }
           : { state: frame.state, text: detail.rows?.text ?? "", lines: detail.rows?.lines ?? 0, more: false };
       patch({ detail: { ...detail, rows } });
       return;

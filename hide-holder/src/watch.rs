@@ -202,7 +202,8 @@ fn state(state: State) -> ScreenState {
 }
 
 /// The pane's facts now: what the pane says of itself, its foreground, and
-/// its screen read by its rules, with no facts extension.
+/// its screen read by its rules. The writer filters the screen-mode fact
+/// by the watch's negotiated extension before putting it on the wire.
 pub fn facts(
     pane: &Mutex<Pane>,
     rules: &SharedRules,
@@ -229,6 +230,7 @@ pub fn facts(
         screen,
         line_editing: None,
         foreground_unread: None,
+        alternate_screen: Some(observed.alternate_screen),
     })
 }
 
@@ -268,6 +270,8 @@ pub struct FactsWriter {
     /// Whether the watch's node accepted
     /// [`hide_holder_protocol::Capability::ForegroundUnread`].
     pub foreground_unread: bool,
+    /// Whether this watch negotiated the alternate-screen facts extension.
+    pub alternate_screen: bool,
     pub log: Log,
 }
 
@@ -352,6 +356,9 @@ impl FactsWriter {
                         .as_mut()
                         .map(|read| read(pid, LineAsk::Facts)),
                     foreground_unread: self.foreground_unread.then_some(unread.is_some()),
+                    alternate_screen: self
+                        .alternate_screen
+                        .then_some(facts.alternate_screen == Some(true)),
                     ..facts
                 },
                 Err(error) => {
@@ -735,10 +742,25 @@ mod tests {
         assert_eq!(facts.title.as_deref(), Some("job"));
         assert_eq!((facts.bells, facts.prompts), (2, 1));
         assert!(facts.bracketed_paste);
+        assert_eq!(facts.alternate_screen, Some(false));
         assert_eq!(facts.screen, ScreenRead::NoRules);
         feed(&pane, b"\x1b]7;relative/folder\x07\x1b[?2004l");
         let facts = super::facts(&pane, &rules, &mut reading, None).unwrap();
         assert_eq!(facts.cwd.as_deref(), Some(expected));
         assert!(!facts.bracketed_paste);
+        feed(&pane, b"\x1b[?1049h");
+        assert_eq!(
+            super::facts(&pane, &rules, &mut reading, None)
+                .unwrap()
+                .alternate_screen,
+            Some(true)
+        );
+        feed(&pane, b"\x1b[?1049l");
+        assert_eq!(
+            super::facts(&pane, &rules, &mut reading, None)
+                .unwrap()
+                .alternate_screen,
+            Some(false)
+        );
     }
 }

@@ -164,7 +164,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
           {viewing ? <LookViewer row={viewing.row} content={viewing.content} refreshing={viewing.refreshing} /> : <LooksList looks={detail.looks} />}
         </div>
       ) : !showsConversation ? (
-        <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} />
+        <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} alternateScreen={rows?.alternateScreen ?? false} conversation={hasConversation} />
       ) : conversation ? (
         <ConversationLog conversation={conversation} />
       ) : (
@@ -346,7 +346,7 @@ function usePinnedScroll(content: unknown, top: number, onTop: () => void) {
   return { scroller, onScroll };
 }
 
-function Scrollback({ text, more, lines, loading }: { text: string; more: boolean; lines: number; loading: boolean }) {
+function Scrollback({ text, more, lines, loading, alternateScreen, conversation }: { text: string; more: boolean; lines: number; loading: boolean; alternateScreen: boolean; conversation: boolean }) {
   const { t } = useInterfaceTranslation();
   const rows = useMemo(() => ansiRows(text), [text]);
   const { scroller, onScroll } = usePinnedScroll(rows, lines, () => {
@@ -355,6 +355,13 @@ function Scrollback({ text, more, lines, loading }: { text: string; more: boolea
   return (
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-scrollback={lines} onScroll={onScroll}>
       {more ? <p className="pb-sm text-center text-body text-muted-foreground">{t("mobile.pullOlder")}</p> : null}
+      {alternateScreen && !more ? (
+        conversation ? (
+          <Button variant="text" size="inline" className="mb-sm min-h-(--size-touch-target) w-full whitespace-normal text-left text-body text-muted-foreground" data-phone-screen-history onClick={() => setTab("conversation")}>
+            {t("mobile.screenHistory")}
+          </Button>
+        ) : <p className="pb-sm text-body text-muted-foreground" data-phone-screen-history>{t("mobile.screenHistory")}</p>
+      ) : null}
       {loading ? <p className="text-body text-muted-foreground">{t("mobile.loading")}</p> : null}
       <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-caption leading-normal text-foreground">
         {rows.map((row, index) => (

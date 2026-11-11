@@ -150,11 +150,12 @@ const SENDS: [Capability; 6] = [
 ];
 
 /// What this holder sends on a watch.
-const WATCH_SENDS: [Capability; 4] = [
+const WATCH_SENDS: [Capability; 5] = [
     Capability::Facts,
     Capability::ProgramPackage,
     Capability::LineEditing,
     Capability::ForegroundUnread,
+    Capability::AlternateScreen,
 ];
 
 enum Event {
@@ -1135,6 +1136,7 @@ impl Holder {
         let program_package = sends.contains(&Capability::ProgramPackage);
         let line_editing = sends.contains(&Capability::LineEditing);
         let foreground_unread = sends.contains(&Capability::ForegroundUnread);
+        let alternate_screen = sends.contains(&Capability::AlternateScreen);
         wake.send(HolderMessage::Watching(Watching {
             version,
             rules_engine: hide_screen_rules::ENGINE_VERSION,
@@ -1167,6 +1169,7 @@ impl Holder {
                     move || master.group(shell)
                 }),
                 foreground_unread,
+                alternate_screen,
                 line_editing: line_editing.then(|| self.line_editing(master.clone())),
                 log: self.log.clone(),
             };

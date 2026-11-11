@@ -56,6 +56,7 @@ fn classify(error: EngineError) -> PaneError {
 pub struct Rows {
     pub text: String,
     pub truncated: bool,
+    pub alternate_screen: bool,
 }
 
 pub fn read(engine: &EngineHandle, pane_id: &str, lines: u32) -> Result<Rows, PaneError> {
@@ -65,6 +66,7 @@ pub fn read(engine: &EngineHandle, pane_id: &str, lines: u32) -> Result<Rows, Pa
     Ok(Rows {
         text: read.text,
         truncated: read.truncated,
+        alternate_screen: read.alternate_screen,
     })
 }
 

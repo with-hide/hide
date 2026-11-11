@@ -587,7 +587,7 @@ async fn conversation_step(
 /// so it cannot say that new rows arrived.
 #[derive(Default)]
 struct RowsReader {
-    last: Option<(String, u32)>,
+    last: Option<(pane::Rows, u32)>,
     last_error: Option<&'static str>,
 }
 
@@ -611,12 +611,18 @@ impl RowsReader {
                 if self
                     .last
                     .as_ref()
-                    .is_some_and(|(text, lines)| *lines == asked && *text == rows.text)
+                    .is_some_and(|(previous, lines)| *lines == asked && *previous == rows)
                 {
                     return None;
                 }
-                let frame = rows_frame(key, &rows.text, rows.truncated, asked);
-                self.last = Some((rows.text, asked));
+                let frame = rows_frame(
+                    key,
+                    &rows.text,
+                    rows.truncated,
+                    asked,
+                    rows.alternate_screen,
+                );
+                self.last = Some((rows, asked));
                 Some(frame)
             }
             Err(error) => {
@@ -649,12 +655,21 @@ impl RowsReader {
 /// (engineering #15). A holder that cut its read to its own byte bound
 /// answers more than this frame holds (`HOLDER_CUT_KEEPS`), so that read is
 /// always cut here too and offers nothing more.
-fn rows_frame(key: &AgentKey, text: &str, truncated: bool, asked: u32) -> Value {
+fn rows_frame(
+    key: &AgentKey,
+    text: &str,
+    truncated: bool,
+    asked: u32,
+    alternate_screen: bool,
+) -> Value {
     // Measured with `false`, the longer of the two values `more` takes.
     let mut frame = json!({
         "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
         "state": "ok", "text": "", "lines": asked, "more": false,
     });
+    if alternate_screen {
+        frame["alternate_screen"] = Value::Bool(true);
+    }
     let room = FRAME_LIMIT.saturating_sub(wire_len(&frame));
     // A string's JSON is its escaped bytes between two quotes; escaping is
     // per character, so the pieces' lengths add up.
@@ -2352,7 +2367,7 @@ mod tests {
             serde_json::to_string(&text).unwrap().len() > FRAME_LIMIT,
             "its JSON does not"
         );
-        let frame = rows_frame(&terminal_key(), &text, true, 600);
+        let frame = rows_frame(&terminal_key(), &text, true, 600, false);
         let bytes = frame.to_string().len();
         assert!(
             bytes <= hide_relay_protocol::noise::MAX_MESSAGE,
@@ -2374,17 +2389,22 @@ mod tests {
         // Within the budget nothing is cut, and older rows stay offered
         // until the cap.
         let small = colored_lines(100);
-        let frame = rows_frame(&terminal_key(), &small, true, 200);
+        let frame = rows_frame(&terminal_key(), &small, true, 200, false);
+        assert!(frame.get("alternate_screen").is_none());
+        assert_eq!(
+            rows_frame(&terminal_key(), &small, false, 200, true)["alternate_screen"],
+            true
+        );
         assert_eq!(
             (frame["text"].as_str().unwrap(), &frame["more"]),
             (small.as_str(), &json!(true))
         );
         assert_eq!(
-            rows_frame(&terminal_key(), &small, true, pane::MAX_LINES)["more"],
+            rows_frame(&terminal_key(), &small, true, pane::MAX_LINES, false)["more"],
             false
         );
         assert_eq!(
-            rows_frame(&terminal_key(), &small, false, 200)["more"],
+            rows_frame(&terminal_key(), &small, false, 200, false)["more"],
             false
         );
     }
@@ -2393,7 +2413,13 @@ mod tests {
     fn a_newest_line_longer_than_the_frame_keeps_its_newest_part_in_its_color() {
         // A minified file is one line once soft wraps are joined.
         let line = format!("{}END", "\x1b[0m\x1b[32mx".repeat(40_000));
-        let frame = rows_frame(&terminal_key(), &format!("older\r\n{line}"), true, 200);
+        let frame = rows_frame(
+            &terminal_key(),
+            &format!("older\r\n{line}"),
+            true,
+            200,
+            false,
+        );
         assert!(frame.to_string().len() <= FRAME_LIMIT);
         let sent = frame["text"].as_str().unwrap();
         assert!(sent.ends_with("xEND"), "the newest characters were dropped");
@@ -2415,7 +2441,13 @@ mod tests {
     fn an_older_line_that_does_not_fit_what_is_left_goes_whole() {
         let newer = "n".repeat(FRAME_LIMIT / 2);
         let older = format!("OLD{}", "o".repeat(FRAME_LIMIT / 2));
-        let frame = rows_frame(&terminal_key(), &format!("{older}\r\n{newer}"), false, 200);
+        let frame = rows_frame(
+            &terminal_key(),
+            &format!("{older}\r\n{newer}"),
+            false,
+            200,
+            false,
+        );
         assert_eq!(frame["text"], newer);
         assert_eq!(frame["more"], false);
     }
@@ -2432,7 +2464,7 @@ mod tests {
         let (held, cut) = styled::newest_bytes(&read, MAX_READ_BYTES, &str::len);
         assert!(cut && held.len() >= HOLDER_CUT_KEEPS);
         for asked in [200, 400, 600] {
-            let frame = rows_frame(&terminal_key(), &held, true, asked);
+            let frame = rows_frame(&terminal_key(), &held, true, asked, false);
             let sent = frame["text"].as_str().unwrap();
             assert!(sent.ends_with("\r\n\x1b[0mEND"), "{asked}");
             assert_eq!(
@@ -2442,7 +2474,7 @@ mod tests {
         }
         // A read the holder did not cut, with rows above it, still offers
         // them.
-        let frame = rows_frame(&terminal_key(), "\x1b[0mEND", true, 200);
+        let frame = rows_frame(&terminal_key(), "\x1b[0mEND", true, 200, false);
         assert_eq!(frame["more"], true);
     }
 
