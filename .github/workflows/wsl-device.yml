@@ -172,7 +172,37 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
-          additional-packages: git python3 openssh-server
+      - name: Install the distribution's packages after DNS is ready
+        # setup-wsl's apt update can report DNS failures and still succeed,
+        # leaving its one install attempt to fail before any product test.
+        # Keep first-run setup undone; only root installs the prerequisites.
+        # DNS gets 120 s to become usable; the existing downloader then owns
+        # a 300 s network budget. Ten minutes also bounds WSL startup/dpkg.
+        timeout-minutes: 10
+        run: |
+          diagnostics() {
+            wsl.exe --version || true
+            powershell.exe -NoProfile -Command 'Resolve-DnsName archive.ubuntu.com; Resolve-DnsName security.ubuntu.com; Get-DnsClientServerAddress -AddressFamily IPv4' || true
+            wsl.exe --distribution Ubuntu-24.04 --user root -- bash -c '
+              uname -a
+              cat /etc/wsl.conf
+              cat /etc/resolv.conf
+              timeout 15 getent ahostsv4 archive.ubuntu.com security.ubuntu.com
+            ' || true
+          }
+          trap diagnostics ERR
+          wsl.exe --version
+          wsl.exe --distribution Ubuntu-24.04 --user root -- bash -s <<'LINUX'
+          set -euo pipefail
+          cat /etc/resolv.conf
+          # Wait for both actual apt hosts, not a fixed startup delay.
+          timeout --kill-after=5 120 bash -c '
+            until getent ahostsv4 archive.ubuntu.com && getent ahostsv4 security.ubuntu.com; do
+              sleep 2
+            done
+          '
+          LINUX
+          wsl.exe --distribution Ubuntu-24.04 --user root -- env APT_BUDGET_SECONDS=300 bash -s -- git python3 openssh-server < scripts/ci-apt-install.sh
       - uses: actions/download-artifact@v8
         timeout-minutes: 5
         with:
