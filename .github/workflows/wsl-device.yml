@@ -172,7 +172,52 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
-          additional-packages: git python3 openssh-server
+      - name: DNS for the distribution
+        # `setup-wsl` runs apt itself right after it installs the distribution,
+        # so its `additional-packages` are installed by the steps below
+        # instead. WSL's own resolver, which writes `/etc/resolv.conf`, failed
+        # to resolve any name inside the distribution on 2026-11-11 (apt:
+        # `Temporary failure resolving 'archive.ubuntu.com'`, with-hide/
+        # hide-private#398): WSL no longer writes the file, and public
+        # resolvers take its place. WSL reads `/etc/wsl.conf` when the
+        # distribution starts, so the distribution is terminated after the
+        # file is written. Each script goes in on stdin, which no layer of
+        # quoting between Git Bash, `wsl.exe` and `sh` can change.
+        timeout-minutes: 3
+        run: |
+          wsl.exe --distribution Ubuntu-24.04 --user root --exec sh -eu <<'EOF'
+          printf '\n[network]\ngenerateResolvConf=false\n' >> /etc/wsl.conf
+          EOF
+          wsl.exe --terminate Ubuntu-24.04
+          wsl.exe --distribution Ubuntu-24.04 --user root --exec sh -eu <<'EOF'
+          rm -f /etc/resolv.conf
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+          EOF
+      - name: The distribution resolves names
+        # Before apt, which retries for minutes before it says the same thing:
+        # a name that does not resolve fails here, with what the distribution
+        # was given to resolve it.
+        timeout-minutes: 3
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if wsl.exe --distribution Ubuntu-24.04 --user root --exec getent hosts archive.ubuntu.com security.ubuntu.com; then
+              exit 0
+            fi
+            echo "attempt $attempt: no answer"
+            sleep 5
+          done
+          wsl.exe --distribution Ubuntu-24.04 --user root --exec sh -c 'cat /etc/wsl.conf /etc/resolv.conf; ip route'
+          echo "::error::the distribution cannot resolve archive.ubuntu.com or security.ubuntu.com"
+          exit 1
+      - name: Packages for the distribution
+        # What `setup-wsl`'s `additional-packages` installed before.
+        timeout-minutes: 8
+        run: |
+          wsl.exe --distribution Ubuntu-24.04 --user root --exec sh -eu <<'EOF'
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install --yes --no-install-recommends git python3 openssh-server
+          EOF
       - uses: actions/download-artifact@v8
         timeout-minutes: 5
         with:
