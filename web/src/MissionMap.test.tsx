@@ -605,6 +605,21 @@ it("draws `👤 머지는 내가` as the card's second-line strip only where the
   } finally { await scoped.unmount(); }
 });
 
+it("keeps the lines a card draws at the regular weight inside the shared card, a medium-weight button, the other base bold and the title semibold (PRD mission-destination B16)", async () => {
+  const nodes = [
+    node("core", { title: "Schema", status: "working", pr: 41, pr_state: "pending", prs: [{ number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", state: "ahead", prs: [41] } }),
+    node("cause", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
+  ];
+  const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
+  try {
+    const weight = (element: Element | null | undefined) => (element?.getAttribute("class")?.match(/\bfont-(?:normal|medium|semibold|bold)\b/g) ?? []).join(" ");
+    const core = card(map, "core");
+    expect(["[data-node-stations]", "[data-node-run]", "[data-node-row]", "[data-node-merge-strip]"].map((part) => weight(core.querySelector(part)))).toEqual(["font-normal", "font-normal", "font-normal", "font-normal"]);
+    expect(weight(card(map, "cause").querySelector("[data-node-row]"))).toBe("font-normal");
+    expect([weight([...core.querySelectorAll("[data-station-label]")].at(-1)), weight(core.querySelector("[data-node-title]"))]).toEqual(["font-bold", "font-semibold"]);
+  } finally { await map.unmount(); }
+});
+
 it("shows on a card's hover its title, its worker in full, where it is, where its result goes with who merges and its worktree branch, and the Conductor's last line, with nothing to press (PRD mission-destination D-19, D-20, B32, B33)", async () => {
   const nodes = [
     node("core", { title: "A long title that the card cuts", status: "working", change: "split in two", branch: "feat/core-split", line: "replay 19/31", pr: 41, pr_state: "pending", prs: [{ number: 40, state: "closed", url: null }, { number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", why: "DB change", state: "ahead", prs: [41] } }),
