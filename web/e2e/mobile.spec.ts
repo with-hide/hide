@@ -508,16 +508,17 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(enable).toHaveCount(0, { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
     await expect(page.locator("[data-mobile-phone-line]")).toHaveText("Just now · Receiving notifications");
 
-    // B31, B33 (always): two finishes; one notification for it, with no terminal content.
+    // B31, B33 (always): two finishes, then asks; a finish is never pushed (2026-11-11), so the one push is the question.
     await finish(two);
+    await ask(fixture, daemon!, two, "배포할까요?");
     await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(1);
-    const done = push.received[0]!;
-    expect(done.payload.title).toBe("Agent two");
-    expect(done.payload.state).toBe("done");
-    expect(done.payload.tag).toBe(`${done.payload.device_id}|${two}`);
-    expect(done.payload.pane_id).toBe(two);
-    expect(JSON.stringify(done.payload)).not.toContain("fixture %");
-    expect(done.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
+    const asked = push.received[0]!;
+    expect(asked.payload.title).toBe("Agent two");
+    expect(asked.payload.state).toBe("needs_you");
+    expect(asked.payload.tag).toBe(`${asked.payload.device_id}|${two}`);
+    expect(asked.payload.pane_id).toBe(two);
+    expect(JSON.stringify(asked.payload)).not.toContain("fixture %");
+    expect(asked.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
 
     // B33: while the phone views one, its ask is read as under the desktop's focus (listed read, never announced).
     await oneRow.tap();
@@ -543,13 +544,13 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await choosePush(page, "app_closed");
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await pushSkippedByMode(daemon!, push.received, 1, () => finish(two));
-    await expect.poll(() => groupOf(frames, two)).toBe("done");
+    await pushSkippedByMode(daemon!, push.received, 1, () => ask(fixture, daemon!, two, "앱이 열려 있을 때"));
+    await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
     await expect.poll(() => coreLog(daemon as Daemon)).toContain('"mode":"app_closed","renderers":1');
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);
     await page.locator(`nav[data-sidebar] [data-project] [data-agent-open="${two}"]`).click();
-    await expect(phone.locator('[data-phone-group="seen"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => readOf(frames, two), { timeout: 20_000 }).toBe(true); // a read ask stays in Needs You (B11)
     await page.close();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
