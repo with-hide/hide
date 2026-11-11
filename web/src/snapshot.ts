@@ -1502,6 +1502,9 @@ export type MissionGate = {
 /** What an external node watches (`External`). */
 export type MissionExternal = { pr: number } | { branch: string };
 
+/** Where an outside node's work goes (`OutsideView`, PRD mission-destination D-14): its pull request's base and state as GitHub last answered, or the default branch its branch is judged against; each absent until read. */
+export type MissionOutside = { base?: string; state?: PrState };
+
 /** What the Conductor asked beside its decision (`Question`, B25, B32); `key` names it, so an answer to a changed question is refused. */
 export type MissionQuestion = {
   key: number;
@@ -1632,6 +1635,8 @@ export type MissionNode = {
   criteria_met: number;
   criteria_skipped: number;
   external: MissionExternal | null;
+  /** Where an outside node's work goes, for its station line; absent for any other node and from a core before it. */
+  outside?: MissionOutside;
   /** An outside node Hide could not read: it stays waiting, the reason is in the diagnostic log (`확인 못 함`, B20). */
   unread: boolean;
   /** How often a later node's defect opened it again (`↻n`, B21). */
@@ -1715,7 +1720,7 @@ export type Mission = {
   device_id: string;
   status: MissionStatus;
   scope: MissionScope;
-  /** The branch the mission's results go to (`Mission::destination`); absent for a mission that records none, whose destination is the project's default branch, and from a core before destinations. */
+  /** The branch the mission's results go to, the one the core judges it against (`Runtime::judged_destination`): what it records, else the project's default branch; absent only while neither can be read, and from a core before destinations, so the map names no branch then. */
   destination?: string;
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */

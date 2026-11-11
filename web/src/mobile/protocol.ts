@@ -108,6 +108,12 @@ export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
 export type PhoneMissionNode = MissionNodeBrief & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
+  /** The branch its current pull request merges into, as GitHub last answered; absent until it answered and from a Mac before it. */
+  pr_base?: string;
+  /** How many pull requests it holds besides its current one, the `+N` of its PR station; absent at zero and from a Mac before it. */
+  pr_more?: number;
+  /** The pull request an outside step watches; absent for one that watches a branch and from a Mac before it. */
+  external_pr?: number;
   stage: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
@@ -122,6 +128,10 @@ export type PhoneDecisionView = { device_id: string; display_id: string; view: s
 export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   title: string;
   device_id: string;
+  /** The branch the mission's results go to, as the Mac's map names it; absent when the Mac cannot read one, and from a Mac before destinations, so the phone names no branch. */
+  destination?: string;
+  /** How far the mission goes: `pr` leaves every merge to the operator, so no node draws the `👤` strip; absent from a Mac before it. */
+  scope?: "pr" | "merge";
   /** The device a mission away from the paired Mac runs on; null on the Mac. */
   device_label: string | null;
   answer: MissionAnswer | null;

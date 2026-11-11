@@ -234,7 +234,7 @@ test("the mission's card closes and opens again from the sidebar, the screen kee
   }
 });
 
-test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis (PRD mission-node-simple B30)", async ({ page }) => {
+test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis before the worker, and each change's stations to the branch the mission goes to (PRD mission-node-simple B30; PRD mission-destination B24, B28, B30, B48, B53)", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -247,17 +247,33 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     const map = page.locator('aside[data-detail="mission"]');
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
+    // Nothing of a card, its title, its worker or a station's word, reaches past its right edge.
     const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       cards.flatMap((card) => {
-        const box = card.getBoundingClientRect();
-        const title = card.querySelector<HTMLElement>("[title]");
-        const out = card.scrollWidth > card.clientWidth + 1 || (title !== null && title.getBoundingClientRect().right > box.right + 1);
+        const right = card.getBoundingClientRect().right + 1;
+        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-station]")];
+        const out = card.scrollWidth > card.clientWidth + 1 || parts.some((part) => part.getBoundingClientRect().right > right);
         return out ? [card.getAttribute("data-mission-node")] : [];
       }),
     );
     expect(spills).toEqual([]);
     // The long title is cut, not wrapped or spilled: its whole is on hover and in the card's name.
-    expect(await map.locator('[data-mission-node="cause"] [title]').evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
+    const cause = map.locator('[data-mission-node="cause"]');
+    expect(await cause.locator("[data-node-title]").evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
+    expect(await cause.getAttribute("aria-label")).toContain(PLAN.nodes[0]!.title);
+    // Research changes no code: no stations. Each change runs from its work to the branch its checkout was on, and the planned worker sits on the title line.
+    await expect(cause.locator("[data-node-stations]")).toHaveCount(0);
+    for (const key of ["api", "screen"]) {
+      const card = map.locator(`[data-mission-node="${key}"]`);
+      // The scope `pr` mission leaves the merge to the operator: the last station is theirs, ahead.
+      await expect(card.locator("[data-node-stations]")).toHaveAttribute("data-node-stations", "work:todo pr:todo approve:todo land:ahead");
+      await expect(card.locator('[data-station="land"] [data-station-label]')).toHaveText("main");
+      await expect(card).toHaveAttribute("aria-label", /(Where it goes|어디로 들어가나): (Work|작업) → PR → (Approval|승인) → main/);
+    }
+    await expect(map.locator('[data-mission-node="api"] [data-node-run] [data-node-model]')).toHaveText("opus");
+    // The head names the branch and, merge first, what the mission applies; the scope `pr` mission leaves the merges to the operator.
+    await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
+    await expect(map.locator('[data-mission-options] [data-mission-head-option="merge"]')).toHaveText(/PR까지 · 머지는 전부 내가|Up to PRs · you merge them all/);
     await screenshot(page, "mission-map-narrow");
   } finally {
     daemon?.stop();

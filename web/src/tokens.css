@@ -100,6 +100,7 @@
   --color-mission-working: var(--mission-working);
   --color-mission-review: var(--mission-review);
   --color-mission-hold: var(--mission-hold);
+  --color-mission-land: var(--mission-land);
   --color-mission-failed: var(--mission-failed);
   --color-mission-waiting: var(--mission-waiting);
   --color-mission-cancelled: var(--mission-cancelled);
@@ -318,6 +319,7 @@
   --size-turn-card: 520px;
   --size-turn-card-answer: 320px;
   --size-mission-node: 224px;
+  --size-mission-station: 16px;
   --size-mission-node-gap: 24px;
   --size-mission-layer-gap: 40px;
   --size-mission-band: 3px;
@@ -334,6 +336,7 @@
   --size-legend-mark: 8px;
   --size-task-table-wide: 520px;
   --size-mission-run-min: 32px;
+  --size-mission-options-min: 120px;
   --size-mission-popover: 320px;
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
@@ -500,6 +503,7 @@
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
   --mission-hold: var(--warning);
+  --mission-land: #4d7c0f;
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
@@ -606,6 +610,7 @@
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
   --mission-hold: var(--warning);
+  --mission-land: #b9ff66;
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);

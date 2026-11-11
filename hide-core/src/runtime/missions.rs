@@ -57,9 +57,13 @@ pub struct MissionView {
     pub device_id: String,
     pub status: MissionStatus,
     pub scope: MissionScope,
-    /// The branch the mission's results go to (`Mission::destination`);
-    /// absent for a mission that records none, whose destination is the
-    /// project's default branch.
+    /// The branch the mission's results go to. In the snapshot it is the
+    /// branch the core judges the mission against
+    /// (`Runtime::judged_destination`): the one it records, else for a
+    /// mission that records none the project's default branch, so the map
+    /// names the branch the judgment uses; absent only while neither can be
+    /// read. A command's answer, `hide mission show` among them, says what
+    /// the mission records: absent when it records none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
     pub cap: u8,
@@ -248,6 +252,11 @@ pub struct NodeView {
     pub criteria_met: u32,
     pub criteria_skipped: u32,
     pub external: Option<External>,
+    /// Where an outside node's work goes, for its station line (PRD
+    /// mission-destination D-14); shown only, its done stays the merge or
+    /// landing it waits on (D-07). Absent for a node that is not outside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outside: Option<OutsideView>,
     /// An outside node Hide could not read: it stays waiting, and the
     /// reason is in the diagnostic log (B20 `확인 못 함`).
     pub unread: bool,
@@ -495,6 +504,20 @@ pub struct NodePrView {
     /// has not answered for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+}
+
+/// Where an outside node's work goes (`NodeView::outside`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OutsideView {
+    /// An outside pull request's base as GitHub last answered, or the
+    /// project's default branch an outside branch is judged against
+    /// (`Runtime::project_default_branch`); absent while neither is read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// An outside pull request's state as GitHub last answered; absent for
+    /// a branch and before GitHub answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<PrState>,
 }
 
 /// The mission's safety net as its card draws it (`MissionView::safety_net`).
@@ -770,6 +793,10 @@ struct ViewsMadeFrom {
     /// its card lists the ones still open and whether each was seen; zero
     /// with none linked.
     views_generation: u64,
+    /// Per mission in book order: its project's default branch as the
+    /// catalog lists it, which a mission that records no destination and
+    /// an outside branch are drawn with, and which moves without the book.
+    defaults: Vec<Option<String>>,
     made: bool,
 }
 
@@ -4172,6 +4199,21 @@ impl Runtime {
                     criteria_met,
                     criteria_skipped,
                     external: node.external.clone(),
+                    outside: node.external.as_ref().map(|external| match external {
+                        External::Pr(number) => {
+                            let pull = pull_of(*number);
+                            OutsideView {
+                                base: pull.map(|pull| pull.base_branch.clone()),
+                                state: pull.map(|pull| {
+                                    PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
+                                }),
+                            }
+                        }
+                        External::Branch(_) => OutsideView {
+                            base: self.project_default_branch(&mission.device_id, &mission.project),
+                            state: None,
+                        },
+                    }),
                     unread: self.missions.outside.unread(&mission.id, &node.key),
                     reopened: node.reopened,
                     started_at_unix_ms: node.started_at_unix_ms,
@@ -4454,6 +4496,13 @@ impl Runtime {
         let laid = self.laid_panes();
         let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
         let views_generation = self.decision_views_generation();
+        let defaults: Vec<Option<String>> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.project_default_branch(&mission.device_id, &mission.project))
+            .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -4466,7 +4515,8 @@ impl Runtime {
             && before.github_edit == self.missions.github_edit
             && before.stale == stale
             && before.sleeping == sleeping
-            && before.laid == laid;
+            && before.laid == laid
+            && before.defaults == defaults;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -4507,7 +4557,10 @@ impl Runtime {
                     .flatten();
                 match kept {
                     Some(view) => view.clone(),
-                    None => self.view_mission(mission, &agents, &sleeping, ledger.as_deref()),
+                    None => MissionView {
+                        destination: self.judged_destination(mission),
+                        ..self.view_mission(mission, &agents, &sleeping, ledger.as_deref())
+                    },
                 }
             })
             .collect();
@@ -4553,6 +4606,7 @@ impl Runtime {
             laid,
             rows_and_holds,
             views_generation,
+            defaults,
             made: true,
         };
     }
