@@ -20,7 +20,7 @@ export function GateStrip({ gate, className }: { gate: Pick<MissionGate, "state"
     <span
       className={cn(
         "flex min-w-0 items-start gap-xs rounded-xs px-xs py-xxs text-caption",
-        gate.state === "open" ? "bg-mission-hold/20 font-semibold text-foreground" : gate.state === "ahead" ? "bg-mission-hold/10 text-foreground" : "text-muted-foreground",
+        stripTone(gate.state),
         className,
       )}
       data-node-gate={gate.state}
