@@ -961,19 +961,19 @@ test("the phone's mission page draws each step's stations to the mission's desti
     const phone = await phoneContextA.newPage();
     await phone.goto(await shownPairingUrl(page, live));
     await phone.locator('[data-phone-pair="true"]').tap();
-    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone's pairing reaches connected
     await phone.locator('[data-phone-tab="missions"]').tap();
     await phone.locator("[data-phone-mission]").first().tap();
 
     await expect(phone.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
     const card = (key: string) => phone.locator(`[data-mission-node="${key}"]`);
     // Pull request #31, ready as GitHub answered, after #32: every station passed, and the operator's merge ahead of them.
-    await expect(card("schema").locator("[data-node-stations]")).toHaveAttribute("data-node-stations", "work:done pr:done approve:done land:ahead", { timeout: 30_000 });
+    await expect(card("schema").locator("[data-node-stations]")).toHaveAttribute("data-node-stations", "work:done pr:done approve:done land:ahead", { timeout: 30_000 }); // wait-ok: GitHub's answer for #31 reaches the phone's frame
     await expect(card("schema").locator("[data-station-label]")).toHaveText(["Work", "#31 +1", "Approval", "main"]);
     await expect(card("schema").locator("[data-node-merge-strip]")).toHaveText("You merge it");
     await expect(card("schema")).toHaveAttribute("aria-label", /Where it goes: Work \(done\) → #31 \+1 \(done\) → Approval \(done\) → main · You merge it \(yours later\)/);
     // An outside pull request and branch start at what they watch and end where it goes.
-    await expect(card("outside").locator("[data-station-label]")).toHaveText(["↗#34", "Approval", "main"], { timeout: 30_000 });
+    await expect(card("outside").locator("[data-station-label]")).toHaveText(["↗#34", "Approval", "main"], { timeout: 30_000 }); // wait-ok: the outside pull request's state reaches the phone's frame
     await expect(card("lib").locator("[data-station-label]")).toHaveText(["↗ feat/lib", "main"]);
     await expect(card("cause").locator("[data-node-stations]")).toHaveCount(0);
     const spills = await phone.locator("[data-mission-node]").evaluateAll((cards) => cards.flatMap((one) => {
