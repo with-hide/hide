@@ -4084,6 +4084,43 @@ pub(super) fn worker_life(
     }
 }
 
+impl Runtime {
+    /// What the open missions still need from the delivery ledger: their
+    /// Conductors, and their nodes' workers and bound checkers, whose
+    /// health and letters are read from their registrations. Before the
+    /// book is read, or while it cannot be, every spawn a mission started
+    /// is held with its child instead.
+    pub(super) fn mission_holds(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        held: &mut crate::coordination::Held,
+    ) {
+        if self.missions.store.is_none() || self.missions.unreadable.is_some() {
+            for spawn in ledger
+                .into_iter()
+                .flat_map(|ledger| &ledger.spawns)
+                .filter(|spawn| spawn.mission.is_some())
+            {
+                held.spawns.insert(spawn.id.clone());
+                held.agents.extend(spawn.child.clone());
+            }
+            return;
+        }
+        let open = || {
+            self.missions
+                .book
+                .missions
+                .iter()
+                .filter(|mission| mission.status.open())
+        };
+        held.agents.extend(
+            open()
+                .filter_map(|mission| mission.conductor.agent_id.clone())
+                .chain(named_agents(open()).into_iter().map(str::to_owned)),
+        );
+    }
+}
+
 /// The registrations `missions` name: their nodes' workers and bound
 /// checkers (B29).
 pub(super) fn named_agents<'m>(

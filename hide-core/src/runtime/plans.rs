@@ -258,6 +258,40 @@ pub(crate) fn summary_of(plan: &Plan) -> PlanSummary {
 }
 
 impl Runtime {
+    /// What the plans still need from the delivery ledger: the spawn and
+    /// the child of each step still handed, which the fold of its letters
+    /// and end reads (`fold_delegations`). Before the saved plans are read,
+    /// every spawn a step started is held with its child instead.
+    pub(super) fn plan_holds(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        held: &mut crate::coordination::Held,
+    ) {
+        if self.plans.load != Load::Ready {
+            for spawn in ledger
+                .into_iter()
+                .flat_map(|ledger| &ledger.spawns)
+                .filter(|spawn| spawn.plan.is_some())
+            {
+                held.spawns.insert(spawn.id.clone());
+                held.agents.extend(spawn.child.clone());
+            }
+            return;
+        }
+        for delegation in self
+            .plans
+            .book
+            .values()
+            .flat_map(|plan| &plan.steps)
+            .filter(|step| !step.status.finished())
+            .filter_map(|step| step.delegation.as_ref())
+            .filter(|delegation| delegation.active())
+        {
+            held.spawns.insert(delegation.spawn.clone());
+            held.agents.extend(delegation.agent_id.clone());
+        }
+    }
+
     /// Reads the saved plans into the core, once the link worker is there,
     /// and again after a read that failed when a command needs them.
     pub(super) fn restore_plans(&mut self) {
