@@ -924,6 +924,27 @@ it("draws the raises its Conductor has not settled as one safety net card in 내
   } finally { await gone.unmount(); }
 });
 
+it("lists beside the map what the Conductor decided on its own: each skipped line with its node, why, who and when, open or closed", async () => {
+  const now = Date.now();
+  const skips = [
+    { node: "api", title: "Node api", line: "check", kind: "check" as const, reason: "no check command in this repo", by: "conductor", at_unix_ms: now - 5 * 60_000 },
+    { node: "api", title: "Node api", line: "c2", kind: "own" as const, text: "The OS table matches", reason: "covered by c1", by: "conductor", at_unix_ms: now - 3 * 60_000 },
+  ];
+  for (const status of ["running", "done"] as const) {
+    const map = await mount({ items: [mission({ status, closed_at_unix_ms: status === "done" ? now : null, nodes: [node("api", { status: "working" })], skipped_alone: skips })] });
+    try {
+      const row = map.q('[data-mission-summary-row="decided"]')!;
+      expect(row.querySelector("dt")?.textContent).toBe("Decided by the Conductor 2");
+      expect([...row.querySelectorAll("[data-mission-skip]")].map((one) => one.textContent)).toEqual([
+        "Node apiCheck command passes skipped · no check command in this repoconductor · 5m",
+        "Node apiThe OS table matches skipped · covered by c1conductor · 3m",
+      ]);
+      // Nothing it lists is the operator's turn.
+      expect(map.q("[data-mission-turn]")).toBeNull();
+    } finally { await map.unmount(); }
+  }
+});
+
 it("lists only what the operator can do in 내 차례: the decision whose node chip picks the node, a node raised to the operator with its reason's choices, a worker the core raised, the merge order (B18, B20, B25; PRD mission-node-simple B14-B16)", async () => {
   const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
   const nodes = [
