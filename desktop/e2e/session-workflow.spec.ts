@@ -9,6 +9,7 @@ import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { askPermission, startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
+import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 import { finishNative } from "./native-teardown";
@@ -74,6 +75,8 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       await page.locator(`[data-theme-option="${theme}"]`).click();
       await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${theme}\\b`));
       await page.keyboard.press("Escape");
+      await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
+      await animationsFinished(page); await compositorPresents(page);
       await captureNativeWindow(app, `session-header-${theme}`, { ...facts, terminal });
       await treeButton.click();
       await expect(page.locator(`[data-agent-child="${child}"]`)).toBeVisible();
