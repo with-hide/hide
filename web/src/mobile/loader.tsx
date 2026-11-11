@@ -7,9 +7,9 @@ import { useLoaderTranslation } from "./loaderTranslation";
 import { Button } from "../components/ui/button";
 import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
-import { ScanQr, scanInApp } from "./ScanQr";
-import { FirstScreen, StartSettings } from "./StartScreens";
-import { bundlePath, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
+import { scanInApp } from "./ScanQr";
+import { AddScreen, FirstScreen, StartSettings } from "./StartScreens";
+import { bundlePath, HOST_LIST_LINK, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
 import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
@@ -146,18 +146,19 @@ function Loader() {
       {error ? <p role="alert" className="px-xl pb-lg text-center text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
     </>;
   }
+  // Back from the add page: the list when a computer is kept, else the first screen, at an address that opens neither by itself.
+  if (adding) return <AddScreen t={t} full={(known ?? 0) >= MAX_HOSTS} onPair={(qr) => { setError(null); setPair(qr); setAdding(false); }}
+    onBack={() => { setError(null); setAdding(false); window.history.replaceState(null, "", known ? HOST_LIST_LINK : "/"); }} />;
   return <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col gap-lg px-xl">
     <h1 className="pt-lg text-headline font-semibold">hide</h1>
-    {adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
-      <h2 className="text-title">{t("mobile.relay.devices")}</h2>
-      <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
-      <div className="flex flex-col gap-xs">
-        <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={demo}>
-          <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
-        </Button>
-        <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>
-      </div>
-    </>}
+    <h2 className="text-title">{t("mobile.relay.devices")}</h2>
+    <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
+    <div className="flex flex-col gap-xs">
+      <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={demo}>
+        <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
+      </Button>
+      <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>
+    </div>
     {error ? <p role="alert" className="text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </main>;
 }
