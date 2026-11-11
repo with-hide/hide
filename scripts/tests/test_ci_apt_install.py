@@ -170,12 +170,14 @@ class CiAptInstall(unittest.TestCase):
         self.assertFalse(self.dns_state.exists())
         self.assertEqual(calls, [])
 
-    def test_a_local_deb_and_downgrade_permission_reach_the_offline_install(self):
-        done, calls, _ = self.run_script('--allow-downgrades', '/w/hide.deb', APT_BUDGET_SECONDS='30')
-        self.assertEqual(done.returncode, 0, done.stderr)
-        installs = [call for call in calls if '--no-download' in call]
-        self.assertEqual(len(installs), 1)
-        self.assertTrue(installs[0].endswith('--allow-downgrades /w/hide.deb'), installs[0])
+    def test_local_debs_and_options_are_refused_before_network_or_installation(self):
+        for argument in ('./hide.deb', '/w/hide.deb', '--allow-downgrades'):
+            with self.subTest(argument=argument):
+                done, calls, _ = self.run_script(argument, APT_BUDGET_SECONDS='30')
+                self.assertEqual(done.returncode, 2)
+                self.assertIn('accepts repository package names', done.stderr)
+                self.assertEqual(calls, [])
+                self.assertFalse(self.dns_state.exists())
 
 
 if __name__ == '__main__':

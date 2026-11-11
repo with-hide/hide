@@ -349,7 +349,8 @@ jobs:
         id: installed
         timeout-minutes: 10
         run: |
-          bash scripts/ci-apt-install.sh "./desktop/out/release/hide-v${HIDE_VERSION}-linux-x64.deb"
+          bash scripts/ci-apt-dns.sh
+          sudo apt-get install -y "./desktop/out/release/hide-v${HIDE_VERSION}-linux-x64.deb"
           app=/opt/hide
           # Every account can reach the app; a new terminal's `hide` is the CLI, the app menu has the window, and no sandbox step was asked of anyone.
           [ "$(stat -c %a /opt/hide)" = 755 ] || { echo "::error::/opt/hide is $(stat -c %a /opt/hide), not 755"; exit 1; }
@@ -374,7 +375,9 @@ jobs:
         run: |
           docker run --rm --init -e RUNNER_ENVIRONMENT -v "$PWD:/w" -v "$(readlink -f "$(command -v node)"):/usr/local/bin/node:ro" -w /w ubuntu:24.04 bash -euo pipefail -c '
             export DEBIAN_FRONTEND=noninteractive
-            bash scripts/ci-apt-install.sh "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"
+            bash scripts/ci-apt-dns.sh
+            apt-get update -q
+            apt-get install -y -q --no-install-recommends "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"
             [ -s /etc/machine-id ] || tr -d - </proc/sys/kernel/random/uuid >/etc/machine-id
             useradd -m person
             runuser -u person -- node desktop/scripts/smoke-package.mjs /opt/hide
@@ -415,7 +418,8 @@ jobs:
           test -d "$bundle"
           node desktop/scripts/installers.mjs "$bundle" 0.0.1 "$RUNNER_TEMP/update-n"
           node desktop/scripts/installers.mjs "$bundle" 0.0.2 "$RUNNER_TEMP/update-next"
-          bash scripts/ci-apt-install.sh --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
+          bash scripts/ci-apt-dns.sh
+          sudo apt-get install -y --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
       - name: Update the installed app to the next version
         # The installed N finds N+1, downloads it, and Restart in the Help
         # menu installs it while the engine's panes and the daemon keep running

@@ -21,11 +21,14 @@
 # (.github/actions/apt-install saves it with actions/cache); a hit leaves
 # phase 1 nothing to download, so a usual run does not reach the mirror.
 #
-# Arguments are apt install options and packages, including a local .deb.
+# Arguments are repository package names, optionally with a pinned version.
 # Exits 2 on a bad call, 1 when DNS, fetching or installation fails.
 set -euo pipefail
 
 (( $# )) || { echo 'usage: APT_BUDGET_SECONDS=<n> [APT_CACHE_DIR=<dir>] ci-apt-install.sh <package>...' >&2; exit 2; }
+for package; do
+  [[ $package != -* && $package != *.deb ]] || { echo 'ci-apt-install.sh accepts repository package names, not options or local deb files' >&2; exit 2; }
+done
 
 budget=${APT_BUDGET_SECONDS:-300}
 pause=${APT_RETRY_PAUSE_SECONDS:-5}
