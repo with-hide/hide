@@ -207,13 +207,14 @@ pub fn wait_within<T>(
 
 /// What the hook helper recorded about why it gave no letter, read from the
 /// `delivery-diagnostics.json` of the records folder `environment`'s hooks
-/// keep it in (`hide_agent_hooks::route::records_root`; docs/agent-hooks.md,
+/// keep it in (`hide_agent_hooks::route::records_of_state`; docs/agent-hooks.md,
 /// Where the hooks keep their records): the cause and the stage times of the
 /// request it stopped at (`asked_ms`, `connected_ms`, `answered_ms`,
 /// `ended_ms`), so a hook that ran out of its budget says which stage the
-/// time went to. An account folder is searched too, for a record a build
-/// before the records followed the state folder left there. Read-only; a
-/// missing file says so.
+/// time went to. The folder's `installs/<mark>` is searched too, since a
+/// helper's records are kept under its installation's mark, and an account
+/// folder as well, for a record a build before the records followed the
+/// state folder left there. Read-only; a missing file says so.
 pub fn hook_diagnostics(environment: &Environment) -> String {
     fn find(folder: &Path, depth: usize) -> Option<PathBuf> {
         for entry in fs::read_dir(folder).ok()?.flatten() {
@@ -239,7 +240,8 @@ pub fn hook_diagnostics(environment: &Environment) -> String {
         environment.var("HIDE_STATE_DIR").as_deref(),
         environment.var("XDG_STATE_HOME").as_deref(),
     );
-    let records = hide_agent_hooks::route::records_root(&environment.home, Some(&state));
+    let records = hide_agent_hooks::route::records_of_state(&environment.home, Some(&state), None)
+        .unwrap_or_else(|_| hide_agent_hooks::route::account_records(&environment.home));
     find(&records, 2)
         .or_else(|| find(&environment.home.join(".hide"), 4))
         .map_or_else(

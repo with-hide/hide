@@ -201,9 +201,15 @@ impl Outcome {
     }
 }
 
-/// Records the outcome of one report: a failure replaces the last one, a
-/// success clears it, so the file describes the hook's current state rather
-/// than its history.
+/// Records the outcome of one report for the pane this process runs in: the
+/// failure record and its log line go in the folder the hooks' records of
+/// this process's daemon and installation live in
+/// ([`crate::route::pane_records`]), so a helper's failure and the app's
+/// never overwrite each other, and the pane a start waits on is the pane
+/// whose failure `doctor`, a node and the journey find.
+///
+/// A failure replaces the last one and a success clears it, so the file
+/// describes the hook's current state rather than its history.
 pub fn record_outcome(
     home: &Path,
     pane_id: &str,
@@ -212,7 +218,7 @@ pub fn record_outcome(
     outcome: &Outcome,
 ) -> io::Result<()> {
     record_outcome_at(
-        &crate::route::records_folder(home)?,
+        &crate::route::pane_records(home)?,
         pane_id,
         agent,
         event,
@@ -301,30 +307,46 @@ pub fn record_and_say(home: &Path, pane_id: &str, agent: &str, event: &str, outc
     }
 }
 
-/// The last recorded failure, or none when the last report succeeded or no
-/// report has run. A file that cannot be read back is reported as a failure
-/// of its own rather than read as "no failure"; a state route that does not
-/// resolve is that error, not a clean bill (engineering rule 4).
+/// The last recorded failure for the pane this process runs in, from the
+/// folder that pane's hook wrote to ([`crate::route::pane_records`]), or
+/// none when the last report succeeded or no report has run.
+///
+/// A file that cannot be read back is reported as a failure of its own
+/// rather than read as "no failure", and a route or a read that fails is
+/// that error, not a clean bill (engineering rule 4).
 pub fn last_failure(home: &Path) -> io::Result<Option<ReportFailure>> {
-    Ok(last_failure_at(&crate::route::records_folder(home)?))
+    last_failure_at(&crate::route::pane_records(home)?)
 }
 
 /// [`last_failure`] in a records folder named directly: the one a daemon's
 /// node, doctor and a test read, which is the folder the hook of the same
 /// daemon wrote to.
-pub fn last_failure_at(records: &Path) -> Option<ReportFailure> {
+///
+/// `NotFound` is the one answer that means absence: no report has failed
+/// there, or the file a success removed is gone. Every other read error is
+/// kept as this caller's error, so a records folder this process may not
+/// read is `Hook records unreadable` in `doctor` and Settings rather than
+/// the same empty answer as a hook that never failed (engineering rule 4).
+pub fn last_failure_at(records: &Path) -> io::Result<Option<ReportFailure>> {
     let path = records.join("last-report-failure.json");
-    match fs::read(&path) {
-        Ok(raw) => match serde_json::from_slice(&raw) {
-            Ok(failure) => Some(failure),
-            Err(error) => Some(ReportFailure {
-                error: format!("{} could not be read back: {error}", path.display()),
-                kind: None,
-                ..ReportFailure::default()
-            }),
-        },
-        Err(_) => None,
-    }
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("{} could not be read: {error}", path.display()),
+            ));
+        }
+    };
+    Ok(match serde_json::from_slice(&raw) {
+        Ok(failure) => Some(failure),
+        Err(error) => Some(ReportFailure {
+            error: format!("{} could not be read back: {error}", path.display()),
+            kind: None,
+            ..ReportFailure::default()
+        }),
+    })
 }
 
 #[cfg(test)]
@@ -394,7 +416,9 @@ mod tests {
             Err("The hook could not reach Hide: unavailable".to_owned()),
         );
         record_outcome_at(&root, "w1:p1", "claude", "Stop", &failed).expect("record");
-        let failure = last_failure_at(&root).expect("a failure is remembered");
+        let failure = last_failure_at(&root)
+            .expect("records read")
+            .expect("a failure is remembered");
         assert_eq!(
             (
                 failure.pane_id.as_str(),
@@ -407,7 +431,7 @@ mod tests {
         assert!(failure.message().contains("w1:p1"));
         record_outcome_at(&root, "w1:p1", "claude", "Stop", &outcome(Ok(()), Ok(())))
             .expect("clear");
-        assert_eq!(last_failure_at(&root), None);
+        assert!(last_failure_at(&root).expect("records read").is_none());
         // The log keeps the failure the success cleared from the record, and
         // names the step beside the sentence.
         let log = fs::read_to_string(crate::hook_log::log_path_at(&root)).unwrap();
@@ -442,7 +466,7 @@ mod tests {
             Ok(()),
         );
         record_outcome_at(&root, "w1:p1", "claude", "SessionStart", &record_only).unwrap();
-        let failure = last_failure_at(&root).unwrap();
+        let failure = last_failure_at(&root).unwrap().unwrap();
         assert_eq!(failure.kind, Some(FailureKind::Record));
         assert_eq!(
             (
@@ -457,7 +481,7 @@ mod tests {
             Err("The hook could not reach Hide: unavailable".to_owned()),
         );
         record_outcome_at(&root, "w1:p1", "claude", "SessionStart", &both).unwrap();
-        let failure = last_failure_at(&root).unwrap();
+        let failure = last_failure_at(&root).unwrap().unwrap();
         assert_eq!(failure.kind, Some(FailureKind::RecordAndReport));
         assert_eq!(
             (
@@ -494,7 +518,9 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let failure = last_failure_at(&root).expect("read back");
+        let failure = last_failure_at(&root)
+            .expect("records read")
+            .expect("read back");
         assert_eq!(failure.kind, None);
         assert_eq!(
             failure.error,
@@ -514,7 +540,9 @@ mod tests {
         let path = root.join("last-report-failure.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"not json").unwrap();
-        let failure = last_failure_at(&root).expect("reported");
+        let failure = last_failure_at(&root)
+            .expect("records read")
+            .expect("reported");
         assert!(failure.error.contains("could not be read back"));
         fs::remove_dir_all(&root).ok();
     }

@@ -278,23 +278,33 @@ impl Diagnosis {
     /// Reads every runtime under `home`, each runtime's program found on
     /// `search` ([`runtime_compatibility`]), and the last report failure the
     /// hooks of the daemon this process asks recorded
-    /// ([`crate::route::records_folder`]). It performs file reads and no
+    /// ([`crate::route::pane_records`]). It performs file reads and no
     /// writes, so it is safe to call from a background reader.
+    ///
+    /// This is `doctor`'s read, and the only one that resolves the folder
+    /// from this process's environment; a node, the core and the journey
+    /// name the state folder and the installation they own and call
+    /// [`read_at`](Self::read_at).
     pub fn read(home: &Path, search: &OsStr) -> Self {
         Self::read_toward(
             home,
             |runtime| runtime_compatibility(runtime, search),
-            crate::route::records_folder(home),
+            crate::route::pane_records(home),
         )
     }
 
     /// [`read`](Self::read) for a daemon whose hook records are `records`,
-    /// as its node reads them for the state folder it serves.
-    pub fn read_at(home: &Path, search: &OsStr, records: &Path) -> Self {
+    /// as its node reads them for the state folder it serves
+    /// ([`crate::route::records_of_state`]): the one decision of where those
+    /// records are, made by the caller that owns the state folder and the
+    /// installation, never read from the environment this diagnosis runs in.
+    /// The resolution itself may fail, and that failure is kept as
+    /// `records_error` rather than refusing the whole diagnosis.
+    pub fn read_at(home: &Path, search: &OsStr, records: std::io::Result<PathBuf>) -> Self {
         Self::read_toward(
             home,
             |runtime| runtime_compatibility(runtime, search),
-            Ok(records.to_path_buf()),
+            records,
         )
     }
 
@@ -303,12 +313,19 @@ impl Diagnosis {
         probe: impl Fn(AgentRuntime) -> MemoryCompatibility,
         records: std::io::Result<PathBuf>,
     ) -> Self {
-        // A folder that does not resolve is kept as its own answer: the
-        // failure record is unread, which is not the same as "nothing
-        // failed", and folding the two into one empty read is how a hook's
-        // lost record used to look like a clean bill (engineering rule 4).
+        // A folder that does not resolve is kept as its own answer, and so is
+        // a failure record that does not read: the last report failure is
+        // unread, which is not the same as "nothing failed", and folding the
+        // two into one empty read is how a hook's lost record used to look
+        // like a clean bill (engineering rule 4).
         let (last_report_failure, records_error) = match records {
-            Ok(records) => (last_failure_at(&records), None),
+            Ok(records) => match last_failure_at(&records) {
+                Ok(failure) => (failure, None),
+                Err(error) => (
+                    None,
+                    Some(format!("the hooks' records could not be read: {error}")),
+                ),
+            },
             Err(error) => (
                 None,
                 Some(format!(
@@ -690,7 +707,9 @@ mod tests {
     /// A records folder that does not resolve is not read as "nothing
     /// failed": the reason is kept as its own field, drawn in `doctor`'s
     /// text, and carried on the answer the core stores and logs as
-    /// `records.unreadable` (engineering rules 4 and 10).
+    /// `records.unreadable` (engineering rules 4 and 10). A folder that
+    /// resolves but refuses the read is that same answer, not a clean bill
+    /// for every step after the folder (the finding this covers).
     #[test]
     fn a_records_folder_that_does_not_read_is_its_own_answer() {
         let home =
@@ -720,6 +739,73 @@ mod tests {
             Diagnosis::read_toward(&home, compatible, Ok(crate::route::account_records(&home)));
         assert_eq!(readable.records_error, None);
         assert!(!readable.render().contains("Hook records unreadable:"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A failure record whose own read is refused is the reader's error, not
+    /// "nothing failed": the folder resolved and the file beside it does not
+    /// read, which is exactly the case a mode-denied state folder produced
+    /// while `last_failure_at` answered `None` for every error (engineering
+    /// rules 4 and 10). A record that exists and reads is still read, and a
+    /// missing file is still absence.
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_record_that_does_not_read_is_the_readers_error_not_an_absence() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home =
+            std::env::temp_dir().join(format!("hide-diagnosis-denied-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let records = crate::route::account_records(&home);
+        std::fs::create_dir_all(&records).unwrap();
+        // No record yet: absence, and no error.
+        let empty = Diagnosis::read_toward(&home, compatible, Ok(records.clone()));
+        assert_eq!(empty.records_error, None);
+        assert_eq!(empty.last_report_failure, None);
+
+        // A record this process may not read: the folder resolved, the read
+        // did not, and the diagnosis says so instead of answering nothing.
+        let path = records.join("last-report-failure.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "pane_id": "w1:p1", "agent": "claude", "event": "Stop",
+                "error": "unavailable", "at_unix_ms": 1, "kind": "report",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = Diagnosis::read_toward(&home, compatible, Ok(records.clone()));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let error = denied
+            .records_error
+            .as_deref()
+            .expect("a refused record read is kept as an answer");
+        assert!(
+            error.contains("last-report-failure.json"),
+            "the sentence names the file: {error}"
+        );
+        assert!(
+            error.contains("Permission denied"),
+            "and the kernel's own cause: {error}"
+        );
+        assert!(
+            denied.render().contains("Hook records unreadable:"),
+            "{}",
+            denied.render()
+        );
+
+        // Readable again: the record is the answer.
+        let readable = Diagnosis::read_toward(&home, compatible, Ok(records));
+        assert_eq!(readable.records_error, None);
+        assert_eq!(
+            readable
+                .last_report_failure
+                .as_ref()
+                .map(|failure| failure.pane_id.as_str()),
+            Some("w1:p1")
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 

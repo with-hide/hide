@@ -1623,6 +1623,27 @@ pub fn handle_with_progress(
             // own folder or the one its state folder keeps them in, composed
             // with the installation whose panes this node starts by the rule
             // those panes' hooks apply (the pane id is this node's core's).
+            // The answer is the receiving node's own, so it names the state
+            // folder it serves and never this process's environment; a folder
+            // or a record that does not read is `records_error` on the
+            // diagnosis, not a refusal that hides every other row.
+            let install = crate::kit::running_install().map(|install| install.id);
+            let records = hide_agent_hooks::route::records_of_state(
+                &home,
+                env.state.as_deref(),
+                install.as_deref(),
+            );
+            to_value(hide_agent_hooks::Diagnosis::read_at(
+                &home, &search, records,
+            ))
+        }
+        Call::OwedConfirmations { pane } => {
+            let home = env.home("HOME is not set, so the agent hooks keep no records")?;
+            // The hooks keep their records in the folder of the installation
+            // that started their pane, which is this node's own, and that
+            // folder is the one this node's daemon reads. It is resolved from
+            // the state folder this node serves, never from this process's
+            // environment, and the installation is applied once, by the route.
             let install = crate::kit::running_install().map(|install| install.id);
             let records = hide_agent_hooks::route::records_of_state(
                 &home,
@@ -1635,22 +1656,7 @@ pub fn handle_with_progress(
                     format!("the hooks' records folder could not be read: {error}"),
                 )
             })?;
-            to_value(hide_agent_hooks::Diagnosis::read_at(
-                &home, &search, &records,
-            ))
-        }
-        Call::OwedConfirmations { pane } => {
-            let home = env.home("HOME is not set, so the agent hooks keep no records")?;
-            // The hooks keep their records in the folder of the installation
-            // that started their pane, which is this node's own.
-            let install = crate::kit::running_install().map(|install| install.id);
-            let folder = hide_kit::layout::owed_confirmations_of(&home, install.as_deref())
-                .map_err(|error| {
-                    HostError::new(
-                        ErrorCode::Io,
-                        format!("the hooks' records folder could not be read: {error}"),
-                    )
-                })?;
+            let folder = hide_kit::layout::owed_confirmations_in(&records);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since| {
@@ -2048,7 +2054,9 @@ mod tests {
 
     /// A node hands over, once, what its pane's hooks could not confirm,
     /// from the records of the account it runs as, on every system and on
-    /// a device alike.
+    /// a device alike. The record is written where the route resolves this
+    /// node's daemon's records, which is the folder the answer reads, so the
+    /// writer and the reader agree on one folder (engineering rule 5).
     #[test]
     fn owed_confirmations_are_handed_over_once_from_the_accounts_hook_records() {
         let home = tempfile::tempdir().unwrap();
@@ -2057,7 +2065,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        hide_agent_hooks::owed::owe(home.path(), "h2:p2", "s1", &["letter-12".to_owned()], now)
+        let records = hide_agent_hooks::route::records_of_state(home.path(), None, None).unwrap();
+        let folder = hide_kit::layout::owed_confirmations_in(&records);
+        hide_agent_hooks::owed::owe_in(&folder, "h2:p2", "s1", &["letter-12".to_owned()], now)
             .unwrap();
         let ask = || {
             handle_in(
