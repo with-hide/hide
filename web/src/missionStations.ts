@@ -100,7 +100,8 @@ function ownStations(node: StationNode, destination: string | null): Station[] |
   const place = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr } : branchPlace(node.pr_base ?? destination, destination);
   if (place) {
     const person = node.merge?.by === "operator";
-    const landed = node.landing?.state === "landed" || pull === "merged" || node.merge?.state === "merged";
+    // In only once all of it is: a node merged by pull request by its merge's own state, which an older pull request still open holds back however its newest stands; any other by the landing the core judged.
+    const landed = node.merge ? node.merge.state === "merged" : node.landing?.state === "landed";
     const state: StationState = landed ? "landed" : person ? (node.merge?.state === "due" ? "due" : "ahead") : reached ? "current" : "todo";
     stations.push({ kind: "land", state, place, person });
   }
