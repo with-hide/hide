@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 
 use super::{
     CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
-    MISSIONS, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
-    read_marker, write,
+    MISSIONS, MISSIONS_DIR, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH,
+    WORKSPACE_VIEWS, mission_files, read_json, read_marker, write,
 };
 use crate::node::NodeId;
 
@@ -225,15 +225,22 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         renumbered: &renumbered,
         pruned: 0,
     };
-    for file in [
+    let stores = [
         CORE_STATE,
         WORKSPACE_VIEWS,
         LABELS,
         DELIVERY_LEDGER,
         LOCAL_ISSUES,
         MISSIONS,
-    ] {
-        let path = staging.join(file);
+    ]
+    .into_iter()
+    .map(|file| (file, file.to_owned(), staging.join(file)));
+    // Each mission's file is keyed as the book it is one mission of.
+    let missions = mission_files(staging)
+        .map_err(|reason| refuse(&staging.join(MISSIONS_DIR), reason))?
+        .into_iter()
+        .map(|(name, path)| (MISSIONS, name, path));
+    for (file, name, path) in stores.chain(missions) {
         let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
             continue;
         };
@@ -259,7 +266,7 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
             let bytes =
                 serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
             write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
-            outcome.files.push(file.to_owned());
+            outcome.files.push(name);
         }
     }
 
@@ -1944,6 +1951,41 @@ mod tests {
                 && links.has_device(X).unwrap()
         );
         assert_eq!(read(&state.join(MARKER_FILE))["node"], json!(C));
+    }
+
+    /// A core move rewrites both the per-mission body and the metadata
+    /// used without a body, including shelved sessions' machine identity.
+    #[test]
+    fn mission_files_and_their_index_follow_the_core_owner() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        let original = read(&state.join(MISSIONS));
+        let folder = hide_kit::layout::missions_dir(state);
+        std::fs::create_dir(&folder).unwrap();
+        for (n, mission) in original["missions"].as_array().unwrap().iter().enumerate() {
+            let path = hide_kit::layout::mission_file(&folder, &format!("mission-{}", n + 1));
+            std::fs::write(
+                path,
+                serde_json::to_vec(&json!({"schema_version": 4, "missions": [mission]})).unwrap(),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            hide_kit::layout::mission_index(&folder),
+            serde_json::to_vec(&original).unwrap(),
+        )
+        .unwrap();
+        reown(state, &forward(), &forward_ids()).unwrap();
+        let expected = read(&state.join(MISSIONS));
+        let index = read(&hide_kit::layout::mission_index(&folder));
+        assert_eq!(index, expected);
+        for (n, mission) in expected["missions"].as_array().unwrap().iter().enumerate() {
+            let body = read(&hide_kit::layout::mission_file(
+                &folder,
+                &format!("mission-{}", n + 1),
+            ));
+            assert_eq!(&body["missions"][0], mission);
+        }
     }
 
     #[test]

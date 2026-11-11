@@ -2183,10 +2183,8 @@ mod tests {
             runtime.missions.store = None;
             if failed {
                 runtime.install_mission_store(
-                    crate::missions::MissionStore::new(
-                        runtime.state_path.with_file_name("missions.json"),
-                    ),
-                    crate::missions::Restored::Unreadable("restore_failed".into()),
+                    crate::mission_store::MissionStore::new(runtime.state_path.parent().unwrap()),
+                    crate::mission_store::Restored::Unreadable("restore_failed".into()),
                 );
             }
             let (answer, diagnostics) =
@@ -2211,12 +2209,11 @@ mod tests {
                 mission.status = MissionStatus::Running;
                 mission.conductor.session = Some(identity("old-0"));
                 runtime.install_mission_store(
-                    crate::missions::MissionStore::new(
-                        runtime.state_path.with_file_name("missions.json"),
-                    ),
-                    crate::missions::Restored::Read(MissionBook {
+                    crate::mission_store::MissionStore::new(runtime.state_path.parent().unwrap()),
+                    crate::mission_store::Restored::Read(MissionBook {
                         missions: vec![mission],
                         next: 2,
+                        ..MissionBook::default()
                     }),
                 );
                 incoming(&mut runtime, "new").unwrap();
@@ -2357,6 +2354,7 @@ mod tests {
         let missions = MissionBook {
             missions: vec![open, closed],
             next: 3,
+            ..MissionBook::default()
         };
         let plans = [
             ("planning", "working"),
