@@ -2559,18 +2559,22 @@ impl LabelWorker {
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
             .is_some_and(|event| facts.feeds_work(event, ledger.parent_name.as_deref()));
-        // A delegated session asks its parent, whose letters answer it, or
-        // the operator typing into its pane (B12); an ask still waiting after
-        // a mere progress letter is the one the label lists again.
+        // A delegated session asks its parent, whose reply or request
+        // letter answers it, or the operator typing into its pane (B12). The
+        // parent is matched by the name the lineage gives it, its wire name,
+        // never by the name a bell line shows, which is its pane's title.
         let parent = ledger.parent_name.as_deref();
-        let bells = self.input.bells(&self.target, pane_id);
         let asks_answered = turn_events.iter().any(|event| {
             event.kind == LabelEventKind::Human
                 && (facts.feeds_work(event, parent)
-                    || matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Operator))
+                    || matches!(
+                        facts.requester_at(event.offset),
+                        Some(super::facts::Requester::Operator)
+                    )
                     || parent.is_some_and(|parent| {
-                        matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Named(name)) if name == parent)
-                            && letter_answers(event, &bells)
+                        facts
+                            .letter_of(event)
+                            .is_some_and(|letter| letter.from == parent && letter.answers())
                     }))
         });
         let turn_witness = events
@@ -3151,21 +3155,6 @@ fn settle_recovery_notice(record: &mut PaneRecord, target: &str, pane_id: &str) 
         "target": target, "pane_id": pane_id, "state_change_seq": seq,
     }));
     true
-}
-
-/// Whether a parent's letter can answer what its delegated session asked: a
-/// reply or a request does, a progress, report, block or watch letter does
-/// not (B12). An envelope names its kind; a bell line is judged by the kind
-/// Hide recorded when it typed it, never by its words.
-pub(super) fn letter_answers(event: &LabelEvent, bells: &[super::input::Bell]) -> bool {
-    let kind = match hide_session::envelope_header(&event.text) {
-        Some((_, kind)) => kind,
-        None => match super::facts::rang(bells, event) {
-            Some(bell) => bell.kind.clone(),
-            None => return false,
-        },
-    };
-    matches!(kind.as_str(), "request" | "reply")
 }
 
 /// Whether the agent has a `/goal` command: Claude Code and Codex.
