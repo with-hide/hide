@@ -13590,3 +13590,138 @@ fn a_destination_hide_cannot_find_lands_nothing_and_holds_the_missions_own_close
     runtime.drive_mission_health(now);
     assert_eq!(mission_status(&runtime), MissionStatus::Done);
 }
+
+/// A published mission cut to what its record alone decides, as
+/// `scripts/release_state/scenario.py` (`published_mission`) cut what the
+/// release itself published.
+fn published(mission: &Value) -> Value {
+    let field = |value: &Value, name: &str| value.get(name).cloned().unwrap_or(Value::Null);
+    let mut cut = serde_json::Map::new();
+    for name in [
+        "id",
+        "title",
+        "status",
+        "scope",
+        "decision",
+        "landing_order",
+        "stack_waiting",
+        "report",
+    ] {
+        cut.insert(name.into(), field(mission, name));
+    }
+    let nodes: Vec<Value> = mission["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|node| {
+            let mut row = serde_json::Map::new();
+            for name in [
+                "key",
+                "kind",
+                "delivery",
+                "status",
+                "depends_on",
+                "branch",
+                "base_pr",
+                "commit",
+                "verdict",
+                "checks",
+                "landing",
+                "external",
+                "line",
+            ] {
+                row.insert(name.into(), field(node, name));
+            }
+            let list = |name: &str| node[name].as_array().cloned().unwrap_or_default();
+            row.insert(
+                "prs".into(),
+                list("prs")
+                    .iter()
+                    .map(|pull| pull["number"].clone())
+                    .collect(),
+            );
+            row.insert(
+                "criteria".into(),
+                list("criteria")
+                    .iter()
+                    .map(|line| json!([line["key"], line["kind"], line["state"]]))
+                    .collect(),
+            );
+            row.insert("gate".into(), field(&node["gate"], "state"));
+            row.insert("hold".into(), field(&node["hold"], "why"));
+            Value::Object(row)
+        })
+        .collect();
+    cut.insert("nodes".into(), Value::Array(nodes));
+    Value::Object(cut)
+}
+
+/// PRD mission-destination B15, B42: the missions a released build stored
+/// (closed done, waiting for a branch, and running with nodes at work,
+/// stacked on a pull request, behind a gate asked and a gate passed,
+/// waiting on an outside branch, verified, and worked on a device) are read
+/// by this build as that build published them: the same state, landing,
+/// lines, gates and results. None records a destination, none is written
+/// one, and the first evaluation after the upgrade reopens, closes or moves
+/// nothing.
+#[test]
+fn a_released_builds_missions_read_as_that_build_published_them() {
+    use crate::node_migration::upgrade_tests::{fixtures, started};
+    let by_id = |missions: Vec<Value>| -> std::collections::BTreeMap<String, Value> {
+        missions
+            .into_iter()
+            .map(|mission| (mission["id"].as_str().unwrap().to_owned(), mission))
+            .collect()
+    };
+    let mut compared = Vec::new();
+    for folder in fixtures() {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let store = crate::mission_store::MissionStore::new(state.path());
+        let restored = store.restore();
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        let mut runtime = runtime.lock().unwrap();
+        runtime.install_mission_store(store, restored);
+        assert_eq!(runtime.missions.unreadable, None, "{tag}");
+        for mission in &runtime.missions.book.missions {
+            assert_eq!(mission.destination, None, "{tag} {}", mission.id);
+            let record = serde_json::to_value(mission).unwrap();
+            assert_eq!(record.get("destination"), None, "{tag} {}", mission.id);
+        }
+        let read = |runtime: &Runtime| {
+            let ids: Vec<String> = runtime
+                .missions
+                .book
+                .missions
+                .iter()
+                .map(|mission| mission.id.clone())
+                .collect();
+            by_id(
+                ids.iter()
+                    .map(|id| published(&json!(runtime.mission_view_of(id).unwrap())))
+                    .collect(),
+            )
+        };
+        // Not `with_extension`: a tag's dots are not an extension.
+        let report = folder.parent().unwrap().join(format!("{tag}.json"));
+        let report: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        // A folder made before the release's own view was kept names none.
+        let expected = by_id(report["missions"].as_array().cloned().unwrap_or_default());
+        let now = read(&runtime);
+        if !expected.is_empty() {
+            assert_eq!(now, expected, "{tag}");
+            compared.push((tag.clone(), expected.len()));
+        }
+        runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+        assert_eq!(
+            read(&runtime),
+            now,
+            "{tag}: the first evaluation moved a mission"
+        );
+    }
+    assert!(
+        compared.iter().any(|(_, missions)| *missions >= 4),
+        "no release folder holds the missions in each state: {compared:?}"
+    );
+}
