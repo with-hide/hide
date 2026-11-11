@@ -50,6 +50,7 @@ import {
   nodeSteps,
   nodeWork,
   nodeWorkWords,
+  stopCauseWords,
   nodeResult,
   reportLine,
   shortCommit,
@@ -59,7 +60,7 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionNodeHold } from "./snapshot";
+import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionNodeHold, MissionNodeWork } from "./snapshot";
 import { useShellStore } from "./store";
 import type { TFunction } from "i18next";
 
@@ -385,7 +386,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const word = markWord(node, look, t);
   // What its worker does now (hide-private issue 680): a resting or absent worker stops the ring and says so under the title; a working one needs no words.
   const doing = nodeWork(mission, node);
-  const doingLine = doing && doing.state !== "working" ? nodeWorkWords(doing, t) : null;
+  const doingLine = doing && doing.state !== "working" && doing.state !== "stopped" ? nodeWorkWords(doing, t) : null;
+  const stopLine = useStopWords(doing);
   const hold = nodeHold(mission, node);
   const holdLine = useHoldWords(hold);
   // A worker's person's turn is the step's waiting reason, a key and what and where (PRD ask-human D-18, B25); the Conductor's row carries Done.
@@ -418,6 +420,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
         ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
+        ...(stopLine ? [stopLine.full] : []),
         ...(holdLine ? [holdLine.full] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
@@ -451,6 +454,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {doingLine ? (
         <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
           {doingLine}
+        </span>
+      ) : null}
+      {/* A worker stopped with nothing to wait on says why under the title as a held node does, the cause cut when it runs long and how long ago whole at the line's end; its Conductor, not the operator, is told (operator decision 2026-11-11). */}
+      {stopLine ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={stopLine.full} data-node-work="stopped">
+          <span className="min-w-0 truncate">{stopLine.why}</span>
+          {stopLine.age ? <span className="shrink-0 whitespace-nowrap" data-node-stopped-age="true">· {stopLine.age}</span> : null}
         </span>
       ) : null}
       {/* A node its Conductor holds back says why in grey under the title, cut when it runs long, and keeps how long it still holds whole at the line's end (operator decision 2026-11-11). */}
@@ -602,6 +612,20 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
       <span className="text-caption text-muted-foreground">{note}</span>
     </div>
   );
+}
+
+/** A stopped worker's line: why first, then how long ago it stopped; `full` is the whole sentence, the agent's own line included, for the hover and the card's name. */
+function useStopWords(work: MissionNodeWork | null): { why: string; age: string | null; full: string } | null {
+  const { t } = useInterfaceTranslation();
+  const stopped = work?.state === "stopped" ? work : null;
+  const age = useElapsed(stopped?.since_unix_ms);
+  if (!stopped) return null;
+  const why = stopCauseWords(stopped.cause, t, true);
+  return {
+    why: nodeWorkWords(stopped, t),
+    age,
+    full: age ? t("mission.work.stoppedFull", { age, why }) : t("mission.work.stopped", { why }),
+  };
 }
 
 /** A held node's line: why first, then how long it still holds while the core has not lifted it yet; `full` is the whole sentence for the hover and the card's name. */

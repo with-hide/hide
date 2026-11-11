@@ -1664,8 +1664,14 @@ export type MissionNode = {
 /** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
 export type MissionNodeHold = { why: string; until_unix_ms: number };
 
-/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
-export type MissionNodeWork = { state: "working" } | { state: "waiting"; on: MissionWaitingOn } | { state: "no_worker" };
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker. */
+export type MissionNodeWork =
+  | { state: "working" }
+  | { state: "waiting"; on: MissionWaitingOn }
+  | { state: "stopped"; cause: MissionStopCause | null; since_unix_ms: number }
+  | { state: "no_worker" };
+/** Why a node's worker stopped (`StopCause`): the provider refused its turn on a usage limit or with an API error, with the agent's own first line for it. */
+export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
 export type MissionLettersHeldFor = "unreachable" | "undelivered" | "approval" | "draft" | "unanswered";
@@ -1679,9 +1685,9 @@ export type MissionWaitingOn =
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
-export type MissionWarningKind = "review_fails" | "no_push";
+export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
-export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null };
+export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
 
 /** One node the safety net holds (`HeldNodeView`): its raise's reason and since when it stands. */
 export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason; pr: number | null; since_unix_ms: number };

@@ -2087,6 +2087,11 @@ pub struct SidebarAgentSnapshot {
     /// declaration is compared with when this row is its parent.
     #[serde(skip_serializing)]
     pub lineage_session: Option<String>,
+    /// Why the provider refused the turn this row's own session last ended,
+    /// as its hook said it (`agent_hooks::facts::TurnRefused`); none for any
+    /// other turn. What a mission reads as its stopped worker's cause.
+    #[serde(skip)]
+    pub(crate) refused: Option<crate::agent_hooks::facts::TurnRefused>,
     /// Hide's server mark as the pane carries it (`wire::SERVER_MARK_TOKEN`):
     /// which run of the engine a saved `state_change_seq` for this pane can be
     /// compared on.
@@ -10362,10 +10367,14 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_fix_reason", &fixes);
             checked.insert("mission_fix_reason");
             use crate::missions::WarningKind;
-            let warnings = [WarningKind::ReviewFails, WarningKind::NoPush];
+            let warnings = [
+                WarningKind::ReviewFails,
+                WarningKind::NoPush,
+                WarningKind::Stopped,
+            ];
             for variant in warnings {
                 match variant {
-                    WarningKind::ReviewFails | WarningKind::NoPush => {}
+                    WarningKind::ReviewFails | WarningKind::NoPush | WarningKind::Stopped => {}
                 }
             }
             assert_wire(&contract, "mission_warning_kind", &warnings);
@@ -10447,11 +10456,18 @@ mod wire_enum_tests {
                 NodeWork::Waiting {
                     on: crate::missions::WaitingOn::Review,
                 },
+                NodeWork::Stopped {
+                    cause: None,
+                    since_unix_ms: 0,
+                },
                 NodeWork::NoWorker,
             ];
             for variant in &work {
                 match variant {
-                    NodeWork::Working | NodeWork::Waiting { .. } | NodeWork::NoWorker => {}
+                    NodeWork::Working
+                    | NodeWork::Waiting { .. }
+                    | NodeWork::Stopped { .. }
+                    | NodeWork::NoWorker => {}
                 }
             }
             let states: Vec<String> = work

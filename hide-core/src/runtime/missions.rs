@@ -290,21 +290,34 @@ pub struct NodeView {
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
 /// its worker works, its worker rests and the node waits on someone
-/// (`waiting_on`, said beside it), or no worker stands for it.
+/// (`waiting_on`, said beside it), its worker stopped with no one to wait
+/// on (`mission_health::stopped_worker`), since when and why, or no worker
+/// stands for it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum NodeWork {
     Working,
-    Waiting { on: WaitingOn },
+    Waiting {
+        on: WaitingOn,
+    },
+    Stopped {
+        cause: Option<crate::missions::StopCause>,
+        since_unix_ms: u64,
+    },
     NoWorker,
 }
 
 /// What `view`, a node of a running mission, is doing now: from its
 /// worker's registration (none or ended is no worker, asleep rests) and,
 /// for a running one, its agent row's activity (`working` works, `stopped`
-/// rests); a row Hide cannot see, or whose activity it does not know, says
-/// nothing rather than a guess.
-fn node_work(mission: &Mission, view: &NodeView, row_activity: Option<&str>) -> Option<NodeWork> {
+/// rests, or stands stopped when `stopped` says so); a row Hide cannot see,
+/// or whose activity it does not know, says nothing rather than a guess.
+fn node_work(
+    mission: &Mission,
+    view: &NodeView,
+    row_activity: Option<&str>,
+    stopped: Option<&crate::mission_health::WorkerStopped>,
+) -> Option<NodeWork> {
     use crate::delivery::answer::Runtime as Life;
     if !mission.status.open()
         || view.status != NodeStatus::Working
@@ -318,7 +331,13 @@ fn node_work(mission: &Mission, view: &NodeView, row_activity: Option<&str>) -> 
         Some(Life::Asleep) => waiting(),
         Some(Life::Running) => match row_activity? {
             "working" => Some(NodeWork::Working),
-            "stopped" => waiting(),
+            "stopped" => match stopped {
+                Some(stop) => Some(NodeWork::Stopped {
+                    cause: stop.cause.clone(),
+                    since_unix_ms: stop.since_unix_ms,
+                }),
+                None => waiting(),
+            },
             _ => None,
         },
     }
@@ -1008,19 +1027,56 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     .iter()
                     .find(|warning| Some(warning.kind) == wake.warning)
             });
-            let what = match (wake.warning, node, warning) {
-                (Some(WarningKind::ReviewFails), Some(node), _) => {
-                    format!("failed its review {} times in a row", node.review_fails())
-                }
-                (Some(WarningKind::NoPush), _, Some(warning)) => format!(
-                    "has worked {} minutes with no push",
-                    warning.since_unix_ms.saturating_sub(warning.from_unix_ms) / 60_000
+            let minutes = |warning: &crate::missions::NodeWarning| {
+                warning.since_unix_ms.saturating_sub(warning.from_unix_ms) / 60_000
+            };
+            let read = format!(
+                "Read it with `hide mission show {} --mission {}`",
+                wake.node, mission.id
+            );
+            let (what, ask) = match (wake.warning, node, warning) {
+                (Some(WarningKind::ReviewFails), Some(node), _) => (
+                    format!("failed its review {} times in a row", node.review_fails()),
+                    "judge whether its worker needs another approach or the node a fresh worker",
                 ),
-                _ => "shows signs its worker is stuck".to_owned(),
+                (Some(WarningKind::NoPush), _, Some(warning)) => (
+                    format!("has worked {} minutes with no push", minutes(warning)),
+                    "judge whether its worker needs another approach or the node a fresh worker",
+                ),
+                (Some(WarningKind::Stopped), _, Some(warning)) => {
+                    use crate::missions::StopCause;
+                    let why = match &warning.cause {
+                        Some(StopCause::Limit { line }) => {
+                            format!("on a usage limit: \"{line}\"")
+                        }
+                        Some(StopCause::Error { line }) => {
+                            format!("on an API error: \"{line}\"")
+                        }
+                        None => "with no report and no error".to_owned(),
+                    };
+                    (
+                        format!(
+                            "has a worker whose turn ended {} minutes ago {why}, and it waits on nothing",
+                            minutes(warning)
+                        ),
+                        match warning.cause {
+                            Some(StopCause::Limit { .. }) => {
+                                "send it on with a letter once the limit resets, hold the mission until then with `hide mission delay`, or give the node a fresh worker on another model"
+                            }
+                            _ => {
+                                "send it on with a letter saying what is left, or give the node a fresh worker"
+                            }
+                        },
+                    )
+                }
+                _ => (
+                    "shows signs its worker is stuck".to_owned(),
+                    "judge whether its worker needs another approach or the node a fresh worker",
+                ),
             };
             format!(
-                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is told if the warning still stands in 30 minutes.",
-                wake.node, mission.id, mission.title, wake.node, mission.id
+                "Node {} {what} (mission {} \"{}\").\n{read} and {ask}; if the warning still stands in 30 minutes it is raised on the node for you to settle.",
+                wake.node, mission.id, mission.title
             )
         }
     }
@@ -3898,10 +3954,12 @@ impl Runtime {
 
     /// What `ViewsMadeFrom::rows_and_holds` compares while a mission runs,
     /// zero with none running: each open mission's workers' and checkers'
-    /// activity as a node's `work` reads it (`worker_activity`), and the
-    /// doorbell's holds by the operator's part in them, which a Conductor's
-    /// held letters read. Rows no mission holds are not read, so an
-    /// unrelated agent's turn rebuilds no mission; one pass over the
+    /// rows as a node's `work` reads them, their activity
+    /// (`worker_activity`) and what they say of a stop
+    /// (`worker_row_stopped`), and the doorbell's holds by the operator's part
+    /// in them, which a Conductor's held letters read. Rows no mission holds
+    /// are not read, so an unrelated agent's turn rebuilds no mission; one
+    /// pass over the
     /// missions' registrations and the holds, both bounded by the ledger.
     pub(super) fn rows_and_holds_digest(
         &self,
@@ -3919,9 +3977,15 @@ impl Runtime {
             return 0;
         }
         let records = worker_records(ledger, open);
-        let mut workers: Vec<(&str, Option<&str>)> = records
+        let mut workers: Vec<_> = records
             .iter()
-            .map(|(id, record)| (*id, self.worker_activity(record)))
+            .map(|(id, record)| {
+                (
+                    *id,
+                    self.worker_activity(record),
+                    self.worker_row_stopped(record),
+                )
+            })
             .collect();
         workers.sort_unstable();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -4097,7 +4161,21 @@ impl Runtime {
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
-                view.work = node_work(mission, &view, activity);
+                let fact = crate::mission_health::NodeFacts {
+                    worker: Some(crate::mission_health::WorkerLife::Running),
+                    stopped: record.and_then(|record| {
+                        self.worker_stopped(record, ledger, &mission.conductor.actor)
+                    }),
+                    ..Default::default()
+                };
+                let stopped = crate::mission_health::stopped_worker(
+                    mission,
+                    node,
+                    &fact,
+                    self.mission_pulls(mission),
+                    self.gate_open(mission, node),
+                );
+                view.work = node_work(mission, &view, activity, stopped);
                 view
             })
             .collect();

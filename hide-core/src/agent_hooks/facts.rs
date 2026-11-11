@@ -75,6 +75,11 @@ struct SessionFact {
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
     waiting_seq: Option<Laid>,
+    /// Why the provider refused the turn that ended (`StopFailure`), with
+    /// when the hook said so; memory only, as the turn is, and gone once
+    /// the turn is anything but ended.
+    #[serde(skip)]
+    refused: Option<TurnRefused>,
     /// The account variables the session's start reported its agent runs
     /// with, empty for the default account
     /// (`hide_agent_hooks::account::reported_variables`); kept, so a restart
@@ -88,6 +93,16 @@ struct SessionFact {
     /// before it was kept, older than any.
     #[serde(default, skip_serializing_if = "is_zero")]
     account_start: u64,
+}
+
+/// A turn the provider refused (`HookRefusal`) and when its hook said so,
+/// which is when the turn ended: an agent that then waits on its screen for
+/// a usage limit's reset reads as working to the engine, so no engine state
+/// marks that time.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TurnRefused {
+    pub refusal: hide_node_link::panes::HookRefusal,
+    pub at_unix_ms: u64,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -254,6 +269,7 @@ impl HookFacts {
         &mut self,
         pane: &str,
         report: &HookStatusReport,
+        now: u64,
     ) -> Result<Recorded, &'static str> {
         if !self.panes.contains_key(pane) && self.panes.len() >= PANE_LIMIT {
             return Err("hook_facts_full");
@@ -318,6 +334,7 @@ impl HookFacts {
                 turn_seq: None,
                 waiting: Vec::new(),
                 waiting_seq: None,
+                refused: None,
                 account: None,
                 account_start: 0,
             },
@@ -354,6 +371,20 @@ impl HookFacts {
         };
         if fact.turn != turn_before {
             fact.turn_seq = None;
+        }
+        // A refusal is the ended turn's: a turn that ends again without one
+        // (a `Stop`), or any other turn, has none, while the prompt that
+        // rests after it (`idle_prompt`) leaves it.
+        match (report.turn, &report.refused) {
+            (Some(HookTurn::Done), Some(refusal)) => {
+                fact.refused = Some(TurnRefused {
+                    refusal: refusal.clone(),
+                    at_unix_ms: now,
+                });
+            }
+            (Some(HookTurn::Done), None) => fact.refused = None,
+            _ if fact.turn != Some(HookTurn::Done) => fact.refused = None,
+            _ => {}
         }
         // A report made since the engine that laid the fact ended speaks for
         // the engine reading the pane now: the turn or approvals it restates
@@ -411,6 +442,7 @@ impl HookFacts {
         let mut moved = false;
         for agent in &mut payload.agents {
             agent.hook = None;
+            agent.hook_refused = None;
             let Some(pane) = agent.pane_id.clone().or_else(|| agent.id.clone()) else {
                 continue;
             };
@@ -441,6 +473,10 @@ impl HookFacts {
             } else {
                 Some(HookTurn::Waiting)
             };
+            agent.hook_refused = fact
+                .refused
+                .clone()
+                .filter(|_| agent.hook == Some(HookTurn::Done));
             tokens.insert(
                 pane,
                 PaneHookTokens {
@@ -602,6 +638,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
         .take(SESSIONS_PER_PANE)
         .rev()
         .map(|record| SessionFact {
+            refused: None,
             counts: hide_agent_adapter::adapter(&record.agent)
                 .and_then(|adapter| adapter.subagent_counts)
                 .map(|_| HookCounts {
@@ -675,6 +712,7 @@ mod tests {
             session_start: false,
             waiting: None,
             account: None,
+            refused: None,
         }
     }
 
@@ -741,6 +779,58 @@ mod tests {
         asking
     }
 
+    /// A turn the provider refused keeps why and when on the row while it
+    /// stands ended, even with the engine reading the agent at work (Claude
+    /// Code waits on its screen for a usage limit's reset); the rest after
+    /// it keeps it, and the next turn, or an end without a refusal, clears it.
+    #[test]
+    fn a_refused_turn_keeps_why_and_when_until_the_next_turn() {
+        use hide_node_link::panes::{HookRefusal, RefusalKind};
+        let refusal = HookRefusal {
+            kind: RefusalKind::Limit,
+            line: "You've hit your limit · resets 4pm".to_owned(),
+        };
+        let refused_at = |facts: &mut HookFacts| {
+            let mut laid = read("working", 9, None, &[]);
+            lay(facts, &mut laid);
+            let agent = &laid.agents[0];
+            (
+                agent.hook,
+                agent
+                    .hook_refused
+                    .as_ref()
+                    .map(|refused| refused.at_unix_ms),
+            )
+        };
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 10)
+            .unwrap();
+        let mut ended = report(Some("s-1"), Some(HookTurn::Done));
+        ended.refused = Some(refusal.clone());
+        facts.record("w1:p1", &ended, 20).unwrap();
+        assert_eq!(refused_at(&mut facts), (Some(HookTurn::Done), Some(20)));
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Idle)), 80)
+            .unwrap();
+        facts
+            .record("w1:p1", &report(Some("s-1"), None), 90)
+            .unwrap();
+        assert_eq!(refused_at(&mut facts), (Some(HookTurn::Done), Some(20)));
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 100)
+            .unwrap();
+        assert_eq!(refused_at(&mut facts), (Some(HookTurn::Working), None));
+        facts.record("w1:p1", &ended, 110).unwrap();
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)), 120)
+            .unwrap();
+        assert_eq!(refused_at(&mut facts), (Some(HookTurn::Done), None));
+        facts.record("w1:p1", &ended, 130).unwrap();
+        facts.record("w1:p1", &asking("call-1"), 140).unwrap();
+        assert_eq!(refused_at(&mut facts), (Some(HookTurn::Waiting), None));
+    }
+
     /// A device's engine goes with its link and the next link's engine counts
     /// its states from the start again: a turn the hook last said was
     /// running when the link went down ends once that next engine reads the
@@ -755,7 +845,7 @@ mod tests {
         let mut started = report(Some("s-1"), None);
         started.session_start = true;
         started.account = Some(vec![("CLAUDE_CONFIG_DIR".into(), "/accounts/a".into())]);
-        assert!(facts.record("w1:p1", &started).unwrap().changed);
+        assert!(facts.record("w1:p1", &started, 0).unwrap().changed);
         let saved = encode(&facts.panes).unwrap();
         let stored: Stored = serde_json::from_slice(&saved).unwrap();
         let restored = HookFacts {
@@ -778,7 +868,7 @@ mod tests {
         // A later event of the session says nothing of it and keeps it.
         let mut facts = restored;
         facts
-            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)))
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 0)
             .unwrap();
         assert_eq!(facts.reported_accounts().count(), 1);
         let older: Stored = serde_json::from_value(serde_json::json!({
@@ -799,7 +889,7 @@ mod tests {
         use hide_session::turns::TurnEnded::Completed;
         let mut facts = HookFacts::default();
         facts
-            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)))
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 0)
             .unwrap();
         let working = Some(HookTurn::Working);
         assert_eq!(after(&mut facts, read("working", 57, None, &[])).0, working);
@@ -840,10 +930,10 @@ mod tests {
     fn a_turn_reported_again_after_its_engine_ended_is_laid_under_the_next_one() {
         use hide_session::turns::TurnEnded::Completed;
         let mut facts = HookFacts::default();
-        facts.record("w1:p1", &asking("call-1")).unwrap();
+        facts.record("w1:p1", &asking("call-1"), 0).unwrap();
         after(&mut facts, read("blocked", 57, None, &[]));
         facts.engine_ended(|_| true);
-        facts.record("w1:p1", &asking("call-1")).unwrap();
+        facts.record("w1:p1", &asking("call-1"), 0).unwrap();
         assert_eq!(
             after(&mut facts, read("idle", 2, Some(Completed), &["call-1"])),
             (Some(HookTurn::Waiting), vec!["call-1".to_owned()])
@@ -861,7 +951,7 @@ mod tests {
     #[test]
     fn an_approval_from_an_engine_that_ended_closes_on_the_next_engines_read_of_its_answer() {
         let mut facts = HookFacts::default();
-        facts.record("w1:p1", &asking("call-1")).unwrap();
+        facts.record("w1:p1", &asking("call-1"), 0).unwrap();
         after(&mut facts, read("blocked", 57, None, &[]));
         facts.engine_ended(|_| true);
         let open = vec!["call-1".to_owned()];
@@ -880,7 +970,7 @@ mod tests {
         let mut facts = HookFacts::default();
         for pane in ["w1:p1", "remote:mini:pane:t1"] {
             facts
-                .record(pane, &report(Some("s-1"), Some(HookTurn::Working)))
+                .record(pane, &report(Some("s-1"), Some(HookTurn::Working)), 0)
                 .unwrap();
         }
         let mut both = read("working", 57, None, &[]);
@@ -906,7 +996,7 @@ mod tests {
     fn the_session_the_hook_reported_since_the_engine_last_changed_its_id_speaks_for_the_pane() {
         let mut facts = HookFacts::default();
         facts
-            .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Working)))
+            .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Working)), 0)
             .unwrap();
         assert_eq!(laid_turn(&mut facts, "s-old"), Some(HookTurn::Working));
         // The engine names another session after the report: the engine is the newer
@@ -914,16 +1004,24 @@ mod tests {
         assert_eq!(laid_turn(&mut facts, "s-other"), None);
         // The hook reports again: its session speaks again.
         facts
-            .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Done)))
+            .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Done)), 0)
             .unwrap();
         assert_eq!(laid_turn(&mut facts, "s-other"), Some(HookTurn::Done));
         // A session the engine names that has its own fact keeps speaking, even
         // when another session in the pane reported later (`claude -p`).
         facts
-            .record("w1:p1", &report(Some("s-other"), Some(HookTurn::Waiting)))
+            .record(
+                "w1:p1",
+                &report(Some("s-other"), Some(HookTurn::Waiting)),
+                0,
+            )
             .unwrap();
         facts
-            .record("w1:p1", &report(Some("s-print"), Some(HookTurn::Working)))
+            .record(
+                "w1:p1",
+                &report(Some("s-print"), Some(HookTurn::Working)),
+                0,
+            )
             .unwrap();
         assert_eq!(laid_turn(&mut facts, "s-other"), Some(HookTurn::Waiting));
     }
@@ -932,7 +1030,7 @@ mod tests {
     fn a_turn_is_laid_for_the_panes_own_session_with_its_version() {
         let mut facts = HookFacts::default();
         facts
-            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)))
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 0)
             .unwrap();
         let mut laid = payload("s-1");
         let tokens = lay(&mut facts, &mut laid);
@@ -948,14 +1046,14 @@ mod tests {
     fn a_nested_session_never_takes_the_panes_own_sessions_place() {
         let mut facts = HookFacts::default();
         facts
-            .record("w1:p1", &report(Some("pane"), Some(HookTurn::Done)))
+            .record("w1:p1", &report(Some("pane"), Some(HookTurn::Done)), 0)
             .unwrap();
         let mut nested = report(Some("nested"), Some(HookTurn::Working));
         nested.counts = Some(HookCounts {
             working: 0,
             done: 0,
         });
-        facts.record("w1:p1", &nested).unwrap();
+        facts.record("w1:p1", &nested, 0).unwrap();
         assert_eq!(laid_turn(&mut facts, "pane"), Some(HookTurn::Done));
     }
 
@@ -964,14 +1062,14 @@ mod tests {
         let mut facts = HookFacts::default();
         let idle = report(Some("s-1"), Some(HookTurn::Idle));
         facts
-            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)))
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 0)
             .unwrap();
-        facts.record("w1:p1", &idle).unwrap();
+        facts.record("w1:p1", &idle, 0).unwrap();
         assert_eq!(laid_turn(&mut facts, "s-1"), Some(HookTurn::Idle));
         facts
-            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)))
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)), 0)
             .unwrap();
-        assert!(!facts.record("w1:p1", &idle).unwrap().changed);
+        assert!(!facts.record("w1:p1", &idle, 0).unwrap().changed);
         assert_eq!(laid_turn(&mut facts, "s-1"), Some(HookTurn::Done));
     }
 
@@ -979,7 +1077,7 @@ mod tests {
     fn a_pane_whose_agent_ended_or_that_closed_loses_its_facts() {
         let mut facts = HookFacts::default();
         facts
-            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)))
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)), 0)
             .unwrap();
         // Before the engine lists the agent, its pane keeps the report.
         let mut empty: SessionSnapshotPayload =
@@ -992,7 +1090,9 @@ mod tests {
             facts.panes.is_empty(),
             "the agent the engine listed is gone"
         );
-        facts.record("w1:p1", &report(Some("s-1"), None)).unwrap();
+        facts
+            .record("w1:p1", &report(Some("s-1"), None), 0)
+            .unwrap();
         let mut closed: SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();
         lay(&mut facts, &mut closed);
@@ -1002,7 +1102,7 @@ mod tests {
     #[test]
     fn a_device_payload_drops_none_of_this_machines_facts() {
         let mut facts = HookFacts::default();
-        facts.record("w1:p1", &report(None, None)).unwrap();
+        facts.record("w1:p1", &report(None, None), 0).unwrap();
         let mut device: SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();
         facts.lay(
@@ -1017,11 +1117,11 @@ mod tests {
     fn a_session_start_clears_the_turn_and_repeats_change_nothing() {
         let mut facts = HookFacts::default();
         let working = report(Some("s-1"), Some(HookTurn::Working));
-        assert!(facts.record("w1:p1", &working).unwrap().changed);
-        assert!(!facts.record("w1:p1", &working).unwrap().changed);
+        assert!(facts.record("w1:p1", &working, 0).unwrap().changed);
+        assert!(!facts.record("w1:p1", &working, 0).unwrap().changed);
         let mut start = report(Some("s-1"), None);
         start.session_start = true;
-        assert!(facts.record("w1:p1", &start).unwrap().changed);
+        assert!(facts.record("w1:p1", &start, 0).unwrap().changed);
         assert_eq!(laid_turn(&mut facts, "s-1"), None);
     }
 
@@ -1030,17 +1130,17 @@ mod tests {
         let mut facts = HookFacts::default();
         for index in 0..PANE_LIMIT {
             facts
-                .record(&format!("w1:p{index}"), &report(None, None))
+                .record(&format!("w1:p{index}"), &report(None, None), 0)
                 .unwrap();
         }
         assert_eq!(
-            facts.record("w1:extra", &report(None, None)),
+            facts.record("w1:extra", &report(None, None), 0),
             Err("hook_facts_full")
         );
         let mut facts = HookFacts::default();
         for index in 0..=SESSIONS_PER_PANE {
             facts
-                .record("w1:p1", &report(Some(&format!("s-{index}")), None))
+                .record("w1:p1", &report(Some(&format!("s-{index}")), None), 0)
                 .unwrap();
         }
         let kept = &facts.panes["w1:p1"].sessions;
@@ -1059,7 +1159,7 @@ mod tests {
                 working: 2,
                 done: 1,
             });
-            facts.record("w1:p1", &counted).unwrap();
+            facts.record("w1:p1", &counted, 0).unwrap();
         }
         let mut facts = HookFacts::restore(path, Vec::new);
         let mut laid = payload("s-1");
