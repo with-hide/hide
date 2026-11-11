@@ -13236,6 +13236,35 @@ fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from()
             .unwrap()
             .unwrap();
         assert_eq!(elsewhere.destination, None);
+        // So does one the catalog lists under another project, and the
+        // mission's own project still carries it when the catalog lists
+        // nothing, as after a restart no window has followed.
+        let admitted = |runtime: &Runtime, repo: &str| {
+            runtime
+                .mission_spawn_admission(
+                    &fixture.conductor,
+                    &crate::runtime::missions::SpawnWorker {
+                        repo,
+                        ..worker(None, "codex", &Default::default())
+                    },
+                    &mut None,
+                    "plain",
+                    false,
+                )
+                .unwrap()
+                .unwrap()
+                .destination
+        };
+        runtime
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: "/checkouts/other".into(),
+                ..Default::default()
+            });
+        assert_eq!(admitted(&runtime, "/checkouts/other"), None);
+        runtime.worktree_catalog.projects.clear();
+        assert_eq!(admitted(&runtime, PROJECT).as_deref(), expected);
     }
 }
 
@@ -13283,7 +13312,14 @@ fn a_plan_names_another_destination_and_drops_what_was_read_against_the_one_befo
     assert_eq!(in_main(&node_view(&runtime, "fix")).as_deref(), Some(HEAD));
     let asked_before = landing_ask(&runtime, "fix");
 
-    for name in ["-b", "release 1.3", "main..next", "HEAD", " "] {
+    for name in [
+        "-b",
+        "release 1.3",
+        "main..next",
+        "HEAD",
+        " ",
+        "origin/feat/x",
+    ] {
         assert_eq!(
             command(&mut runtime, "sender", direct_plan(Some(name))).unwrap_err(),
             "mission_destination_invalid",

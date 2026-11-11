@@ -3025,12 +3025,16 @@ impl Runtime {
         // The destination is a branch of the mission's project: a spawn
         // into another repository of that machine starts from that
         // repository's own branch, as it did. A worker on another machine
-        // was admitted above as the same GitHub repository.
+        // was admitted above as the same GitHub repository. A repository
+        // the catalog does not list yet (no window since the restart) is
+        // compared as it was named, as a project's profile is
+        // (`project_agent_profile`).
         let destination = mission.destination.clone().filter(|_| {
             worker_machine != mission.device_id
                 || self
                     .catalog_project_of(worker_machine, worker.repo)
-                    .is_some_and(|project| project.root_path == mission.project)
+                    .map_or(worker.repo, |project| project.root_path.as_str())
+                    == mission.project
         });
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
