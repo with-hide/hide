@@ -8,6 +8,7 @@
 import { useMemo } from "react";
 import { missionEntry, turnCount, type MissionEntry } from "../missionList";
 import { missionCounts, missionOpen, type WorkerEscalation } from "../missions";
+import { mergeOverridden, type StationNode } from "../missionStations";
 import type { AgentKey, PhoneMission, PhoneMissionNode, PhonePr } from "./protocol";
 import { usePhone } from "./store";
 
@@ -36,6 +37,24 @@ export function openCount(entries: readonly MissionEntry<PhoneMission>[]): numbe
 /** The escalation hided read from a step's worker row and sent with the node. */
 export function workerOf(node: PhoneMissionNode): WorkerEscalation | null {
   return node.escalation;
+}
+
+/**
+ * A step as the shared station line reads it (`nodeStations`, PRD
+ * mission-destination D-38): the flat fields the Mac sends the phone put
+ * back in the desktop node's shape, so both screens run one computation. A
+ * field a Mac before destinations does not send stays absent, and the line
+ * names nothing for it (B17).
+ */
+export function phoneStationNode(node: PhoneMissionNode): StationNode {
+  const external = node.external_pr != null ? { pr: node.external_pr } : node.external_branch != null ? { branch: node.external_branch } : null;
+  const outside = node.external_base != null || node.external_state != null ? { base: node.external_base, state: node.external_state } : null;
+  return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0 };
+}
+
+/** Whether a step wears the second-line `👤` strip: the desktop's rule over the mission's scope, which a Mac before it does not send, so then no step does. */
+export function phoneMergeOverridden(mission: Pick<PhoneMission, "scope">, node: PhoneMissionNode): boolean {
+  return mission.scope != null && mergeOverridden(mission.scope, node);
 }
 
 /** The progress words and counts of the head: `n / m` of the steps in the plan. */

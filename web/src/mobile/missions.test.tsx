@@ -510,7 +510,8 @@ it("keeps empty, completed and long missions readable without a rail fold", asyn
   } finally { await unmount(); }
 });
 
-// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn.
+// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn. The turn's line names the open
+// ones; the station line names the step's newest pull request, as the desktop's does (PRD mission-destination D-37).
 it("names only open PRs in the phone merge turn, newest first with the additional count", async () => {
   const db = (prs: number[]) => node("db", "done", { pr: 37, pr_state: "merged", merge: { by: "operator", state: "due", why: "DB review", prs }, landing: { state: "left", action: "merge" } });
   const items = [[31, 33], [31]].map((prs, index) => mission(`merge-${index}`, { nodes: [db(prs)], landing_order: ["db"] }));
@@ -519,15 +520,100 @@ it("names only open PRs in the phone merge turn, newest first with the additiona
     await click('[data-phone-tab="missions"]');
     expect(container.querySelector('[data-phone-mission="merge-0"] [data-phone-mission-line]')?.textContent).toBe("Merge order #33 +1");
     expect(container.querySelector('[data-phone-mission="merge-1"] [data-phone-mission-line]')?.textContent).toBe("Merge order #31");
-    for (const [index, pr] of [[0, "#33"], [1, "#31"]] as const) {
+    for (const [index, turn] of [[0, "Yours to merge: PR #33 +1"], [1, "Yours to merge: PR #31"]] as const) {
       await click(`[data-phone-mission="merge-${index}"]`);
       const card = container.querySelector('[data-mission-node="db"]')!;
-      expect(card.textContent).toContain(pr);
-      expect(card.textContent).not.toContain("#37");
-      expect(card.textContent?.includes("+1")).toBe(index === 0);
-      expect(card.textContent).toContain("Yours to merge");
+      expect(card.querySelector("[data-phone-node-reason]")?.textContent).toBe(turn);
       expect(card.textContent).toContain("Needs you");
       await click('[data-phone-back="missions"]');
     }
+  } finally { await unmount(); }
+});
+
+/** A step's stations as the card draws them (`kind:state`), and where its last one lands. */
+const stationsOf = (container: HTMLElement, key: string) => {
+  const card = container.querySelector(`[data-mission-node="${key}"]`)!;
+  return {
+    line: card.querySelector("[data-node-stations]")?.getAttribute("data-node-stations") ?? null,
+    place: card.querySelector("[data-station-place]")?.getAttribute("data-station-place") ?? null,
+    words: [...card.querySelectorAll("[data-station-label]")].map((label) => label.textContent),
+    strip: card.querySelector("[data-node-merge-strip]")?.textContent ?? null,
+    turn: card.textContent?.includes("Needs you") ?? false,
+    name: card.getAttribute("aria-label") ?? "",
+  };
+};
+
+// PRD mission-destination D-13-D-16, D-21, D-38, D-45, B20, B21, B24-B26, B28, B49: the phone's card ends in the desktop's stations
+// to the mission's destination, the step the plan gives the operator wears the `👤` strip, and the head names where results go.
+it("draws the desktop's stations, the operator's merge strip and the head's destination from the Mac's fields", async () => {
+  const merge = (state: "ahead" | "due", pr: number) => ({ merge: { by: "operator" as const, why: "DB review", state, prs: [pr] } });
+  const { container, click, unmount } = await connect([mission("m-dest", { destination: "feat/login", scope: "merge", nodes: [
+    node("ui", "working", { pr: 31, pr_state: "mergeable", pr_base: "feat/login", pr_more: 1, merge: { by: "conductor", state: "ahead", prs: [30, 31] } }),
+    node("db", "working", { pr: 33, pr_state: "pending", pr_base: "feat/login", ...merge("ahead", 33) }),
+    node("api", "done", { pr: 34, pr_state: "mergeable", pr_base: "feat/login", ...merge("due", 34), landing: { state: "left", action: "merge" } }),
+    node("docs", "done", { delivery: "direct", landing: { state: "landed", proof: { by: "in_main", commit: "abc" } } }),
+    node("sdk", "working", { kind: "external", delivery: null, external_pr: 77, external_base: "main", external_state: "mergeable" }),
+    node("look", "done", { kind: "research", delivery: null }),
+  ] })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-dest"]');
+    expect(container.querySelector("[data-mission-destination]")?.textContent).toBe("→feat/login");
+    // A ready pull request the Conductor merges: every station passed but the destination, which it is on its way to; no strip.
+    expect(stationsOf(container, "ui")).toMatchObject({ line: "work:done pr:done approve:done land:current", place: "destination", words: ["Work", "#31 +1", "Approval", "feat/login"], strip: null, turn: false });
+    // The plan gives the operator this merge: faint orange `👤` ahead on the strip and the last station, and no turn yet.
+    expect(stationsOf(container, "db")).toMatchObject({ line: "work:done pr:current approve:todo land:ahead", strip: "You merge it", turn: false });
+    // Once its pull request is ready it is the operator's turn: the strip and the last station say so, the strip naming the pull request.
+    const api = stationsOf(container, "api");
+    expect(api).toMatchObject({ line: "work:done pr:done approve:done land:due", strip: "Yours to merge: PR #34", turn: true });
+    expect(container.querySelector('[data-mission-node="api"] [data-phone-node-reason]')).toBeNull();
+    expect(api.name).toContain("Where it goes: Work (done) → #34 (done) → Approval (done) → feat/login · You merge it (yours now)");
+    // A direct change has its work and the destination, in once it landed; an outside pull request ends bold in its own base.
+    expect(stationsOf(container, "docs")).toMatchObject({ line: "work:done land:landed", words: ["Work", "feat/login"] });
+    expect(stationsOf(container, "sdk")).toMatchObject({ line: "pr:done approve:done land:current", place: "branch", words: ["↗#77", "Approval", "main"] });
+    // A step that changes no code has no line.
+    expect(stationsOf(container, "look").line).toBeNull();
+  } finally { await unmount(); }
+});
+
+// D-35, B20: a scope `pr` mission leaves every merge to the operator after the report, so a ready pull request stays faint orange with no strip and no turn.
+it("keeps a scope pr mission's ready pull request faint orange, with no strip and no turn", async () => {
+  const { container, click, unmount } = await connect([mission("m-pr", { destination: "main", scope: "pr", nodes: [
+    node("ui", "done", { pr: 31, pr_state: "mergeable", pr_base: "main", merge: { by: "operator", state: "ahead", prs: [31] }, landing: { state: "left", action: "merge" } }),
+  ] })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-pr"]');
+    expect(stationsOf(container, "ui")).toMatchObject({ line: "work:done pr:done approve:done land:ahead", strip: null, turn: false });
+  } finally { await unmount(); }
+});
+
+// B17, B48: a Mac before destinations sends none of the new fields, so the card names no branch, wears no strip and the head no tag;
+// a mission with no step that lands anywhere has no tag either.
+it("names no branch it was not sent, and tags no mission whose steps land nowhere", async () => {
+  const { container, click, unmount } = await connect([
+    mission("m-old", { nodes: [
+      node("db", "done", { pr: 33, pr_state: "mergeable", merge: { by: "operator", state: "due", why: "DB review", prs: [33] }, landing: { state: "left", action: "merge" } }),
+      node("docs", "working", { delivery: "direct" }),
+      node("sdk", "working", { kind: "external", delivery: null, pr: 77 }),
+    ] }),
+    mission("m-look", { destination: "feat/login", scope: "merge", nodes: [node("look", "working", { kind: "research", delivery: null }), node("check", "planned", { kind: "verify", delivery: null })] }),
+  ]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-old"]');
+    expect(container.querySelector("[data-mission-destination]")).toBeNull();
+    // Its merge turn is still the operator's and says so in its line, with no strip and no last station.
+    expect(stationsOf(container, "db")).toMatchObject({ line: "work:done pr:done approve:done", place: null, strip: null, turn: true });
+    expect(container.querySelector('[data-mission-node="db"] [data-phone-node-reason]')?.textContent).toBe("Yours to merge: PR #33");
+    // `작업` alone says nothing; an outside step whose watch was not sent keeps its pull request's mark.
+    expect(stationsOf(container, "docs").line).toBeNull();
+    expect(stationsOf(container, "sdk").line).toBeNull();
+    expect(container.querySelector('[data-mission-node="sdk"]')?.textContent).toContain("#77");
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-look"]');
+    expect(container.querySelector("[data-phone-mission-map]")).not.toBeNull();
+    expect(container.querySelector("[data-mission-destination]")).toBeNull();
+    expect(container.querySelector("[data-node-stations]")).toBeNull();
   } finally { await unmount(); }
 });
