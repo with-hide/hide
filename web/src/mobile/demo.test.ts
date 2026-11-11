@@ -57,6 +57,20 @@ describe("the sample host", () => {
     expect(localStorage.length).toBe(0);
   });
 
+  it("names no agent product on any sample row, conversation head or mission step", async () => {
+    // A store screenshot of the demo carries no other company's name or logo: a kind Hide has an adapter for draws that agent's mark.
+    const { agentAdapter } = await import("../agentAdapters");
+    const { state } = await demoPhone();
+    const kinds: Array<string | null> = [];
+    for (const group of state().groups!) for (const row of [...group.rows, ...(group.more ?? [])]) if (row.kind === "agent") kinds.push(row.agent_kind, ...(row.children ?? []).map((child) => child.agent_kind));
+    for (const mission of state().missions!) kinds.push(mission.conductor.agent_kind, ...mission.nodes.map((node) => node.worker_agent));
+    expect(kinds.length).toBeGreaterThan(10);
+    expect(kinds.filter((kind) => kind !== null && agentAdapter(kind) !== undefined)).toEqual([]);
+    // VoiceOver reads the kind: it is a word of the phone's language, not a code.
+    const { translate } = await import("../i18n/translator");
+    expect(new Set(kinds.filter((kind) => kind !== null))).toEqual(new Set([translate("mobile.demo.kind")]));
+  });
+
   it("answers a reply with a sample answer, in the conversation it was sent from", async () => {
     const { connection, settle, state } = await demoPhone();
     connection.openDetail({ device_id: "local", pane_id: "a1" });
@@ -189,7 +203,7 @@ describe("the sample host", () => {
     await settle();
     expect(state().macName).toBe("Demo Mac");
     connection.leaveDemo();
-    expect(assign).toHaveBeenCalledWith("/");
+    expect(assign).toHaveBeenCalledWith("/?list=1");
     expect(localStorage.getItem(HOSTS_KEY)).toBe(hosts);
     expect(localStorage.length).toBe(1);
     expect(network.calls).toEqual([]);

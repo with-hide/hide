@@ -77,7 +77,7 @@ fn line_word(state: &Value) -> &'static str {
 
 fn reason_word(reason: &Value) -> &'static str {
     match reason.as_str() {
-        Some("merged_unproven") => "머지됐는데 완료 줄이 빠짐",
+        Some("merged_unproven") => "머지됐는데 통과 안 된 완료 줄이 있음",
         Some("worker_ended") => "작업자가 일을 남기고 끝남",
         Some("pr_closed") => "PR이 머지 없이 닫힘",
         Some("unplanned_pr") => "계획에 없는 PR",

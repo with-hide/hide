@@ -44,6 +44,9 @@ ok "build number is $build" ".CFBundleVersion == \"$build\"" "$facts/info.json"
 ok "iPhone only" '.UIDeviceFamily == [1]' "$facts/info.json"
 ok "minimum iOS is $min_os" ".MinimumOSVersion == \"$min_os\"" "$facts/info.json"
 ok "built with the $sdk SDK" "(.DTSDKName // \"\") | startswith(\"$sdk\")" "$facts/info.json"
+# The app and its extension name their keychain groups from this value (PairingKeychain, PushKeychain). Without it the
+# app keeps a push key in its own group, which the extension cannot read, and every notification stays the fixed text.
+ok "the app's Info.plist names the team prefix $team." ".AppIdentifierPrefix == \"$team.\"" "$facts/info.json"
 
 # Export compliance: the operator answered App Store Connect's questionnaire (standard encryption algorithms, not
 # distributed in France), and the app states that answer so no build waits at Missing Compliance. The key must be present
@@ -61,10 +64,13 @@ ok "the app allows no navigation" '((.server // {}).allowNavigation // []) == []
 ok "Capacitor leaves the notification center to the app" '((.ios // {}).handleApplicationNotifications) == false' "$app/capacitor.config.json"
 ok "the web view cannot be inspected" '((.ios // {}).webContentsDebuggingEnabled // false) == false' "$app/capacitor.config.json"
 
-# The binary: the debug pairing hook is compiled out, and the bridge gate is compiled in.
+# The binary: the debug pairing, tapping and clock hooks are compiled out, and the bridge gate is compiled in.
 executable=$(jq -r .CFBundleExecutable "$facts/info.json")
 if [[ -f "$app/$executable" ]]; then
-    ! grep -aq 'HIDE_DEBUG_PAIR_LINK' "$app/$executable" || fail "the debug pairing hook is in the binary"
+    # Each debug-only input of the simulator checks is read from one variable: none of the names may survive into a release.
+    for hook in pairing:HIDE_DEBUG_PAIR_LINK tapping:HIDE_DEBUG_TAPS clock:HIDE_DEBUG_NOW; do
+        ! grep -aq "${hook#*:}" "$app/$executable" || fail "the debug ${hook%%:*} hook is in the binary"
+    done
     grep -aq 'BridgeGate' "$app/$executable" || fail "the bridge gate is not in the binary"
 else
     fail "the app has no executable named $executable"
@@ -98,6 +104,7 @@ while IFS= read -r name; do
         [[ -s "$file" ]] || { fail "$name: $file is missing or empty"; continue 2; }
     done
     ok "$name: bundle id is $appex_bundle" ".CFBundleIdentifier == \"$appex_bundle\"" "$af/info.json"
+    ok "$name: Info.plist names the team prefix $team." ".AppIdentifierPrefix == \"$team.\"" "$af/info.json"
     ok "$name: version is $version" ".CFBundleShortVersionString == \"$version\"" "$af/info.json"
     ok "$name: build number is $build" ".CFBundleVersion == \"$build\"" "$af/info.json"
     ok "$name: extension point is $point" ".NSExtension.NSExtensionPointIdentifier == \"$point\"" "$af/info.json"

@@ -340,7 +340,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   const read = !raised && band.read;
   const humanTurn = bandHumanTurn(band, self);
   return <>
-    <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
+    <span className={cn("group/turn flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
       {raised || band.kind === "approval" || band.kind === "answer" ? null : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
       {raised && originTitle ? <Hint label={who!}><span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs font-semibold" data-pane-band-who={raised.raised_pane_id}><span className="min-w-0 truncate">{originTitle}</span><span className="shrink-0 text-muted-foreground">({t(originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span></Hint> : null}
       <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive", humanTurn && !navigation && "cursor-text select-text")} role={failed ? "alert" : navigation ? "status" : undefined} data-human-turn-place={humanTurn && !navigation ? humanTurn.id : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>

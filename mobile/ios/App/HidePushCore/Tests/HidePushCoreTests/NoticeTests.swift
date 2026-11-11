@@ -62,4 +62,11 @@ final class NoticeTests: XCTestCase {
         let letter = try XCTUnwrap(Notice(json: notice(room: room, extra: ["state": "letter_undelivered", "status_code": NSNull(), "detail": NSNull(), "place": "letter-7"])))
         XCTAssertEqual(letter.body(words: NoticeWords.forLanguages(["en"])), "Letter not delivered · letter-7")
     }
+
+    func testTheDemoSampleIsWordedAndCategorisedAsARealQuestionIs() {
+        let sample = Notice(sampleTitle: "Address review comments", statusCode: "question", state: "needs_you", detail: "Apply all 3 review comments?", place: "demo · fix/review")
+        XCTAssertEqual(sample.title, "Address review comments")
+        XCTAssertEqual(sample.body(words: NoticeWords.forLanguages(["en"])), "Question · Apply all 3 review comments? · demo · fix/review")
+        XCTAssertEqual(NoticeCategory.of(sample), NoticeCategory.reply)
+    }
 }

@@ -107,7 +107,7 @@ for (const surface of ["root", "picker"]) {
       await page.goto("about:blank");
       relay.state.protocol = 9;
       relay.received.length = relay.plaintext.length = relay.wire.binaryFrames = 0;
-      if (surface === "root") await page.goto(relay.origin);
+      if (surface === "root") await page.goto(relay.origin + "/?list=1");
       else {
         await page.goto(relay.origin + "/" + new URL(second.qr).hash);
         await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -136,6 +136,28 @@ test("unsupported device shows both protocol versions and lets the user choose a
   await expect(page.getByText("9", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Choose another device" }).click();
   await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
+});
+
+// Opening the app with one saved computer goes straight to it, so the device list must still be reachable and stay put
+// once chosen: the loader's decision and the bundle's way back cross a page load, which no unit test sees.
+test("one saved device opens at launch, and Choose another device keeps the list", async ({ page, relay }) => {
+  await pair(page, relay);
+  await page.goto("about:blank");
+  await page.goto(relay.origin + "/");
+  await expect(page).toHaveURL(new RegExp(`/p/${PHONE_PROTOCOL}/\\?host=${relay.pairing.room}`));
+  await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+  // A device the app cannot open: its screen's way back is the list, which does not open the device again.
+  relay.state.protocol = 9;
+  await page.goto("about:blank");
+  await page.goto(relay.origin + "/");
+  await expect(page.getByRole("heading", { name: "Update Hide on this device" })).toBeVisible();
+  await page.getByRole("button", { name: "Choose another device" }).click();
+  await expect(page).toHaveURL(relay.origin + "/?list=1");
+  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(page.locator("[data-phone-host]")).toContainText(relay.pairing.name);
+  await expect(page.locator("[data-phone-add]")).toBeVisible();
+  await expect(page.locator("[data-phone-demo-entry]")).toBeVisible();
+  await expect(page).toHaveURL(relay.origin + "/?list=1");
 });
 
 for (const [reason, copy] of [["code_expired", "expired"], ["phone_limit", "4"]]) {
@@ -174,7 +196,7 @@ test("a revoked device stays listed as disconnected, never dials again and pairs
   relay.state.refusal = "";
   await pair(page, relay);
   await expect.poll(hosts).toEqual([expect.objectContaining({ room: relay.pairing.room, credential: relay.credential })]);
-  await page.goto(relay.origin + "/");
+  await page.goto(relay.origin + "/?list=1");
   await expect(page.locator("[data-phone-host-revoked]")).toHaveCount(0);
 });
 

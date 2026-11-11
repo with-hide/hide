@@ -96,13 +96,13 @@ export function appPushRefused(): void {
   set({ outdated: true });
 }
 
-/** The switch turned on. In the demo it posts the sample notification; otherwise it asks iOS, makes this computer's key and registers. */
+/** The switch turned on. In the demo it posts the sample notification, made as a real one is for the first sample agent's question: the agent's title, then the status word, the question and the project; otherwise it asks iOS, makes this computer's key and registers. */
 export async function turnOnAppPush(): Promise<void> {
   if (useAppPush.getState().asking) return;
   set({ asking: true, failed: false });
   try {
     if (usePhone.getState().demo) {
-      await push.demoSample({ title: translate("mobile.group.needs_you"), body: translate("mobile.settings.notificationsSample") });
+      await push.demoSample({ title: translate("mobile.demo.a1.title"), status_code: "question", state: "needs_you", detail: translate("mobile.demo.a1.ask"), place: "demo · fix/review" });
       set({ demo: true, permission: "granted" });
       return;
     }

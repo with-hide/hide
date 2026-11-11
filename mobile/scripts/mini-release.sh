@@ -389,6 +389,11 @@ embed_entitlements() { # <bundle> <the project's entitlements file> <bundle id>
     sed -e "s/\$(AppIdentifierPrefix)/$team./g" -e "s/\$(PRODUCT_BUNDLE_IDENTIFIER)/$id/g" \
         -e 's/\$(APS_ENVIRONMENT)/production/g' "$source" > "$resolved"
     if grep -qF '$(' "$resolved"; then die "${source##*/} names a build setting the release does not resolve"; fi
+    # The same holds for the bundle's Info.plist: `AppIdentifierPrefix` is written empty by an archive with signing off,
+    # and the code names its keychain groups from it (PairingKeychain, PushKeychain). Left empty, the app keeps a push key
+    # in its own group, the extension cannot read it, and every notification stays the fixed text. It is set before the
+    # signature below, which seals the Info.plist; check-release-app.sh reads it back from the signed app.
+    logged 60 "team prefix: ${bundle##*/}" plutil -replace AppIdentifierPrefix -string "$team." "$bundle/Info.plist"
     logged 120 "embed entitlements: ${bundle##*/}" codesign --force --sign - --entitlements "$resolved" --timestamp=none "$bundle"
 }
 # An extension before the app that holds it: signing the app seals the extension's signature.

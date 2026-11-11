@@ -415,18 +415,20 @@ fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState 
             return TaskState::Working;
         }
     }
-    // The current state wins over the mark (D-04); a ★ wins over waiting,
-    // rest and an automatic resolution, an operator's 해결 having taken it,
-    // and over a read ask, which ☆ put off. A read ask not put off is still
-    // the operator's to answer (needs-you-cleanup D-04).
-    if agent.revisit.is_some_and(|revisit| revisit.starred) {
-        return TaskState::Revisit;
-    }
+    // The current state wins over the mark (D-04), a proven wait included
+    // (operator decision 2026-11-11): the ★ lifts a task into 다시 볼 것 only
+    // where it would otherwise fold away, at rest, after an automatic
+    // resolution (an operator's 해결 having taken the ★) or with a read ask ☆
+    // put off. A read ask not put off is still the operator's to answer
+    // (needs-you-cleanup D-04).
     if read_ask(agent) {
         return TaskState::NeedsYou;
     }
     if agent.resolved.is_none() && agent.wait.is_some() {
         return TaskState::Waiting;
+    }
+    if agent.revisit.is_some_and(|revisit| revisit.starred) {
+        return TaskState::Revisit;
     }
     let leftover = rows
         .iter()

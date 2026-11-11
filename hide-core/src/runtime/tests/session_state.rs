@@ -688,6 +688,15 @@ fn the_phone_lists_a_read_question_in_needs_you_read_and_a_starred_one_in_revisi
         crate::agent_state::phone::project(&json!({"navigator": {"agents": [row]}}), "local");
     let listed = phone.agents().next().unwrap();
     assert_eq!((listed.group.as_str(), listed.read), ("revisit", false));
+    // A starred row that waits on proven work keeps its group (operator
+    // decision 2026-11-11): the ★ lifts a row only from rest.
+    let mut waiting = serde_json::to_value(row).unwrap();
+    waiting["group"] = json!("working");
+    waiting["activity"] = json!("stopped");
+    waiting["revisit"] = json!({"starred": true, "read_ask": false, "since_unix_ms": 1});
+    let phone =
+        crate::agent_state::phone::project(&json!({"navigator": {"agents": [waiting]}}), "local");
+    assert_eq!(phone.agents().next().unwrap().group, "working");
     assert_eq!(
         crate::agent_state::phone::GROUP_ORDER,
         ["needs_you", "done", "revisit", "working", "seen"]

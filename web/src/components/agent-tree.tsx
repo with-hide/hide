@@ -65,7 +65,7 @@ export function AskLine({ ask, copy, textHidden = false, className }: { ask: Non
   const human = ask.subject?.cause === "human_turn" ? ask.subject : null;
   const hidden = textHidden || undefined;
   return (
-    <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
+    <span className={cn("group/turn flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
       <span aria-hidden={hidden} className={cn("min-w-0 truncate text-warning", human && "pointer-events-auto cursor-text select-text")} title={what} data-human-turn-place={human ? human.id : undefined}>
         {what}
       </span>

@@ -4123,9 +4123,13 @@ fn a_waiting_mission_closes_itself_only_while_its_done_nodes_meet_every_line() {
     let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
     assert_eq!(status(&runtime), MissionStatus::MergeWait);
 
-    // The pull request is merged with a commit no check ran on.
+    // The pull request is merged with a commit no check ran on and GitHub
+    // reports no checks for: nothing proved that commit, so the earlier
+    // check does not stand for it.
     let late = "e".repeat(40);
-    let merged = github(vec![pull(7, &late, PullRequestBadge::Merged, None)], false);
+    let mut unchecked = pull(7, &late, PullRequestBadge::Merged, None);
+    unchecked.checks = PullRequestChecks::None;
+    let merged = github(vec![unchecked], false);
     runtime.github = merged.clone();
     runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
     assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
@@ -6205,6 +6209,64 @@ fn hide_finishes_a_merged_node_and_closes_the_mission_after_its_last_node() {
         "{:?}",
         mission.wakes
     );
+}
+
+/// A merge of main moves the head after the check passed (mission-49: seven
+/// nodes raised to the operator for it). Once the pull request lands with
+/// its CI passed on the merged head the earlier check stands and Hide
+/// finishes the node; landed on a head whose CI failed, the check is open
+/// and the node is raised as before.
+#[test]
+fn a_check_passed_before_the_head_moved_stands_once_the_pull_request_lands_with_its_ci() {
+    use crate::mission_criteria::CriterionState;
+    let merged_at = |runtime: &mut Runtime, badge, checks| {
+        let mut moved = pull(7, OTHER_HEAD, badge, None);
+        moved.checks = checks;
+        let read = github(vec![moved], false);
+        runtime.github = read.clone();
+        runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+        runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    };
+
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    // The worker merges main: its folder and the pull request move on, and
+    // while the pull request is open the check asks for another run.
+    checkout_at(&mut runtime, OTHER_HEAD);
+    merged_at(
+        &mut runtime,
+        PullRequestBadge::Open,
+        PullRequestChecks::Passing,
+    );
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Pass);
+    merged_at(
+        &mut runtime,
+        PullRequestBadge::Merged,
+        PullRequestChecks::Passing,
+    );
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    assert_eq!((fix.status, fix.attention), (NodeStatus::Done, None));
+    drop(runtime);
+
+    // The same merge with the moved head's CI failed.
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    checkout_at(&mut runtime, OTHER_HEAD);
+    merged_at(
+        &mut runtime,
+        PullRequestBadge::Merged,
+        PullRequestChecks::Failed,
+    );
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(fix.status, NodeStatus::Working);
+    assert!(fix.attention.is_some());
 }
 
 /// PRD mission-node-simple B6, B13, B14: a merge with a line unmet is

@@ -39,9 +39,15 @@ was_booted=0
 id=
 # The appearance of a simulator this command found and did not make, put back on the way out.
 found_appearance=
+# Set by `store-shots`: the status bar override and the system language it put on the simulator.
+store_touched=0
 cleanup() {
     if [[ -n "$found_appearance" && "$created" == 0 && -n "$id" ]]; then
         xcrun simctl ui "$id" appearance "$found_appearance" 2> /dev/null || true
+    fi
+    if [[ "$store_touched" == 1 && "$created" == 0 && -n "$id" ]]; then
+        xcrun simctl status_bar "$id" clear 2> /dev/null || true
+        set_system_language en en_US 2> /dev/null || true
     fi
     if [[ "${HIDE_IOS_KEEP_SIMULATOR:-}" == 1 ]]; then
         [[ -n "$id" && -d "$base" ]] && touch "$kept_marker"
@@ -73,6 +79,61 @@ ensure_device() {
     fi
 }
 
+# The relay protocol library: the two static libraries built on the developer's Mac (the mini has no Rust) become
+# the xcframework the HideShell package links. Made fresh every build, so it is never older than its source.
+make_relay_framework() {
+    local relay=$base/ios/relay frameworks=$project/HideShell/Frameworks
+    [[ -f "$relay/source.json" ]] || { printf 'the relay library is missing: run scripts/build-relay-ios.sh on the developer Mac\n' >&2; exit 1; }
+    rm -rf "$frameworks/HideRelayC.xcframework"
+    mkdir -p "$frameworks"
+    xcodebuild -create-xcframework \
+        -library "$relay/aarch64-apple-ios/libhide_relay_ios.a" -headers "$relay/include" \
+        -library "$relay/aarch64-apple-ios-sim/libhide_relay_ios.a" -headers "$relay/include" \
+        -output "$frameworks/HideRelayC.xcframework"
+}
+
+# The simulator's own language and region, so what iOS draws (a notification's "now", the date) is in the shot's language
+# too. The change reaches SpringBoard on the next boot, so the simulator is restarted.
+set_system_language() {
+    xcrun simctl boot "$id" 2> /dev/null || true
+    xcrun simctl bootstatus "$id" -b > /dev/null
+    xcrun simctl spawn "$id" defaults write -g AppleLanguages -array "$1"
+    xcrun simctl spawn "$id" defaults write -g AppleLocale -string "$2"
+    xcrun simctl shutdown "$id"
+    xcrun simctl boot "$id"
+    xcrun simctl bootstatus "$id" -b > /dev/null
+}
+
+# A status bar that reads the same in every capture: the time of the page's clock, a full battery, full signal.
+fix_status_bar() {
+    xcrun simctl status_bar "$id" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
+        --cellularMode active --cellularBars 4 --operatorName '' --batteryState charged --batteryLevel 100
+}
+
+# `-clonedSourcePackagesDirPath` keeps the Swift packages inside the branch folder, so `clean` removes them too.
+build_app() {
+    xcodebuild -project "$project/App.xcodeproj" -scheme App -configuration Debug \
+        -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+        -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+        ARCHS=arm64 "${signing[@]}" build
+}
+
+# The UI test bundle that answers the notification question is built too, so `allow` needs no build of its own.
+build_ui_tests() {
+    xcodebuild build-for-testing -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
+        -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppUITests ARCHS=arm64 "${signing[@]}"
+}
+
+# Answers the system's notification question for the built app on this branch's simulator: SpringBoard shows it,
+# `simctl` cannot press it, so a UI test does (AppUITests). It launches the app with the debug taps it was sent
+# (the same ones `run` takes), so the page asks the question itself. The grant stays in the simulator.
+allow_notifications() {
+    xcrun simctl bootstatus "$id" -b > /dev/null
+    TEST_RUNNER_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcodebuild test-without-building -project "$project/App.xcodeproj" -scheme App \
+        -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+        -only-testing:AppUITests "${signing[@]}"
+}
+
 case "$command" in
     guard)
         # The machine's release lock and upload record (mini-release.sh) are files beside the branch folders, not branches.
@@ -85,22 +146,8 @@ case "$command" in
         fi
         ;;
     build)
-        # The relay protocol library: the two static libraries built on the developer's Mac (the mini has no Rust) become
-        # the xcframework the HideShell package links. Made fresh every build, so it is never older than its source.
-        relay=$base/ios/relay
-        frameworks=$project/HideShell/Frameworks
-        [[ -f "$relay/source.json" ]] || { printf 'the relay library is missing: run scripts/build-relay-ios.sh on the developer Mac\n' >&2; exit 1; }
-        rm -rf "$frameworks/HideRelayC.xcframework"
-        mkdir -p "$frameworks"
-        xcodebuild -create-xcframework \
-            -library "$relay/aarch64-apple-ios/libhide_relay_ios.a" -headers "$relay/include" \
-            -library "$relay/aarch64-apple-ios-sim/libhide_relay_ios.a" -headers "$relay/include" \
-            -output "$frameworks/HideRelayC.xcframework"
-        # `-clonedSourcePackagesDirPath` keeps the Swift packages inside the branch folder, so `clean` removes them too.
-        xcodebuild -project "$project/App.xcodeproj" -scheme App -configuration Debug \
-            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-            ARCHS=arm64 "${signing[@]}" build
+        make_relay_framework
+        build_app
         ensure_device
         # The HideShell tests run in a real web view on the simulator: they are what proves the bridge refuses a frame.
         # Its own derived data: the app's build already holds a Capacitor framework the package's scheme must not meet.
@@ -114,21 +161,76 @@ case "$command" in
         xcodebuild test -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppTests \
             "${signing[@]}"
-        # The UI test bundle that answers the notification question is built here too, so `allow` needs no build of its own.
-        xcodebuild build-for-testing -project "$project/App.xcodeproj" -scheme App -configuration Debug -destination "id=$id" \
-            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" -only-testing:AppUITests ARCHS=arm64 "${signing[@]}"
+        build_ui_tests
         printf 'built: %s\n' "$derived/Build/Products/Debug-iphonesimulator/App.app"
         df -h / | tail -1 | awk '{printf "build machine free disk: %s of %s\n", $4, $2}'
         ;;
-    allow)
-        # Answers the system's notification question for the built app on this branch's simulator: SpringBoard shows it,
-        # `simctl` cannot press it, so a UI test does (AppUITests). It launches the app with the debug taps it was sent
-        # (the same ones `run` takes), so the page asks the question itself. The grant stays in the simulator.
+    store-shots)
+        # The raw captures of the App Store screenshots (mobile/scripts/store-shots.mjs composes them). Inputs in front of
+        # this script on its standard input, as for `run`: HIDE_STORE_PLAN, one tab-separated line per language and shot
+        # (language, file, capture kind (`notification` asks iOS's notification question first and checks the banner is in the capture), seconds a launch may take before its steps finish, Apple language, Apple locale, the debug steps), HIDE_STORE_CLOCK
+        # (the page's clock) and HIDE_STORE_APPEARANCE. The app is built here, without the tests `build` runs.
+        make_relay_framework
+        build_app
         ensure_device
-        xcrun simctl bootstatus "$id" -b > /dev/null
-        TEST_RUNNER_HIDE_DEBUG_TAPS=${HIDE_TAPS:-} xcodebuild test-without-building -project "$project/App.xcodeproj" -scheme App \
-            -configuration Debug -destination "id=$id" -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-            -only-testing:AppUITests "${signing[@]}"
+        store_touched=1
+        xcrun simctl bootstatus "$id" -b > /dev/null 2>&1 || { xcrun simctl boot "$id" 2> /dev/null || true; xcrun simctl bootstatus "$id" -b > /dev/null; }
+        build_ui_tests
+        xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
+        if [[ $created == 0 && ! -f "$kept_marker" ]]; then found_appearance=$(xcrun simctl ui "$id" appearance 2> /dev/null || true); fi
+        xcrun simctl ui "$id" appearance "${HIDE_STORE_APPEARANCE:-light}"
+        mkdir -p "$shots/store"
+        rm -f "$shots/store"/*.png
+        # iOS's own question is asked once, in the language the simulator starts in: the first notification shot's steps ask it.
+        set_system_language en en_US
+        while IFS=$'\t' read -r lang file capture settle language locale steps; do
+            [[ "$capture" == notification ]] || continue
+            HIDE_TAPS=$steps allow_notifications
+            break
+        done <<< "$HIDE_STORE_PLAN"
+        current=
+        while IFS=$'\t' read -r lang file capture settle language locale steps; do
+            if [[ "$lang" != "$current" ]]; then
+                set_system_language "$language" "$locale"
+                current=$lang
+            fi
+            fix_status_bar
+            xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+            marker=$(xcrun simctl get_app_container "$id" "$bundle_id" data)/tmp/hide-debug-taps
+            rm -f "$marker"
+            SIMCTL_CHILD_HIDE_DEBUG_TAPS=$steps SIMCTL_CHILD_HIDE_DEBUG_NOW=${HIDE_STORE_CLOCK:-} \
+                xcrun simctl launch "$id" "$bundle_id" -AppleLanguages "($language)" -AppleLocale "$locale" > /dev/null
+            # The app says when its last step is pressed (`done`) or that one was never found (`failed <step>`): a shot
+            # is taken only after the first, and the run stops on the second or on no word at all.
+            waited=0
+            until [[ -f "$marker" ]]; do
+                (( waited < settle + 60 )) || { printf 'store-shots: %s %s: the steps never finished\n' "$lang" "$file" >&2; exit 1; }
+                sleep 1
+                waited=$((waited + 1))
+            done
+            [[ "$(cat "$marker")" == done ]] || { printf 'store-shots: %s %s: %s\n' "$lang" "$file" "$(cat "$marker")" >&2; exit 1; }
+            target=$shots/store/$lang-$file.png
+            if [[ "$capture" == notification ]]; then
+                # The banner arrives about 2 s after the last press: a capture taken before it and one after must differ (nothing else on that screen moves).
+                xcrun simctl io "$id" screenshot "$shots/store/before-banner.png" 2>&1 | tail -1
+                sleep 4
+                xcrun simctl io "$id" screenshot "$target" 2>&1 | tail -1
+                if [[ "$(shasum "$shots/store/before-banner.png" | cut -d' ' -f1)" == "$(shasum "$target" | cut -d' ' -f1)" ]]; then
+                    printf 'store-shots: %s %s: no notification banner in the capture\n' "$lang" "$file" >&2
+                    exit 1
+                fi
+                rm -f "$shots/store/before-banner.png"
+            else
+                sleep 4
+                xcrun simctl io "$id" screenshot "$target" 2>&1 | tail -1
+            fi
+            xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
+        done <<< "$HIDE_STORE_PLAN"
+        ls "$shots/store"
+        ;;
+    allow)
+        ensure_device
+        allow_notifications
         ;;
     push)
         # Delivers one Apple-shaped push body to the installed app on this branch's simulator, the way Apple would, and

@@ -33,11 +33,11 @@ function fixture() {
   facts = join(root, 'facts');
   write(join(facts, 'info.json'), {
     CFBundleIdentifier: want.bundleId, CFBundleExecutable: 'App', CFBundleShortVersionString: '1.2.5', CFBundleVersion: '20261110120000',
-    CAPACITOR_DEBUG: 'false', MinimumOSVersion: '15.0', DTSDKName: 'iphoneos26.5', UIDeviceFamily: [1], ITSAppUsesNonExemptEncryption: false, UIBackgroundModes: ['remote-notification'],
+    AppIdentifierPrefix: `${want.teamId}.`, CAPACITOR_DEBUG: 'false', MinimumOSVersion: '15.0', DTSDKName: 'iphoneos26.5', UIDeviceFamily: [1], ITSAppUsesNonExemptEncryption: false, UIBackgroundModes: ['remote-notification'],
   });
   write(join(facts, 'appex', APPEX, 'info.json'), {
     CFBundleIdentifier: extension.bundleId, CFBundleExecutable: 'HideNotification', CFBundleShortVersionString: '1.2.5', CFBundleVersion: '20261110120000',
-    MinimumOSVersion: '15.0', NSExtension: { NSExtensionPointIdentifier: extension.extensionPoint },
+    AppIdentifierPrefix: `${want.teamId}.`, MinimumOSVersion: '15.0', NSExtension: { NSExtensionPointIdentifier: extension.extensionPoint },
   });
   write(join(facts, 'appex', APPEX, 'privacy.json'), { NSPrivacyTracking: false, NSPrivacyTrackingDomains: [], NSPrivacyCollectedDataTypes: [], NSPrivacyAccessedAPITypes: [] });
   write(join(facts, 'appex', APPEX, 'entitlements.json'), extension.entitlements);
@@ -72,6 +72,7 @@ describe('the release gate on the signed app', () => {
     'an export compliance answer of true': [(app) => edit('info.json', (v) => { v.ITSAppUsesNonExemptEncryption = true; }), 'ITSAppUsesNonExemptEncryption'],
     'an export compliance code in the app': [(app) => edit('info.json', (v) => { v.ITSEncryptionExportComplianceCode = 'x'; }), 'export compliance code'],
     'another bundle id': [(app) => edit('info.json', (v) => { v.CFBundleIdentifier = 'me.example.other'; }), 'bundle id is'],
+    'an app whose team prefix the build left empty': [(app) => edit('info.json', (v) => { v.AppIdentifierPrefix = ''; }), 'names the team prefix'],
     'another version': [(app) => edit('info.json', (v) => { v.CFBundleShortVersionString = '9.9.9'; }), 'version is'],
     'an iPad build': [(app) => edit('info.json', (v) => { v.UIDeviceFamily = [1, 2]; }), 'iPhone only'],
     'an older minimum iOS': [(app) => edit('info.json', (v) => { v.MinimumOSVersion = '13.0'; }), 'minimum iOS'],
@@ -84,6 +85,8 @@ describe('the release gate on the signed app', () => {
     'Capacitor taking the notification center': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', ios: { webContentsDebuggingEnabled: false, handleApplicationNotifications: true } }), 'notification center'],
     'an inspectable web view': [(app) => write(join(app, 'capacitor.config.json'), { loggingBehavior: 'none', ios: { webContentsDebuggingEnabled: true } }), 'inspected'],
     'the debug pairing hook in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_PAIR_LINK'), 'debug pairing hook'],
+    'the debug tapping hook (and its fill) in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_TAPS'), 'debug tapping hook'],
+    'the debug clock hook in the binary': [(app) => write(join(app, 'App'), 'BridgeGate HIDE_DEBUG_NOW'), 'debug clock hook'],
     'no bridge gate in the binary': [(app) => write(join(app, 'App'), 'binary only'), 'bridge gate'],
     'no privacy manifest': [(app) => rmSync(join(app, 'PrivacyInfo.xcprivacy')), 'PrivacyInfo.xcprivacy'],
     'tracking in the privacy manifest': [(app) => edit('privacy.json', (v) => { v.NSPrivacyTracking = true; }), 'no tracking'],
@@ -100,6 +103,7 @@ describe('the release gate on the signed app', () => {
     'an extension that is missing': [(app) => rmSync(join(app, 'PlugIns', APPEX), { recursive: true }), 'different extensions'],
     'an extension nobody named': [(app) => write(join(app, 'PlugIns', 'Other.appex', 'Other'), 'x'), 'different extensions'],
     'an extension of another bundle id': [(app) => edit(`appex/${APPEX}/info.json`, (v) => { v.CFBundleIdentifier = 'me.grab.hide.ios.other'; }), `${APPEX}: bundle id`],
+    'an extension whose team prefix the build left empty': [(app) => edit(`appex/${APPEX}/info.json`, (v) => { v.AppIdentifierPrefix = ''; }), `${APPEX}: Info.plist names the team prefix`],
     'an extension of another version': [(app) => edit(`appex/${APPEX}/info.json`, (v) => { v.CFBundleShortVersionString = '1.0'; }), `${APPEX}: version`],
     'an extension of another point': [(app) => edit(`appex/${APPEX}/info.json`, (v) => { v.NSExtension.NSExtensionPointIdentifier = 'com.apple.widgetkit-extension'; }), 'extension point'],
     'an extension with an App Transport Security exception': [(app) => edit(`appex/${APPEX}/info.json`, (v) => { v.NSAppTransportSecurity = { NSAllowsArbitraryLoads: true }; }), `${APPEX}: no App Transport Security`],

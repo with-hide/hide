@@ -3,7 +3,7 @@ import type { TFunction } from "i18next";
 import { LaptopIcon, PlusIcon, ServerIcon, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { leaveHostPush } from "./appPush";
-import { hostStore, hostLink, removeHost, dropHostPush, type PairedHost } from "./hosts";
+import { hostStore, hostLink, removeHost, dropHostPush, HOST_LIST_LINK, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
@@ -146,6 +146,6 @@ export function VersionScreen({ t, name, protocol, app, appBehind = false }: { t
       <div className="flex flex-col gap-xs"><dt>{t("mobile.relay.phoneVersion")}</dt><dd className="font-mono text-subtle-foreground">{app}</dd></div>
       <div className="flex flex-col gap-xs"><dt>{t("mobile.relay.deviceVersion")}</dt><dd className="font-mono text-subtle-foreground">{protocol ?? "?"}</dd></div>
     </dl>
-    <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => window.location.assign("/")}>{t("mobile.relay.choose")}</Button>
+    <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => window.location.assign(HOST_LIST_LINK)}>{t("mobile.relay.choose")}</Button>
   </Landing>;
 }
