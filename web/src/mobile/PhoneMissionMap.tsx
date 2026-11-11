@@ -37,7 +37,7 @@ export function PhoneMissionMap({ mission }: { mission: PhoneMission }) {
       ) : nodes.length === 0 ? (
         <p className="text-body text-muted-foreground" data-phone-mission-empty="true">{t(mission.status === "done" ? "mission.report.done" : mission.status === "cancelled" ? "mission.cancelled" : "mission.planning")}</p>
       ) : (
-        <div className="flex h-[50svh] min-h-(--size-image-min-height) min-w-0 flex-col" data-phone-mission-map="true">
+        <div className="flex h-[50svh] min-w-0 flex-col" data-phone-mission-map="true">
           <MissionMapCanvas wide page={null} flow={flow} onFlow={setFlow} touch focusNodes={focus}>
             <MissionGraph
               mission={graph} flow={flow} selected={null} onSelect={() => {}}
