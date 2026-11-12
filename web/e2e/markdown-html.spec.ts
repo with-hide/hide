@@ -245,3 +245,61 @@ test("a mermaid fence draws as its diagram, a broken one stays code under its re
     close(stack);
   }
 });
+
+const LONG = "흩어져 있던 이유와 모이는 이유가 한 논리여야 하고, 그 논리가 70년이라는 길이와 일곱이라는 수를 함께 설명해야 한다.";
+
+const TABLES = [
+  "intro",
+  "",
+  "| 장치 | 관객이 품는 질문 | 답이 회수해야 할 지점 |",
+  "|---|:---:|---|",
+  "| 70년 | 왜 하필 [지금](https://example.com/now)? | 70이라는 길이에 이유가 있어야 한다. |",
+  `| 7체 | 왜 일곱이고, 왜 **흩어져** 있었나? | ${LONG} \`${"a1b2c3d4".repeat(8)}\` https://example.com/${"long/".repeat(16)}end |`,
+  "",
+  "below the table",
+  "",
+].join("\n");
+
+test("a table draws as a header row and wrapping cells inside the column, its link opens on modifier-click, a press shows its source, and the gutter under it holds", async ({ page, context }) => {
+  const stack = await openStack(page, { "table.md": TABLES });
+  try {
+    await page.locator(`[data-explorer-row="${stack.repo}/table.md"]`).click();
+    const block = page.locator(".cm-md-table");
+    const table = block.locator("table");
+    await expect(table).toBeVisible({ timeout: 20_000 });
+    await expect(table.locator("th")).toHaveText(["장치", "관객이 품는 질문", "답이 회수해야 할 지점"]);
+    await expect(table.locator("th").nth(1)).toHaveCSS("text-align", "center");
+    await expect(table.locator("tbody td").nth(4).locator("strong")).toHaveText("흩어져");
+    await expect(page.locator(".cm-content")).not.toContainText("|---|");
+    // The long cell wraps inside its own column, its hash and address too; the table stays inside the text column and the page never scrolls sideways.
+    const oneLine = (await table.locator("th").first().boundingBox())!.height;
+    expect((await table.locator("tbody td").nth(5).boundingBox())!.height).toBeGreaterThan(2 * oneLine);
+    expect((await table.boundingBox())!.width).toBeLessThanOrEqual((await block.boundingBox())!.width + 1);
+    expect(await page.locator(".cm-scroller").first().evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+    await screenshot(page, "markdown-table-live");
+
+    // The `+` of the line under the table sits on that line, so the table's drawn height reached the editor.
+    const below = page.locator(".cm-content > .cm-line", { hasText: "below the table" });
+    const row = (await below.boundingBox())!;
+    const gutter = (await page.locator(".cm-view-comment-gutter").boundingBox())!;
+    await page.mouse.move(gutter.x + gutter.width / 2, row.y + 4);
+    const plus = (await page.locator('[data-view-comment-add="8"]').boundingBox())!;
+    expect(plus.y).toBeGreaterThanOrEqual(row.y - 1);
+    expect(plus.y + plus.height).toBeLessThanOrEqual(row.y + row.height + 1);
+
+    // A link in a cell opens on modifier-click only and the table stays drawn; a plain press, on the link too, shows its source.
+    const link = table.locator("a", { hasText: "지금" });
+    const opened = context.waitForEvent("page");
+    await link.click({ modifiers: ["ControlOrMeta"] });
+    expect((await opened).url()).toContain("example.com/now");
+    await expect(table).toBeVisible();
+    await link.click();
+    await expect(block).toHaveCount(0);
+    expect(context.pages()).toHaveLength(2);
+    await expect(page.locator(".cm-content")).toContainText("|---|:---:|---|");
+    await below.click();
+    await expect(table).toBeVisible();
+  } finally {
+    close(stack);
+  }
+});

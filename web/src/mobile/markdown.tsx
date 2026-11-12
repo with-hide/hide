@@ -173,11 +173,13 @@ function rowCells(row: SyntaxNode): (SyntaxNode | null)[] {
  * A GFM table, the one drawing of it the phone, the pull request card and the
  * document view's Live mode share: as many columns as the header has cells (a
  * shorter row is filled with empty cells, a longer one cut, as GitHub draws
- * it), each aligned as its delimiter mark says. Columns take the width their
- * text needs and wrap inside the width they are given, whole words kept,
- * under a quiet header and a hairline between rows. Only a word wider than
- * its column's share (a long address) can make the table wider than its
- * place, and then the table scrolls sideways inside it, never the page.
+ * it), each aligned as its delimiter mark says, under a quiet header and a
+ * hairline between rows. Columns take the width their text needs and wrap
+ * inside the width they are given: a word of prose stays whole, Korean
+ * included, while code, a link and a bare address (a path, a hash, a URL)
+ * break anywhere, so a long one wraps inside its column. A long token in
+ * plain prose is the one thing that can make the table wider than its place,
+ * and then the table scrolls sideways inside it, never the page.
  */
 function MarkdownTable({ table, header, source }: { table: SyntaxNode; header: SyntaxNode; source: Source }) {
   const columns = rowCells(header).length;
@@ -189,7 +191,7 @@ function MarkdownTable({ table, header, source }: { table: SyntaxNode; header: S
       const cell = cells[index] ?? null;
       const align = ALIGN_CLASS[aligns[index] ?? "left"];
       return (
-        <Cell key={index} className={`px-sm py-xs align-top break-words break-keep first:pl-none last:pr-none ${align} ${Cell === "th" ? "font-medium text-subtle-foreground" : ""}`}>
+        <Cell key={index} className={`px-sm py-xs align-top break-words break-keep [&_a]:wrap-anywhere [&_code]:wrap-anywhere [&_[data-markdown-url]]:wrap-anywhere ${align} ${Cell === "th" ? "font-medium text-subtle-foreground" : ""}`}>
           {cell ? inline(cell, source) : null}
         </Cell>
       );
@@ -315,6 +317,13 @@ function span(node: SyntaxNode, source: Source, key: number): ReactNode {
     }
     case "Autolink":
       return <span key={key}>{inline(node, source)}</span>;
+    case "URL":
+      // A bare address, which a table cell lets break anywhere.
+      return (
+        <span key={key} data-markdown-url="true">
+          {text.slice(node.from, node.to)}
+        </span>
+      );
     case "HardBreak":
       return <br key={key} />;
     case "Escape":
