@@ -1,4 +1,4 @@
-import { ArrowRightIcon, CheckIcon, ChevronRightIcon, EyeIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, ChevronRightIcon, EyeIcon, GitBranchIcon, HistoryIcon, HourglassIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -48,6 +48,7 @@ import { planCells, planCount } from "./plans";
 import { formatBytes } from "./i18n/format";
 import { sessionOfAgent } from "./sessionWork";
 import type { MessageKey } from "./i18n/catalogs";
+import { PRESET_ICON } from "./components/mission-line";
 import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -100,9 +101,11 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   // The worker's life beside its model (B4): asleep or ended, as `hide agent show` says it.
   const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.worker.asleep" : "mission.worker.ended") : null;
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
-  const kind = node.kind === "general" && node.preset === "verify" ? "mission.panel.kindVerify" : node.kind === "general" ? nodeKindWord(node) : KIND_SHORT[node.kind];
+  // A general node's preset by its icon and name, a waiting node by its hourglass, as its card draws them (PRD node-presets D-08, D-13); a change, the usual kind, says nothing.
+  const kind = node.kind === "change" ? null : nodeKindWord(node);
+  const KindIcon = node.kind === "external" ? HourglassIcon : PRESET_ICON[node.preset ?? "general"];
   const parts: ReactNode[] = [
-    ...(kind ? [<span key="kind" className="shrink-0 font-semibold text-subtle-foreground" data-panel-kind={node.kind}>{t(kind)}</span>] : []),
+    ...(kind ? [<span key="kind" className="flex shrink-0 items-center gap-xxs font-semibold text-subtle-foreground" data-panel-kind={node.kind} data-panel-preset={node.kind === "general" ? (node.preset ?? "general") : undefined}><KindIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />{t(kind)}</span>] : []),
     ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}<RunText run={worker.run} /></span>] : []),
     ...(device ? [<MissionDevice key="device" name={device} />] : []),
     ...facts.map((fact) => <span key={fact} className="shrink-0 tabular-nums" data-panel-fact="true">{fact}</span>),
@@ -138,11 +141,6 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   );
 }
 
-/** A node's kind as the head's first fact; a change, the usual kind, says nothing. */
-const KIND_SHORT: Record<Exclude<MissionNode["kind"], "general">, MessageKey | null> = {
-  change: null,
-  external: "mission.kind.external",
-};
 
 /**
  * The head's ways out (B31): the node's current pull request as its PR mark

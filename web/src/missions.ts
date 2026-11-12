@@ -422,9 +422,10 @@ export function stageWord(node: Pick<MissionNode, "kind" | "preset" | "delivery"
 
 /**
  * What a node left behind, by its kind (B22, D-14): its pull request, a
- * direct change's commit on main or else its branch, a research node's
- * conclusion, a verify node's recorded verdict or else its line. A research
- * or verify node's line is a result only once the node is done; while it
+ * direct change's commit on main or else its branch, and for a general node
+ * its recorded verdict, whatever its preset, or else its result line: a
+ * research node's conclusion, any other's line (PRD node-presets D-04, D-08).
+ * A general node's line is a result only once the node is done; while it
  * runs the line is its progress. Null when the record holds none, so
  * nothing is drawn for it.
  */
@@ -434,7 +435,7 @@ export type NodeResult =
   | { kind: "branch"; branch: string }
   | { kind: "conclusion"; line: string }
   | { kind: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
-  | { kind: "verify"; line: string };
+  | { kind: "line"; line: string };
 
 export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
@@ -445,7 +446,7 @@ export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.kind === "general" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
   if (!node.line) return null;
   if (node.kind === "general" && node.preset === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
-  return node.status === "done" ? { kind: "verify", line: node.line } : null;
+  return node.status === "done" ? { kind: "line", line: node.line } : null;
 }
 
 /**

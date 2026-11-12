@@ -77,17 +77,26 @@ it("says the line in words, its pull request's state and the operator's merge in
   expect(branchLineWords(branchLine(node({ kind: "external", delivery: null, branch: null, external: { branch: "vendor/sdk" } }), null)!, words)).toBe("↗ vendor/sdk");
 });
 
-it("gives a node that changes no code its result line: its kind until done, lit while it works, then the conclusion or the verdict (D-54, B57)", () => {
-  const research = node({ kind: "general", preset: "research", delivery: null, branch: null });
-  const verify = node({ kind: "general", preset: "verify", delivery: null, branch: null });
-  expect([branchLine(research, "main"), branchLine(verify, "main")]).toEqual([null, null]);
+it("gives every general node its preset's line: the name until done, then the result line or a verdict of any preset, the icon by where it stands (PRD node-presets D-08, B1, B2, B5)", () => {
+  const general = (preset: "research" | "verify" | "deploy" | null) => node({ kind: "general", preset, delivery: null, branch: null });
+  const [research, verify, deploy, none] = [general("research"), general("verify"), general("deploy"), general(null)];
+  expect([research, verify, deploy, none].map((one) => branchLine(one, "main"))).toEqual([null, null, null, null]);
   expect(resultLine(node())).toBeNull();
-  expect(resultLine({ ...research, status: "planned" })).toEqual({ kind: "research", working: false, shows: "kind" });
-  expect(resultLine({ ...research, line: "the reopen order" })).toEqual({ kind: "research", working: true, shows: "kind" });
-  expect(resultLine({ ...research, status: "done", line: "the reopen order" })).toEqual({ kind: "research", working: false, shows: "conclusion", line: "the reopen order" });
-  expect(resultLine({ ...verify, status: "done", verdict: "fail", checks: { passed: 5, total: 7 } })).toEqual({ kind: "verify", working: false, shows: "verdict", verdict: "fail", checks: { passed: 5, total: 7 } });
-  // A finished node with nothing kept says its kind, as before it finished.
-  expect(resultLine({ ...research, status: "done" })).toMatchObject({ shows: "kind" });
+  // Planned grey, worked blue: the preset's name whatever line its worker last said.
+  expect(resultLine({ ...research, status: "planned" })).toEqual({ preset: "research", tone: "planned", shows: "kind" });
+  expect(resultLine({ ...deploy, line: "signing the package" })).toEqual({ preset: "deploy", tone: "working", shows: "kind" });
+  // Done green with the result line itself, whatever the preset, none included (B1, B5).
+  expect(resultLine({ ...research, status: "done", line: "the reopen order" })).toEqual({ preset: "research", tone: "done", shows: "conclusion", line: "the reopen order" });
+  expect(resultLine({ ...deploy, status: "done", line: "1.2.8 out" })).toEqual({ preset: "deploy", tone: "done", shows: "conclusion", line: "1.2.8 out" });
+  expect(resultLine({ ...none, status: "done", line: "three pages reworded" })).toEqual({ preset: null, tone: "done", shows: "conclusion", line: "three pages reworded" });
+  // A verdict wins over the line on any preset, red when it failed (B2).
+  expect(resultLine({ ...verify, status: "done", line: "two failed", verdict: "fail", checks: { passed: 5, total: 7 } })).toEqual({ preset: "verify", tone: "failed", shows: "verdict", verdict: "fail", checks: { passed: 5, total: 7 } });
+  expect(resultLine({ ...research, status: "done", line: "why", verdict: "pass", checks: null })).toEqual({ preset: "research", tone: "done", shows: "verdict", verdict: "pass", checks: null });
+  // A finished node with nothing kept says its preset, as before it finished.
+  expect(resultLine({ ...none, status: "done" })).toEqual({ preset: null, tone: "done", shows: "kind" });
   const words = t();
-  expect([resultLineWords(resultLine({ ...verify, status: "done", verdict: "pass", checks: { passed: 7, total: 7 } })!, words), resultLineWords(resultLine({ ...verify, status: "planned" })!, words), resultLineWords(resultLine({ ...research, status: "planned" })!, words)]).toEqual(["통과 7/7", "검증", "조사"]);
+  expect([
+    resultLineWords(resultLine({ ...verify, status: "done", verdict: "pass", checks: { passed: 7, total: 7 } })!, words),
+    ...[research, verify, deploy, none].map((one) => resultLineWords(resultLine({ ...one, status: "planned" })!, words)),
+  ]).toEqual(["통과 7/7", "리서치", "검증", "배포·출시", "일반"]);
 });

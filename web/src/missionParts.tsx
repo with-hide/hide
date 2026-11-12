@@ -37,7 +37,7 @@ export function MissionDevice({ name, className }: { name: string | null; classN
  * What a node left, by its kind, as the Conductor pane's popover lists it
  * (PRD mission-plan-visibility B11): `⑂ #n` in its pull request's state
  * colour, a direct change's branch or its commit on main, `결론 ▸` for
- * research or a verify node's verdict or line.
+ * research, or a general node's verdict or line.
  */
 export function ResultTail({ result, stale, full = false }: { result: NodeResult; stale: boolean; full?: boolean }) {
   const { t } = useInterfaceTranslation();
@@ -69,8 +69,8 @@ export function ResultTail({ result, stale, full = false }: { result: NodeResult
           <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </span>
       );
-    case "verify":
-      return <span className={cn("min-w-0 text-caption text-muted-foreground", full ? "break-words" : "truncate")} title={result.line} data-node-verify="true">{result.line}</span>;
+    case "line":
+      return <span className={cn("min-w-0 text-caption text-muted-foreground", full ? "break-words" : "truncate")} title={result.line} data-node-result-line="true">{result.line}</span>;
   }
 }
 

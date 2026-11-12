@@ -16,12 +16,12 @@
 // accessible name says these words; the line itself is for the eye.
 
 import type { ReactNode } from "react";
-import { ChevronRightIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
+import { ChevronRightIcon, FileTextIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, HourglassIcon, RocketIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { linePrLabel, lineToLabel, lineToWords, resultLineWords, type BranchLine, type LineMark, type ResultLine } from "../missionLine";
+import { linePrLabel, lineToLabel, lineToWords, resultLineWords, type BranchLine, type LineMark, type ResultLine, type ResultTone } from "../missionLine";
 import { PR_LOOK } from "../prMark";
-import type { PrState } from "../snapshot";
+import type { MissionNodePreset, PrState } from "../snapshot";
 
 /** A mark the PR list does not draw: a branch before any pull request, one not read yet, and a planned node's faint marks. */
 const OWN_MARK: Record<Exclude<LineMark, keyof typeof PR_LOOK>, { icon: LucideIcon; tone: string }> = {
@@ -138,18 +138,33 @@ function StackMark({ state }: { state: PrState | null }) {
   return <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-to-mark={state ?? "unknown"} />;
 }
 
-const RESULT_ICON = { research: SearchIcon, verify: ShieldCheckIcon } as const;
+/** A general node's preset as its icon (PRD node-presets D-08): research a magnifier, verify a shield with a check, deploy a rocket, none a document; the core's preset table names the same icons. */
+export const PRESET_ICON: Record<MissionNodePreset | "general", LucideIcon> = { research: SearchIcon, verify: ShieldCheckIcon, deploy: RocketIcon, general: FileTextIcon };
+
+/** The icon's colour by where the node stands (v4): grey planned, blue worked, green done, red on a failed verdict. */
+const RESULT_TONE: Record<ResultTone, string> = { planned: "text-muted-foreground", working: "text-mission-working", done: "text-mission-done", failed: "text-mission-failed" };
 
 export function ResultLineView({ line, whole = false, className }: { line: ResultLine; whole?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const Icon = RESULT_ICON[line.kind];
-  const verdict = line.shows === "verdict" ? (line.verdict === "pass" ? "text-mission-done" : "text-mission-failed") : null;
+  const Icon = PRESET_ICON[line.preset ?? "general"];
+  const verdict = line.shows === "verdict" ? (line.verdict === "pass" ? "font-semibold text-mission-done" : "font-semibold text-mission-failed") : null;
   const words = resultLineWords(line, t);
   return (
-    <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xxs text-caption", verdict ?? (line.shows === "conclusion" ? "text-subtle-foreground" : "text-muted-foreground"), className)} data-node-line="result" data-line-kind={line.kind} data-line-shows={line.shows} data-line-verdict={line.shows === "verdict" ? line.verdict : undefined}>
-      <Icon className={cn("size-(--size-icon-sm) shrink-0", line.working && line.shows === "kind" ? "text-mission-working" : verdict)} />
-      <span className={whole ? "min-w-0 break-words" : "min-w-0 truncate"} title={!whole && line.shows === "conclusion" ? line.line : undefined}>{words}</span>
-      {line.shows !== "kind" ? <ChevronRightIcon className="size-(--size-icon-sm) shrink-0" /> : null}
+    <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xxs text-caption", line.shows === "conclusion" ? "text-subtle-foreground" : "text-muted-foreground", className)} data-node-line="result" data-line-kind={line.preset ?? "general"} data-line-tone={line.tone} data-line-shows={line.shows} data-line-verdict={line.shows === "verdict" ? line.verdict : undefined}>
+      <Icon className={cn("size-(--size-icon-sm) shrink-0", RESULT_TONE[line.tone])} data-line-icon={line.preset ?? "general"} />
+      <span className={cn(whole ? "min-w-0 break-words" : "min-w-0 truncate", verdict)} title={!whole && line.shows === "conclusion" ? line.line : undefined}>{words}</span>
+      {line.shows !== "kind" ? <ChevronRightIcon className="size-(--size-icon-sm) shrink-0 text-muted-foreground opacity-(--opacity-dimmed)" /> : null}
+    </span>
+  );
+}
+
+/** A waiting node's place for a worker on the desktop's card and the phone's (PRD node-presets D-13, B12): an hourglass and `기다림`, since Hide, not an agent, watches its pull request or branch. */
+export function WaitingMark() {
+  const { t } = useInterfaceTranslation();
+  return (
+    <span className="flex shrink-0 items-center gap-xxs" data-node-waiting="true">
+      <HourglassIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+      {t("mission.kind.external")}
     </span>
   );
 }

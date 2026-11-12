@@ -532,7 +532,9 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // A worker on another machine names it on its row, beside the band at the card's left.
     expect([card(map, "away").querySelector("[data-node-run] [data-device-chip]")?.getAttribute("data-device-chip"), card(map, "away").querySelector("[data-node-remote]") !== null]).toEqual(["mini", true]);
     // A finished node with no launch kept, or a node with no worker, names no model and no mark.
-    expect(["ran-unknown", "asked", "next", "outside"].map(worker)).toEqual([null, null, null, null]);
+    expect(["ran-unknown", "asked", "next"].map(worker)).toEqual([null, null, null]);
+    // A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13, B12).
+    expect([worker("outside"), card(map, "outside").querySelector("[data-node-run] [data-node-waiting]")?.textContent]).toEqual([["waiting", null, null, null], "Waiting"]);
     // The last row, under a hairline, is where the result goes: the pull request's mark as the PR list draws it, its number (the newest with +N), the branch when known and the destination (B55).
     // An outside node's pull request or branch carries `↗` and goes to its own base, bold where that is not the destination; a node not started says its plan; no branch or base the core did not send is named (B60).
     const branch = (key: string) => {
@@ -587,7 +589,7 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // Outside is the node's kind: a dotted border in every state; one closed unmerged waits on the Conductor (B12, B19).
     expect(["outside", "closed-out", "merged-out"].map((key) => card(map, key).className.includes("border-dotted"))).toEqual([true, true, true]);
     expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
-    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Outside the mission · Where it goes: ↗${"#"}1702 → main · Merged`);
+    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Waiting · outside the mission · Where it goes: ↗${"#"}1702 → main · Merged`);
   } finally { await map.unmount(); }
 });
 
@@ -637,29 +639,40 @@ it("draws what the operator does right under the title: the gate's strip, `머�
   } finally { await scoped.unmount(); }
 });
 
-it("ends a node that changes no code in its kind until it is done, then research's conclusion and verify's verdict, and draws a planned card with no time (PRD mission-destination D-54, D-55, B57, B58)", async () => {
+it("ends every general node in its preset's icon and name until it is done, then its result line or a verdict of any preset, and draws a planned card with no time (PRD node-presets D-08, B1, B2, B5; PRD mission-destination D-55, B58)", async () => {
+  const general = (key: string, preset: "research" | "verify" | "deploy" | null, over: Parameters<typeof node>[1] = {}) => node(key, { kind: "general", preset, delivery: null, ...over });
   const nodes = [
-    node("cause", { kind: "general", preset: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
-    node("look", { kind: "general", preset: "research", delivery: null, status: "working" }),
-    node("pass", { kind: "general", preset: "verify", delivery: null, status: "done", verdict: "pass", checks: { passed: 7, total: 7 } }),
-    node("fail", { kind: "general", preset: "verify", delivery: null, status: "done", verdict: "fail", checks: { passed: 5, total: 7 } }),
-    node("later", { kind: "general", preset: "verify", delivery: null, status: "planned", worker: { agent: "codex", model: "gpt-6.1-sol", effort: "high", effort_auto: false } }),
+    general("cause", "research", { status: "done", line: "the cause is the reopen order" }),
+    general("look", "research", { status: "working" }),
+    general("pass", "verify", { status: "done", verdict: "pass", checks: { passed: 7, total: 7 } }),
+    general("fail", "verify", { status: "done", verdict: "fail", checks: { passed: 5, total: 7 } }),
+    general("later", "verify", { status: "planned", worker: { agent: "codex", model: "gpt-6.1-sol", effort: "high", effort_auto: false } }),
+    general("ship", "deploy", { status: "done", line: "1.2.8 out, downloads checked" }),
+    general("copy", null, { status: "working" }),
+    general("judged", "research", { status: "done", line: "why", verdict: "pass", checks: { passed: 3, total: 3 } }),
   ];
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
     const result = (key: string) => {
       const one = card(map, key).querySelector<HTMLElement>("[data-node-foot] [data-node-line='result']");
-      return one ? [one.dataset.lineKind, one.dataset.lineShows, one.textContent, one.getAttribute("class")?.match(/text-mission-(?:done|failed)/)?.[0] ?? null] : null;
+      return one ? [one.querySelector<SVGElement>("[data-line-icon]")?.dataset.lineIcon, one.dataset.lineTone, one.dataset.lineShows, one.textContent] : null;
     };
-    expect(["cause", "look", "pass", "fail", "later"].map(result)).toEqual([
-      ["research", "conclusion", "the cause is the reopen order", null],
-      ["research", "kind", "Research", null],
-      ["verify", "verdict", "Passed 7/7", "text-mission-done"],
-      ["verify", "verdict", "Failed 5/7", "text-mission-failed"],
-      ["verify", "kind", "Verify", null],
+    expect(nodes.map((one) => result(one.key))).toEqual([
+      ["research", "done", "conclusion", "the cause is the reopen order"],
+      ["research", "working", "kind", "Research"],
+      ["verify", "done", "verdict", "Passed 7/7"],
+      ["verify", "failed", "verdict", "Failed 5/7"],
+      ["verify", "planned", "kind", "Verify"],
+      ["deploy", "done", "conclusion", "1.2.8 out, downloads checked"],
+      ["general", "working", "kind", "General"],
+      ["research", "done", "verdict", "Passed 3/3"],
     ]);
-    // Its icon is lit while it works.
-    expect(card(map, "look").querySelector("[data-node-line] svg")?.getAttribute("class")).toContain("text-mission-working");
+    // The icon's colour follows where the node stands, the verdict's words theirs: grey planned, blue worked, green done, red failed.
+    const icon = (key: string) => card(map, key).querySelector("[data-line-icon]")?.getAttribute("class")?.match(/text-(?:mission-\w+|muted-foreground)/)?.[0];
+    expect(["later", "look", "cause", "fail"].map(icon)).toEqual(["text-muted-foreground", "text-mission-working", "text-mission-done", "text-mission-failed"]);
+    expect(["pass", "fail"].map((key) => card(map, key).querySelector("[data-node-line='result'] .font-semibold")?.getAttribute("class")?.match(/text-mission-(?:done|failed)/)?.[0])).toEqual(["text-mission-done", "text-mission-failed"]);
+    // A result is followed by `›`, a name is not.
+    expect(["cause", "look"].map((key) => card(map, key).querySelectorAll("[data-node-line='result'] svg").length)).toEqual([2, 1]);
     // No branch line on a node that changes no code, and its result is in the card's name.
     expect(card(map, "cause").querySelector("[data-node-line='branch']")).toBeNull();
     expect(card(map, "fail").getAttribute("aria-label")).toContain("Failed 5/7");
@@ -966,8 +979,9 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     // A connection picks its node.
     await act(async () => (panel.querySelector('[data-panel-link="verify"]') as HTMLElement).click());
     expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("verify");
-    // A kind other than a change leads the facts line.
-    expect(map.q('[data-mission-detail="verify"] [data-panel-meta] [data-panel-kind]')?.textContent).toBe("Verify");
+    // A kind other than a change leads the facts line, a general node by its preset's icon and name (PRD node-presets D-08).
+    const kind = map.q('[data-mission-detail="verify"] [data-panel-meta] [data-panel-kind]');
+    expect([kind?.textContent, kind?.dataset.panelPreset, kind?.querySelector("svg") != null]).toEqual(["Verify", "verify", true]);
     await act(async () => (map.q('[data-panel-link="engine"]') as HTMLElement).click());
     const back = map.q('[data-mission-detail="engine"]')!;
     expect(back.querySelector('[data-panel-part="head"] [data-node-pr-card]')).not.toBeNull();

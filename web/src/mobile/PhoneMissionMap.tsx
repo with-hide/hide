@@ -4,14 +4,14 @@ import { agentProductName } from "../agentAdapters";
 import { useMinuteClock } from "../components/elapsed";
 import { OperatorBand } from "../components/mission-gate";
 import { MissionGraphCard, MissionGraphReport } from "../components/mission-graph-card";
-import { BranchLineView, ResultLineView } from "../components/mission-line";
+import { BranchLineView, ResultLineView, WaitingMark } from "../components/mission-line";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, nodeKindWord, nodeLook, openAttention } from "../missions";
+import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, nodeLook, openAttention } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { phoneLineNode, workerOf } from "./missionModel";
@@ -59,7 +59,7 @@ export function PhoneMissionMap({ mission }: { mission: PhoneMission }) {
  * right under it the operator's band, the gate's strip and a merge that is
  * theirs now; its worker's mark and name; why it waits, when it does; and its
  * bottom line under a hairline, the desktop's branch line without the branch
- * name (the frame carries none) or a research or verify step's kind, then
+ * name (the frame carries none) or a general step's preset icon and name, then
  * `내 차례` at its first row's end when the step waits on the operator for more than its merge. The
  * model, the time, the steps bar and a finished step's conclusion or verdict
  * are not in the frame and are not drawn (`docs/INSTALL.md`). A tap opens the
@@ -101,8 +101,6 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
         node={node} look={look} word={word} yours={mergeDue || turn}
         aria-label={[
           node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, detail,
-          // A general step whose line does not say its preset says it here, as the phone's card always has (PRD node-presets B9).
-          node.kind === "general" && !result ? t(nodeKindWord(node)) : null,
           // The lines are drawn for the eye, so their words and states are said here (B28).
           branch ? `${t("mission.foot.where")}: ${branchLineWords(branch, t)}` : null,
           result ? resultLineWords(result, t) : null,
@@ -114,6 +112,10 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
       >
         <OperatorBand gate={gate} mergeDue={mergeDue} />
         {gate?.state === "passed" && gate.via ? <span className="text-caption text-muted-foreground" data-phone-node-gate-via={gate.via}>{t(`mission.gate.via.${gate.via}`)}{gate.said ? ` · “${gate.said}”` : ""}</span> : null}
+        {/* A waiting step has no worker and says `⏳ 기다림` in its place, as the desktop's card does (PRD node-presets D-13). */}
+        {node.kind === "external" ? (
+          <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run="waiting"><WaitingMark /></span>
+        ) : null}
         {node.worker_agent ? (
           <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run="worker">
             <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={node.worker_agent} /></span>
@@ -122,10 +124,10 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
         ) : null}
         {detail ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
         {branch || result || marks ? (
-          <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center gap-x-xs")} data-node-foot="true">
+          <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
             {branch ? <BranchLineView line={branch} end={marks} /> : (
               <>
-                {result ? <ResultLineView line={result} className="flex-1" /> : <span className="flex-1" />}
+                {result ? <ResultLineView line={result} className="flex-1" /> : null}
                 {marks}
               </>
             )}

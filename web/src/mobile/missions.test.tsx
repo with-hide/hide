@@ -575,6 +575,9 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     node("look", "done", { kind: "general", preset: "research", delivery: null, worker_agent: "codex" }),
     node("check", "working", { kind: "general", preset: "verify", delivery: null }),
     node("tidy", "planned", { delivery: "direct" }),
+    node("ship", "planned", { kind: "general", preset: "deploy", delivery: null, worker_agent: null, depends_on: ["docs"], gate: { state: "open", look: "Fine to ship", when: "start", ask: 2, since_unix_ms: 1, long_wait_at_unix_ms: null, via: null, said: null } }),
+    node("store", "planned", { kind: "general", preset: "deploy", delivery: null, worker_agent: null, depends_on: ["db"], gate: { state: "ahead", look: "Fine to submit", when: "start", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: null, said: null } }),
+    node("copy", "done", { kind: "general", preset: null, delivery: null }),
   ] })]);
   try {
     await click('[data-phone-tab="missions"]');
@@ -595,11 +598,18 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     expect(cardOf(container, "stack").name).toContain("Where it goes: #35 → PR 31");
     expect(cardOf(container, "docs")).toMatchObject({ mark: "merged", text: "→feat/login· No PR" });
     // An outside pull request ends bold in its own base; an outside branch names the branch it watches, which the frame carries.
-    expect(cardOf(container, "sdk")).toMatchObject({ worker: null, mark: "mergeable", text: "↗#77→main", bold: true });
-    expect(cardOf(container, "lib")).toMatchObject({ mark: "branch", text: "↗ feat/lib→feat/login", bold: false });
-    // Research and verify end in their kind: the conclusion and verdict are not in the phone's frame.
+    // A waiting step says `⏳ 기다림` where a worker would be (PRD node-presets D-13, B12).
+    expect(cardOf(container, "sdk")).toMatchObject({ worker: "Waiting", mark: "mergeable", text: "↗#77→main", bold: true });
+    expect(cardOf(container, "lib")).toMatchObject({ worker: "Waiting", mark: "branch", text: "↗ feat/lib→feat/login", bold: false });
+    // A general step ends in its preset's icon and name, done or not: the result line and verdict are not in the phone's frame (PRD node-presets B10).
     expect(cardOf(container, "look")).toMatchObject({ worker: "Codex", line: "result", mark: "research", text: "Research" });
     expect(cardOf(container, "check")).toMatchObject({ line: "result", mark: "verify", text: "Verify" });
+    expect(cardOf(container, "copy")).toMatchObject({ line: "result", mark: "general", text: "General" });
+    // A deploy step's start gate: the faint band while what it waits on works, the band and the operator's turn once it asks (B3, B10).
+    expect(cardOf(container, "store")).toMatchObject({ band: "Fine to submit", mark: "deploy", text: "Deploy", yours: false, tag: null });
+    expect(container.querySelector<HTMLElement>('[data-mission-node="store"] [data-node-gate]')?.dataset.nodeGate).toBe("ahead");
+    expect(cardOf(container, "ship")).toMatchObject({ band: "Fine to ship", mark: "deploy", text: "Deploy", yours: true });
+    expect([container.querySelector<HTMLElement>('[data-mission-node="ship"] [data-node-gate]')?.dataset.nodeGate, cardOf(container, "ship").tag]).toEqual(["open", "Needs you"]);
     // A planned step says how it will go: `No PR` to the destination, faint, and the card no time or steps.
     expect(cardOf(container, "tidy")).toMatchObject({ mark: "plan_direct", text: "No PR→feat/login" });
     expect(container.querySelector("[data-node-steps], [data-node-took], [data-node-model]")).toBeNull();

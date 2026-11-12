@@ -6,14 +6,15 @@
 // `[icon] #n <branch> → <destination>`: the icon is its pull request's state
 // as the PR list draws it (`PR_LOOK`), a grey branch before one, faint while
 // the node is only planned; the operator's merge is a person before the
-// destination. A node that changes no code (`research`, `verify`) ends in its
-// result line: its kind until it is done, then the conclusion or the
-// verdict. Every value comes from the core; a branch or destination it did
+// destination. A general node, which changes no code, ends in its result
+// line: its preset's icon and name until it is done, then its result line or
+// its verdict (PRD node-presets D-08). Every value comes from the core; a branch or destination it did
 // not send is left out, never named (B60).
 
 import type { TFunction } from "i18next";
+import { nodeKindWord } from "./missions";
 import { PR_LOOK } from "./prMark";
-import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionOutside, MissionVerdict, PrState } from "./snapshot";
+import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, PrState } from "./snapshot";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
 export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
@@ -30,7 +31,7 @@ export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr
   pr_more?: number;
   /** Where an outside node's work goes and how its pull request stands; absent from a core before it. */
   outside?: MissionOutside | null;
-  /** A finished node's conclusion or verify line, and a verify node's verdict; absent where the frame carries none. */
+  /** A finished general node's result line and its verdict; absent where the frame carries none. */
   line?: string | null;
   verdict?: MissionVerdict | null;
   checks?: { passed: number; total: number } | null;
@@ -116,26 +117,27 @@ function branchTo(branch: string | null, destination: string | null): LineTo | n
 }
 
 /**
- * A node that changes no code (D-54): its kind until it is done, the icon
- * lit while it works; done, research's conclusion line itself and a verify
- * node's verdict with its checks, or its line when it has no verdict.
+ * A general node's line (PRD node-presets D-08, B1, B2, B5): its preset's
+ * icon, and its preset's name until it is done; done, the result line itself,
+ * or the verdict with its checks when one was recorded, whatever the preset.
+ * The icon's tone follows the card (v4): grey while planned, blue while
+ * worked, green done, red on a failed verdict.
  */
-export type ResultLine = { kind: "research" | "verify"; working: boolean } & (
+export type ResultTone = "planned" | "working" | "done" | "failed";
+export type ResultLine = { preset: MissionNodePreset | null; tone: ResultTone } & (
   | { shows: "kind" }
   | { shows: "conclusion"; line: string }
   | { shows: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
 );
 
 export function resultLine(node: LineNode): ResultLine | null {
-  // A general node of the research or verify preset; another general node's line is the next node's (PRD node-presets).
-  const kind = node.kind === "general" ? node.preset : null;
-  if (kind !== "research" && kind !== "verify") return null;
-  const base = { kind, working: node.status === "working" };
-  if (node.status === "done") {
-    if (kind === "verify" && node.verdict) return { ...base, shows: "verdict", verdict: node.verdict, checks: node.checks ?? null };
-    if (node.line) return { ...base, shows: "conclusion", line: node.line };
-  }
-  return { ...base, shows: "kind" };
+  if (node.kind !== "general") return null;
+  const preset = node.preset ?? null;
+  const done = node.status === "done";
+  if (done && node.verdict) return { preset, tone: node.verdict === "fail" ? "failed" : "done", shows: "verdict", verdict: node.verdict, checks: node.checks ?? null };
+  const tone: ResultTone = done ? "done" : node.status === "working" ? "working" : "planned";
+  if (done && node.line) return { preset, tone, shows: "conclusion", line: node.line };
+  return { preset, tone, shows: "kind" };
 }
 
 /** The branch line's destination as drawn: the branch, or a stack's number beside its pull request's mark (D-57). */
@@ -170,7 +172,7 @@ export function branchLineWords(line: BranchLine, t: TFunction<"translation">): 
 export function resultLineWords(line: ResultLine, t: TFunction<"translation">): string {
   switch (line.shows) {
     case "kind":
-      return t(line.kind === "research" ? "mission.foot.research" : "mission.foot.verify");
+      return t(nodeKindWord({ kind: "general", preset: line.preset }));
     case "conclusion":
       return line.line;
     case "verdict":
