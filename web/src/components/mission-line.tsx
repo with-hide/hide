@@ -42,37 +42,48 @@ export function BranchLineView({ line, className }: { line: BranchLine; classNam
   // A direct change's `PR 없이` follows the destination's name, or the branch when there is none, and never gives way.
   const direct = (after: boolean) => (line.direct ? <span className="shrink-0 font-normal text-muted-foreground" data-line-direct="true">{after ? "· " : ""}{t("mission.foot.planDirect")}</span> : null);
   const from = plan != null || line.branch != null || (line.direct && line.to == null);
-  return (
-    <span aria-hidden="true" className={cn("flex min-w-0 items-center text-caption text-muted-foreground", line.pr ? "flex-wrap gap-x-xs" : "gap-x-xxs", className)} data-node-line="branch" data-line-mark={line.mark} data-line-person={line.person ?? undefined}>
-      <span className="flex shrink-0 items-center gap-xxs" data-line-head="true">
-        <Icon className={cn("size-(--size-icon-sm)", tone)} data-line-icon={line.mark} />
-        {line.pr ? <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span> : null}
+  const icon = <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />;
+  const path = (
+    // Where the branch and the destination do not both fit, a grid of auto columns grows them from zero alike, each frozen
+    // at its whole width, so a name shorter than half the row stays whole and two long ones share it.
+    <span className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", line.pr ? "inline-grid h-lh align-top" : "grid")} data-line-path="true">
+      {from ? (
+        <span className="flex min-w-0 items-center gap-xxs" data-line-from="true">
+          {plan ? <span className="min-w-0 truncate" data-line-plan={line.plan}>{plan}</span> : null}
+          {line.branch ? (
+            <span className="min-w-0 truncate" title={line.branch.name} data-line-branch={line.branch.name}>
+              {line.branch.outside ? "↗ " : ""}
+              {line.branch.name}
+            </span>
+          ) : null}
+          {line.to ? null : direct(line.branch != null)}
+        </span>
+      ) : null}
+      {line.to ? (
+        <span className={cn("flex min-w-0 items-center gap-xxs", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
+          <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
+          {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
+          <span className="min-w-0 truncate" title={lineToLabel(line.to)}>{lineToLabel(line.to)}</span>
+          {direct(true)}
+        </span>
+      ) : null}
+    </span>
+  );
+  const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined };
+  // A numbered line runs inline, so the path wraps whole to a second row under the number and that row, below the foot's
+  // right-end marks, takes the card's whole width; a line without a number is one flex row that never wraps.
+  return line.pr ? (
+    <span aria-hidden="true" className={cn("block min-w-0 text-caption text-muted-foreground", className)} {...data}>
+      <span className="mr-xs inline-flex h-lh items-center gap-xxs align-top" data-line-head="true">
+        {icon}
+        <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span>
       </span>
-      {/* Wraps whole under the number when it does not fit beside it, and a line without a number never wraps. Where the
-          branch and the destination do not both fit, a grid of auto columns grows them from zero alike, each frozen at its
-          whole width, so a name shorter than half the row stays whole and two long ones share it. */}
-      <span className="grid min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs" data-line-path="true">
-        {from ? (
-          <span className="flex min-w-0 items-center gap-xxs" data-line-from="true">
-            {plan ? <span className="min-w-0 truncate" data-line-plan={line.plan}>{plan}</span> : null}
-            {line.branch ? (
-              <span className="min-w-0 truncate" title={line.branch.name} data-line-branch={line.branch.name}>
-                {line.branch.outside ? "↗ " : ""}
-                {line.branch.name}
-              </span>
-            ) : null}
-            {line.to ? null : direct(line.branch != null)}
-          </span>
-        ) : null}
-        {line.to ? (
-          <span className={cn("flex min-w-0 items-center gap-xxs", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
-            <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
-            {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
-            <span className="min-w-0 truncate" title={lineToLabel(line.to)}>{lineToLabel(line.to)}</span>
-            {direct(true)}
-          </span>
-        ) : null}
-      </span>
+      {path}
+    </span>
+  ) : (
+    <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-x-xxs text-caption text-muted-foreground", className)} {...data}>
+      <span className="flex h-lh shrink-0 items-center" data-line-head="true">{icon}</span>
+      {path}
     </span>
   );
 }

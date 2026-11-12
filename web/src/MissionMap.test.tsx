@@ -554,8 +554,8 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     expect(card(map, "core").querySelector("[data-node-foot]")?.className).toContain("border-t");
     // The branch line's icon is the PR list's: its shape and colour by the same state.
     expect(card(map, "api").querySelector("[data-line-icon]")?.getAttribute("class")).toContain("text-pr-merged");
-    // `!` keeps the row's right end after the line.
-    expect((card(map, "asked").querySelector("[data-node-foot]")!.lastElementChild as HTMLElement).dataset.nodeAttentionTag).toBe("worker_ended");
+    // `!` keeps the row's right end, in the group that floats beside the line's first row (D-56).
+    expect(card(map, "asked").querySelector("[data-node-foot] > [data-node-foot-end] [data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("worker_ended");
     // The line is drawn for the eye; the card's name says it, the pull request's state in words, never only a colour (B55).
     expect(card(map, "core").getAttribute("aria-label")).toBe(`제안 core: 기록·공책·점수·반영 · In progress · opus·high (planned) · PR ${"#"}1703 · PR ${"#"}1704 · Where it goes: ${"#"}1704 +1 → main`);
     expect(card(map, "launched").getAttribute("aria-label")).toMatch(new RegExp(`^Node launched · In progress · Opus 5\\.5·high · PR ${"#"}1910 · Where it goes: ${"#"}1910 → main · CI running or review pending · Needs a look · Conductor · `));
