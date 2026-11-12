@@ -610,6 +610,7 @@ it("names no branch or destination it was not sent, and tags no mission whose st
       node("db", "done", { pr: 33, pr_state: "mergeable", merge: { by: "operator", state: "due", why: "DB review", prs: [33] }, landing: { state: "left", action: "merge" } }),
       node("docs", "working", { delivery: "direct" }),
       node("sdk", "working", { kind: "external", delivery: null, pr: 77 }),
+      node("ext", "working", { kind: "external", delivery: null }),
     ] }),
     mission("m-look", { destination: "feat/login", nodes: [node("look", "working", { kind: "research", delivery: null }), node("check", "planned", { kind: "verify", delivery: null })] }),
   ]);
@@ -622,6 +623,8 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     expect(cardOf(container, "docs")).toMatchObject({ mark: "branch", text: "· No PR", to: null });
     // An outside step whose watch was not sent still names the pull request the frame carries.
     expect(cardOf(container, "sdk")).toMatchObject({ text: "↗#77", to: null });
+    // One sent with nothing it watches has no line at all, rather than a mark that names nothing.
+    expect(cardOf(container, "ext")).toMatchObject({ line: null, hairline: false });
     await click('[data-phone-back="missions"]');
     await click('[data-phone-mission="m-look"]');
     expect(container.querySelector("[data-phone-mission-map]")).not.toBeNull();

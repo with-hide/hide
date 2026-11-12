@@ -75,7 +75,8 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   // A merge the core says is the operator's now is the band's (D-53); one ahead or done is the person on the branch line.
   const mergeDue = node.merge?.state === "due";
   const line = useMemo(() => phoneLineNode(node), [node]);
-  const branch = useMemo(() => branchLine(line, mission.destination ?? null), [line, mission.destination]);
+  // An outside step a Mac before destinations sent with nothing it watches has no line: a lone mark would say nothing (B60).
+  const branch = useMemo(() => line.kind === "external" && !line.external ? null : branchLine(line, mission.destination ?? null), [line, mission.destination]);
   const result = branch ? null : resultLine(line);
   // `내 차례` at the line's end says the step waits on the operator for something the band and line do not: a gate reached, a raised reason, a decision or the worker's turn.
   const turn = gate?.state === "open" || attention?.to === "operator" || reason?.kind === "decision" || reason?.kind === "worker";
