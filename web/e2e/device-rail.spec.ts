@@ -117,7 +117,8 @@ test("the rail follows the registered devices; a device that cannot be reached i
     const contentBox = (await page.locator("[data-sidebar-content]").boundingBox())!;
     const sidebarBox = (await sidebar.boundingBox())!;
     expect(Math.round(railBox.width)).toBe(48);
-    expect(Math.round(contentBox.width)).toBe(292);
+    // The sidebar's right hairline is the column's own edge, inside the stored width.
+    expect(Math.round(contentBox.width)).toBe(292 - 1);
     expect(Math.round(sidebarBox.width)).toBe(48 + 292);
     expect(Math.round(railBox.x)).toBe(Math.round(sidebarBox.x));
     expect(Math.round(railBox.y)).toBe(Math.round(sidebarBox.y));

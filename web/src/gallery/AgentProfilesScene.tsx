@@ -170,7 +170,7 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
             { kind: "opencode", profile: "default", name: null, version: null, left: null },
           ];
       return (
-        <div className="flex w-(--size-search-sheet-w) max-w-full flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg" data-start-panel-mock="true">
+        <div className="flex w-(--size-search-sheet-w) max-w-full flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-hover)] [--secondary:var(--dialog-raised)] shadow-modal" data-start-panel-mock="true">
           <div className="px-sm pt-sm text-caption text-subtle-foreground">blog › main</div>
           <Textarea bare className="field-sizing-content min-h-(--size-control-lg) px-md pt-xs pb-sm" placeholder={t("shell.instructionPrompt")} />
           <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm">

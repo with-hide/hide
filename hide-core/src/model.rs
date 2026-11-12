@@ -11365,6 +11365,11 @@ mod wire_enum_tests {
             SshProblem::NameNotFound,
             SshProblem::Unreachable,
             SshProblem::ProxyFailed,
+            SshProblem::SilentEnd,
+            SshProblem::SilentTimeout,
+            SshProblem::ConfigUnreadable,
+            SshProblem::CheckFailed,
+            SshProblem::Busy,
             SshProblem::Unclassified,
         ] {
             assert_eq!(row(problem), "cannot_connect", "{problem:?}");

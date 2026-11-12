@@ -30,13 +30,13 @@ function SheetContent({
   const returnFocus = useReturnFocus(true, returnFocusTo ? { target: returnFocusTo, within: () => surface.current } : undefined);
   return (
     <SheetPrimitive.Portal>
-      <SheetPrimitive.Overlay data-slot="sheet-overlay" className="fixed inset-0 z-50 bg-background opacity-(--opacity-dimmed)" />
+      <SheetPrimitive.Overlay data-slot="sheet-overlay" className="fixed inset-0 z-50 bg-scrim" />
       <SheetPrimitive.Content
         ref={surface}
         data-slot="sheet-content"
         data-side={side}
         className={cn(
-          "fixed z-50 flex flex-col bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg outline-none",
+          "fixed z-50 flex flex-col bg-dialog text-body text-popover-foreground [--accent:var(--dialog-hover)] [--secondary:var(--dialog-raised)] shadow-modal outline-none",
           side === "right" && "inset-y-0 right-0 w-(--size-panel-ideal) max-w-full border-l border-border",
           side === "left" && "inset-y-0 left-0 w-(--size-panel-ideal) max-w-full border-r border-border",
           side === "top" && "inset-x-0 top-0 h-auto border-b border-border",

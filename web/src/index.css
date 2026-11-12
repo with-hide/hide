@@ -313,3 +313,40 @@ html[data-view-drag="row-resize"] * {
 [data-project-list] {
   scroll-padding-top: var(--size-sidebar-section-header);
 }
+
+/* A container tinted with a status colour: the secondary and outline buttons
+   inside it take a fill of that colour instead of grey, and lose their
+   stroke, so the container's own edge is the only line (DESIGN_GUIDE.md,
+   Tinted containers). */
+@utility tone-hold { --tone: var(--mission-hold); @apply tone-fill; }
+@utility tone-warning { --tone: var(--warning); @apply tone-fill; }
+@utility tone-success { --tone: var(--success); @apply tone-fill; }
+@utility tone-destructive { --tone: var(--destructive); @apply tone-fill; }
+@utility tone-fill {
+  --secondary: color-mix(in srgb, var(--tone) calc(var(--opacity-selected-fill) * 100%), transparent);
+  --accent: color-mix(in srgb, var(--tone) calc(var(--opacity-emphasis-fill) * 100%), transparent);
+  & :is([data-variant="secondary"], [data-variant="outline"]):not(.border-dashed) { border-color: transparent; }
+}
+
+/* The chosen item of a segmented control: lifted white in Light; in Dark a shadow reads as a stroke and the raised gray sits too close to the track, so it is a stronger foreground tint with no shadow. */
+@utility segment-on {
+  &, &:hover {
+    background-color: var(--raised);
+    color: var(--foreground);
+    box-shadow: var(--shadow-raised);
+  }
+  .dark &, .dark &:hover {
+    background-color: color-mix(in srgb, var(--foreground) calc(var(--opacity-emphasis-fill) * 100%), transparent);
+    box-shadow: none;
+  }
+}
+
+/* A status mark beside a count: sized to the count's letters rather than to a row's title, so the mark does not outweigh its number. */
+@utility mark-with-count {
+  --size-agent-mark: 0.85em;
+}
+
+/* A line icon drawn filled outweighs the outline icons around it at the same size, so it shrinks a little about its centre inside the same box. */
+@layer components {
+  svg.lucide.fill-current { scale: 0.85; }
+}

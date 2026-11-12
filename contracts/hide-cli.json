@@ -4215,6 +4215,7 @@
                 "agent_pane_required",
                 "caller_identity_conflict",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4255,6 +4256,7 @@
                 "human_place_too_long",
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4279,6 +4281,7 @@
             "refusals": [
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -5161,7 +5164,8 @@
                 "composer_unconfirmed",
                 "force_target_asleep",
                 "intent_conflict",
-                "no_parent"
+                "no_parent",
+                "participant_registering"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6000,6 +6004,10 @@
                 "mission_node_unknown",
                 "mission_criterion_unknown",
                 "mission_criterion_not_yours",
+                "participant_session_changed",
+                "participant_registering",
+                "participant_unavailable",
+                "ledger_unavailable",
                 "mission_ambiguous",
                 "mission_commit_required",
                 "mission_rerun_spent",
@@ -6672,7 +6680,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a7b819bda852b9bb4cbc1e50fcc86878f665dafed241ed1d2d6b2481eda1fd45",
+    "digest": "sha256:d771a99207c24bde61cc31d6a671e37f39b1bbf6f50976b075f10d7ed8188314",
     "envelopes": {
         "agent": {
             "answer": "value",

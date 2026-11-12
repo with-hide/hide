@@ -299,16 +299,16 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
       data-desk-job-selected={selected ? "true" : undefined}
     >
       {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" hover={false} aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
-      <div className={cn("pointer-events-none relative flex min-w-0 flex-col gap-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
+      {/* The lead marks take their own column, so the line under the title starts where the title does. */}
+      <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-sm gap-y-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
+        <span className="flex shrink-0 items-center gap-xs"><JobLead job={job} /></span>
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <JobLead job={job} />
           <span className="min-w-0 flex-1 truncate font-medium text-foreground">{job.title}</span>
           <span className="pointer-events-auto relative flex shrink-0 items-center gap-xxs">
             <JobChip job={job} selectedOutput={selectedOutput} onOutput={actions.onOutput} onMission={actions.onMission} />
           </span>
         </div>
-        <div className="flex min-w-0 items-center gap-xs">
-          <span aria-hidden="true" className="w-(--size-agent-mark) shrink-0" />
+        <div className="col-start-2 flex min-w-0 items-center gap-xs">
           <JobLine job={job} className="flex-1" />
           {action(t, job, actions)}
         </div>

@@ -259,11 +259,11 @@ function Table({ groups, empty, filtered, connected, projectLabel, actions }: {
   return (
     <div
       ref={scroller}
-      className="min-h-0 flex-1 overflow-y-auto px-lg pb-lg"
+      className="min-h-0 flex-1 overflow-y-auto pb-lg"
       onScroll={(event) => useUiStore.getState().setMissions({ scroll: event.currentTarget.scrollTop })}
       data-mission-screen-state="table"
     >
-      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border bg-background py-xs text-caption text-muted-foreground")} aria-hidden="true">
+      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border/60 bg-background px-[calc(var(--spacing-lg)+var(--spacing-xs))] py-xs text-caption text-muted-foreground")} aria-hidden="true">
         <span>{t("missionScreen.col.mission")}</span>
         <span className="hidden missions-split:block">{t("missionScreen.col.project")}</span>
         <span>{t("missionScreen.col.steps")}</span>
@@ -299,8 +299,8 @@ function TableGroup({ group, entries, connected, projectLabel, actions }: { grou
   const all = useUiStore((s) => s.missions.closedAll);
   const rows = group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries;
   return (
-    <section className="flex min-w-0 flex-col pt-md" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
-      <GroupHead group={group} count={entries.length} className="pb-xxs" />
+    <section className="flex min-w-0 flex-col border-t border-border/60 px-lg pt-md pb-sm first-of-type:border-t-0" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
+      <GroupHead group={group} count={entries.length} className="px-xs pb-xs" />
       {rows.map((entry) => <TableRow key={entry.mission.id} entry={entry} connected={connected} project={projectLabel(entry.mission.workspace_id)} actions={actions} />)}
     </section>
   );
@@ -313,15 +313,18 @@ function TableGroup({ group, entries, connected, projectLabel, actions }: { grou
  * the rest of the row opens it. A device that does not answer dims the row
  * and holds its actions.
  */
+/** A row's action keeps the line's height so it never outgrows the line it sits in, and keeps a button's square corners and outline so it never reads as the row's state pill. */
+const TABLE_ACTION = "-my-px h-auto rounded-xs px-xs text-caption leading-normal";
+
 function TableRow({ entry, connected, project, actions }: { entry: MissionEntry; connected: boolean; project: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { mission, group, turn } = entry;
   const closed = group === "closed";
   const stale = mission.stale || !connected;
   return (
-    <div className={cn("relative min-w-0 rounded-xs py-xs", TABLE_COLUMNS, stale && "opacity-(--opacity-dimmed)")} data-mission-row={mission.id} data-mission-row-group={group} data-mission-row-stale={stale || undefined}>
+    <div className={cn("relative min-w-0 rounded-xs px-xs py-xs", TABLE_COLUMNS, stale && "opacity-(--opacity-dimmed)")} data-mission-row={mission.id} data-mission-row-group={group} data-mission-row-stale={stale || undefined}>
       <RowOverlayButton aria-label={t("missionScreen.open", { title: mission.title })} onClick={() => actions.showMissionOnScreen(mission.id)} />
-      <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs pl-xs">
+      <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs">
         <span className="flex min-w-0 items-center gap-xs">
           <MissionNumber mission={mission} className="text-caption" />
           {closed ? <ClosedMark mission={mission} /> : <Pill mission={mission} turn={turn[0] ?? null} />}
@@ -330,7 +333,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
         {closed ? null : (
           <span className="flex min-w-0 items-center gap-xs">
             <RowLine mission={mission} turn={turn[0] ?? null} />
-            {turn[0]?.kind === "takeover" ? <span className={cn("ml-auto shrink-0", stale ? "pointer-events-none" : "pointer-events-auto")}><MissionTakeOver mission={mission} actions={actions} disabled={stale} /></span> : null}
+            {turn[0]?.kind === "takeover" ? <span className={cn("shrink-0", stale ? "pointer-events-none" : "pointer-events-auto")}><MissionTakeOver mission={mission} actions={actions} disabled={stale} className={TABLE_ACTION} /></span> : null}
           </span>
         )}
       </span>
@@ -507,7 +510,7 @@ function List({ groups, selected, connected, actions }: { groups: { group: Missi
     >
       {groups.map(({ group, entries }) => (
         <section key={group} className="flex min-w-0 flex-col pt-sm" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group}>
-          <GroupHead group={group} count={entries.length} className="px-xs pb-xxs" />
+          <GroupHead group={group} count={entries.length} className="px-sm pb-xxs" />
           {(group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries).map((entry) => (
             <ListRow key={entry.mission.id} entry={entry} selected={entry.mission.id === selected} connected={connected} actions={actions} />
           ))}
@@ -525,7 +528,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
     <RowButton
       aria-label={t("missionScreen.open", { title: mission.title })}
       aria-current={selected ? "true" : undefined}
-      className={cn("flex-col items-stretch gap-xxs", selected && "bg-selected hover:bg-selected", stale && "opacity-(--opacity-dimmed)")}
+      className={cn("flex-col items-stretch gap-xxs px-sm py-sm", selected && "bg-selected hover:bg-selected", stale && "opacity-(--opacity-dimmed)")}
       onClick={() => actions.showMissionOnScreen(mission.id)}
       data-mission-list-row={mission.id}
       data-selected={selected ? "true" : undefined}
@@ -536,7 +539,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>
       {group !== "closed" && ((group === "turn" && turn[0]) || mission.nodes.length > 0) ? (
-        <span className="flex min-w-0 items-center gap-xs pl-(--size-icon-sm)">
+        <span className="flex min-w-0 items-center gap-xs pl-[calc(var(--size-icon-sm)+var(--spacing-xs))]">
           {group === "turn" && turn[0] ? (
             <span className="min-w-0 flex-1 truncate text-caption text-mission-hold">{t(missionPillKey(mission, turn[0]))}</span>
           ) : (

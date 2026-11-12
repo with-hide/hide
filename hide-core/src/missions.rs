@@ -398,9 +398,9 @@ pub enum AttentionReason {
     /// The node could start, nothing holds it, and it was not started
     /// (`mission_health::stall_acts`).
     NotStarted,
-    /// A warning its Conductor was sent stood with nothing moving
-    /// (`mission_health::stall_acts`): raised to the Conductor as every
-    /// other stall is.
+    /// A no-push or stopped warning its Conductor was sent stood with
+    /// nothing moving (`mission_health::stall_acts`, `WarningKind::stalls`):
+    /// raised to the Conductor as every other stall is.
     WarningStood,
     /// The node's pull request waited on CI, a review or the merge for longer
     /// than any of those takes (`mission_health::stall_acts`).
@@ -579,6 +579,17 @@ impl WarningKind {
             Self::NoPush => "no_push",
             Self::Stopped => "stopped",
         }
+    }
+
+    /// Whether the warning, still standing after its letter, is raised as a
+    /// stall (`warning_stood`): the one rule raising and keeping that stall
+    /// read. A warning the worker's own move takes off (a push, the stopped
+    /// worker at work again) stands only while no move came. A failed review
+    /// goes only once a review passes, which a worker fixing the findings
+    /// does not reach for a whole round, so standing says nothing of a move:
+    /// it stays the Conductor's warning and never reaches the operator.
+    pub fn stalls(self) -> bool {
+        !matches!(self, Self::ReviewFails)
     }
 }
 
@@ -3838,6 +3849,18 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_criterion_not_yours" => {
             "Record only your own lines: a worker its node's own lines, check command and defects, a checker its review or verification; Hide records the CI, and the Conductor can only skip"
+        }
+        "participant_session_changed" => {
+            "Your pane's registration belongs to an earlier agent session than the one running in it now, so this session cannot record the line: tell your Conductor, who starts a new agent for the line with hide agent spawn and a new intent and binds the id it answers"
+        }
+        "participant_registering" => {
+            "The spawn that started you is still registering you: run the same record again in a few seconds"
+        }
+        "participant_unavailable" => {
+            "Your pane has no registration: tell your Conductor, who starts the line's agent with hide agent spawn until it answers an agent id and binds that one"
+        }
+        "ledger_unavailable" => {
+            "Stop and tell the operator: Hide could not read its agent ledger (the reason is in Hide's diagnostic log); retry once Hide reads it again"
         }
         "mission_commit_required" => {
             "Give --commit <sha>: the commit the check command ran on, or the head of the pull request a review or verification read (git rev-parse HEAD in the worktree it read)"

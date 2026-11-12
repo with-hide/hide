@@ -6241,6 +6241,97 @@ fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
     path
 }
 
+/// A delegated session's turn end tells the judgment the session is
+/// delegated, and of the questions it lists the ledger is handed the one
+/// whose sentence is in the turn's answer, the one for the parent folded,
+/// and never one quoted from the answer before the turn's request.
+#[test]
+fn a_delegated_turn_end_keeps_only_questions_its_own_answer_asks() {
+    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    let harness = Harness::new();
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (mut worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    client.prime_context_for_test(
+        SessionIdentity {
+            device_id: LOCAL_TARGET.into(),
+            agent: "claude".into(),
+            session_id: "native-a".into(),
+        },
+        LedgerContext {
+            parent_name: Some("agent-7".into()),
+            ..Default::default()
+        },
+    );
+    let path = later_session(
+        &harness,
+        &[
+            ("user", "모바일 출시 설정 PR 맡아줘"),
+            ("assistant", "앞 답변의 질문: 설정을 따로 낼까요?"),
+            ("user", "계속 진행해"),
+            (
+                "assistant",
+                "PR을 올렸습니다.\n- **배포:** 지금 배포할까요?\n- 127번 칩을 하나로 줄일지 알려 주세요.",
+            ),
+        ],
+    );
+    let ask = |quote: &str, to: &str| {
+        json!({"kind": "ask", "text": quote, "same_as": null, "quote": quote,
+            "ask_type": "decision", "addressed_to": to})
+    };
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "모바일 출시 설정 PR", "goal_update": "replace", "line": "배포 여부 결정", "end": "question",
+        "work": {"missed": [
+            ask("배포: 지금 배포할까요?", "operator"),
+            ask("설정을 따로 낼까요?", "operator"),
+            ask("127번 칩을 하나로 줄일지 알려 주세요.", "parent"),
+        ], "resolved": [], "artifacts": []},
+    }));
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+    let input = harness
+        .backend
+        .inputs
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap();
+    assert!(
+        input.starts_with("<raw-session-events>\n<session-role>delegated:"),
+        "{input}"
+    );
+    let missed: Vec<(String, bool)> = client
+        .ledger_updates_for_test()
+        .into_iter()
+        .find_map(|update| match update {
+            LedgerUpdate::TurnEnd { judgment, .. } => Some(judgment.missed),
+            _ => None,
+        })
+        .unwrap()
+        .into_iter()
+        .map(|line| (line.text, line.to_parent))
+        .collect();
+    assert_eq!(
+        missed,
+        [
+            ("배포: 지금 배포할까요?".to_owned(), false),
+            ("127번 칩을 하나로 줄일지 알려 주세요.".to_owned(), true),
+        ]
+    );
+}
+
 /// B12: a parent's reply or request letter answers what its delegated
 /// session asked; its progress letter and a sibling's reply do not. The
 /// doorbell shows a writer on its line by the name a person knows it by,

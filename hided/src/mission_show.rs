@@ -107,7 +107,7 @@ fn reason_word(reason: &Value) -> &'static str {
         Some("close_refused") => "작업은 끝났는데 확인 기록이 빠져 미션을 닫지 못함",
         Some("human_gate") => "사람 검토 지점",
         Some("not_started") => "시작할 수 있는데 시작 안 함",
-        Some("warning_stood") => "경고가 풀리지 않고 그대로",
+        Some("warning_stood") => "경고 뒤에도 일꾼이 움직이지 않음",
         Some("wait_stood") => "CI·리뷰·머지를 오래 기다림",
         _ => "확인 필요",
     }

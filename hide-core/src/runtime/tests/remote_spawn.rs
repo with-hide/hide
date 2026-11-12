@@ -1265,10 +1265,10 @@ fn a_spawn_whose_profiles_program_did_not_start_closes_the_tab_it_opened() {
 type Refusal = Arc<Mutex<Option<(&'static str, &'static str)>>>;
 
 /// A spawn's answer time, shortened for one test.
-struct AnswerWait;
+pub(super) struct AnswerWait;
 
 impl AnswerWait {
-    fn set(wait: Duration) -> Self {
+    pub(super) fn set(wait: Duration) -> Self {
         crate::coordination::executor::TEST_ANSWER_WAIT.set(Some(wait));
         Self
     }

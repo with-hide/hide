@@ -12,6 +12,7 @@ import { KindIcon } from "./components/kind-mark";
 import { MissionAskChoices, MissionAskLine, useMissionAsks, useMissionPlace } from "./components/sidebar-mission-row";
 import { missionAskWhat, type MissionAsk } from "./missions";
 import { Button } from "./components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Kbd } from "./components/ui/kbd";
 import { EmptyWelcome } from "./components/empty-welcome";
 import { commandLabel } from "./shortcutLabels";
@@ -429,7 +430,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     ) : <>
       <div className="og-toolbar">
         <div><h2>{t("overviewGraph.title")}</h2></div>
-        <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
+        <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<ToggleGroup type="single" value={mode} onValueChange={(value) => { if (value === "graph" || value === "list") setMode(value); }} aria-label={t("overviewGraph.title")}><ToggleGroupItem value="graph">{t("overviewGraph.graph")}</ToggleGroupItem><ToggleGroupItem value="list">{t("overviewGraph.list")}</ToggleGroupItem></ToggleGroup></div>
       </div>
       <div className="og-filters">
         <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
@@ -500,6 +501,7 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
     </section> : null}
     {waiting.length + missions.length > 0 ? <section className="og-waiting" aria-label={t("overviewGraph.waiting")}>
       <h3>{t("overviewGraph.waiting")} <span>{waiting.length + missions.length}</span></h3>
+      <div className="og-ask-list">
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" title={row.agent.profile ? agentWithProfile(t, row.agent) : undefined} aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
@@ -507,6 +509,7 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
         <Button variant="secondary" size="sm" onClick={() => actions.openAgent(askingPane(row, model))}>{t("overviewGraph.answer")}</Button>
         {row.agent.human_turn ? <HumanTurnDone turn={row.agent.human_turn} actions={actions} /> : null}
       </div>)}
+      </div>
     </section> : null}
   </aside>;
 }
@@ -530,7 +533,7 @@ function OverviewMissionAsks({ deviceId, projectId, actions }: { deviceId: strin
   if (missions.length === 0) return null;
   return <section className="og-waiting og-waiting-alone" aria-label={t("overviewGraph.waiting")} data-graph-mission-asks="true">
     <h3>{t("overviewGraph.waiting")} <span>{missions.length}</span></h3>
-    {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
+    <div className="og-ask-list">{missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}</div>
   </section>;
 }
 
@@ -548,7 +551,7 @@ function SessionPreview({ row, model, actions, openRecord, close, choose }: { ro
   const talks = model.communication.filter((pair) => pair.source === row.id || pair.target === row.id).map((pair) => exchange(pair, row.id)).filter((talk) => rows.has(talk.other));
   const ask = row.agent.state.ask;
   const launch = launchWords(row);
-  return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
+  return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-overlay" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
     <div className="og-details-head"><strong><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
     <p className="og-detail-status"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} />{markWords(t, row.agent)}</p>
     <p className="og-context">{row.project.label} · {row.checkout.branch ?? row.checkout.label}{row.device ? ` · ${row.device}` : ""}</p>

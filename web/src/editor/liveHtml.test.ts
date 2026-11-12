@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { hasVisibleHtml, imageTarget, resolveInCheckout, sanitizeHtml } from "./liveHtml";
+import { hasVisibleHtml, imageTarget, liveLinkAddress, resolveInCheckout, sanitizeHtml } from "./liveHtml";
 
 const base = { docPath: "/work/repo/docs/guide/README.md", root: "/work/repo" };
 
@@ -50,6 +50,17 @@ describe("sanitizeHtml", () => {
   it("leaves the source on screen when nothing visible survives", () => {
     expect(sanitizeHtml("<script>alert(1)</script>")).toBeNull();
     expect(sanitizeHtml("<span></span>")).toBeNull();
+  });
+});
+
+describe("liveLinkAddress", () => {
+  it("keeps the addresses the sanitizer keeps an href by, a relative file among them, and refuses every other scheme", () => {
+    for (const kept of ["https://example.com/x", "http://example.com", "mailto:a@b.c", "#install", "docs/README.md", "../notes.md", "/src/x.ts"]) {
+      expect(liveLinkAddress(` ${kept} `)).toBe(kept);
+    }
+    for (const refused of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "file:///etc/passwd", "data:text/html,x", "vbscript:x", "s3:bucket/key", ""]) {
+      expect(liveLinkAddress(refused)).toBeNull();
+    }
   });
 });
 

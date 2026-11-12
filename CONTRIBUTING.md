@@ -329,7 +329,7 @@ The step's own `timeout-minutes` is only a backstop a few minutes above that bud
 
 The additional gates that drive an installed app or reach an external device are local steps and are not required in CI.
 They are listed under "Local gates" below; every script in `scripts/` is either a required gate above, a local gate there, or a generator named in [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).
-The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs` and `node --test scripts/tests/token-contrast.test.mjs scripts/tests/ui-parts.test.mjs`.
+The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs` and `node --test scripts/tests/token-contrast.test.mjs scripts/tests/gen-tokens.test.mjs scripts/tests/ui-parts.test.mjs`.
 The shared entrypoint checks public web token usage, token contrast, bundled agent marks and raw controls outside the parts through `check-web-tokens.mjs`, `check-token-contrast.mjs`, `check-agent-logos.mjs` and `check-ui-parts.mjs`.
 Public builds and contribution checks require no private repository or design-tool login.
 These are static checks; [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) owns visual review with the production gallery and isolated app captures.
