@@ -113,7 +113,7 @@ test("Sleep after, the issue link and the worktree names live in Agents and Hide
     const idle = page.locator('[data-settings-group="idle-agents"]');
     // A Mac that never chose sleeps idle agents after 12 hours.
     await expect(idle.locator("[data-agent-sleep-after]")).toHaveAttribute("data-agent-sleep-after", "12");
-    await expect(idle).toContainText("0 sleeping now. An agent you delegated to sleeps as soon as it reports back. Working and on-screen agents never sleep, and unread ones wait until you read them.");
+    await expect(idle).toContainText("0 sleeping now. A child agent sleeps as soon as it reports to its parent. Working and on-screen agents never sleep, and unread ones wait until you read them.");
     await idle.locator("[data-agent-sleep-after]").click();
     await page.locator('[data-agent-sleep-option="4"]').click();
     await expect(idle.locator("[data-agent-sleep-after]")).toHaveAttribute("data-agent-sleep-after", "4");

@@ -121,8 +121,8 @@ export const settingsEnglish = {
   "settings.update.prereleaseNote": "Get versions before their stable release. Turning this off won't roll you back to an older version; you'll stay on the one you have until the next stable release.",
   "settings.details": "Details",
   "settings.startingWork": "Starting work",
-  "settings.sleepingNow_one": "{{count}} sleeping now. An agent you delegated to sleeps as soon as it reports back. Working and on-screen agents never sleep, and unread ones wait until you read them.",
-  "settings.sleepingNow_other": "{{count}} sleeping now. An agent you delegated to sleeps as soon as it reports back. Working and on-screen agents never sleep, and unread ones wait until you read them.",
+  "settings.sleepingNow_one": "{{count}} sleeping now. A child agent sleeps as soon as it reports to its parent. Working and on-screen agents never sleep, and unread ones wait until you read them.",
+  "settings.sleepingNow_other": "{{count}} sleeping now. A child agent sleeps as soon as it reports to its parent. Working and on-screen agents never sleep, and unread ones wait until you read them.",
 } as const;
 
 const ko = {
@@ -246,8 +246,8 @@ const ko = {
   "settings.update.prereleaseNote": "정식 출시 전 버전을 먼저 받아요. 끄면 낮은 버전으로 되돌리지 않고, 다음 정식 버전까지 기다려요.",
   "settings.details": "세부 정보",
   "settings.startingWork": "작업 시작",
-  "settings.sleepingNow_one": "지금 {{count}}개가 잠들어 있어요. 일을 맡긴 에이전트는 보고하면 바로 잠들어요. 작업 중이거나 화면에 보이는 에이전트는 잠들지 않고, 읽지 않은 에이전트는 읽을 때까지 기다려요.",
-  "settings.sleepingNow_other": "지금 {{count}}개가 잠들어 있어요. 일을 맡긴 에이전트는 보고하면 바로 잠들어요. 작업 중이거나 화면에 보이는 에이전트는 잠들지 않고, 읽지 않은 에이전트는 읽을 때까지 기다려요.",
+  "settings.sleepingNow_one": "지금 {{count}}개가 잠들어 있어요. 자식 에이전트는 부모에게 보고하면 바로 잠들어요. 작업 중이거나 화면에 보이는 에이전트는 잠들지 않고, 읽지 않은 에이전트는 읽을 때까지 기다려요.",
+  "settings.sleepingNow_other": "지금 {{count}}개가 잠들어 있어요. 자식 에이전트는 부모에게 보고하면 바로 잠들어요. 작업 중이거나 화면에 보이는 에이전트는 잠들지 않고, 읽지 않은 에이전트는 읽을 때까지 기다려요.",
 } satisfies Catalog<typeof settingsEnglish>;
 
 const ja = {
@@ -371,8 +371,8 @@ const ja = {
   "settings.update.prereleaseNote": "正式リリース前のバージョンを先に受け取ります。オフにしても低いバージョンには戻さず、次の正式版まで待ちます。",
   "settings.details": "詳細",
   "settings.startingWork": "作業の開始",
-  "settings.sleepingNow_one": "現在{{count}}件が休止中です。作業を任せたエージェントは報告するとすぐに休止します。作業中や画面に表示中のエージェントは休止せず、未読のエージェントは読むまで待ちます。",
-  "settings.sleepingNow_other": "現在{{count}}件が休止中です。作業を任せたエージェントは報告するとすぐに休止します。作業中や画面に表示中のエージェントは休止せず、未読のエージェントは読むまで待ちます。",
+  "settings.sleepingNow_one": "現在{{count}}件が休止中です。子エージェントは親に報告するとすぐに休止します。作業中や画面に表示中のエージェントは休止せず、未読のエージェントは読むまで待ちます。",
+  "settings.sleepingNow_other": "現在{{count}}件が休止中です。子エージェントは親に報告するとすぐに休止します。作業中や画面に表示中のエージェントは休止せず、未読のエージェントは読むまで待ちます。",
 } satisfies Catalog<typeof settingsEnglish>;
 
 const zhCN = {
@@ -496,8 +496,8 @@ const zhCN = {
   "settings.update.prereleaseNote": "在正式发布前先获取新版本。关闭后不会退回到更低的版本，而是等待下一个正式版。",
   "settings.details": "详细信息",
   "settings.startingWork": "开始工作",
-  "settings.sleepingNow_one": "当前有 {{count}} 个在休眠。你委派的智能体汇报后会立即休眠。工作中和屏幕上显示的智能体不会休眠，未读的智能体会等你读过后再休眠。",
-  "settings.sleepingNow_other": "当前有 {{count}} 个在休眠。你委派的智能体汇报后会立即休眠。工作中和屏幕上显示的智能体不会休眠，未读的智能体会等你读过后再休眠。",
+  "settings.sleepingNow_one": "当前有 {{count}} 个在休眠。子智能体向父智能体汇报后会立即休眠。工作中和屏幕上显示的智能体不会休眠，未读的智能体会等你读过后再休眠。",
+  "settings.sleepingNow_other": "当前有 {{count}} 个在休眠。子智能体向父智能体汇报后会立即休眠。工作中和屏幕上显示的智能体不会休眠，未读的智能体会等你读过后再休眠。",
 } satisfies Catalog<typeof settingsEnglish>;
 
 export const settingsCatalogs = { en: settingsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof settingsEnglish>;
