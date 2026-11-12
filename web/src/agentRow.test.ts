@@ -1,7 +1,7 @@
 import { sectionTree, sectionCount, directChildren, unfoldedRows } from "../test/legacyRowTree";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import { openAsksCount, projectTreeLine, asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
+import { projectTreeLine, asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
 import { createInterfaceI18n } from "./i18n/instance";
 import type { AgentRow } from "./snapshot";
 
@@ -354,24 +354,18 @@ describe("a View to look at (PRD unseen-agent-views D-05, D-14, D-18)", () => {
   });
 });
 
-// docs/status-model.md, A question still waiting: a row whose questions to the
-// operator still wait ends its line with ?N while none of them is its ask; once
-// one is laid, the line says it and the rest are counted by the ask.
+// docs/status-model.md, A question still waiting: the questions a session put
+// to the operator are counted in its pane head and listed in its turn card,
+// never on a row; a row asks only once one of them is laid as its ask.
 describe("questions still waiting on the operator", () => {
   const session = { device_id: "local", agent: "claude", session_id: "s" };
   const open_asks = { session, items: [{ id: "m1", text: "스테이징 먼저?", at_unix_ms: 1 }, { id: "m2", text: "영문 사업자명", at_unix_ms: 2 }] };
 
-  it("ends a working row's line with the count, words included for assistive technology", async () => {
+  it("leaves a working row's line and its words for assistive technology as they are", async () => {
     const { t } = await createInterfaceI18n("ko");
     const working = row("w", { group: "working", activity: "working", open_asks });
     const line = { mode: "quiet", text: "TestFlight 진행 중" } as const;
-    expect(lineParts(t, working, line)).toEqual({ lead: null, text: "TestFlight 진행 중", tail: null, asks: 2 });
-    expect(lineText(t, working, line)).toBe("TestFlight 진행 중 · 나를 기다리는 것 2개");
-  });
-
-  it("counts none once a question of the list is the row's ask, and none without the list", () => {
-    expect(openAsksCount({ open_asks, ask_subject: { cause: "open_ask", id: "m1", line: "스테이징 먼저?" } })).toBe(0);
-    expect(openAsksCount({ open_asks, ask_subject: { cause: "plan_review", steps: 3 } })).toBe(2);
-    expect(openAsksCount({})).toBe(0);
+    expect(lineParts(t, working, line)).toEqual({ lead: null, text: "TestFlight 진행 중", tail: null });
+    expect(lineText(t, working, line)).toBe("TestFlight 진행 중");
   });
 });

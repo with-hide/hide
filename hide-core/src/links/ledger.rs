@@ -471,6 +471,11 @@ pub enum MissedStatus {
     Dismissed,
     /// `백로그로` made an item of it: `backlog_key` names the item.
     Backlog,
+    /// A question Hide AI read as settled or moot in a turn no answer came
+    /// in: folded under `정리됨` with its reason, never removed, and one
+    /// press opens it again (docs/status-model.md, A question still
+    /// waiting). Only a question known not to be the operator's own step.
+    Folded,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -489,6 +494,9 @@ pub struct MissedWork {
     /// (`github:owner/repo#7`, `local:/path#3`).
     pub backlog_key: Option<String>,
     pub creating: bool,
+    /// Why Hide AI folded the question, one line; only on a folded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -496,6 +504,13 @@ pub struct MissedWork {
 pub struct NewMissedWork {
     pub kind: MissedKind,
     pub text: String,
+    /// For a question: whether only the operator can take its step
+    /// themselves (a sign-in, an approval, a permission, information to
+    /// type in), which a parent's letter cannot answer and Hide AI never
+    /// folds. Absent when the judgment did not say, which counts as not
+    /// known to be anyone else's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_only: Option<bool>,
     /// The id of the session's open question this line repeats, in the same
     /// or in other words: that question stays one line. Text alone cannot
     /// say it, since a turn a letter woke words the same question again.
@@ -508,6 +523,20 @@ pub struct NewMissedWork {
 pub struct ResolvedMissedWork {
     pub id: String,
     pub issue_number: Option<u64>,
+    /// For a question no answer came in for: what settled it or made it
+    /// moot, one line, which folds it with that reason. Empty or absent
+    /// folds nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Who answered the session's questions in a turn (B12): the operator,
+/// which settles every question, or a delegated session's parent, which
+/// settles all but the operator's own steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsksAnswered {
+    Operator,
+    Parent,
 }
 
 /// A request's summary from one analysis, keyed by the request's offset.
@@ -609,7 +638,7 @@ pub enum LedgerUpdate {
         work_author: bool,
         /// Whoever the session's asks wait on spoke in this turn: the
         /// operator, or for a delegated session its parent (B12).
-        asks_answered: bool,
+        asks_answered: Option<AsksAnswered>,
         turn_witness: Option<String>,
         judgment: TurnJudgment,
     },
@@ -682,6 +711,9 @@ pub struct SessionRecord {
     pub status: Option<RecordStatus>,
     /// Questions and decisions waiting on the operator (D-12).
     pub asks: Vec<MissedWork>,
+    /// The current flow's questions Hide AI folded, oldest first, each with
+    /// its reason (`MissedStatus::Folded`).
+    pub folded_asks: Vec<MissedWork>,
     /// Oldest first; the last is the current flow (D-03).
     pub flows: Vec<WorkFlow>,
     /// Requests the cap dropped from this session (B30).

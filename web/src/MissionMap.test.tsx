@@ -74,6 +74,13 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     expect(empty.q("[data-mission-pill]")?.textContent).toBe("Planning");
     expect(empty.q("[data-mission-turn]")).toBeNull();
   } finally { await empty.unmount(); }
+  // A plan waiting for approval has nothing done: its head counts the steps left in it, with no cells or `n / m`.
+  const planned = await mount({ items: [mission({ status: "planning", started_at_unix_ms: null, nodes: [node("a"), node("b"), node("c", { status: "dropped" })] })] });
+  try {
+    expect(planned.q('[data-mission-stat="steps"]')?.textContent).toBe("Steps 2");
+    expect(planned.q('[data-mission-summary] [data-progress-cells]')).toBeNull();
+    expect(planned.q('[data-mission-stat="done"]')).toBeNull();
+  } finally { await planned.unmount(); }
   const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "working", depends_on: ["a"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }), node("d"), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
   const running = await mount({ items: [mission({ nodes })] });
   try {
@@ -145,9 +152,16 @@ it("shows the decision with why, the node it stopped, its wait and the choices a
     const send = () => map.q("[data-mission-answer-send]") as HTMLButtonElement | null;
     expect(send()?.textContent).toBe("Answer");
     expect(send()?.disabled).toBe(true);
+    // Nothing marked: no hint, and the button is the quiet one.
+    const hint = () => map.q("[data-mission-answer-hint]");
+    expect(hint()).toBeNull();
+    expect(send()?.className).not.toContain("bg-primary");
     await act(async () => (banner.querySelector('[data-mission-option="1"]') as HTMLElement).click());
     await act(async () => (banner.querySelector('[data-mission-option="2"]') as HTMLElement).click());
     expect(map.events.some((event) => event.kind === "mission_answer")).toBe(false);
+    // Marked but not sent: one line says so and 답하기 is the primary button.
+    expect(hint()?.textContent).toBe("Selected. Press Answer to send.");
+    expect(send()?.className).toContain("bg-primary");
     expect(banner.querySelector('[data-mission-option="2"]')?.getAttribute("aria-checked")).toBe("true");
     await act(async () => send()!.click());
     expect(map.events.filter((event) => event.kind === "mission_answer")).toEqual([{ schema_version: 2, kind: "mission_answer", payload: { mission: "mission-1", key: 3, option: 2 } }]);
@@ -155,6 +169,7 @@ it("shows the decision with why, the node it stopped, its wait and the choices a
     expect(map.q("[data-mission-banner-sent]")?.textContent).toBe("Wait for the API PR to merge· Conductor is reading");
     expect(map.q("[data-mission-option]")).toBeNull();
     expect(send()).toBeNull();
+    expect(hint()).toBeNull();
     // A working Conductor reads it on its next turn.
     await map.rerender(asked({ answer: { key: 3, text: "Wait for the API PR to merge", option: 2, state: "waiting" } }));
     expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("waiting");

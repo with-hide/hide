@@ -58,10 +58,10 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await page.evaluate(() => document.documentElement.style.removeProperty('--interface-scale'));
     await expect.poll(groupSize).toBe(originalSize);
     await graph.getByRole('button', { name: /^My turn/ }).click();
-    await graph.getByRole('button', { name: 'Sessions', exact: true }).click();
+    await graph.getByRole('radio', { name: 'Sessions', exact: true }).click();
     await expect(graph.locator('[data-graph-session-list] > button')).not.toHaveCount(0);
     await expect(graph.getByRole('button', { name: /^My turn/ })).toHaveAttribute('aria-pressed', 'true');
-    await graph.getByRole('button', { name: 'Graph', exact: true }).click();
+    await graph.getByRole('radio', { name: 'Graph', exact: true }).click();
     await expect(graph).toHaveAttribute('data-graph-phase', 'ready');
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
     await captureElectronWindow(app, 'overview-focus-renderer', { state: run.env.HIDE_STATE_DIR, daemonPid: run.daemonPid(), scenario: 'explicit selection, filters, stable coordinates' });

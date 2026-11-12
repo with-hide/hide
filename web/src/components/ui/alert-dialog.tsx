@@ -35,13 +35,13 @@ function AlertDialogContent({
   const returnFocus = useReturnFocus(true);
   return (
     <AlertDialogPrimitive.Portal>
-      <AlertDialogPrimitive.Overlay data-slot="alert-dialog-overlay" className="fixed inset-0 z-50 bg-background opacity-(--opacity-secondary)" />
+      <AlertDialogPrimitive.Overlay data-slot="alert-dialog-overlay" className="fixed inset-0 z-50 bg-scrim" />
       <AlertDialogPrimitive.Content
         ref={surface}
         tabIndex={-1}
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-add-device-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-auto rounded-lg border border-border bg-dialog p-lg text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg outline-none",
+          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-add-device-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-auto rounded-lg border border-border bg-dialog p-lg text-body text-popover-foreground [--accent:var(--dialog-hover)] [--secondary:var(--dialog-raised)] shadow-modal outline-none",
           className,
         )}
         onOpenAutoFocus={(event) => {

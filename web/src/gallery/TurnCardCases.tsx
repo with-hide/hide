@@ -140,7 +140,7 @@ export function TurnCardCases({ seed }: { seed: AgentRow }) {
         {CASES.map((example) => (
           <div key={example.id} className="flex flex-col gap-xs" data-turn-card-case={example.id}>
             <div className="text-micro text-muted-foreground">{example.label}</div>
-            <div className="w-(--size-turn-card) max-w-full rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-lg">
+            <div className="w-(--size-turn-card) max-w-full rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-overlay">
               <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request, wait: example.wait, open_asks: example.open_asks }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} onAsk={() => undefined} answerOpened={example.opened} lettersOpened={example.lettersOpened} />
             </div>
           </div>

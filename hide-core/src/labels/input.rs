@@ -31,15 +31,44 @@ pub(crate) struct Submit {
     pub(crate) while_working: bool,
 }
 
-/// A bell line Hide typed into a pane: when, its exact words, the name of
-/// the letter's writer and the letter's kind (PRD session-record-goal-flow
-/// D-19). The words are Hide's own line, never the operator's.
+/// A bell line Hide typed into a pane: when, its exact words, the name the
+/// line shows its writer by and the letter it rang for (PRD
+/// session-record-goal-flow D-19). The words are Hide's own line, never the
+/// operator's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Bell {
     pub(crate) at_unix_ms: u64,
     pub(crate) line: String,
+    /// The name a person knows the writer by, which the line shows: its
+    /// registered name, else its pane's title, which moves with its task
+    /// (`delivery::doorbell::bell_sender`). Never compared with a lineage.
     pub(crate) sender: String,
+    pub(crate) letter: Letter,
+}
+
+/// Who wrote a letter and what kind it is, as the delivery ledger names
+/// them: `from` is the writer's wire name (`coordination::wire_name`), the
+/// one a delegated session's lineage names its parent by, so whether a
+/// letter came from the parent is a comparison of one name with itself
+/// (docs/status-model.md, A question still waiting).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Letter {
+    pub(crate) from: String,
     pub(crate) kind: String,
+    /// The operator wrote it, from Hide's screen (`Actor::operator_owned`):
+    /// a person's turn done (`hide agent ask-human`), which is their own
+    /// answer.
+    #[serde(default)]
+    pub(crate) operator: bool,
+}
+
+impl Letter {
+    /// Whether the letter can answer what its recipient asked: a reply or a
+    /// request does, a progress, report, block or watch letter does not
+    /// (B12).
+    pub(crate) fn answers(&self) -> bool {
+        matches!(self.kind.as_str(), "request" | "reply")
+    }
 }
 
 /// Bells kept per pane, newest last.
@@ -99,13 +128,15 @@ impl OperatorInput {
         submits.push_back(submit);
     }
 
-    /// Records a bell line typed into `pane_id`, named as `record` names it.
+    /// Records a bell line typed into `pane_id`, named as `record` names it:
+    /// `sender` is the name the line shows, `letter` the letter it rang for.
     pub(crate) fn record_bell(
         &self,
         pane_id: &str,
         at_unix_ms: u64,
         line: &str,
-        (sender, kind): (&str, &str),
+        sender: &str,
+        letter: Letter,
     ) {
         let key = label_key(&self.node, pane_id);
         let Ok(mut record) = self.record.lock() else {
@@ -127,7 +158,7 @@ impl OperatorInput {
             at_unix_ms,
             line: line.to_owned(),
             sender: sender.to_owned(),
-            kind: kind.to_owned(),
+            letter,
         });
     }
 

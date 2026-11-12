@@ -1278,7 +1278,6 @@ pub mod push {
     /// only seeds it: nothing that was already waiting is announced.
     #[derive(Default)]
     pub struct Transitions {
-        observation: u64,
         last: Option<BTreeMap<AgentKey, Seen>>,
         /// Agents that left the list, with their state and when: a device that
         /// reconnects, or a list that was briefly empty, brings them back in the
@@ -1292,8 +1291,7 @@ pub mod push {
     #[derive(Clone)]
     struct Seen {
         state: Effective,
-        entered: u64,
-        declared: BTreeMap<String, u64>,
+        declared: BTreeSet<String>,
     }
 
     /// How long a vanished agent's state is kept for its return.
@@ -1308,37 +1306,6 @@ pub mod push {
         /// Whether a projection has seeded it since it was made or reset.
         pub fn seeded(&self) -> bool {
             self.last.is_some()
-        }
-
-        /// A monotonic observation boundary, retained across reset so an old
-        /// delivery can never consume a newly seeded wait.
-        pub fn observation(&self) -> u64 {
-            self.observation
-        }
-
-        /// The newest current wait not consumed by a phone and included in a
-        /// settled observation. The declaration map replaces the ledger's old
-        /// ID set; it keeps no history beyond its existing current/grace rows.
-        pub fn waiting_between(
-            &self,
-            key: &AgentKey,
-            after: u64,
-            through: u64,
-            projection: &Projection,
-        ) -> Option<Notice> {
-            let seen = self.last.as_ref()?.get(key)?;
-            if seen.state != Effective::NeedsYou {
-                return None;
-            }
-            let agent = projection.find(key)?;
-            let declared = seen
-                .declared
-                .iter()
-                .filter(|(_, at)| after < **at && **at <= through)
-                .max_by_key(|(id, at)| (**at, *id))
-                .and_then(|(id, _)| agent.human_turns.get(id));
-            (declared.is_some() || (after < seen.entered && seen.entered <= through))
-                .then(|| waiting_notice(key, agent, declared))
         }
 
         /// Whether the last projection observed has `key` waiting on the
@@ -1377,34 +1344,15 @@ pub mod push {
             projection: &Projection,
             at: std::time::Instant,
         ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
-            self.observation += 1;
             let now = effective(projection);
             let states: BTreeMap<AgentKey, Seen> = now
                 .iter()
                 .map(|(key, (state, agent))| {
-                    let before = self
-                        .last
-                        .as_ref()
-                        .and_then(|last| last.get(key))
-                        .or_else(|| self.vanished.get(key).map(|(seen, _)| seen));
                     (
                         key.clone(),
                         Seen {
                             state: *state,
-                            entered: before
-                                .filter(|before| before.state == *state)
-                                .map_or(self.observation, |before| before.entered),
-                            declared: agent
-                                .human_turns
-                                .keys()
-                                .map(|id| {
-                                    let at = before
-                                        .and_then(|before| before.declared.get(id))
-                                        .copied()
-                                        .unwrap_or(self.observation);
-                                    (id.clone(), at)
-                                })
-                                .collect(),
+                            declared: agent.human_turns.keys().cloned().collect(),
                         },
                     )
                 })
@@ -1421,15 +1369,14 @@ pub mod push {
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
                     .unwrap_or(Seen {
                         state: Effective::Other,
-                        entered: 0,
-                        declared: BTreeMap::new(),
+                        declared: BTreeSet::new(),
                     });
                 // Each declaration not seen before is a notice of its own,
                 // in its own words, also on a row already in Needs You (B17).
                 let declared_now: Vec<_> = agent
                     .human_turns
                     .iter()
-                    .filter(|(id, _)| !before.declared.contains_key(*id))
+                    .filter(|(id, _)| !before.declared.contains(*id))
                     .map(|(_, subject)| subject)
                     .collect();
                 if before.state == *state

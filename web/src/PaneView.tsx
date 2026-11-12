@@ -372,7 +372,7 @@ export const PaneView = memo(function PaneView({
       onDrop={drop}
     >
       <header
-        className={`group/header relative flex h-[var(--size-pane-header)] shrink-0 items-center gap-sm px-sm text-caption ${
+        className={`group/header relative flex h-[var(--size-pane-header)] shrink-0 items-center gap-sm pl-sm pr-[calc((var(--size-tab-overflow-control)-var(--size-control-sm))/2)] text-caption ${
           input ? "bg-primary/[var(--opacity-selected-fill)] text-foreground" : "bg-card text-muted-foreground"
         }`}
         onPointerDown={(event) => {

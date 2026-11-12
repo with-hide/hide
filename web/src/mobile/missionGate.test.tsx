@@ -108,9 +108,10 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
 
     await click('[data-phone-mission="m-plan"]');
     expect([...container.querySelectorAll("[data-mission-gate-row]")].map((row) => row.textContent)).toEqual([
-      "Step athe cause written downOnce all other finish lines pass",
-      "Step btwo screen draftsOnce all other finish lines pass",
+      "the cause written downStep a",
+      "two screen draftsStep b",
     ]);
+    expect(container.querySelector("[data-mission-gate-when]")?.textContent).toBe("once each step passes its other finish lines");
     await click('[data-phone-back="missions"]');
 
     await click('[data-phone-mission="m-run"]');

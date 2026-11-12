@@ -27,7 +27,7 @@ const pr = (number: number, title: string, state: string, source: WorkSession, s
 /** One PR of a session's list as the core lays it: its own when `holder` is null, else a descendant's. */
 const listed = (number: number, title: string, state: PrState, holder: string | null = null): SessionPull => ({ url: `https://example.invalid/pull/${number}`, number, title, state, own: holder === null, holders: holder ? [holder] : [], stale: false, last_read_at_unix_ms: AT });
 const flow = (id: string, name: string, minutes: number, requests: WorkRequest[], result: WorkFlow["result"]): WorkFlow => ({ id, name, at_unix_ms: AT + minutes * MIN, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
-const empty = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
+const empty = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
 // Invented content matching the user-approved record design.
 const CHILDREN = [
   ["기록 화면 조사", "claude", "done", []],
@@ -106,6 +106,11 @@ function recordFor(base: RecordValue, kind: string | null): RecordValue {
     record.asks = [];
   }
   if (kind === "omitted") record.omitted_requests = 37;
+  if (kind === "folded") {
+    // What Hide AI read as settled with no answer: folded under 정리됨 with its reason (status-model.md, A question still waiting).
+    const folded = (id: string, text: string, reason: string): MissedWork => ({ ...ask(id, text), status: "folded", reason });
+    record.folded_asks = [folded("ask-3", "릴리스 노트를 지금 쓸지", "다른 세션이 운영자 결정을 전해 받아 이미 씀"), folded("ask-4", "실패한 검사를 다시 돌릴지", "에이전트가 직접 다시 돌려 통과함")];
+  }
   if (kind === "delegated") record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, author: "parent" as const })) }));
   if (kind === "empty") Object.assign(record, { ...empty, status: null });
   return record;

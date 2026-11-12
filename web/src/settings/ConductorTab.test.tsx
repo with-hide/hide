@@ -100,7 +100,7 @@ it("puts the merged-worktree cleanup switch right under the cap and the scope, o
     expect(rows.slice(-1)[0]).toBe(cleanup);
     expect(rows.length).toBe(3);
     expect(cleanup.textContent).toContain("Clean up a worktree once merged");
-    expect(cleanup.textContent).toContain("Removes the worktree and build cache of a branch whose PR merged. One that still holds files you were changing, or is in use, stays.");
+    expect(cleanup.textContent).toContain("Once a change merges into its destination branch, removes its worktree and build cache. The branch stays, and so does a worktree that still holds files you were changing or is in use.");
     const toggle = cleanup.querySelector<HTMLElement>('[role="switch"]')!;
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     await act(async () => toggle.click());

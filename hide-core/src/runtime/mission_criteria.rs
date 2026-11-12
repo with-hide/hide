@@ -189,6 +189,9 @@ impl Runtime {
             .into_iter()
             .map(str::to_owned)
             .collect();
+        // A node an earlier build saved with its pull request and no ci line
+        // stands for checks not yet read until GitHub answers for it
+        // (`skip_criterion` makes the line it skips).
         let has_ci = node
             .criteria
             .iter()
@@ -352,6 +355,7 @@ impl Runtime {
         }
         if next.current_pr() != node.current_pr() {
             next.criteria.retain(|line| line.kind != CriterionKind::Ci);
+            next.ensure_ci_line();
             if let Some(project) = self.mission_pulls(mission) {
                 read_node_ci(&mut next, project, now);
             }
@@ -652,6 +656,23 @@ impl Runtime {
             .iter()
             .position(|row| row.key == node)
             .ok_or("mission_node_unknown")?;
+        // The ci line an earlier build never made for a pull request GitHub
+        // has not answered for is the line this skip goes past.
+        if key == "ci"
+            && !mission.exempt
+            && !mission.nodes[index]
+                .criteria
+                .iter()
+                .any(|line| line.kind == CriterionKind::Ci)
+            && self
+                .node_unmet(mission, &mission.nodes[index])
+                .iter()
+                .any(|line| line == "ci")
+        {
+            let made = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+            made.nodes[index].ensure_ci_line();
+        }
+        let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         let at = mission.nodes[index]
             .criteria
             .iter()
@@ -936,62 +957,46 @@ fn landed(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> bool {
     })
 }
 
-/// The CI `project` reports for `node`'s pull request: a line where it has
-/// checks, none where it has none, unchanged where the list does not say.
+/// The CI `project` reports for `node`'s pull request: a line that follows
+/// its checks, open while they cannot be read, and none where the pull
+/// request has no checks, or is merged and its checks are no longer read
+/// (D-15, narrowed: checks not known keep the line open so the Conductor can
+/// skip it on the operator's answer).
 fn read_node_ci(
     node: &mut MissionNode,
     project: &GithubProjectSnapshot,
     now: u64,
 ) -> crate::mission_criteria::Effect {
     let mut out = crate::mission_criteria::Effect::default();
-    let Some(pull) = node
-        .current_pr()
-        .and_then(|number| pull_in(Some(project), number))
-    else {
+    let Some(number) = node.current_pr() else {
         return out;
     };
+    let pull = pull_in(Some(project), number);
     let line = node
         .criteria
         .iter()
         .position(|line| line.kind == CriterionKind::Ci);
-    match (pull.ci_end(), line, pull.head_oid.as_deref()) {
-        (CiEnd::NoChecks, Some(line), _) => {
+    let end = pull.map(PullRequestSnapshot::ci_end);
+    // A merged pull request's checks are no longer read, so a line that never
+    // read them is no question left.
+    let unread_merge = pull.is_some_and(merged)
+        && end == Some(CiEnd::Unread)
+        && line.is_some_and(|at| {
+            node.criteria[at].commit.is_none() && node.criteria[at].skip.is_none()
+        });
+    if end == Some(CiEnd::NoChecks) || unread_merge {
+        if let Some(line) = line {
             node.criteria.remove(line);
             out.changed = true;
         }
-        // Checks not known add no line, but a line read on another head
-        // opens again on this one (D-15).
-        (CiEnd::NoChecks | CiEnd::Unread, None, _) | (_, _, None) => {}
-        (end, line, Some(head)) => {
-            let line = match line {
-                Some(line) => line,
-                None => {
-                    // The CI line goes after the check command, before the
-                    // reviews.
-                    let place = node
-                        .criteria
-                        .iter()
-                        .position(|line| {
-                            matches!(
-                                line.kind,
-                                CriterionKind::Review
-                                    | CriterionKind::Verify
-                                    | CriterionKind::Defect
-                            )
-                        })
-                        .unwrap_or(node.criteria.len());
-                    node.criteria.insert(
-                        place,
-                        crate::mission_criteria::Criterion::new("ci", CriterionKind::Ci),
-                    );
-                    out.changed = true;
-                    place
-                }
-            };
-            let effect = node.criteria[line].read_ci(head, end, now);
-            out.changed |= effect.changed;
-            out.spent = effect.spent;
-        }
+        return out;
+    }
+    let (line, made) = crate::mission_criteria::ensure_ci_line(&mut node.criteria);
+    out.changed |= made;
+    if let (Some(end), Some(head)) = (end, pull.and_then(|pull| pull.head_oid.as_deref())) {
+        let effect = node.criteria[line].read_ci(head, end, now);
+        out.changed |= effect.changed;
+        out.spent = effect.spent;
     }
     out
 }

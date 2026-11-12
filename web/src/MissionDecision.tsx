@@ -89,26 +89,29 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   // Why the operator cannot answer now, or why the last answer did not arrive (B28, B39).
   const reason = view.reason ? t(reasonKey(view.reason), { device }) : null;
 
+  // A question with nothing but its title and the write action carries that action on its title line, with no divider.
+  const bare = !sent && !writing && !question && !options.length && others.length === 0 && views.length === 0;
   return (
     <div
       role="group"
       aria-label={mission.decision ?? undefined}
-      className="mx-md mb-xs flex min-w-0 flex-col gap-sm rounded-md border border-mission-hold bg-card px-md py-sm"
+      className="tone-hold flex min-w-0 flex-col gap-sm rounded-md border border-mission-hold/30 bg-mission-hold/8 px-md py-sm"
       data-mission-banner="decision"
       data-mission-answer={sent?.state ?? (closed ? "closed" : "open")}
     >
-      <div className="flex min-w-0 items-center gap-sm">
+      <div className={cn("flex min-w-0 items-center gap-sm", bare && "flex-wrap")}>
         <StatusMark mark="turn" />
-        <span className="min-w-0 flex-1 truncate text-body font-semibold" title={mission.decision ?? undefined} data-mission-question="true">{mission.decision}</span>
+        <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", bare && "basis-(--size-flow-title)")} title={mission.decision ?? undefined} data-mission-question="true">{mission.decision}</span>
         {stopped ? (
           // The node chip picks its node on the map below (PRD mission-map-git-criteria B25).
-          <button type="button" onClick={() => onNode(stopped.key)} className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-muted px-xs text-caption text-mission-hold outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
+          <button type="button" onClick={() => onNode(stopped.key)} className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-secondary px-xs text-caption text-mission-hold outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
             {t("mission.banner.stopped", { node: stopped.title })}
           </button>
         ) : null}
         {waited ? <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-banner-waited="true">{t("mission.banner.waited", { elapsed: waited })}</span> : null}
         {long ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-banner-long="true">· {t("mission.gate.long")}</span> : null}
         {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
+        {bare ? <Button ref={writeButton} size="sm" variant="secondary" className="ml-auto shrink-0" disabled={closed} onClick={() => setWriting(true)} data-mission-write="true"><PencilIcon aria-hidden="true" />{t("mission.banner.write")}</Button> : null}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
       {others.length > 0 ? (
@@ -146,7 +149,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           <span className="min-w-0 truncate text-caption text-muted-foreground" data-mission-banner-hold={mission.answer?.hold ?? "other"}>· {t(sent.word)}</span>
           {sent.canNow ? <Button size="sm" variant="ghost" onClick={() => actions.answerMission(mission.id, key, { now: true })} data-mission-now="true">{t("mission.banner.now")}</Button> : null}
         </p>
-      ) : (
+      ) : bare ? null : (
         <div className="flex min-w-0 flex-col gap-sm">
           {/* With nothing linked to look at, asking for material is a row of its own above the choices; it never holds the answer back. */}
           {views.length === 0 && question && !writing ? (
@@ -175,7 +178,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
               );
             })}
           </RadioGroup> : null}
-          <div className="flex min-w-0 flex-wrap items-center gap-xs border-t border-border pt-sm">
+          <div className="flex min-w-0 flex-wrap items-center gap-xs border-t border-mission-hold/20 pt-sm">
           {writing ? (
             <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-xs">
               <Input
@@ -196,7 +199,13 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
             <Button ref={writeButton} size="sm" variant="outline" disabled={closed} onClick={() => setWriting(true)} data-mission-write="true"><PencilIcon aria-hidden="true" />{t("mission.banner.write")}</Button>
           )}
           {/* A decision without choices, an old one included, is answered by writing only. */}
-          {options.length ? <Button size="sm" variant="secondary" className="ml-auto" disabled={closed || picked == null} onClick={() => picked != null && choose(picked)} data-mission-answer-send="true">{t("mission.banner.answer")}</Button> : null}
+          {/* A marked choice is not sent: the button turns primary and one line says so, until the press sends it and the choices give way to the sent line (PRD mission-human-gate B19). */}
+          {options.length ? (
+            <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-xs">
+              {picked != null && !closed ? <span className="text-caption text-muted-foreground" data-mission-answer-hint="true">{t("mission.banner.marked")}</span> : null}
+              <Button size="sm" variant={picked != null && !closed ? "default" : "secondary"} disabled={closed || picked == null} onClick={() => picked != null && choose(picked)} data-mission-answer-send="true">{t("mission.banner.answer")}</Button>
+            </span>
+          ) : null}
           </div>
         </div>
       )}

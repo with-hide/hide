@@ -21,12 +21,12 @@ import { AGENT_ADAPTERS } from "../agentAdapters";
 import { ledgerScene } from "./usageHistorySceneData";
 import type { SessionRecord, SessionSearchOptions, SessionSearchStatus, WorkSession } from "../snapshot";
 import type { NodeUsage } from "../generated/hided-ws";
-import { workKey } from "../sessionWork";
+import { MISSED_FOLD, workKey } from "../sessionWork";
 import { installKeyboard } from "../keyboard";
 import { Palette } from "../Palette";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 
-const STATES = ["work", "mission-ask", "focus", "backlog", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
+const STATES = ["work", "mission-ask", "focus", "backlog", "backlog-missed", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
 type OverviewSceneState = (typeof STATES)[number];
 export type OverviewSceneParams = { state: OverviewSceneState; theme: "light" | "dark"; palette: "hide" | "neutral"; language: InterfaceLanguage; scale: number; content?: string };
 
@@ -127,7 +127,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       screen: state === "record" ? { kind: "workspace" } : { kind: "main" },
       overviewOpen: false,
       mainView: state === "projects" ? "projects" : (state === "work" || state === "mission-ask" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
-      overview: { ...OVERVIEW_ENTRY, panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
+      overview: { ...OVERVIEW_ENTRY, ...(state === "backlog-missed" ? { open: [...OVERVIEW_ENTRY.open, MISSED_FOLD] } : {}), panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
       quickAdd: state === "backlog-add" ? { returnFocus: null } : null,
     });
     const root = document.documentElement;

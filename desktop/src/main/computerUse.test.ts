@@ -63,3 +63,27 @@ it("treats an unavailable idle source as in use, while still honoring sleep and 
   expect(use.current()).toBe(false);
   use.stop();
 });
+
+it("reports resumed input once per five-second pause, never for continuous typing", () => {
+  vi.useFakeTimers();
+  const power = new PowerMonitor();
+  const reports: boolean[] = [];
+  const use = new ComputerUse(power, (value) => reports.push(value));
+  use.start();
+  const poll = (idle: number) => {
+    power.idle = idle;
+    vi.advanceTimersByTime(COMPUTER_USE_POLL_MS);
+  };
+  for (const idle of [0, 0, 1, 2, 4, 0, 0]) poll(idle);
+  expect(reports).toEqual([true]);
+  poll(5);
+  poll(0);
+  expect(reports).toEqual([true, true]);
+  for (const idle of [0, 0, 1, 2, 3, 4]) poll(idle);
+  expect(reports).toEqual([true, true]);
+  poll(5);
+  poll(1);
+  expect(reports).toEqual([true, true, true]);
+  use.stop();
+  expect(vi.getTimerCount()).toBe(0);
+});

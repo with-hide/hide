@@ -1100,10 +1100,9 @@ fn run_hook(arguments: &[String], started: Instant) {
         });
         // SessionStart's Workspace probe is asked beside Memory, not after
         // it: neither answer depends on the other, and each request
-        // keeps its own deadline. The probe is not gated on a pane id: hided
-        // binds a caller outside any pane (a Codex shared daemon, a plain
-        // terminal) to the registered checkout holding its cwd, and refuses
-        // everything else itself.
+        // keeps its own deadline. It is asked only from a Hide pane
+        // (`workspace_context::live_context`): a session started in another
+        // terminal app gets no Hide guidance.
         let probing = (event == HookEvent::SessionStart).then(|| {
             std::thread::Builder::new()
                 .name("hide-hook-workspace".to_owned())

@@ -10,7 +10,7 @@ function Toaster({ theme, ...props }: ToasterProps) {
       className="toaster group"
       toastOptions={{
         classNames: {
-          toast: "!rounded-md !border !border-border !bg-popover !text-popover-foreground !text-body !shadow-lg",
+          toast: "!rounded-md !border !border-border !bg-popover !text-popover-foreground !text-body !shadow-overlay",
           description: "!text-subtle-foreground",
           actionButton: "!bg-primary !text-primary-foreground",
           cancelButton: "!bg-secondary !text-secondary-foreground",

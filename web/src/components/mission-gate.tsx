@@ -69,11 +69,15 @@ export function OperatorBand({ gate, mergeDue, className }: { gate: Pick<Mission
 
 /**
  * Where the operator will look, while the plan waits for their approval
- * (D-08, B1): `내가 볼 곳 N`, then one row each with the node, what to look at
- * and when, which is once the node's other finish lines all pass
- * (D-10). The operator turns a place on or off by saying so to the Conductor,
- * whose replan redraws the list; it is never the operator's turn (B9). With
- * `onSelect` the node is a button that picks it on the map.
+ * (D-08, B1): `내가 볼 곳 N` with when, said once since it is the same for
+ * every place (once the node's other finish lines all pass, D-10), then one
+ * place each: what to look at on its first line and its node, quiet and
+ * whole, under it. It wears no hold colour, since none of it is the
+ * operator's turn (B9); the operator turns a place on or off by saying so to
+ * the Conductor, whose replan redraws the list. With `onSelect` the node is a
+ * word button that picks it on the map. A place's caption line leaves more
+ * room under its words than its bold line leaves over them, so a row pads
+ * less below than above and its divider sits midway between the two places.
  */
 export function GatePlanList({ nodes, onSelect, className }: { nodes: readonly { key: string; title: string; gate?: Pick<MissionGate, "look"> | null }[]; onSelect?: (key: string) => void; className?: string }) {
   const { t } = useInterfaceTranslation();
@@ -81,22 +85,23 @@ export function GatePlanList({ nodes, onSelect, className }: { nodes: readonly {
   const title = t("mission.gate.planTitle", { count: nodes.length });
   return (
     <section aria-label={title} className={cn("flex min-w-0 flex-col gap-xs", className)} data-mission-gates={nodes.length}>
-      <h3 className="flex min-w-0 items-center gap-xs text-caption font-semibold text-mission-hold">
-        <EyeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-        {title}
+      <h3 className="flex min-w-0 items-baseline gap-xs text-caption">
+        <EyeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 self-center text-muted-foreground" />
+        <span className="shrink-0 font-semibold">{title}</span>
+        <span aria-hidden="true" className="shrink-0 text-muted-foreground">·</span>
+        <span className="min-w-0 break-keep text-muted-foreground wrap-anywhere" data-mission-gate-when="true">{t("mission.gate.planWhen")}</span>
       </h3>
-      <ul className="flex min-w-0 flex-col gap-xxs">
+      <ul className="flex min-w-0 flex-col divide-y divide-border pl-[calc(var(--size-icon-sm)+var(--spacing-xs))]">
         {nodes.map((node) => (
-          <li key={node.key} className="flex min-w-0 flex-col items-start gap-xxs text-body sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-xs" data-mission-gate-row={node.key}>
+          <li key={node.key} className="flex min-w-0 flex-col items-start gap-xxs pt-xs pb-xxs text-body first:pt-none last:pb-none" data-mission-gate-row={node.key}>
+            <span className="min-w-0 break-keep font-semibold wrap-anywhere" data-mission-gate-look="true">{node.gate?.look}</span>
             {onSelect ? (
-              <Button variant="secondary" size="sm" onClick={() => onSelect(node.key)} title={node.title} className="max-w-(--size-flow-title) shrink-0 justify-start" data-mission-gate-node={node.key}>
-                <span className="min-w-0 truncate">{node.title}</span>
+              <Button variant="text-link" size="inline" onClick={() => onSelect(node.key)} className="min-w-0 justify-start whitespace-normal text-left text-caption break-keep wrap-anywhere" data-mission-gate-node={node.key}>
+                {node.title}
               </Button>
             ) : (
-              <span className="min-w-0 break-keep rounded-xs bg-secondary px-xs text-caption wrap-anywhere" data-mission-gate-node={node.key}>{node.title}</span>
+              <span className="min-w-0 break-keep text-caption text-muted-foreground wrap-anywhere" data-mission-gate-node={node.key}>{node.title}</span>
             )}
-            <span className="min-w-0 break-keep font-semibold wrap-anywhere sm:flex-1">{node.gate?.look}</span>
-            <span className="min-w-0 break-keep text-caption text-muted-foreground wrap-anywhere" data-mission-gate-when="true">{t("mission.gate.when")}</span>
           </li>
         ))}
       </ul>

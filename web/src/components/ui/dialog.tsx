@@ -20,7 +20,7 @@ function DialogClose(props: ComponentProps<typeof DialogPrimitive.Close>) {
 }
 
 function DialogOverlay({ className, ...props }: ComponentProps<typeof DialogPrimitive.Overlay>) {
-  return <DialogPrimitive.Overlay data-slot="dialog-overlay" className={cn("fixed inset-0 z-50 bg-background opacity-(--opacity-secondary)", className)} {...props} />;
+  return <DialogPrimitive.Overlay data-slot="dialog-overlay" className={cn("fixed inset-0 z-50 bg-scrim", className)} {...props} />;
 }
 
 /**
@@ -49,7 +49,7 @@ function DialogContent({
         ref={surface}
         data-slot="dialog-content"
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-worktree-dialog) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg outline-none",
+          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-worktree-dialog) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-hover)] [--secondary:var(--dialog-raised)] shadow-modal outline-none",
           className,
         )}
         onOpenAutoFocus={(event) => {
@@ -87,8 +87,14 @@ function DialogBody({ className, ...props }: ComponentProps<"div">) {
   return <div data-slot="dialog-body" className={cn("min-h-0 flex-1 overflow-auto px-lg py-md", className)} {...props} />;
 }
 
+/**
+ * A quiet button (ghost) that opens or closes a row keeps its padding inside the row: its word, not its
+ * invisible box, lines up with the text above, so it stands on the same left (or right) edge as the body.
+ */
+const QUIET_EDGE = "[&>[data-variant=ghost][data-size=default]:first-child]:-ml-md [&>[data-variant=ghost][data-size=sm]:first-child]:-ml-sm [&>[data-variant=ghost][data-size=default]:last-child]:-mr-md [&>[data-variant=ghost][data-size=sm]:last-child]:-mr-sm";
+
 function DialogFooter({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="dialog-footer" className={cn("flex flex-wrap items-center justify-end gap-sm px-lg pb-lg", className)} {...props} />;
+  return <div data-slot="dialog-footer" className={cn("flex flex-wrap items-center justify-end gap-sm px-lg pb-lg", QUIET_EDGE, className)} {...props} />;
 }
 
 function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) {

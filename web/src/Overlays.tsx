@@ -72,7 +72,7 @@ export function CycleOverlay() {
   const chord = commandLabel(cycle.kind === "area" || cycle.kind === "agents" ? "recent_area_tab" : cycle.kind === "panels" ? "recent_panel" : "recent_project", uiState);
   return createPortal(
     <div className="fixed inset-x-0 top-[var(--size-tab-strip)] z-30 flex justify-center" data-cycle={cycle.kind}>
-      <div role="listbox" aria-label={title} data-slot="cycle-overlay" className="w-[var(--size-pr-popover)] rounded-md border border-border bg-popover py-xs shadow-lg">
+      <div role="listbox" aria-label={title} data-slot="cycle-overlay" className="w-[var(--size-pr-popover)] rounded-md border border-border bg-popover py-xs shadow-overlay">
         <div className="flex items-center justify-between px-md pb-xxs">
           <span className="text-caption font-semibold uppercase text-muted-foreground">{title}</span>
           {chord ? <Kbd>{chord}</Kbd> : null}

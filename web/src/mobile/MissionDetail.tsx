@@ -289,15 +289,18 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
             })}
           </RadioGroup>
           {view.options.length ? (
-            <Button
-              variant="secondary"
-              className="min-h-(--size-touch-target) self-end"
-              disabled={view.closed || !connected || marked == null}
-              data-phone-choice-send="true"
-              onClick={() => marked != null && answerMission(mission, { option: marked + 1 }, view.options[marked]!)}
-            >
-              {t("mission.banner.answer")}
-            </Button>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-sm">
+              {marked != null && !view.closed ? <span className="break-keep text-caption text-muted-foreground wrap-anywhere" data-phone-answer-hint="true">{t("mission.banner.marked")}</span> : null}
+              <Button
+                variant={marked != null && !view.closed ? "default" : "secondary"}
+                className="min-h-(--size-touch-target)"
+                disabled={view.closed || !connected || marked == null}
+                data-phone-choice-send="true"
+                onClick={() => marked != null && answerMission(mission, { option: marked + 1 }, view.options[marked]!)}
+              >
+                {t("mission.banner.answer")}
+              </Button>
+            </div>
           ) : null}
         </div>
       )}

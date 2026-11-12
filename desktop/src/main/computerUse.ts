@@ -2,6 +2,8 @@
 export const COMPUTER_AWAY_SECONDS = 10 * 60;
 /** Bounds detection of new input after idle, without watching individual inputs. */
 export const COMPUTER_USE_POLL_MS = 1_000;
+/** One resumed-input report per pause, using the existing poll on every OS. */
+export const COMPUTER_INPUT_PAUSE_SECONDS = 5;
 
 type PowerEvent = "lock-screen" | "unlock-screen" | "suspend" | "resume";
 type Power = {
@@ -17,6 +19,7 @@ export class ComputerUse {
   private suspended = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private value: boolean | undefined;
+  private idle: number | undefined;
   private readonly events: Record<PowerEvent, () => void> = {
     "lock-screen": () => { this.locked = true; this.read(); },
     "unlock-screen": () => { this.locked = false; this.read(); },
@@ -39,9 +42,12 @@ export class ComputerUse {
     const state = this.power.getSystemIdleState(COMPUTER_AWAY_SECONDS);
     // An unknown idle source (including some Wayland sessions) deliberately
     // retains in-use behavior. A lock/suspend event still takes precedence.
+    const idle = this.power.getSystemIdleTime();
+    const resumed = this.idle !== undefined && this.idle >= COMPUTER_INPUT_PAUSE_SECONDS && idle < this.idle;
+    this.idle = idle;
     const inUse = !this.locked && !this.suspended && state !== "locked"
-      && (state === "unknown" || this.power.getSystemIdleTime() < COMPUTER_AWAY_SECONDS);
-    if (inUse === this.value) return;
+      && (state === "unknown" || idle < COMPUTER_AWAY_SECONDS);
+    if (inUse === this.value && !(inUse && resumed)) return;
     this.value = inUse;
     this.changed(inUse);
   }

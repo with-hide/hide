@@ -143,6 +143,7 @@ function loginRecord(nowMs: number): SessionRecord {
       requests: LOGIN_REQUESTS.map(([hoursAgo, text], offset) => ({ offset, at_unix_ms: at(hoursAgo), text, author: "operator" as const, images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false })),
       result: { kind: "turn", end: "done", line: "Expiry follows the server's clock; test added", at_unix_ms: at(22.8) },
     }],
+    folded_asks: [],
     omitted_requests: 0,
     outputs: [output],
     pr_groups: [{ child: null, name: LOGIN_TITLE, pulls: [{ url: PR_URL, number: PR_NUMBER, title: PR_TITLE, state: "pending", own: true, holders: [], stale: false, last_read_at_unix_ms: at(1) }] }],

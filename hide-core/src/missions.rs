@@ -1306,6 +1306,15 @@ impl MissionNode {
         self.prs.push(number);
     }
 
+    /// Gives a node with a pull request its CI line, open until GitHub's
+    /// checks are read (`mission_criteria::ensure_ci_line`); an external node,
+    /// which Hide finishes itself, has none. Whether the line was made.
+    pub(crate) fn ensure_ci_line(&mut self) -> bool {
+        self.kind != NodeKind::External
+            && self.current_pr().is_some()
+            && crate::mission_criteria::ensure_ci_line(&mut self.criteria).1
+    }
+
     /// The mark a person leaves by taking the node back to work from done
     /// or dropped: Hide does not finish it again on the facts it was taken
     /// back on, only once it holds another pull request or a line is
@@ -1430,6 +1439,16 @@ pub struct Decided {
     pub node: String,
 }
 
+/// The line a closing pull added to a mission's report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FolderLine {
+    pub text: String,
+    /// The checkout held the destination when the line was written: the
+    /// pull brought it there or found it there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Mission {
     pub id: String,
@@ -1524,6 +1543,12 @@ pub struct Mission {
     pub delay_until_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
+    /// The line about the operator's checkout Hide added to `report` when
+    /// the mission closed (`runtime/mission_pull.rs`, PRD
+    /// mission-destination D-28), so a later close replaces it rather than
+    /// adding a second. A build from before it ignores and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_line: Option<FolderLine>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     #[serde(default)]
@@ -3958,6 +3983,7 @@ pub(crate) mod tests {
             delay: None,
             delay_until_unix_ms: None,
             report: None,
+            folder_line: None,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
             started_at_unix_ms: None,
