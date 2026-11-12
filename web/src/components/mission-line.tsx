@@ -60,10 +60,13 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
         {direct(true)}
       </span>
     ) : null;
+  // A line runs inline when its head (the number, or the icon of a line without one that has marks) holds the first row
+  // and the path wraps whole to the second when it does not fit beside it.
+  const inline = line.pr ? !end : end != null;
   const path = (
     // Where the branch and the destination do not both fit, a grid of auto columns grows them from zero alike, each frozen
     // at its whole width, so a name shorter than half the row stays whole and two long ones share it.
-    <span aria-hidden="true" className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", line.pr && !end ? "inline-grid h-lh align-top" : "grid", line.pr && end && "col-span-2 justify-self-start", !line.pr && "flex-1")} data-line-path="true">
+    <span aria-hidden="true" className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", inline ? "inline-grid h-lh align-top" : "grid", line.pr && end && "col-span-2 justify-self-start", !line.pr && !end && "flex-1")} data-line-path="true">
       {from ? (
         <span className="flex min-w-0 items-center gap-xxs" data-line-from="true">
           {plan ? <span className="min-w-0 truncate" data-line-plan={line.plan}>{plan}</span> : null}
@@ -100,9 +103,11 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
     );
   }
   // A numbered line with marks: the number and the marks on the first row, the number never giving way, and the path on
-  // the second. Without marks it runs inline, so the path wraps whole under the number to a row of the card's whole
-  // width. A line without a number is one flex row that never wraps: its path takes what the marks leave, so they keep
-  // their width at the row's right end and only a warning's words give way.
+  // the second. A numbered line without marks runs inline, so the path wraps whole under the number to a row of the card's
+  // whole width. A line without a number that has marks runs inline the same way, its icon in the number's place and the
+  // marks at the first row's right end, never wider than the icon leaves so a warning's words give way first: the path
+  // stays on that row when it fits between them and otherwise takes the whole second row. Without marks it is one row that
+  // never wraps.
   if (line.pr && end) {
     return (
       <span className={cn("grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-xs text-caption text-muted-foreground", className)} {...data}>
@@ -115,19 +120,19 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
       </span>
     );
   }
-  return line.pr ? (
-    <span className={cn("block min-w-0 text-caption text-muted-foreground", className)} {...data}>
+  return inline ? (
+    <span className={cn("flow-root min-w-0 text-caption text-muted-foreground", className)} {...data}>
       <span aria-hidden="true" className="mr-xs inline-flex h-lh items-center gap-xxs align-top" data-line-head="true">
         {icon}
         {number}
       </span>
+      {end ? <span className="float-right ml-xs flex h-lh max-w-[calc(100%_-_var(--size-icon-sm)_-_2_*_var(--spacing-xs))] items-center">{end}</span> : null}
       {path}
     </span>
   ) : (
     <span className={cn("flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground", className)} {...data}>
       <span aria-hidden="true" className="flex h-lh shrink-0 items-center" data-line-head="true">{icon}</span>
       {path}
-      {end}
     </span>
   );
 }
