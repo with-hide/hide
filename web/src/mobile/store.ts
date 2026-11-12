@@ -5,13 +5,15 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
+  /** The native app is still reading its saved connection, so no destination is known yet. */
+  | "starting"
   /** No code and no credential on this phone (B13). */
   | "version"
   | "unpaired"
@@ -58,7 +60,7 @@ export function answerSentFor(sent: MissionAnswerSent | null, mission: string): 
   return sent?.mission === mission ? sent : null;
 }
 
-export type Rows = { state: RowsState; text: string; lines: number; more: boolean };
+export type Rows = { state: RowsState; text: string; lines: number; more: boolean; alternateScreen?: boolean };
 
 /** The agent's open Views, as the last `looks` frame carried them; `omitted` are the ones past hided's cap. */
 export type Looks = { rows: LookRow[]; omitted: number };
@@ -125,7 +127,6 @@ type PhoneState = {
   interfaceLanguage: string | null;
   /** The operator's color theme as the last `agents` frame carried it; null before the first frame (drawn as Hide). */
   colorTheme: string | null;
-  pushMode: PushMode;
   notifications: Notifications;
   vapidKey: string | null;
   /** Null until the first list arrives; kept across a lost connection. */
@@ -151,7 +152,7 @@ type PhoneState = {
   missionsFailed: boolean;
   /** The missions the last frame left out (its caps), shown as a line under the list. */
   missionsOmitted: number;
-  /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `done:<mission>` for a page's 끝남; only missions the record still has. */
+  /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `decided:<mission>` for its skipped lines; only missions the record still has. */
   missionFolds: Record<string, true>;
   /** What was typed for each mission's decision, kept until its answer is accepted (B35). */
   missionDrafts: Record<string, string>;
@@ -202,7 +203,6 @@ const initial: PhoneState = {
   otherPhones: 0,
   interfaceLanguage: null,
   colorTheme: null,
-  pushMode: "off",
   notifications: "unasked",
   vapidKey: null,
   groups: null,
@@ -264,7 +264,7 @@ export function applyFrame(frame: ServerFrame): void {
       });
       return;
     case "meta":
-      patch({ pushMode: frame.push_mode, otherPhones: frame.other_phones });
+      patch({ otherPhones: frame.other_phones });
       return;
     case "agents":
       patch({
@@ -285,7 +285,7 @@ export function applyFrame(frame: ServerFrame): void {
         // A mission that left the record takes its page and its draft with it.
         missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
         missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),
-        missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("done:") || listed.has(key.slice("done:".length)))),
+        missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("decided:") || listed.has(key.slice("decided:".length)))),
       });
       return;
     }
@@ -313,7 +313,7 @@ export function applyFrame(frame: ServerFrame): void {
       if (!detail || !sameKey(detail.key, frame)) return;
       const rows: Rows =
         frame.state === "ok"
-          ? { state: "ok", text: frame.text ?? "", lines: frame.lines ?? 0, more: frame.more ?? false }
+          ? { state: "ok", text: frame.text ?? "", lines: frame.lines ?? 0, more: frame.more ?? false, alternateScreen: frame.alternate_screen ?? false }
           : { state: frame.state, text: detail.rows?.text ?? "", lines: detail.rows?.lines ?? 0, more: false };
       patch({ detail: { ...detail, rows } });
       return;

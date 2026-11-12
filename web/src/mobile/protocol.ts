@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionGate, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -29,6 +29,8 @@ export type PhoneAgent = {
   background_left?: number;
   /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
   children_left?: number;
+  /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
+  starred?: true;
   agent_kind: string;
   title: string;
   place: string | null;
@@ -111,8 +113,6 @@ export type PhoneMissionNode = MissionNodeBrief & {
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
   agent: AgentKey | null;
   escalation: WorkerEscalation | null;
-  /** The place the plan has the operator look before the step is done (`PhoneGate`, PRD mission-human-gate B13); absent for a step without one or from an older Mac. */
-  gate?: MissionGate;
 };
 
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */
@@ -124,7 +124,6 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   device_id: string;
   /** The device a mission away from the paired Mac runs on; null on the Mac. */
   device_label: string | null;
-  question: MissionQuestion | null;
   answer: MissionAnswer | null;
   answer_failed: MissionAnswerFailure | null;
   /** The Views linked to the open decision; absent when none. Each opens the 볼 것 of the agent that opened it. */
@@ -167,8 +166,6 @@ export type PhonePr = PullRequest & {
 export type PhonePrFeedback = Pick<PrFeedback, "request_id" | "pr_number" | "phase" | "failed_checks" | "change_requests" | "failure">;
 
 export type Notifications = "on" | "off" | "unasked";
-
-export type PushMode = "off" | "app_closed" | "always";
 
 export type RowsState = "ok" | "gone" | "device_unreachable" | "unavailable";
 
@@ -267,7 +264,8 @@ export type StartCatalog = {
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
   | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications }
-  | { type: "meta"; push_mode: PushMode; other_phones: number }
+  // Older computers still send off; new phone settings do not use this global mode.
+  | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number }
   /**
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
@@ -282,7 +280,8 @@ export type ServerFrame =
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
   /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */
   | { type: "pr_result"; request_id?: string; action: "read_pr" | "merge_pr" | "read_pr_feedback"; pr?: string | null; ok: boolean; reason: string | null }
-  | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
+  /** The holder watch's last screen mode; absent on older computers means false. */
+  | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean; alternate_screen?: boolean }
   | {
       type: "conversation";
       device_id: string;
@@ -670,29 +669,6 @@ export function staleTags(tags: readonly string[], groups: readonly AgentGroup[]
     if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
   }
   return tags.filter((tag) => !live.has(tag));
-}
-
-/** The notification row on the list (B30), or null when it has nothing to say. */
-export type NotificationRow = "enable" | "install_first" | "denied" | null;
-
-export function notificationRow({
-  pushMode,
-  notifications,
-  permission,
-  supported,
-}: {
-  pushMode: PushMode;
-  notifications: Notifications;
-  permission: NotificationPermission | "unsupported";
-  /** Whether this page can subscribe at all: a Safari tab on iOS cannot, a Home Screen app can. */
-  supported: boolean;
-}): NotificationRow {
-  if (pushMode === "off") return null;
-  if (permission === "denied" || (notifications === "off" && permission !== "granted")) return "denied";
-  if (notifications === "on" && permission === "granted") return null;
-  // iOS offers push only to a Home Screen app; a Safari tab has no PushManager.
-  if (!supported) return "install_first";
-  return "enable";
 }
 
 /** The unseen Views first and then the seen ones, each in hided's order (newest first): what the 볼 것 list draws (B12). */

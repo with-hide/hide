@@ -24,7 +24,7 @@ final class NotificationService: UNNotificationServiceExtension {
         }
         content.title = notice.title
         content.body = notice.body(words: .current)
-        content.categoryIdentifier = NoticeCategory.of(notice)
+        content.categoryIdentifier = NoticeCategory.open
         content.threadIdentifier = notice.tag
         content.userInfo = NoticeInfo.of(notice)
         finish(content, forgetCiphertext: false)

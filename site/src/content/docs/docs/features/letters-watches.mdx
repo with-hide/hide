@@ -59,7 +59,8 @@ A parent that starts a helper with `hide agent spawn --parent here` gets a watch
 
 - After **20 minutes** without activity the parent gets a warning letter. A status change or a write to the helper's conversation counts as activity and starts a new episode.
 - After **60 more minutes** it gets a second warning. There are at most two warnings per episode.
-- If the helper stopped on a question, or sits at a blocked prompt, the parent hears after about **one minute**, so it can answer or ask you.
+- If the helper stopped on a question, the parent hears after about **one minute**, so it can answer or ask you.
+- If the helper sits at a blocked prompt, such as an approval, the parent hears **at once**. If the prompt is still waiting **one minute** later, it reaches you too.
 - If the parent does not act, Hide tells you once, 60 minutes after the first warning.
 - A watch ends when the helper exits, when the parent stops it, or when the parent receives the helper's `report`.
 

@@ -1,13 +1,13 @@
 //! The runtime half of a mission's own care (PRD mission-node-simple): the
 //! facts `crate::mission_health::evaluate` reads, gathered under the lock;
-//! what its acts do to the book, the events and the letters; the raise to
-//! the operator after ten minutes; and the operator's answer to a raise.
+//! what its acts do to the book, the events and the letters; the mission's
+//! safety net (`crate::mission_health::safety_net`) and its notice; and the
+//! operator's answer to a raise.
 //!
 //! The evaluation runs when a fact it reads moves, never on a clock of its
 //! own (D-08): the coordinator's tick compares the book's and the GitHub
 //! answers' counts, the ledger and the workers asleep with what the last
-//! evaluation read, which costs a few comparisons while nothing moved. The
-//! ten-minute raise is counted in the existing minute decision.
+//! evaluation read, which costs a few comparisons while nothing moved.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,7 +18,9 @@ use serde_json::json;
 use super::Runtime;
 use crate::mission_criteria::GATE_KEY;
 use crate::mission_events::{EventKind, MissionEvent};
-use crate::mission_health::{Act, Facts, NodeFacts, WarnAct, WorkerLife, evaluate, warn_acts};
+use crate::mission_health::{
+    Act, Facts, NodeFacts, WarnAct, WorkerLife, WorkerStopped, evaluate, warn_acts,
+};
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
     MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, WOKEN_LIMIT,
@@ -34,9 +36,6 @@ const MISSION_READ_AFTER: std::time::Duration = std::time::Duration::from_secs(3
 /// Wakes for workers one mission keeps waiting; a new one past it is
 /// refused and logged (B28).
 pub(super) const WORKER_WAKE_LIMIT: usize = 16;
-/// How long a raise waits on the Conductor before it reaches the operator
-/// (D-05).
-pub(super) const RAISE_TO_OPERATOR_MS: u64 = 10 * 60_000;
 /// Mission notices one delivery pass claims (B5); the human notices of the
 /// ledger keep their own cap.
 const MISSION_NOTICE_LIMIT: usize = 8;
@@ -86,7 +85,9 @@ pub(super) struct MissionAttentionPayload {
 }
 
 /// Raises `reason` for node `key` of `mission`: to the Conductor with a
-/// letter, or to the operator at once for a reason only they settle. A node
+/// letter, or to the operator at once for a reason only they settle
+/// (`AttentionReason::operator_first`); a raise of the Conductor's never
+/// reaches the operator by itself (the safety net is the mission's). A node
 /// carries one raise at a time, a cause raised once is not raised again,
 /// and a mission past `ATTENTION_LIMIT` refuses new ones. Returns the
 /// events it made, none when nothing was raised.
@@ -161,7 +162,6 @@ pub(super) fn raise_for(
         agent,
         key: mission.attention_seq,
         since_unix_ms: now,
-        operator_at_unix_ms: to_operator.then_some(now),
         notified: false,
     };
     let node = &mut mission.nodes[at];
@@ -206,17 +206,6 @@ pub(super) fn raise_for(
     vec![event]
 }
 
-/// Whether a raise its Conductor was asked first reached the operator
-/// after ten minutes unanswered (B15): what lets the operator hand the
-/// mission to another session while that Conductor is still there.
-pub(super) fn conductor_unanswered(mission: &Mission) -> bool {
-    mission.nodes.iter().any(|node| {
-        node.attention.as_ref().is_some_and(|attention| {
-            attention.operator_at_unix_ms.is_some() && !attention.reason.operator_first()
-        })
-    })
-}
-
 /// A key naming `attention`'s raise, its letter or its reaching the
 /// operator: a stall's carries the raise's count, since the same stall that
 /// went and stands again is a new one (`AttentionReason::stall`).
@@ -255,29 +244,25 @@ pub(super) fn lower_not_started(mission: &mut Mission, now: u64) -> bool {
     lowered
 }
 
-/// A Conductor that took the mission over is asked first again for what
-/// reached the operator because its predecessor did not answer (B15): its
-/// own ten minutes start now, so the old timeout never hands it on.
-pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
+/// A Conductor that took the mission over is told each raise of the
+/// Conductor's that stands, as its predecessor was: the letter's key is the
+/// raise's, and the letters keep one per recipient, so the new session gets
+/// each once. Its own safety-net time starts at its arrival
+/// (`Runtime::note_conductor_arrived`).
+pub(super) fn tell_new_conductor(mission: &mut Mission) {
     let mut asked = Vec::new();
-    for node in &mut mission.nodes {
-        let Some(key) = node.attention.as_ref().map(|attention| {
-            stall_named(
-                act_key(node, &format!("raise:{}", attention.cause())),
-                attention,
-            )
-        }) else {
+    for node in &mission.nodes {
+        let Some(attention) = node
+            .attention
+            .as_ref()
+            .filter(|attention| !attention.reason.operator_first())
+        else {
             continue;
         };
-        let Some(attention) = node.attention.as_mut() else {
-            continue;
-        };
-        if attention.operator_at_unix_ms.is_none() || attention.reason.operator_first() {
-            continue;
-        }
-        attention.since_unix_ms = now;
-        attention.operator_at_unix_ms = None;
-        attention.notified = false;
+        let key = stall_named(
+            act_key(node, &format!("raise:{}", attention.cause())),
+            attention,
+        );
         asked.push((node.key.clone(), attention.pr, attention.reason, key));
     }
     for (node, pr, reason, key) in asked {
@@ -356,17 +341,6 @@ pub(super) fn prune_attention_wakes(mission: &mut Mission) {
                 .reason
                 .is_some_and(|reason| standing.contains(&(wake.node.clone(), reason)))
     });
-}
-
-/// Who a mission's raises are asked of first, as a reaching of the
-/// operator's key names it: the Conductor's agent, else its session, else
-/// its pane.
-fn conductor_identity(conductor: &crate::missions::Conductor) -> String {
-    conductor
-        .agent_id
-        .clone()
-        .or_else(|| conductor.actor.session.clone())
-        .unwrap_or_else(|| format!("{}/{}", conductor.actor.device_id, conductor.actor.pane_id))
 }
 
 /// Queues the letter of each warning `mission` holds untold, in the
@@ -458,7 +432,7 @@ fn hide_event(now: u64, node: &str, mark: &HideMark) -> MissionEvent {
 
 /// The report Hide gives a mission it closed (B18): each node's result,
 /// its pull requests and its lines met.
-fn closing_report(mission: &Mission) -> String {
+pub(super) fn closing_report(mission: &Mission) -> String {
     let mut lines = vec![format!(
         "Hide closed the mission: every node is done or dropped ({} nodes).",
         mission.nodes.len()
@@ -497,6 +471,51 @@ fn closing_report(mission: &Mission) -> String {
                 format!(" · {met}/{} lines", node.criteria.len())
             },
         ));
+    }
+    // What is left for the operator to merge, so the report says it even
+    // when the map is not open (PRD mission-destination D-11, D-35).
+    let left: Vec<String> = mission
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                super::mission_landing::node_landing(mission, node, false),
+                Some(super::mission_landing::NodeLanding::Left {
+                    action: super::mission_landing::LandingAction::Merge
+                })
+            )
+        })
+        .map(|node| {
+            let prs = super::mission_landing::open_pulls(node)
+                .map(|pr| format!("#{pr}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let pr = format!(" · PR {prs}");
+            let why = node
+                .operator_merge
+                .as_deref()
+                .map_or_else(String::new, |why| format!(" · {why}"));
+            format!("- {} ({}){pr}{why}", node.title, node.key)
+        })
+        .collect();
+    if !left.is_empty() {
+        lines.push(format!("Left for the operator to merge ({}):", left.len()));
+        lines.extend(left);
+    }
+    // What the Conductor settled on its own is read with the close
+    // (hide-private docs/missions.md, the principle of 2026-11-11).
+    let alone = super::missions::skipped_alone(mission);
+    if !alone.is_empty() {
+        lines.push(format!(
+            "Skipped by the Conductor on its own ({}):",
+            alone.len()
+        ));
+        for skip in alone {
+            lines.push(format!(
+                "- {} ({}) · {}: {} · {} · at {} Unix ms",
+                skip.title, skip.node, skip.line, skip.reason, skip.by, skip.at_unix_ms
+            ));
+        }
     }
     lines.join("\n")
 }
@@ -539,6 +558,7 @@ impl Runtime {
                 .collect(),
             made: true,
         };
+        self.note_conductors_seen(&made.present, now);
         if made == self.missions.health_made {
             self.drive_mission_cleanup(false);
             return false;
@@ -565,88 +585,9 @@ impl Runtime {
         // A review's failure or a push moves a node's warnings now; the
         // quiet that only time makes is the minute decision's.
         changed |= self.warn_missions(now);
-        // A raise with no Conductor to wait on, or whose Conductor just
-        // left, reaches the operator now rather than at the minute (D-08).
-        changed |= self.raise_to_operator(now);
         // A node this evaluation finished is looked at in the same pass.
         self.drive_mission_cleanup(true);
         changed
-    }
-
-    /// The raises that waited ten minutes on the Conductor, or that have no
-    /// Conductor to wait on, reach the operator (D-05, B14); run in the
-    /// minute decision.
-    pub(crate) fn raise_to_operator(&mut self, now: u64) -> bool {
-        let mut changed = Vec::new();
-        for index in 0..self.missions.book.missions.len() {
-            let mission = &self.missions.book.missions[index];
-            if !mission.status.asks() || self.mission_stale(mission) {
-                continue;
-            }
-            // A closed mission's Conductor has finished with it: a raise the
-            // mission still holds goes to the operator at once.
-            let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
-            let mission = &mut self.missions.book.missions[index];
-            let asked = conductor_identity(&mission.conductor);
-            // A raise on a node the open decision is about waits on the
-            // operator's answer there, with the Conductor: the decision is
-            // already the operator's one card for it.
-            let decided: Vec<bool> = mission
-                .nodes
-                .iter()
-                .map(|node| mission.deciding_on(&node.key))
-                .collect();
-            let mut events = Vec::new();
-            for (node, decided) in mission.nodes.iter_mut().zip(decided) {
-                if decided {
-                    continue;
-                }
-                // The raise's cause and round and the Conductor it was asked
-                // of name its reaching the operator: the same raise read
-                // again after a restart makes the same key, and one asked
-                // again of a Conductor that took over is its own act (B27).
-                let Some(key) = node.attention.as_ref().map(|attention| {
-                    stall_named(
-                        act_key(node, &format!("operator:{}:{asked}", attention.cause())),
-                        attention,
-                    )
-                }) else {
-                    continue;
-                };
-                let Some(attention) = node.attention.as_mut() else {
-                    continue;
-                };
-                if attention.operator_at_unix_ms.is_some()
-                    || (present
-                        && now.saturating_sub(attention.since_unix_ms) < RAISE_TO_OPERATOR_MS)
-                {
-                    continue;
-                }
-                attention.operator_at_unix_ms = Some(now);
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.attention_to_operator",
-                    "mission": mission.id, "node": node.key,
-                    "reason": attention.reason.as_str(), "conductor_present": present,
-                }));
-                let mut event = MissionEvent::new(now, EventKind::RaisedToOperator).node(&node.key);
-                event.reason = Some(attention.reason);
-                event.pr = attention.pr;
-                event.id = Some(key);
-                events.push(event);
-            }
-            if !events.is_empty() {
-                mission.updated_at_unix_ms = now;
-                changed.push((mission.id.clone(), events));
-            }
-        }
-        if changed.is_empty() {
-            return false;
-        }
-        for (id, events) in changed {
-            self.stage_mission_events(&id, events);
-        }
-        self.save_missions();
-        true
     }
 
     /// Brings each mission's node warnings to what `warn_acts` answers at
@@ -658,14 +599,21 @@ impl Runtime {
     /// operator's. A mission whose device does not answer is left as it is
     /// (B29). Whether the book changed.
     pub(crate) fn warn_missions(&mut self, now: u64) -> bool {
+        let ledger = self.delivery_state().ok();
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
             if self.mission_stale(mission) {
                 continue;
             }
-            let pulls = self.mission_pulls(mission);
-            let acts = warn_acts(mission, pulls, now);
+            let sleeping = self.mission_sleeping(mission, ledger.as_deref());
+            let facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
+            let operator_waits: Vec<bool> = mission
+                .nodes
+                .iter()
+                .map(|node| self.gate_open(mission, node))
+                .collect();
+            let acts = warn_acts(mission, facts.pulls, &facts.nodes, &operator_waits, now);
             let untold = mission
                 .nodes
                 .iter()
@@ -678,13 +626,19 @@ impl Runtime {
             let mut moved = !acts.is_empty();
             for act in acts {
                 match act {
-                    WarnAct::Raise { node, kind, from } => {
+                    WarnAct::Raise {
+                        node,
+                        kind,
+                        from,
+                        cause,
+                    } => {
                         let target = &mut mission.nodes[node];
                         target.warnings.push(NodeWarning {
                             kind,
                             from_unix_ms: from,
                             since_unix_ms: now,
                             told_unix_ms: None,
+                            cause,
                         });
                         crate::diagnostic!(json!({
                             "component": "missions", "kind": "mission.warned",
@@ -945,10 +899,14 @@ impl Runtime {
                 } else {
                     Vec::new()
                 };
+                let stopped = record.and_then(|record| {
+                    self.worker_stopped(record, ledger, &mission.conductor.actor)
+                });
                 NodeFacts {
                     worker,
                     own_prs,
                     unmet,
+                    stopped,
                 }
             })
             .collect();
@@ -957,6 +915,76 @@ impl Runtime {
             nodes,
             device_stale: self.mission_stale(mission),
         }
+    }
+
+    /// The worker `record`'s row read as stopped with nothing of its own to
+    /// wait on (`mission_health::WorkerStopped`, hide-private
+    /// docs/missions.md, A stopped worker): the row says so
+    /// (`worker_row_stopped`), no letter of the worker's waits an answer, and
+    /// its last word to its Conductor is not a report.
+    pub(super) fn worker_stopped(
+        &self,
+        record: &crate::coordination::AgentRecord,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        conductor: &crate::delivery::Actor,
+    ) -> Option<WorkerStopped> {
+        let stopped = self.worker_row_stopped(record)?;
+        let own = |actor: &crate::delivery::Actor| actor.same_identity(&record.actor);
+        let letters = &ledger?.letters;
+        if letters
+            .iter()
+            .any(|letter| own(&letter.sender) && letter.waiting_answer)
+        {
+            return None;
+        }
+        let last_word = letters
+            .iter()
+            .filter(|letter| {
+                (own(&letter.sender) && letter.recipient.same_identity(conductor))
+                    || (letter.sender.same_identity(conductor) && own(&letter.recipient))
+            })
+            .max_by_key(|letter| letter.created_at_unix_ms);
+        if last_word.is_some_and(|letter| own(&letter.sender) && letter.kind == "report") {
+            return None;
+        }
+        Some(stopped)
+    }
+
+    /// What the worker `record`'s own row says of a stop, the part of
+    /// `worker_stopped` the mission views are kept by
+    /// (`rows_and_holds_digest`): its pane still runs the worker's session;
+    /// the row is stopped, asks the operator nothing, and no person's turn,
+    /// sleep, child, background task, reply or checks hold it. Stopped since
+    /// its hook's refusal when one ended the turn, since an agent waiting on
+    /// its screen for a limit's reset reads working to the engine, else since
+    /// its row last changed.
+    pub(super) fn worker_row_stopped(
+        &self,
+        record: &crate::coordination::AgentRecord,
+    ) -> Option<WorkerStopped> {
+        if record.ended || !self.device_answers(&record.machine) {
+            return None;
+        }
+        let row = self
+            .agent_row(&record.pane_on(self.node.as_str()))
+            .filter(|row| row.lineage_session == record.actor.session)?;
+        let rests = row.activity == "stopped"
+            && !matches!(row.demand.as_str(), "question" | "approval")
+            && !row.blocked
+            && row.wait.is_none()
+            && row.human_turn.is_none()
+            && row.declared_human_turn.is_none()
+            && row.sleep.is_none();
+        if !rests {
+            return None;
+        }
+        let refused = row.refused.as_ref();
+        Some(WorkerStopped {
+            since_unix_ms: refused
+                .map(|refused| refused.at_unix_ms)
+                .or(row.changed_at_unix_ms)?,
+            cause: refused.map(|refused| crate::missions::StopCause::of(&refused.refusal)),
+        })
     }
 
     /// Evaluates one mission and applies what it answers; whether the book
@@ -1096,8 +1124,12 @@ impl Runtime {
             return false;
         };
         let before = mission.nodes[at].clone();
+        let exempt = mission.exempt;
         let node = &mut mission.nodes[at];
         node.attach_pr(pr);
+        if !exempt {
+            node.ensure_ci_line();
+        }
         if let Some(seen) = seen {
             super::missions::note_seen(node, seen, now);
         }
@@ -1292,6 +1324,12 @@ impl Runtime {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
+        // A destination the last read could not find is a scope question
+        // for the operator (PRD mission-destination D-33): nothing is
+        // closed against it until a read finds it or the plan names another.
+        if self.missions.outside.destination_lost(id) {
+            return false;
+        }
         let report = mission.report.is_none().then(|| closing_report(mission));
         let key = close_key(mission);
         let wake_key = key.clone();
@@ -1434,7 +1472,10 @@ impl Runtime {
         if !mission.status.open() || !self.conductor_present(&mission.conductor.actor) {
             return refused("mission_not_conducted");
         }
-        if !conductor_unanswered(mission) {
+        if self
+            .mission_safety_net(mission, now)
+            .is_none_or(|net| !net.conductor_present)
+        {
             return refused("mission_handover_not_due");
         }
         let from = mission.conductor.actor.clone();
@@ -1495,9 +1536,7 @@ impl Runtime {
         // is refused rather than applied to a node that no longer waits.
         // The screen names a raise by when it reached whom it waits on.
         let names_it = |attention: &crate::missions::Attention| {
-            payload.since_unix_ms.is_some_and(|since| {
-                since == attention.since_unix_ms || Some(since) == attention.operator_at_unix_ms
-            })
+            payload.since_unix_ms == Some(attention.since_unix_ms)
         };
         if payload.action != OperatorAction::Resume && !attention.as_ref().is_some_and(names_it) {
             return Err("mission_attention_moved".into());
@@ -1578,6 +1617,9 @@ impl Runtime {
                     .and_then(|attention| attention.pr)
                     .ok_or("mission_attention_moved")?;
                 next.attach_pr(pr);
+                if !mission.exempt {
+                    next.ensure_ci_line();
+                }
                 if let Some(seen) = self.pull_seen(mission, pr) {
                     super::missions::note_seen(&mut next, seen, now);
                 }
@@ -1776,11 +1818,13 @@ impl Runtime {
         }
     }
 
-    /// Claims the notices for nodes that wait on the operator with no Needs
-    /// You row to lay them on (B5): neither the Conductor nor the node's
-    /// worker stands. Each cause is told once, marked in the book before
-    /// any channel runs, so a restart never tells it again; the rest wait
-    /// for the next pass past the cap.
+    /// Claims the notices for what waits on the operator outside a Needs You
+    /// row (B5): a raise only the operator settles with neither the
+    /// Conductor nor the node's worker standing to carry it, and a mission's
+    /// safety net as it comes up, once for the raises it holds (no held raise
+    /// told before). Each is told once, marked in the book before any channel
+    /// runs, so a restart never tells it again; the rest wait for the next
+    /// pass past the cap.
     pub(crate) fn claim_mission_notices(&mut self) -> Vec<crate::delivery::worker::HumanNotice> {
         use crate::delivery::worker::{HumanNotice, HumanNoticeKind};
         // Whether a row carries a raise is what is laid on the rows, so the
@@ -1788,8 +1832,13 @@ impl Runtime {
         if self.refresh_plan_reviews() {
             self.announce_missions();
         }
+        let now = super::memory::now_ms();
         let ledger = self.delivery_state().ok();
-        let mut claims = Vec::new();
+        // Per claim, the mission and the nodes it tells of, the first named.
+        let mut claims: Vec<(usize, Vec<usize>, &'static str)> = Vec::new();
+        // A standing net owns one notice. A new raise inherits that notice
+        // before an earlier raise can leave it, even if this pass is capped.
+        let mut inherited = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {
             if !mission.status.asks() || self.mission_stale(mission) {
                 continue;
@@ -1799,28 +1848,62 @@ impl Runtime {
                     break;
                 }
                 let waits = node.attention.as_ref().is_some_and(|attention| {
-                    attention.operator_at_unix_ms.is_some() && !attention.notified
+                    attention.reason.operator_first() && !attention.notified
                 });
                 if waits && !self.mission_attention_has_row(ledger.as_deref(), mission, node) {
-                    claims.push((at, index));
+                    claims.push((at, vec![index], "mission.attention_noticed"));
                 }
             }
-        }
-        if claims.is_empty() {
-            return Vec::new();
-        }
-        let mut notices = Vec::new();
-        for (at, index) in claims {
-            let mission = &mut self.missions.book.missions[at];
-            let node = &mut mission.nodes[index];
-            let Some(attention) = node.attention.as_mut() else {
+            let Some(net) = self.mission_safety_net(mission, now) else {
                 continue;
             };
-            attention.notified = true;
+            let told = net.nodes.iter().any(|&index| {
+                mission.nodes[index]
+                    .attention
+                    .as_ref()
+                    .is_some_and(|attention| attention.notified)
+            });
+            if told {
+                for index in net.nodes {
+                    if mission.nodes[index]
+                        .attention
+                        .as_ref()
+                        .is_some_and(|attention| !attention.notified)
+                    {
+                        inherited.push((at, index));
+                    }
+                }
+            } else if claims.len() < MISSION_NOTICE_LIMIT {
+                claims.push((at, net.nodes, "mission.safety_net_noticed"));
+            }
+        }
+        if claims.is_empty() && inherited.is_empty() {
+            return Vec::new();
+        }
+        for (at, index) in inherited {
+            if let Some(attention) = self.missions.book.missions[at].nodes[index]
+                .attention
+                .as_mut()
+            {
+                attention.notified = true;
+            }
+        }
+        let mut notices = Vec::new();
+        for (at, nodes, kind) in claims {
+            let mission = &mut self.missions.book.missions[at];
+            let Some(&first) = nodes.first() else {
+                continue;
+            };
+            for &index in &nodes {
+                if let Some(attention) = mission.nodes[index].attention.as_mut() {
+                    attention.notified = true;
+                }
+            }
+            let node = &mission.nodes[first];
             crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.attention_noticed",
-                "mission": mission.id, "node": node.key,
-                "reason": attention.reason.as_str(),
+                "component": "missions", "kind": kind,
+                "mission": mission.id, "node": node.key, "nodes": nodes.len(),
+                "reason": node.attention.as_ref().map(|attention| attention.reason.as_str()),
             }));
             notices.push(HumanNotice {
                 id: mission.id.clone(),
@@ -1834,10 +1917,102 @@ impl Runtime {
         notices
     }
 
+    /// The mission's safety net now (`mission_health::safety_net`), as every
+    /// reader of it asks: none while the mission's device does not answer
+    /// (B29); its Conductor counted present only while the mission is open,
+    /// since a closed mission's Conductor has finished with it; each node's
+    /// gate read as the stall rule reads it.
+    pub(crate) fn mission_safety_net(
+        &self,
+        mission: &Mission,
+        now: u64,
+    ) -> Option<crate::mission_health::SafetyNet> {
+        if self.mission_stale(mission) {
+            return None;
+        }
+        let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
+        let operator_waits: Vec<bool> = mission
+            .nodes
+            .iter()
+            .map(|node| self.gate_open(mission, node))
+            .collect();
+        crate::mission_health::safety_net(
+            mission,
+            present,
+            self.conductor_present_since(&mission.id, now),
+            &operator_waits,
+            now,
+        )
+    }
+
+    /// When the view of a mission whose Conductor is present must be made
+    /// again for its safety net to come up (`mission_health::safety_net_due`).
+    pub(super) fn mission_safety_net_due(&self, mission: &Mission, now: u64) -> Option<u64> {
+        if self.mission_stale(mission)
+            || !mission.status.open()
+            || !self.conductor_present(&mission.conductor.actor)
+        {
+            return None;
+        }
+        let operator_waits: Vec<bool> = mission
+            .nodes
+            .iter()
+            .map(|node| self.gate_open(mission, node))
+            .collect();
+        crate::mission_health::safety_net_due(
+            mission,
+            self.conductor_present_since(&mission.id, now),
+            &operator_waits,
+            now,
+        )
+    }
+
+    /// Since when this daemon has seen the mission's Conductor present, `now`
+    /// when it has not yet: memory only, so a restart, a take or a resume
+    /// starts its safety-net time again and a Conductor that just came is
+    /// never read as silent about raises it was not there for.
+    fn conductor_present_since(&self, mission: &str, now: u64) -> u64 {
+        self.missions
+            .conductor_seen
+            .get(mission)
+            .copied()
+            .unwrap_or(now)
+    }
+
+    /// Follows each mission's Conductor presence as the health pass reads it
+    /// (`present`, in book order): first seen present keeps `now`, absent
+    /// forgets it. At most one entry per mission of the book.
+    fn note_conductors_seen(&mut self, present: &[bool], now: u64) {
+        let seen = &mut self.missions.conductor_seen;
+        for (mission, &here) in self.missions.book.missions.iter().zip(present) {
+            if here {
+                seen.entry(mission.id.clone()).or_insert(now);
+            } else {
+                seen.remove(&mission.id);
+            }
+        }
+        let ids: std::collections::HashSet<&str> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| mission.id.as_str())
+            .collect();
+        seen.retain(|id, _| ids.contains(id.as_str()));
+    }
+
+    /// A Conductor came to the mission (a take or a resume): its safety-net
+    /// time starts now.
+    pub(super) fn note_conductor_arrived(&mut self, mission: &str, now: u64) {
+        self.missions.conductor_seen.insert(mission.to_owned(), now);
+    }
+
     /// Whether the mission worker `target` waits on someone else now
     /// (`mission_health::quiet_waits`, D-06, B22, with-hide/hide#2300): its
     /// watch then reads it as active, so its quiet is counted from when the
-    /// wait ends. The rule its node's quiet warning reads too.
+    /// wait ends. The rule its node's quiet warning reads too. A worker
+    /// whose node warns that it stopped waits on its Conductor, whom that
+    /// warning's letter told, so its watch adds no second letter.
     pub(crate) fn mission_worker_waits(&self, target: &crate::delivery::Actor) -> bool {
         let Ok(ledger) = self.delivery_state() else {
             return false;
@@ -1859,11 +2034,14 @@ impl Runtime {
                 mission.nodes.iter().any(|node| {
                     node.status == NodeStatus::Working
                         && node.agent_id.as_deref() == Some(agent.id.as_str())
-                        && crate::mission_health::quiet_waits(
+                        && (crate::mission_health::quiet_waits(
                             mission,
                             node,
                             self.mission_pulls(mission),
                         ) == Some(true)
+                            || node.warnings.iter().any(|warning| {
+                                warning.kind == crate::missions::WarningKind::Stopped
+                            }))
                 })
             })
     }

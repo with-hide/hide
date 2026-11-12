@@ -2522,6 +2522,21 @@ fn handle_client_text(
         }
         // A desktop window says whether its notifications are on; the daemon
         // judges agent changes for it only then (`desktop_notices.rs`).
+        Some("desktop_activity") => {
+            if !desktop {
+                return Err("desktop_activity is a desktop window's".to_owned());
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Activity {
+                in_use: bool,
+            }
+            let activity: Activity = serde_json::from_value(event["payload"].clone())
+                .map_err(|_| "desktop_activity.in_use must be a boolean".to_owned())?;
+            state.desktop_notices.activity(connection, activity.in_use);
+            state.mobile.wake_follower();
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
         Some("desktop_notices") => {
             if !desktop {
                 return Err("desktop_notices is a desktop window's".to_owned());
@@ -2533,9 +2548,20 @@ fn handle_client_text(
             else {
                 return Err("desktop_notices.wanted must be a boolean".to_owned());
             };
-            if state.desktop_notices.set(connection, wanted) {
-                state.mobile.wake_follower();
-            }
+            let waiting = event["payload"]
+                .get("needs_you")
+                .map(|value| {
+                    value
+                        .as_bool()
+                        .ok_or("desktop_notices.needs_you must be a boolean")
+                })
+                .transpose()?
+                .unwrap_or(wanted);
+            state
+                .desktop_notices
+                .set_waiting(connection, wanted && waiting);
+            state.desktop_notices.set(connection, wanted);
+            state.mobile.wake_follower();
             return Ok(ClientAction::Replies(Vec::new()));
         }
         // An item's origin is read for each window that shows it and closed
@@ -5037,6 +5063,7 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     state.browser_comments.release(connection);
     state.mobile.release(connection);
     state.desktop_notices.release(connection);
+    state.mobile.wake_follower();
     for (pane, size) in state.pane_sizes.left(connection) {
         send_grid(state, &pane, size);
     }

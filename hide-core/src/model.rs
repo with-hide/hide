@@ -2006,6 +2006,11 @@ pub struct SidebarAgentSnapshot {
     /// the rest (needs-you-cleanup D-13).
     #[serde(skip)]
     pub(crate) laid_since_unix_ms: Option<u64>,
+    /// When the core first read this delegated child blocked, while it still
+    /// is (`runtime/blocked_children.rs`): the start of the grace its parent
+    /// has before its lineage root is raised (`escalation::grace_end`).
+    #[serde(skip)]
+    pub(crate) blocked_since_unix_ms: Option<u64>,
     #[serde(skip)]
     pub(crate) laid_more: usize,
     /// Which of the core's questions are laid on this row now, the one it
@@ -2082,6 +2087,11 @@ pub struct SidebarAgentSnapshot {
     /// declaration is compared with when this row is its parent.
     #[serde(skip_serializing)]
     pub lineage_session: Option<String>,
+    /// Why the provider refused the turn this row's own session last ended,
+    /// as its hook said it (`agent_hooks::facts::TurnRefused`); none for any
+    /// other turn. What a mission reads as its stopped worker's cause.
+    #[serde(skip)]
+    pub(crate) refused: Option<crate::agent_hooks::facts::TurnRefused>,
     /// Hide's server mark as the pane carries it (`wire::SERVER_MARK_TOKEN`):
     /// which run of the engine a saved `state_change_seq` for this pane can be
     /// compared on.
@@ -10169,6 +10179,23 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_gate_state", &gate_states);
             checked.insert("mission_gate_state");
+            use crate::runtime::mission_landing::{MergeBy, MergeStep};
+            let merge_by = [MergeBy::Operator, MergeBy::Conductor];
+            for variant in merge_by {
+                match variant {
+                    MergeBy::Operator | MergeBy::Conductor => {}
+                }
+            }
+            assert_wire(&contract, "mission_merge_by", &merge_by);
+            checked.insert("mission_merge_by");
+            let merge_steps = [MergeStep::Ahead, MergeStep::Due, MergeStep::Merged];
+            for variant in merge_steps {
+                match variant {
+                    MergeStep::Ahead | MergeStep::Due | MergeStep::Merged => {}
+                }
+            }
+            assert_wire(&contract, "mission_merge_step", &merge_steps);
+            checked.insert("mission_merge_step");
             let criterion_states = [
                 CriterionState::Open,
                 CriterionState::Pass,
@@ -10357,10 +10384,14 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_fix_reason", &fixes);
             checked.insert("mission_fix_reason");
             use crate::missions::WarningKind;
-            let warnings = [WarningKind::ReviewFails, WarningKind::NoPush];
+            let warnings = [
+                WarningKind::ReviewFails,
+                WarningKind::NoPush,
+                WarningKind::Stopped,
+            ];
             for variant in warnings {
                 match variant {
-                    WarningKind::ReviewFails | WarningKind::NoPush => {}
+                    WarningKind::ReviewFails | WarningKind::NoPush | WarningKind::Stopped => {}
                 }
             }
             assert_wire(&contract, "mission_warning_kind", &warnings);
@@ -10442,11 +10473,18 @@ mod wire_enum_tests {
                 NodeWork::Waiting {
                     on: crate::missions::WaitingOn::Review,
                 },
+                NodeWork::Stopped {
+                    cause: None,
+                    since_unix_ms: 0,
+                },
                 NodeWork::NoWorker,
             ];
             for variant in &work {
                 match variant {
-                    NodeWork::Working | NodeWork::Waiting { .. } | NodeWork::NoWorker => {}
+                    NodeWork::Working
+                    | NodeWork::Waiting { .. }
+                    | NodeWork::Stopped { .. }
+                    | NodeWork::NoWorker => {}
                 }
             }
             let states: Vec<String> = work

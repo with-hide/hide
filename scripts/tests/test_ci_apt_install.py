@@ -32,6 +32,25 @@ esac
 exit 0
 '''
 
+# DNS and resolver configuration cross the OS boundary. These stand-ins
+# expose whether the configured resolver can answer, without changing the
+# developer's or CI runner's real network settings.
+GETENT = r'''#!/usr/bin/env bash
+if [ -e "$DNS_STATE" ]; then
+  [ "${DNS_REPAIRED_OK:-1}" = 1 ] || exit 2
+  if [ -n "${DNS_FAILED_SERVER:-}" ] && [[ $(cat "$DNS_STATE") == *"$DNS_FAILED_SERVER"* ]]; then exit 2; fi
+else
+  [ "${DNS_DEFAULT_OK:-1}" = 1 ] || exit 2
+fi
+echo '185.125.190.82 STREAM archive.ubuntu.com'
+'''
+RESOLVECTL = r'''#!/usr/bin/env bash
+if [ "$1" = dns ]; then printf '%s\n' "$3" > "$DNS_STATE"; fi
+'''
+TEE = r'''#!/usr/bin/env bash
+cat > "$DNS_STATE"
+'''
+
 # GNU `timeout` ships with the Linux runners this script runs on; macOS lacks
 # it, so a developer's machine gets a stand-in with the one form the script
 # uses: `timeout --kill-after=<n> <seconds> <command>...`.
@@ -54,19 +73,25 @@ class CiAptInstall(unittest.TestCase):
         root = Path(self.temp.name)
         bin_dir = root / 'bin'
         bin_dir.mkdir()
-        stand_ins = [('sudo', SUDO), ('apt-get', APT_GET)]
+        stand_ins = [('sudo', SUDO), ('apt-get', APT_GET),
+                     ('uname', '#!/usr/bin/env bash\necho Linux\n'),
+                     ('getent', GETENT), ('resolvectl', RESOLVECTL), ('tee', TEE),
+                     ('ip', '#!/usr/bin/env bash\necho "default via 10.0.0.1 dev eth0"\n')]
         if shutil.which('timeout') is None:
             stand_ins.append(('timeout', TIMEOUT))
         for name, body in stand_ins:
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
         self.log = root / 'apt.log'
+        self.dns_state = root / 'dns'
         self.env = {
             **os.environ,
             'PATH': f'{bin_dir}:{os.environ["PATH"]}',
             'APT_LOG': str(self.log),
             'APT_STATE': str(root / 'state'),
             'APT_RETRY_PAUSE_SECONDS': '1',
+            'DNS_STATE': str(self.dns_state),
+            'RUNNER_ENVIRONMENT': 'github-hosted',
         }
 
     def run_script(self, *packages, **env):
@@ -112,6 +137,47 @@ class CiAptInstall(unittest.TestCase):
     def test_a_call_without_packages_or_with_a_bad_budget_is_refused(self):
         self.assertEqual(self.run_script()[0].returncode, 2)
         self.assertEqual(self.run_script('zsh', APT_BUDGET_SECONDS='0')[0].returncode, 2)
+
+    def test_healthy_dns_keeps_the_default_resolver(self):
+        done, _, _ = self.run_script('git', APT_BUDGET_SECONDS='30')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(self.dns_state.exists())
+
+    def test_failed_dns_is_repaired_before_packages_are_installed(self):
+        done, calls, _ = self.run_script('git', APT_BUDGET_SECONDS='30', DNS_DEFAULT_OK='0')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('1.1.1.1', self.dns_state.read_text())
+        self.assertTrue(any('--no-download' in call for call in calls))
+
+    def test_failed_dns_repair_reports_failure_without_installing(self):
+        done, calls, _ = self.run_script('git', APT_BUDGET_SECONDS='30',
+                                         DNS_DEFAULT_OK='0', DNS_REPAIRED_OK='0')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('Ubuntu package DNS still fails', done.stderr)
+        self.assertEqual(calls, [])
+
+    def test_an_unreachable_public_resolver_does_not_hide_a_working_candidate(self):
+        done, _, _ = self.run_script('git', APT_BUDGET_SECONDS='30',
+                                     DNS_DEFAULT_OK='0', DNS_FAILED_SERVER='1.1.1.1')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('8.8.8.8', self.dns_state.read_text())
+
+    def test_a_non_disposable_runner_refuses_dns_changes(self):
+        done, calls, _ = self.run_script('git', APT_BUDGET_SECONDS='30',
+                                         DNS_DEFAULT_OK='0', RUNNER_ENVIRONMENT='self-hosted')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('restricted to disposable GitHub-hosted runners', done.stderr)
+        self.assertFalse(self.dns_state.exists())
+        self.assertEqual(calls, [])
+
+    def test_local_debs_and_options_are_refused_before_network_or_installation(self):
+        for argument in ('./hide.deb', '/w/hide.deb', '--allow-downgrades'):
+            with self.subTest(argument=argument):
+                done, calls, _ = self.run_script(argument, APT_BUDGET_SECONDS='30')
+                self.assertEqual(done.returncode, 2)
+                self.assertIn('accepts repository package names', done.stderr)
+                self.assertEqual(calls, [])
+                self.assertFalse(self.dns_state.exists())
 
 
 if __name__ == '__main__':

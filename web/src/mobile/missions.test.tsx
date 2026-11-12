@@ -61,6 +61,7 @@ const closed = (id: string, at: number, status: PhoneMission["status"] = "done")
 /** A phone paired and connected to a fake hided that has listed the given missions. */
 async function connect(items: PhoneMission[]) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
   vi.stubGlobal("WebSocket", FakeSocket);
   FakeSocket.instances = [];
   vi.resetModules();
@@ -197,11 +198,45 @@ it("opens a step's worker only when the phone's list holds that row", async () =
     await serve({ type: "agents", groups: [{ group: "working", count: 2, rows: [row] }], omitted: 1, devices: [], interface_language: "en", color_theme: null });
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-run"]');
-    expect(container.querySelector('[data-phone-step="a"] [data-phone-step-open]')).not.toBeNull();
-    expect(container.querySelector('[data-phone-step="b"] [data-phone-step-open]')).toBeNull();
+    expect(container.querySelector('[data-mission-node="a"]')).not.toBeNull();
+    expect(container.querySelector('[data-mission-node="b"]')?.getAttribute("aria-disabled")).toBe("true");
     expect(container.querySelector("[data-phone-mission-chat]"), "the Conductor's row was left out too").toBeNull();
-    await click('[data-phone-step="a"] [data-phone-step-open]');
+    await click('[data-mission-node="a"]');
     expect(socket.sent.filter((message) => message.type === "open").map((message) => message.pane_id)).toEqual(["w1:p2"]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("draws the raises its Conductor has not settled as one safety net card with a line per held step, and folds the lines the Conductor skipped on its own", async () => {
+  const now = Date.now();
+  const held = ["a", "b", "c", "d", "e"].map((key) => ({ key, title: `Step ${key}`, reason: "worker_ended" as const, pr: null, since_unix_ms: now - 25 * 60_000 }));
+  const nodes = held.map((one) => node(one.key, "working", { attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: one.since_unix_ms, on_row: false, item: false } }));
+  const skip = { node: "a", title: "Step a", line: "check", kind: "check" as const, reason: "no check command in this repo", by: "conductor", at_unix_ms: now - 5 * 60_000 };
+  const silent = mission("m-net", { nodes, safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: held }, skipped_alone: [skip] });
+  const gone = mission("m-gone", { nodes, conductor: { present: false, takes_answers: false, name: "Conductor", agent_kind: "claude", agent: null }, safety_net: { conductor_present: false, since_unix_ms: now - 25 * 60_000, nodes: held } });
+  const { container, click, serve, unmount } = await connect([silent, gone]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    expect(container.querySelector('[data-phone-mission="m-net"] [data-phone-mission-line]')?.textContent).toBe("5 stuck · the Conductor has not settled them yet");
+    await click('[data-phone-mission="m-net"]');
+    const net = container.querySelector('[data-phone-safety-net="present"]')!;
+    expect(net.querySelector("[data-phone-safety-net-head]")?.textContent).toBe("5 stuck items unchanged for 25m");
+    expect([...net.querySelectorAll("[data-phone-held-step]")].map((row) => row.textContent)).toEqual(held.map((one) => `${one.title}Worker ended with work left · for 25m`));
+    // Each held card waits on its Conductor, never the operator's turn.
+    expect(container.querySelector('[data-mission-node="a"] [data-phone-node-reason]')?.textContent).toBe("Conductor · Worker ended with work left");
+    expect(container.querySelector('[data-mission-node="a"] [data-node-turn]')).toBeNull();
+    expect(container.querySelector('[data-phone-mission-decided="folded"]')?.textContent).toContain("Decided by the Conductor 1");
+    await click('[data-phone-fold="decided:m-net"]');
+    expect(container.querySelector('[data-phone-skip="a:check"]')?.textContent).toBe("Step acheck skipped · no check command in this repoconductor · 5m");
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-gone"]');
+    expect(container.querySelector('[data-phone-safety-net="absent"] [data-phone-safety-net-head]')?.textContent).toBe("No Conductor conducts this mission · 5 stuck");
+    await serve({ type: "missions", items: [gone], failed: false });
+    await serve({ type: "missions", items: [gone, silent], failed: false });
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-net"]');
+    expect(container.querySelector('[data-phone-mission-decided="folded"]')).not.toBeNull();
   } finally {
     await unmount();
   }
@@ -216,13 +251,17 @@ it("answers a decision with one request once a marked choice is sent with 답하
     // The question, its reason and the recommended choice come first; the stopped step is held.
     expect(page.querySelector("[data-phone-question]")!.textContent).toBe("Merge now?");
     expect(page.querySelector('[data-phone-option="1"]')!.hasAttribute("data-phone-recommended")).toBe(true);
-    expect(page.querySelector('[data-phone-step-kind="hold"]')!.getAttribute("data-phone-step")).toBe("b");
+    expect(page.querySelector('[data-mission-node="b"] [data-node-turn]')).not.toBeNull();
     expect(container.querySelector("[data-phone-tabs]")).toBeNull();
 
     // A press only marks the row; 답하기 sends it, and cannot before one is marked.
     expect(container.querySelector<HTMLButtonElement>("[data-phone-choice-send]")!.disabled).toBe(true);
+    expect(container.querySelector("[data-phone-answer-hint]")).toBeNull();
     await click('[data-phone-option="1"]');
     expect(answers()).toHaveLength(0);
+    // Marked, not sent: the hint shows and 답하기 is the primary button.
+    expect(container.querySelector("[data-phone-answer-hint]")?.textContent).toBe("Selected. Press Answer to send.");
+    expect(container.querySelector("[data-phone-choice-send]")!.className).toContain("bg-primary");
     await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(1);
     expect(answers()[0]).toMatchObject({ type: "answer_mission", mission: "m-turn", key: 4, option: 1 });
@@ -434,28 +473,65 @@ it("lists a decision's first three Views and folds the rest behind +N, as the de
   }
 });
 
-it("draws every step on one rail by what it waits on: side-by-side steps bracketed, a step not begun naming what it waits for, finished ones folded", async () => {
-  // a → (b, c side by side) → d; e was dropped and is not drawn; d names the two unfinished steps it waits for in its own order, by pull request or title, and not the finished a.
-  const { container, click, unmount } = await connect([mission("m-rail", { nodes: [
-    node("d", "planned", { depends_on: ["b", "a", "c"], agent_runtime: null }),
+it("shows the desktop graph with finished and parallel nodes, dependencies and its report", async () => {
+  const { container, click, unmount } = await connect([mission("m-map", { nodes: [
+    node("d", "planned", { depends_on: ["b", "c"], agent_runtime: null }),
     node("c", "working", { depends_on: ["a"] }),
     node("b", "working", { depends_on: ["a"], pr: 7 }),
     node("a", "done", { pr: 6, pr_state: "merged" }),
-    node("e", "dropped"),
   ] })]);
   try {
     await click('[data-phone-tab="missions"]');
-    await click('[data-phone-mission="m-rail"]');
-    const steps = () => [...container.querySelectorAll<HTMLElement>("[data-phone-step]")].map((step) => step.dataset.phoneStep);
-    expect(steps()).toEqual(["c", "b", "d"]);
-    expect(container.querySelector('[data-phone-step="c"] [data-phone-step-together]')?.getAttribute("data-phone-step-together")).toBe("first");
-    expect(container.querySelector('[data-phone-step="b"] [data-phone-step-together]')?.getAttribute("data-phone-step-together")).toBe("next");
-    expect(container.querySelector('[data-phone-step="d"] [data-phone-step-together]')).toBeNull();
-    expect(container.querySelector('[data-phone-step="d"] [data-phone-step-line="planned"]')?.textContent).toBe("waiting for #7, Step c");
-    // The finished step opens in place, at the head of the rail it came first on.
-    await click('[data-phone-fold^="done:"]');
-    expect(steps()).toEqual(["a", "c", "b", "d"]);
-  } finally {
-    await unmount();
-  }
+    await click('[data-phone-mission="m-map"]');
+    const map = container.querySelector("[data-phone-mission-steps]")!;
+    expect([...map.querySelectorAll("[data-mission-node]")].map((node) => node.textContent)).toEqual([
+      expect.stringContaining("Step a"), expect.stringContaining("Step c"), expect.stringContaining("Step b"), expect.stringContaining("Step d"),
+    ]);
+    const layers = [...map.querySelectorAll("[data-dependency-layer]")];
+    expect(layers[1]?.querySelectorAll("[data-mission-node]")).toHaveLength(2);
+    expect(map.querySelector("[data-dependency-graph]")?.getAttribute("data-dependency-edges")).toBe("5");
+    expect(map.querySelector("[data-mission-report]")?.textContent).toContain("Report");
+    expect(map.querySelector('[data-mission-node="a"]')?.getAttribute("data-node-look")).toBe("done");
+    expect(map.querySelector('[data-mission-node="b"]')?.textContent).toContain("#7");
+    expect(map.querySelector('[data-mission-node="d"]')?.textContent).toContain("Not started");
+  } finally { await unmount(); }
+});
+
+it("keeps empty, completed and long missions readable without a rail fold", async () => {
+  const nodes = Array.from({ length: 18 }, (_, i) => node(`n${i}`, i < 6 ? "done" : i < 9 ? "working" : "planned", { depends_on: i < 3 ? [] : [`n${i - 3}`] }));
+  const { container, click, serve, unmount } = await connect([mission("long", { nodes })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="long"]');
+    expect(container.querySelectorAll("[data-mission-node]")).toHaveLength(18);
+    await serve({ type: "missions", items: [mission("long", { status: "done", nodes: nodes.map((node) => ({ ...node, status: "done" })) })], failed: false });
+    expect(container.querySelectorAll('[data-node-look="done"]')).toHaveLength(18);
+    expect(container.querySelector("[data-mission-report]")?.textContent).toContain("reported");
+    expect(container.querySelector('[data-mission-zoom-step="fit"]')?.getAttribute("aria-pressed")).toBe("true");
+    await serve({ type: "missions", items: [mission("long")], failed: false });
+    expect(container.querySelector("[data-phone-mission-empty]")?.textContent).toContain("Planning");
+    expect(container.querySelector("[data-mission-canvas]")).toBeNull();
+  } finally { await unmount(); }
+});
+
+// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn.
+it("names only open PRs in the phone merge turn, newest first with the additional count", async () => {
+  const db = (prs: number[]) => node("db", "done", { pr: 37, pr_state: "merged", merge: { by: "operator", state: "due", why: "DB review", prs }, landing: { state: "left", action: "merge" } });
+  const items = [[31, 33], [31]].map((prs, index) => mission(`merge-${index}`, { nodes: [db(prs)], landing_order: ["db"] }));
+  const { container, click, unmount } = await connect(items);
+  try {
+    await click('[data-phone-tab="missions"]');
+    expect(container.querySelector('[data-phone-mission="merge-0"] [data-phone-mission-line]')?.textContent).toBe("Merge order #33 +1");
+    expect(container.querySelector('[data-phone-mission="merge-1"] [data-phone-mission-line]')?.textContent).toBe("Merge order #31");
+    for (const [index, pr] of [[0, "#33"], [1, "#31"]] as const) {
+      await click(`[data-phone-mission="merge-${index}"]`);
+      const card = container.querySelector('[data-mission-node="db"]')!;
+      expect(card.textContent).toContain(pr);
+      expect(card.textContent).not.toContain("#37");
+      expect(card.textContent?.includes("+1")).toBe(index === 0);
+      expect(card.textContent).toContain("Yours to merge");
+      expect(card.textContent).toContain("Needs you");
+      await click('[data-phone-back="missions"]');
+    }
+  } finally { await unmount(); }
 });

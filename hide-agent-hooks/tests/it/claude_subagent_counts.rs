@@ -294,6 +294,66 @@ fn each_event_reports_the_turn_it_says_and_a_tool_call_reports_only_a_resumed_tu
     assert_eq!(pane.reports(s)[0]["session_start"], true);
 }
 
+/// A turn the provider refused sends no `Stop`, only `StopFailure` with the
+/// refusal (Claude Code 2.1.322, mission-56): it reports the turn ended and
+/// why, the idle prompt after it leaves that, and the continuation Claude
+/// Code starts by itself once a usage limit reset reports the turn working
+/// again, whether or not its queued prompt runs `UserPromptSubmit`.
+#[test]
+fn a_refused_turn_reports_its_end_with_why_and_the_continuation_after_the_reset_works_again() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    let notification = |kind: &str| {
+        pane.event(
+            "Notification",
+            json!({"session_id": s, "hook_event_name": "Notification",
+                   "notification_type": kind, "message": "m"}),
+        );
+    };
+
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "hook_event_name": "UserPromptSubmit", "prompt": "go"}),
+    );
+    pane.event(
+        "StopFailure",
+        json!({"session_id": s, "hook_event_name": "StopFailure", "error": "rate_limit",
+               "last_assistant_message":
+                   "You've hit your 5-hour limit · resets 4pm (Asia/Seoul)\nsecond line"}),
+    );
+    notification("idle_prompt");
+    notification("quota_auto_resume_fired");
+
+    let turn = |name: &str| Some(name.to_owned());
+    assert_eq!(
+        pane.turns(s),
+        [
+            None,
+            turn("working"),
+            turn("done"),
+            turn("idle"),
+            turn("working")
+        ]
+    );
+    let refused: Vec<Value> = pane
+        .reports(s)
+        .into_iter()
+        .map(|report| report["refused"].clone())
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            Value::Null,
+            Value::Null,
+            json!({"kind": "limit", "line": "You've hit your 5-hour limit · resets 4pm (Asia/Seoul)"}),
+            Value::Null,
+            Value::Null,
+        ]
+    );
+}
+
 #[test]
 fn a_report_hide_does_not_take_is_recorded_and_the_next_one_clears_it() {
     let machine = Machine::new("registered");

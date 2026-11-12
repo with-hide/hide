@@ -31,6 +31,8 @@ function readable() {
     '--muted-foreground': color('#FFFFFF', '#000000'),
     '--subtle-foreground': {type: 'alias', value: '--muted-foreground'},
     '--status-seen': color('#FFFFFF', '#000000'),
+    '--terminal-letter-text': color('#FFFFFF', '#000000'),
+    '--terminal-letter-band': color('#000000', '#FFFFFF'),
   };
   for (const name of ANSI) {
     tokens[`--terminal-${name}`] = color('#FFFFFF', '#000000');
@@ -84,4 +86,13 @@ test('a layer that draws the same step as the one under it fails, named with its
     'hide dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
     'hide light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
   ]);
+});
+
+test('the doorbell letter words are checked on their band, per theme and mode', () => {
+  const tokens = readable();
+  assert.deepEqual(failures(tokens), []);
+  tokens['--terminal-letter-band'] = color('#000000', '#FFFFFF', {value: '#777777', light: '#FFFFFF'});
+  const found = failures(tokens);
+  assert.equal(found.length, 1, found.join('\n'));
+  assert.ok(found[0].startsWith('hide dark: --terminal-letter-text #FFFFFF on --terminal-letter-band #777777'), found[0]);
 });

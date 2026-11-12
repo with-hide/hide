@@ -38,6 +38,8 @@ mod backlog;
 mod beside_spawn;
 #[path = "tests/birth_cwd.rs"]
 mod birth_cwd;
+#[path = "tests/blocked_children.rs"]
+mod blocked_children;
 mod checkout_git;
 mod closed_registrations;
 #[path = "tests/control_order.rs"]
@@ -580,6 +582,15 @@ pub(crate) fn runtime() -> Runtime {
     );
     runtime.test_dirs.push(state);
     runtime
+}
+
+/// A successful launch has read both books before archive eviction starts.
+pub(crate) fn ready_archive_protections(runtime: &mut Runtime) {
+    runtime.ingest_plans(Ok(crate::links::ledger::LedgerAnswer::Plans(vec![])));
+    runtime.install_mission_store(
+        crate::mission_store::MissionStore::new(runtime.state_path.parent().unwrap()),
+        crate::mission_store::Restored::Fresh,
+    );
 }
 
 /// A runtime with a live context pointed at a socket that does not exist.

@@ -344,6 +344,7 @@ impl SleepRecord {
         SessionAgentPayload {
             record: None,
             hook: None,
+            hook_refused: None,
             telemetry_stale: false,
             terminal_failed: false,
             launch_pending: false,
@@ -790,6 +791,7 @@ mod tests {
             user_turn: None,
             ask_subject: None,
             laid_since_unix_ms: None,
+            blocked_since_unix_ms: None,
             laid_more: 0,
             laid_asks: std::collections::BTreeSet::new(),
             open_asks: None,
@@ -807,6 +809,7 @@ mod tests {
             spawned_from_machine_id: None,
             declared_parent_session: None,
             lineage_session: None,
+            refused: None,
             server_mark: None,
             delegated: false,
             descendant_counts: crate::model::DescendantCountsSnapshot::default(),

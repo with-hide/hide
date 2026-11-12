@@ -84,6 +84,10 @@ fn reason_word(reason: &Value) -> &'static str {
         Some("conductor_failed") => "지휘자가 실패로 기록",
         Some("wake_refused") => "잠든 작업자를 깨우지 못함",
         Some("close_refused") => "작업은 끝났는데 확인 기록이 빠져 미션을 닫지 못함",
+        Some("human_gate") => "사람 검토 지점",
+        Some("not_started") => "시작할 수 있는데 시작 안 함",
+        Some("warning_stood") => "경고가 풀리지 않고 그대로",
+        Some("wait_stood") => "CI·리뷰·머지를 오래 기다림",
         _ => "확인 필요",
     }
 }
@@ -132,6 +136,35 @@ fn push_words(node: &Value, now: u64) -> Option<String> {
     Some(marked(quiet.is_some(), words))
 }
 
+/// Why a stopped worker stopped (`StopCause`): a usage limit or an API
+/// error with the agent's own line, or no report.
+fn cause_words(cause: &Value) -> String {
+    let line = cause["line"].as_str().unwrap_or_default();
+    match cause["kind"].as_str() {
+        Some("limit") => format!("사용 한도 · {line}"),
+        Some("error") => format!("API 오류 · {line}"),
+        _ => "보고 없음".to_owned(),
+    }
+}
+
+/// A node whose worker stopped with nothing to wait on (`work` `stopped`):
+/// since when and why, marked when its warning stands.
+fn stop_words(node: &Value, now: u64) -> Option<String> {
+    let work = &node["work"];
+    if work["state"] != "stopped" {
+        return None;
+    }
+    let since = work["since_unix_ms"].as_u64()?;
+    Some(marked(
+        warning(node, "stopped").is_some(),
+        format!(
+            "멈춤 {} · {}",
+            minutes_ago(now, since),
+            cause_words(&work["cause"])
+        ),
+    ))
+}
+
 /// How long ago `at` was in minutes up to a day, so the quiet that warns
 /// at ninety minutes reads as such.
 fn minutes_ago(now: u64, at: u64) -> String {
@@ -155,15 +188,31 @@ fn pr_words(node: &Value) -> Option<String> {
         let _ = write!(
             words,
             " · CI {}",
-            match ci["state"].as_str() {
-                Some("pass") => "통과",
-                Some("fail") => "실패",
-                Some("skipped") => "건너뜀",
+            match (ci["state"].as_str(), node["pr_state"].is_null()) {
+                (Some("pass"), _) => "통과",
+                (Some("fail"), _) => "실패",
+                (Some("skipped"), _) => "건너뜀",
+                // The pull request itself is not read: nothing is running that
+                // Hide knows of.
+                (_, true) => "읽지 못함",
                 _ => "도는 중",
             }
         );
     }
     Some(words)
+}
+
+/// A node whose plan gives the operator its merge (`merge.why`, PRD
+/// mission-destination D-10), and where that merge stands; none for every
+/// other node, a scope `pr` mission's included, which reads as before.
+fn merge_words(node: &Value) -> Option<&'static str> {
+    let merge = &node["merge"];
+    merge["why"].as_str()?;
+    Some(match merge["state"].as_str() {
+        Some("due") => "👤 머지할 차례",
+        Some("merged") => "👤 머지함",
+        _ => "👤 내가 머지",
+    })
 }
 
 /// What the node waits on, as the core decided it (`waiting_on`); a
@@ -223,6 +272,21 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         nodes.iter().map(warning_count).sum::<usize>(),
     );
     let mut out = format!("{head}\n");
+    // Where the results go; a mission from before destinations names none
+    // and reads as it did.
+    if let Some(destination) = mission["destination"].as_str() {
+        let _ = writeln!(out, "도착 · {destination}");
+    }
+    // The scope's line, said only when the plan gave the operator a merge
+    // the scope does not (PRD mission-destination B18).
+    let mine: Vec<&str> = nodes
+        .iter()
+        .filter(|node| node["merge"]["why"].is_string())
+        .map(|node| text(node, "key"))
+        .collect();
+    if !mine.is_empty() {
+        let _ = writeln!(out, "머지까지 · {}만 👤 내가 머지", mine.join(", "));
+    }
     if let Some(decision) = mission["decision"].as_str() {
         let _ = writeln!(out, "결정 · {decision}");
     }
@@ -239,14 +303,47 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
             age(now, &mission["github_read_at_unix_ms"])
         );
     }
+    // The operator's one card for the raises the Conductor has not settled.
+    if let Some(net) = mission["safety_net"].as_object() {
+        let held = net["nodes"].as_array().cloned().unwrap_or_default();
+        let keys: Vec<&str> = held.iter().map(|node| text(node, "key")).collect();
+        let _ = writeln!(
+            out,
+            "안전망 · 걸린 일 {}건 · {}부터 그대로 · 운영자에게 보임 · {}",
+            held.len(),
+            age(now, &net["since_unix_ms"]),
+            keys.join(" "),
+        );
+    }
     for node in &nodes {
         let mut fields = vec![text(node, "key").to_owned(), node_status(node)];
         fields.extend(review_words(node));
         fields.extend(push_words(node, now));
+        fields.extend(stop_words(node, now));
         fields.extend(pr_words(node));
+        fields.extend(merge_words(node).map(str::to_owned));
         fields.extend(waits_on(node)?);
         let mark = if warning_count(node) > 0 { WARN } else { " " };
         let _ = writeln!(out, "{mark} {}", fields.join(" · "));
+    }
+    // What the Conductor settled on its own, as the map's `Conductor가 정한 것`.
+    let alone = mission["skipped_alone"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if !alone.is_empty() {
+        let _ = writeln!(out, "Conductor가 정한 것 {}", alone.len());
+        for skip in &alone {
+            let _ = writeln!(
+                out,
+                "  ⤳ {} · {} 넘김 · {} · {} · {}",
+                text(skip, "node"),
+                text(skip, "line"),
+                text(skip, "reason"),
+                text(skip, "by"),
+                age(now, &skip["at_unix_ms"]),
+            );
+        }
     }
     Ok(out)
 }
@@ -356,7 +453,10 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(delivery) = node["delivery"].as_str() {
         state.push(match delivery {
             "pr" => "PR로".to_owned(),
-            "direct" => "main에 바로".to_owned(),
+            "direct" => format!(
+                "{}에 바로",
+                result["destination"].as_str().unwrap_or("main")
+            ),
             other => other.to_owned(),
         });
     }
@@ -365,6 +465,15 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
         state.extend(waits_on(node)?);
     }
     let _ = writeln!(out, "상태 {}", state.join(" · "));
+    // A change's pull request takes this branch as its base, unless it is
+    // stacked on another.
+    if let (Some(destination), "change") = (result["destination"].as_str(), text(node, "kind")) {
+        let _ = writeln!(out, "도착 {destination}");
+    }
+    // Its merge is the operator's: never the Conductor's to make.
+    if let (Some(words), Some(why)) = (merge_words(node), node["merge"]["why"].as_str()) {
+        let _ = writeln!(out, "{words} · {why}");
+    }
     if let Some(worker) = worker_words(node) {
         let _ = writeln!(out, "작업자 {worker}");
     }
@@ -378,8 +487,14 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(branch) = node["branch"].as_str() {
         let _ = writeln!(out, "브랜치 {branch}");
     }
+    if let Some(reason) = result["unread_reason"].as_str() {
+        let _ = writeln!(out, "읽지 못함 · {reason}");
+    }
     if let Some(push) = push_words(node, now) {
         let _ = writeln!(out, "{push}");
+    }
+    if let Some(stop) = stop_words(node, now) {
+        let _ = writeln!(out, "{stop}");
     }
     for warning in node["warnings"].as_array().into_iter().flatten() {
         let what = match warning["kind"].as_str() {
@@ -390,6 +505,11 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
             Some("no_push") => format!(
                 "push 없이 {}분",
                 now.saturating_sub(warning["from_unix_ms"].as_u64().unwrap_or(now)) / 60_000
+            ),
+            Some("stopped") => format!(
+                "멈춘 지 {}분 · {}",
+                now.saturating_sub(warning["from_unix_ms"].as_u64().unwrap_or(now)) / 60_000,
+                cause_words(&warning["cause"])
             ),
             _ => "확인 필요".to_owned(),
         };
@@ -533,6 +653,39 @@ mod tests {
         );
     }
 
+    /// The safety net is one line under the head naming the held nodes and
+    /// since when they stand, and the lines the Conductor skipped on its own
+    /// follow the nodes, each with its reason, who and when, as the map's
+    /// `Conductor가 정한 것` lists them.
+    #[test]
+    fn the_safety_net_and_the_conductors_own_skips_are_shown() {
+        let mut value = mission();
+        value["mission"]["safety_net"] = json!({
+        "conductor_present": true, "since_unix_ms": NOW - 25 * MINUTE,
+        "nodes": [
+            {"key": "show", "title": "Show", "reason": "worker_ended", "pr": null, "since_unix_ms": NOW - 25 * MINUTE},
+            {"key": "ci", "title": "CI", "reason": "wait_stood", "pr": 8, "since_unix_ms": NOW - 70 * MINUTE},
+        ]});
+        value["mission"]["skipped_alone"] = json!([
+            {"node": "docs", "title": "Docs", "line": "check", "kind": "check",
+             "reason": "main merged, CI passed", "by": "lead", "at_unix_ms": NOW - 40 * MINUTE},
+        ]);
+        let text = draw(&value, NOW).unwrap();
+        assert!(
+            text.contains(
+                "안전망 · 걸린 일 2건 · 25분 전부터 그대로 · 운영자에게 보임 · show ci\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(
+                "Conductor가 정한 것 1\n  ⤳ docs · check 넘김 · main merged, CI passed · lead · 40분 전\n"
+            ),
+            "{text}"
+        );
+        assert!(!draw(&mission(), NOW).unwrap().contains("안전망"));
+    }
+
     /// Each line says what the core decided its node waits on, in words for
     /// every kind the core decides, and a change a push is asked of with no
     /// push Hide has read says so.
@@ -580,6 +733,45 @@ mod tests {
             draw(&value, NOW)
                 .unwrap()
                 .contains("  ci · 작업 중 · 기다림 운영자 결정\n")
+        );
+    }
+
+    /// mission-56: a worker stopped with nothing to wait on reads on its
+    /// node's line and in full as since when and why, marked once it warns,
+    /// and its warning says how long and why.
+    #[test]
+    fn a_stopped_worker_reads_as_since_when_and_why() {
+        let mut value = mission();
+        let cause = json!({"kind": "limit", "line": "resets 4pm"});
+        let node = &mut value["mission"]["nodes"][1];
+        node["work"] =
+            json!({"state": "stopped", "since_unix_ms": NOW - 6 * MINUTE, "cause": cause});
+        node["warnings"] = json!([{"kind": "stopped", "from_unix_ms": NOW - 6 * MINUTE,
+            "since_unix_ms": NOW - MINUTE, "told_unix_ms": NOW - MINUTE, "cause": cause}]);
+        let drawn = draw(&value, NOW).unwrap();
+        assert!(
+            drawn.contains(
+                "⚠ ci · 작업 중 · push 12분 전 · ⚠멈춤 6분 전 · 사용 한도 · resets 4pm · #8 대기"
+            ),
+            "{drawn}"
+        );
+        let answer = json!({"mission_id": "mission-33", "node": value["mission"]["nodes"][1].clone(),
+            "letters": [], "checker_letters": []});
+        let full = draw(&answer, NOW).unwrap();
+        assert!(
+            full.contains("\n⚠멈춤 6분 전 · 사용 한도 · resets 4pm\n"),
+            "{full}"
+        );
+        assert!(
+            full.contains("경고 ⚠ 멈춘 지 6분 · 사용 한도 · resets 4pm · 지휘자에게 알림 1분 전"),
+            "{full}"
+        );
+        value["mission"]["nodes"][1]["work"]["cause"] = json!(null);
+        value["mission"]["nodes"][1]["warnings"] = json!([]);
+        assert!(
+            draw(&value, NOW)
+                .unwrap()
+                .contains(" ci · 작업 중 · push 12분 전 · 멈춤 6분 전 · 보고 없음 · #8")
         );
     }
 
@@ -735,6 +927,111 @@ mod tests {
             text.contains("상태 작업 중 · change · PR로 · 기다림 운영자 결정\n"),
             "{text}"
         );
+    }
+
+    /// PRD mission-destination B1, B15: a mission that records where its
+    /// results go says so under its head, and a change node says it too,
+    /// where its worker reads the base of its pull request; a mission from
+    /// before destinations reads line for line as it did.
+    #[test]
+    fn a_destination_is_named_under_the_head_and_on_a_change_node() {
+        let mut value = mission();
+        let before = draw(&value, NOW).unwrap();
+        value["mission"]["destination"] = json!("feat/login");
+        let text = draw(&value, NOW).unwrap();
+        let (head, rest) = before.split_once('\n').unwrap();
+        assert_eq!(text, format!("{head}\n도착 · feat/login\n{rest}"));
+
+        let alone = |node: &Value, destination: Option<&str>| {
+            let mut answer = json!({"mission_id": "mission-33", "node": node, "letters": []});
+            if let Some(destination) = destination {
+                answer["destination"] = json!(destination);
+            }
+            draw(&answer, NOW).unwrap()
+        };
+        let mut direct = mission()["mission"]["nodes"][1].clone();
+        direct["delivery"] = json!("direct");
+        let old = alone(&direct, None);
+        assert!(old.contains("· main에 바로 ·"), "{old}");
+        assert!(!old.contains("도착"), "{old}");
+        let text = alone(&direct, Some("feat/login"));
+        assert!(
+            text.contains("· feat/login에 바로 ·") && text.contains("\n도착 feat/login\n"),
+            "{text}"
+        );
+        // A node that changes no code goes to no branch.
+        let research = mission()["mission"]["nodes"][3].clone();
+        assert!(!alone(&research, Some("feat/login")).contains("도착"));
+
+        // B11: a branch Hide could not read says why, which names a
+        // destination that is gone.
+        let mut answer = json!({"mission_id": "mission-33", "node": direct, "letters": [],
+            "destination": "feat/login",
+            "unread_reason": "Neither feat/login nor origin/feat/login could be read"});
+        answer["node"]["branch"] = json!("feat/fix");
+        let text = draw(&answer, NOW).unwrap();
+        assert!(
+            text.contains(
+                "브랜치 feat/fix\n읽지 못함 · Neither feat/login nor origin/feat/login could be read\n"
+            ),
+            "{text}"
+        );
+    }
+
+    /// PRD mission-destination B18: a node the plan gives the operator to
+    /// merge is named in the scope's line under the head and marked on its
+    /// line and in full with why; a node the scope gives the operator (scope
+    /// `pr`) or the Conductor reads as before.
+    #[test]
+    fn a_node_the_operator_merges_is_named_under_the_head_and_on_its_line() {
+        let mut value = mission();
+        let before = draw(&value, NOW).unwrap();
+        value["mission"]["nodes"][2]["merge"] = json!({"by": "operator", "state": "merged"});
+        value["mission"]["nodes"][1]["merge"] = json!({"by": "conductor", "state": "ahead"});
+        assert_eq!(
+            draw(&value, NOW).unwrap(),
+            before,
+            "the scope decides: as before"
+        );
+
+        value["mission"]["nodes"][1]["merge"] =
+            json!({"by": "operator", "why": "DB는 직접 보고 머지", "state": "due"});
+        let text = draw(&value, NOW).unwrap();
+        let (head, rest) = before.split_once('\n').unwrap();
+        let rest = rest.replace(
+            "#8 대기 · CI 통과 ·",
+            "#8 대기 · CI 통과 · 👤 머지할 차례 ·",
+        );
+        assert_eq!(
+            text,
+            format!("{head}\n머지까지 · ci만 👤 내가 머지\n{rest}")
+        );
+
+        let alone = draw(
+            &json!({"mission_id": "mission-33", "node": value["mission"]["nodes"][1], "letters": []}),
+            NOW,
+        )
+        .unwrap();
+        assert!(
+            alone.contains("\n👤 머지할 차례 · DB는 직접 보고 머지\n"),
+            "{alone}"
+        );
+    }
+
+    /// with-hide/hide#2463: a node whose pull request Hide cannot read holds
+    /// its CI line open; the text says the CI is not read, not that it runs.
+    #[test]
+    fn an_open_ci_line_of_a_pull_request_not_read_is_not_a_running_ci() {
+        let mut value = mission();
+        let node = &mut value["mission"]["nodes"][1];
+        node["pr_state"] = Value::Null;
+        node["criteria"][2]["state"] = json!("open");
+        let text = draw(&value, NOW).unwrap();
+        assert!(text.contains("#8 읽지 못함 · CI 읽지 못함 ·"), "{text}");
+        let node = &mut value["mission"]["nodes"][1];
+        node["pr_state"] = json!("pending");
+        let text = draw(&value, NOW).unwrap();
+        assert!(text.contains("#8 대기 · CI 도는 중 ·"), "{text}");
     }
 
     /// A `waiting_on` this build does not read refuses the text, so the

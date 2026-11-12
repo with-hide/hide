@@ -103,6 +103,8 @@
   --color-pr-draft: var(--pr-draft);
   --color-kind-mission: var(--kind-mission);
   --color-kind-task: var(--kind-task);
+  --color-missed: var(--missed);
+  --color-open-ask: var(--open-ask);
   --color-mission-done: var(--mission-done);
   --color-mission-working: var(--mission-working);
   --color-mission-review: var(--mission-review);
@@ -123,6 +125,8 @@
   --color-terminal-magenta: var(--terminal-magenta);
   --color-terminal-cyan: var(--terminal-cyan);
   --color-terminal-white: var(--terminal-white);
+  --color-terminal-letter-text: var(--terminal-letter-text);
+  --color-terminal-letter-band: var(--terminal-letter-band);
   --color-terminal-bright-black: var(--terminal-bright-black);
   --color-terminal-bright-red: var(--terminal-bright-red);
   --color-terminal-bright-green: var(--terminal-bright-green);
@@ -374,6 +378,8 @@
   --size-control-lg: 32px;
   --size-touch-target: 44px;
   --size-mobile-qr: 168px;
+  --size-mobile-scan-frame: 240px;
+  --size-mobile-scan-margin: 48px;
   --size-mobile-app-icon: 64px;
   --size-mobile-copy: 320px;
   --size-status-copy: 460px;
@@ -572,6 +578,8 @@
   --pr-draft: #6e7781;
   --kind-mission: #b8337f;
   --kind-task: #0e7490;
+  --missed: #0f766e;
+  --open-ask: var(--agent-working);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
@@ -592,6 +600,8 @@
   --terminal-magenta: #8a4cc2;
   --terminal-cyan: #0e7576;
   --terminal-white: #8c959f;
+  --terminal-letter-text: #2f5f78;
+  --terminal-letter-band: #e3edf1;
   --terminal-bright-black: #62686f;
   --terminal-bright-red: #a3212a;
   --terminal-bright-green: #1d6630;
@@ -684,6 +694,8 @@
   --pr-draft: #9198a1;
   --kind-mission: #f0a6d2;
   --kind-task: #4fd1e0;
+  --missed: #2fc4b2;
+  --open-ask: var(--agent-working);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
@@ -704,6 +716,8 @@
   --terminal-magenta: #c99cf0;
   --terminal-cyan: #5fd0c8;
   --terminal-white: #c9cbcf;
+  --terminal-letter-text: #8fb4c8;
+  --terminal-letter-band: #1a252a;
   --terminal-bright-black: #7c7f85;
   --terminal-bright-red: #ff9da0;
   --terminal-bright-green: #a6e9ae;
@@ -754,6 +768,7 @@
   --lineage-rail: var(--slate-78);
   --terminal-black: #1f2429;
   --terminal-white: #969a9f;
+  --terminal-letter-band: #dbe7ec;
   --terminal-bright-black: #666c72;
   --terminal-bright-white: #bdc1c6;
   --terminal-selection: #d3d7dc;
@@ -782,6 +797,7 @@
   --lineage-rail: var(--slate-48);
   --terminal-black: #2b3035;
   --terminal-white: #ccd0d5;
+  --terminal-letter-band: #182b32;
   --terminal-bright-black: #8b8f93;
   --terminal-bright-white: #f3f5f7;
   --terminal-selection: #3a3f45;

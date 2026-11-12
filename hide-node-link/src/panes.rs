@@ -5,7 +5,9 @@
 //! travel the same link as a stream, so a device pane needs no other
 //! connection to the core.
 
-pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn};
+pub use hide_agent_hooks::report::{
+    HookCounts, HookRefusal, HookStatusReport, HookTurn, RefusalKind,
+};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.

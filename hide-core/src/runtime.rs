@@ -22,6 +22,7 @@ mod agents;
 mod attachments;
 mod backlog;
 mod base_push;
+mod blocked_children;
 mod branch_card;
 mod branch_decision;
 mod checkout_git;
@@ -75,6 +76,7 @@ pub(crate) mod mission_gates;
 mod mission_health;
 pub(crate) mod mission_landing;
 mod mission_outside;
+mod mission_pull;
 pub(crate) mod mission_views;
 pub(crate) mod missions;
 mod op_timing;
@@ -1263,7 +1265,8 @@ pub struct Runtime {
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
     letters_waiting: BTreeMap<String, u32>,
-    /// When the oldest Resolved row leaves the 24-hour window.
+    /// When the session projection is next due on the clock: the oldest
+    /// Resolved row leaves the 24-hour window, or a blocked child's grace ends.
     session_window_deadline_unix_ms: u64,
     #[cfg(test)]
     pane_header_derivations: usize,
@@ -1917,6 +1920,9 @@ pub struct Runtime {
     /// The letters owed to agents whose turn a move or a machine restart cut
     /// off (`transition_letters.rs`); session-only.
     transition_letters: transition_letters::TransitionLetters,
+    /// Each delegated child's block, and the note its parent is owed
+    /// (`blocked_children.rs`); session-only.
+    blocked_children: blocked_children::BlockedChildren,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2680,6 +2686,7 @@ impl Runtime {
             spent_bells: Default::default(),
             unreadable_letters: Default::default(),
             transition_letters: Default::default(),
+            blocked_children: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,

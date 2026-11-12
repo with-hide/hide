@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum PushMode {
     #[default]
-    Off,
-    /// Only while no desktop or web shell is connected to this daemon.
+    #[serde(alias = "off")]
+    /// Rest during actual computer use when desktop Needs You notices are on.
     AppClosed,
     Always,
 }
@@ -25,7 +25,6 @@ pub enum PushMode {
 impl PushMode {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "off" => Some(Self::Off),
             "app_closed" => Some(Self::AppClosed),
             "always" => Some(Self::Always),
             _ => None,
@@ -34,7 +33,6 @@ impl PushMode {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Off => "off",
             Self::AppClosed => "app_closed",
             Self::Always => "always",
         }
@@ -298,6 +296,24 @@ mod tests {
     }
 
     #[test]
+    fn phone_push_rest_preserves_its_saved_spelling_including_saved_off() {
+        for saved in [
+            "{}",
+            r#"{"push_mode":"off"}"#,
+            r#"{"push_mode":"app_closed"}"#,
+        ] {
+            let settings: MobileSettings = serde_json::from_str(saved).unwrap();
+            assert_eq!(settings.push_mode, PushMode::AppClosed);
+            assert_eq!(
+                serde_json::to_value(&settings).unwrap()["push_mode"],
+                "app_closed"
+            );
+        }
+        let always: MobileSettings = serde_json::from_str(r#"{"push_mode":"always"}"#).unwrap();
+        assert_eq!(always.push_mode, PushMode::Always);
+    }
+
+    #[test]
     fn a_missing_or_damaged_file_reads_as_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = settings_path(dir.path());
@@ -306,6 +322,6 @@ mod tests {
         fs::write(&path, b"{not json").unwrap();
         let damaged: MobileSettings = read(&path);
         assert!(!damaged.enabled);
-        assert_eq!(damaged.push_mode, PushMode::Off);
+        assert_eq!(damaged.push_mode, PushMode::AppClosed);
     }
 }

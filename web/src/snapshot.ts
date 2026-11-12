@@ -1415,8 +1415,15 @@ export type MissionFixReason = "ci_failed" | "conflict" | "changes_requested";
 export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: MissionFixReason; at_unix_ms: number };
 /** What the operator chose for a node that waits on them (`mission_operator_action`, B15, B16). */
 export type MissionOperatorAction = "done" | "drop" | "attach" | "leave" | "resume";
-/** One of a node's pull requests (`NodePrView`), the current one last. */
-export type MissionNodePr = { number: number; state: PrState | null; url: string | null };
+/** One of a node's pull requests (`NodePrView`), the current one last: `base` is the branch it merges into as GitHub last answered, absent until it answered and from a core before it. */
+export type MissionNodePr = { number: number; state: PrState | null; url: string | null; base?: string };
+
+/** Who merges a node's pull request (`mission_merge_by`, PRD mission-destination D-10, D-35). */
+export type MissionMergeBy = "operator" | "conductor";
+/** Where that merge stands, decided by the core (`mission_merge_step`): `due` is the operator's turn, only for a node whose own plan gives them its merge. */
+export type MissionMergeStep = "ahead" | "due" | "merged";
+/** Who merges a change delivered by pull request and where it stands (`NodeMerge`, D-45): `why` is the plan's reason when the node's own value gives the operator its merge, absent when the scope decides. */
+export type MissionNodeMerge = { by: MissionMergeBy; why?: string; state: MissionMergeStep; /** Still-open held PRs, in held order; older cores omit it. */ prs?: number[] };
 
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";
@@ -1657,6 +1664,8 @@ export type MissionNode = {
   work?: MissionNodeWork | null;
   /** The node's gate (PRD mission-human-gate); absent for a node without one. */
   gate?: MissionGate;
+  /** Who merges its pull request and where that stands (`NodeMerge`); absent for a node that is no change by pull request, and from a core before it. */
+  merge?: MissionNodeMerge;
   /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
   hold?: MissionNodeHold | null;
 };
@@ -1664,8 +1673,14 @@ export type MissionNode = {
 /** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
 export type MissionNodeHold = { why: string; until_unix_ms: number };
 
-/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
-export type MissionNodeWork = { state: "working" } | { state: "waiting"; on: MissionWaitingOn } | { state: "no_worker" };
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker. */
+export type MissionNodeWork =
+  | { state: "working" }
+  | { state: "waiting"; on: MissionWaitingOn }
+  | { state: "stopped"; cause: MissionStopCause | null; since_unix_ms: number }
+  | { state: "no_worker" };
+/** Why a node's worker stopped (`StopCause`): the provider refused its turn on a usage limit or with an API error, with the agent's own first line for it. */
+export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
 export type MissionLettersHeldFor = "unreachable" | "undelivered" | "approval" | "draft" | "unanswered";
@@ -1679,9 +1694,16 @@ export type MissionWaitingOn =
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
-export type MissionWarningKind = "review_fails" | "no_push";
+export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
-export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null };
+export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
+
+/** One node the safety net holds (`HeldNodeView`): its raise's reason and since when it stands. */
+export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason; pr: number | null; since_unix_ms: number };
+/** The safety net (`SafetyNetView`): whether a Conductor holds the mission, what its minutes count from, and the held nodes oldest first. */
+export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: number; nodes: MissionHeldNode[] };
+/** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
+export type MissionSkip = { node: string; title: string; line: string; kind: MissionCriterionKind; text?: string; reason: string; by: string; at_unix_ms: number };
 
 /** One mission as the map draws it (`MissionView`). */
 export type Mission = {
@@ -1693,6 +1715,8 @@ export type Mission = {
   device_id: string;
   status: MissionStatus;
   scope: MissionScope;
+  /** The branch the mission's results go to (`Mission::destination`); absent for a mission that records none, whose destination is the project's default branch, and from a core before destinations. */
+  destination?: string;
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
   exempt: boolean;
@@ -1723,6 +1747,14 @@ export type Mission = {
   /** When the delay ends by itself; every delay has an end (`Mission::delay_until_unix_ms`). */
   delay_until_unix_ms?: number | null;
   report: string | null;
+  /**
+   * The mission's one card for the raises its Conductor has not settled (`SafetyNetView`): none while nothing is held, with no Conductor at
+   * once, and with one once the oldest held raise stood 20 minutes. The operator's turn for raised nodes is this, never a card per node
+   * (hide-private docs/missions.md, the principle of 2026-11-11). Absent from an older core.
+   */
+  safety_net?: MissionSafetyNet | null;
+  /** The lines the Conductor skipped on its own, oldest first: the map's `Conductor가 정한 것` (`SkippedAloneView`). Absent from an older core. */
+  skipped_alone?: MissionSkip[];
   created_at_unix_ms: number;
   started_at_unix_ms: number | null;
   closed_at_unix_ms: number | null;
@@ -1739,9 +1771,9 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime"> & { attention: Omit<MissionAttention, "choices"> | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
-export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters"> & {
+export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;
   nodes: N[];
 };
@@ -3227,7 +3259,7 @@ export type WorkSession = { device_id: string; agent: string; session_id: string
  */
 export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; images: number; summary: string | null; answers: string | null; letter_from: string | null; count: number; repeats?: number[]; goal_command: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
-export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
+export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog" | "folded"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean; /** Why Hide AI folded it; only on a folded question. */ reason?: string };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; source: WorkSession; source_name: string };
 export type TurnOutcome = { end: WorkEnd; line: string; at_unix_ms: number };
 /** Every pull request a flow made, merged or closed, from Hide's stored PR facts (PRD session-record-fact-status D-01). */
@@ -3253,7 +3285,7 @@ export type PrGroup = { child: WorkSession | null; name: string; pulls: SessionP
 export type SessionRecord = {
   session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null;
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
-  status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
+  status: RecordStatus | null; asks: MissedWork[]; /** The current flow's questions Hide AI folded (status-model.md, A question still waiting). */ folded_asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
   outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; artifacts: string[]; children: SessionRecord[];
   /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
   plan?: PlanView;

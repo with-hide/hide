@@ -442,6 +442,7 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
             session_start: false,
             waiting: None,
             account: None,
+            refused: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -491,6 +492,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
             session_start: false,
             waiting: None,
             account: None,
+            refused: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -541,6 +543,7 @@ fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> 
             account: hide_agent_hooks::account::reported_variables(agent.runtime(), |name| {
                 std::env::var_os(name)
             }),
+            refused: None,
         },
         started + report::REPORT_TIMEOUT,
     );

@@ -14,8 +14,8 @@
 //! answer (B29).
 
 use crate::missions::{
-    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionScope,
-    MissionStatus, NodeKind, NodeStatus, WarningKind, cause_key,
+    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionStatus, NodeKind,
+    NodeStatus, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
     CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
@@ -38,6 +38,21 @@ pub(crate) struct NodeFacts {
     pub own_prs: Vec<u32>,
     /// The lines that keep the node from done now (`gate_node_done`).
     pub unmet: Vec<String>,
+    /// The worker's row reads stopped with nothing of its own to wait on
+    /// (`Runtime::worker_stopped`); none while it works, waits or cannot be
+    /// read.
+    pub stopped: Option<WorkerStopped>,
+}
+
+/// A worker whose row reads stopped with nothing of its own to wait on: no
+/// question or approval of the operator's, no person's turn, no child,
+/// background task, reply or checks it waits on, no letter it waits an
+/// answer to, and no report to its Conductor as its last word. Since when,
+/// and why when its hook said (`StopCause`).
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct WorkerStopped {
+    pub since_unix_ms: u64,
+    pub cause: Option<StopCause>,
 }
 
 pub(crate) struct Facts<'a> {
@@ -201,19 +216,11 @@ fn node_acts(
     if node.status != NodeStatus::Working {
         return;
     }
-    let held: Vec<&PullRequestSnapshot> = node
-        .prs
-        .iter()
-        .filter_map(|number| find(pulls, *number))
-        .collect();
     // A pull request the list does not hold is not known; nothing rests on
     // a guess about it.
-    if held.len() != node.prs.len() {
+    let Some(live) = live_pulls(node, pulls) else {
         return;
-    }
-    let closed = |pull: &&PullRequestSnapshot| pull.badge == PullRequestBadge::Closed;
-    let live: Vec<&PullRequestSnapshot> =
-        held.iter().copied().filter(|pull| !closed(pull)).collect();
+    };
     if live.is_empty() {
         // Closed without its merge, and no other is open (B12).
         raise(
@@ -249,9 +256,12 @@ fn node_acts(
     let merged = live
         .iter()
         .all(|pull| pull.badge == PullRequestBadge::Merged);
-    let ready = match mission.scope {
-        MissionScope::Merge => merged,
-        MissionScope::Pr => live.iter().all(|pull| pr_ready(pull)),
+    // A node the operator merges is finished with its pull request ready;
+    // the merge is theirs (PRD mission-destination D-10, D-35).
+    let ready = if mission.operator_merges(node) {
+        live.iter().all(|pull| pr_ready(pull))
+    } else {
+        merged
     };
     if !ready {
         return;
@@ -507,6 +517,31 @@ fn find(pulls: &GithubProjectSnapshot, number: u32) -> Option<&PullRequestSnapsh
         .find(|pull| pull.number == number)
 }
 
+/// The pull requests `node` holds that are not closed, as `pulls` last
+/// answered; none while the list lacks one of them, which is not known.
+fn live_pulls<'a>(
+    node: &MissionNode,
+    pulls: &'a GithubProjectSnapshot,
+) -> Option<Vec<&'a PullRequestSnapshot>> {
+    let held: Vec<&PullRequestSnapshot> = node
+        .prs
+        .iter()
+        .filter_map(|number| find(pulls, *number))
+        .collect();
+    (held.len() == node.prs.len()).then(|| {
+        held.into_iter()
+            .filter(|pull| pull.badge != PullRequestBadge::Closed)
+            .collect()
+    })
+}
+
+/// Whether `node`'s pull requests are ready for the operator's merge (PRD
+/// mission-destination D-11): every one not closed is `pr_ready`, at least
+/// one is, and the list holds them all.
+pub(crate) fn merge_ready(node: &MissionNode, pulls: &GithubProjectSnapshot) -> bool {
+    live_pulls(node, pulls).is_some_and(|live| !live.is_empty() && live.into_iter().all(pr_ready))
+}
+
 /// What an open pull request needs from its worker (D-13): a CI failure
 /// only once its CI ended (`PullRequestSnapshot::ci_end`), the rule its ci
 /// line and its Conductor's letter read.
@@ -527,8 +562,9 @@ fn needs(pull: &PullRequestSnapshot) -> Vec<FixReason> {
     out
 }
 
-/// A pull request a PR-scope mission is finished with (D-11): merged, or
-/// open, out of draft, its checks green or none, and approved.
+/// A pull request a node the operator merges is finished with (D-11;
+/// `Mission::operator_merges`): merged, or open, out of draft, its checks
+/// green or none, and approved.
 fn pr_ready(pull: &PullRequestSnapshot) -> bool {
     pull.badge == PullRequestBadge::Merged
         || (!pull.badge.is_settled()
@@ -552,15 +588,59 @@ fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
 pub(crate) const REVIEW_FAILS_THAT_WARN: u32 = 2;
 /// How long a node at work goes with no push before its Conductor is warned.
 pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
+/// How long a node's worker stands stopped (`stopped_worker`) before its
+/// Conductor is told (hide-private docs/missions.md, A stopped worker).
+pub(crate) const STOPPED_THAT_WARNS_MS: u64 = 5 * 60_000;
+
+/// Whether `node`'s worker stands stopped with no one else to move first
+/// (hide-private docs/missions.md, A stopped worker): the node at work in a
+/// running mission, its worker's program running, its row stopped with
+/// nothing of its own to wait on (`NodeFacts::stopped`), and the node
+/// waiting on no one: no delay, hold, decision or gate (`stall_excused`),
+/// no raise, no question about it, and no pull request that waits on CI, a
+/// review or the merge (`owed_elsewhere`), which a stale answer leaves
+/// unknown, so nothing is said. A raise a told warning became
+/// (`WarningStood`) is the Conductor's move still owed on the same stop,
+/// not someone else's wait, so it never ends the warning that raised it.
+/// The one rule the warning's raise, its keeping and the map's stopped node
+/// read; how the turn ended is its cause, never its condition.
+pub(crate) fn stopped_worker<'a>(
+    mission: &Mission,
+    node: &MissionNode,
+    fact: &'a NodeFacts,
+    pulls: Option<&GithubProjectSnapshot>,
+    operator_waits: bool,
+) -> Option<&'a WorkerStopped> {
+    let raised = node
+        .attention
+        .as_ref()
+        .is_some_and(|raise| raise.reason != AttentionReason::WarningStood);
+    let stands = node_works(mission, node)
+        && fact.worker == Some(WorkerLife::Running)
+        && !stall_excused(mission, node, operator_waits)
+        && !raised
+        && owed_elsewhere(mission, node, pulls) == Some(false);
+    fact.stopped.as_ref().filter(|_| stands)
+}
+
+/// A node at work in a running mission, the mission's own.
+fn node_works(mission: &Mission, node: &MissionNode) -> bool {
+    matches!(
+        mission.status,
+        MissionStatus::Running | MissionStatus::MergeWait
+    ) && node.status == NodeStatus::Working
+        && node.kind != NodeKind::External
+}
 
 /// A change to the warnings a node carries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WarnAct {
     /// The node warns of `kind` from now, standing on the fact at `from`.
     Raise {
         node: usize,
         kind: WarningKind,
         from: u64,
+        cause: Option<StopCause>,
     },
     /// What the warning stood on went.
     Clear { node: usize, kind: WarningKind },
@@ -576,19 +656,47 @@ pub(crate) enum WarnAct {
 /// is no longer at work. A pull request GitHub's answer does not hold now
 /// decides nothing, so a stale answer raises no quiet warning on a node
 /// with one; a node that has none yet is judged without it.
+/// A node whose worker stood stopped `STOPPED_THAT_WARNS_MS`
+/// (`stopped_worker`) warns once with its cause, and the warning goes once
+/// that rule no longer holds: the worker works, waits or ends, or the node
+/// waits on someone. While the rule holds the worker, the quiet warning
+/// goes and none rises, since the stop's letter is the one that asks the
+/// Conductor to move; once it lets go, the quiet is judged again. `facts`
+/// and `operator_waits` hold one entry per node, in the record's order.
 pub(crate) fn warn_acts(
     mission: &Mission,
     pulls: Option<&GithubProjectSnapshot>,
+    facts: &[NodeFacts],
+    operator_waits: &[bool],
     now: u64,
 ) -> Vec<WarnAct> {
-    let runs = matches!(
-        mission.status,
-        MissionStatus::Running | MissionStatus::MergeWait
-    );
     let mut acts = Vec::new();
     for (at, node) in mission.nodes.iter().enumerate() {
-        let works = runs && node.status == NodeStatus::Working && node.kind != NodeKind::External;
+        let works = node_works(mission, node);
         let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
+        let fact = facts.get(at);
+        let stopped = fact
+            .zip(operator_waits.get(at))
+            .and_then(|(fact, waits)| stopped_worker(mission, node, fact, pulls, *waits));
+        match standing(WarningKind::Stopped) {
+            Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
+                node: at,
+                kind: WarningKind::Stopped,
+            }),
+            None if stopped.is_some_and(|stop| {
+                now.saturating_sub(stop.since_unix_ms) >= STOPPED_THAT_WARNS_MS
+            }) =>
+            {
+                let stop = stopped.expect("checked above");
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::Stopped,
+                    from: stop.since_unix_ms,
+                    cause: stop.cause.clone(),
+                });
+            }
+            _ => {}
+        }
         let fails = works && node.review_fails() >= REVIEW_FAILS_THAT_WARN;
         match standing(WarningKind::ReviewFails) {
             Some(_) if !fails => acts.push(WarnAct::Clear {
@@ -599,18 +707,24 @@ pub(crate) fn warn_acts(
                 node: at,
                 kind: WarningKind::ReviewFails,
                 from: last_review_at(node).unwrap_or(now),
+                cause: None,
             }),
             _ => {}
         }
         let quiet = node.quiet_since();
         match standing(WarningKind::NoPush) {
-            Some(warning) if !works || quiet.is_some_and(|since| since > warning.from_unix_ms) => {
+            Some(warning)
+                if !works
+                    || stopped.is_some()
+                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
+            {
                 acts.push(WarnAct::Clear {
                     node: at,
                     kind: WarningKind::NoPush,
                 });
             }
             None if works
+                && stopped.is_none()
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && quiet_waits(mission, node, pulls) == Some(false) =>
@@ -619,6 +733,7 @@ pub(crate) fn warn_acts(
                     node: at,
                     kind: WarningKind::NoPush,
                     from: quiet.unwrap_or(now),
+                    cause: None,
                 });
             }
             _ => {}
@@ -628,11 +743,15 @@ pub(crate) fn warn_acts(
 }
 
 /// How long a node that could start stays unstarted before its Conductor
-/// is asked; the raise reaches the operator `RAISE_TO_OPERATOR_MS` later.
+/// is asked.
 pub(crate) const UNSTARTED_THAT_STALLS_MS: u64 = 20 * 60_000;
-/// How long a warning its Conductor was told stands before it reaches the
-/// operator.
+/// How long a warning its Conductor was told stands before the Conductor is
+/// asked again, as a stall.
 pub(crate) const WARNING_THAT_STALLS_MS: u64 = 30 * 60_000;
+/// How long the Conductor's oldest standing raise stays as it is before the
+/// mission is the operator's (the safety net, hide-private docs/missions.md,
+/// the principle of 2026-11-11).
+pub(crate) const SAFETY_NET_AFTER_MS: u64 = 20 * 60_000;
 /// How long a pull request waits on CI, a review or the merge before its
 /// Conductor is asked: twice the slowest CI run of this repository's own
 /// `verify` (30 minutes, 2026-11-10).
@@ -713,9 +832,107 @@ pub(crate) fn stalls(
 /// Whether no move is owed now: a delay holds the mission or the node, a
 /// decision waits on the operator, or the node waits on the operator's
 /// answer to its gate or to a question about it. The one rule raising and
-/// settling a stall read.
+/// settling a stall, and holding a node in the safety net, read.
 fn stall_excused(mission: &Mission, node: &MissionNode, operator_waits: bool) -> bool {
     mission.delay.is_some() || node.hold.is_some() || mission.decision.is_some() || operator_waits
+}
+
+/// A mission whose raises its Conductor has not settled, the operator's one
+/// card for them (the safety net, hide-private docs/missions.md, the
+/// principle of 2026-11-11): every node it holds and since when the oldest
+/// of them, or the Conductor's arrival if later, has stood as it is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SafetyNet {
+    pub conductor_present: bool,
+    /// What the card counts its minutes from: the oldest held raise, or the
+    /// Conductor's arrival when that is later.
+    pub since_unix_ms: u64,
+    /// The held nodes, oldest raise first.
+    pub nodes: Vec<usize>,
+}
+
+/// The raises of `mission` that wait on its Conductor and owe it a move now:
+/// on a node not dropped, of a reason the Conductor settles (not
+/// `operator_first`), and not excused where a stall is (`stall_excused`), so
+/// a node whose only wait is its gate, or a mission held or asking the
+/// operator, holds none. Oldest first.
+pub(crate) fn held_nodes(mission: &Mission, operator_waits: &[bool]) -> Vec<usize> {
+    if operator_waits.len() != mission.nodes.len() {
+        return Vec::new();
+    }
+    let mut held: Vec<(u64, usize)> = mission
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(at, node)| {
+            node.status != NodeStatus::Dropped
+                && node
+                    .attention
+                    .as_ref()
+                    .is_some_and(|attention| !attention.reason.operator_first())
+                && !stall_excused(mission, node, operator_waits[*at])
+        })
+        .filter_map(|(at, node)| Some((node.attention.as_ref()?.since_unix_ms, at)))
+        .collect();
+    held.sort_unstable();
+    held.into_iter().map(|(_, at)| at).collect()
+}
+
+/// The mission's safety net now, the one derived state the view, Needs You,
+/// the notice and the handover read: with no Conductor present it holds as
+/// soon as one raise is held (`held_nodes`); with one present, once the
+/// oldest held raise, counted from the Conductor's arrival when that is
+/// later (`present_since`), stood `SAFETY_NET_AFTER_MS`. None for a mission
+/// that asks no one (`MissionStatus::asks`). A closed mission's Conductor
+/// has finished with it, so the caller passes `present` false for it.
+pub(crate) fn safety_net(
+    mission: &Mission,
+    present: bool,
+    present_since: u64,
+    operator_waits: &[bool],
+    now: u64,
+) -> Option<SafetyNet> {
+    if !mission.status.asks() {
+        return None;
+    }
+    let nodes = held_nodes(mission, operator_waits);
+    let oldest = mission.nodes[*nodes.first()?]
+        .attention
+        .as_ref()?
+        .since_unix_ms;
+    let since = if present {
+        oldest.max(present_since)
+    } else {
+        oldest
+    };
+    (!present || now.saturating_sub(since) >= SAFETY_NET_AFTER_MS).then_some(SafetyNet {
+        conductor_present: present,
+        since_unix_ms: since,
+        nodes,
+    })
+}
+
+/// When a mission whose raises stand now has its safety net come up with a
+/// Conductor present, if it has not: the time a view made now must be made
+/// again at. None when nothing is held or the net already holds.
+pub(crate) fn safety_net_due(
+    mission: &Mission,
+    present_since: u64,
+    operator_waits: &[bool],
+    now: u64,
+) -> Option<u64> {
+    if !mission.status.asks() {
+        return None;
+    }
+    let nodes = held_nodes(mission, operator_waits);
+    let oldest = mission.nodes[*nodes.first()?]
+        .attention
+        .as_ref()?
+        .since_unix_ms;
+    let due = oldest
+        .max(present_since)
+        .saturating_add(SAFETY_NET_AFTER_MS);
+    (due > now).then_some(due)
 }
 
 /// Whether `node` could start and was not: not started (`started`), the
@@ -787,7 +1004,22 @@ pub(crate) fn quiet_waits(
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
 ) -> Option<bool> {
-    if node.attention.is_some() || mission.deciding_on(&node.key) {
+    if node.attention.is_some() {
+        return Some(true);
+    }
+    owed_elsewhere(mission, node, pulls)
+}
+
+/// Whether the next move on `node` is someone else's besides a raise on
+/// it: the Conductor's question about it, or a pull request that waits on
+/// CI, a review or the merge (`worker_waits`); unknown while GitHub's
+/// answer does not hold the pull request.
+fn owed_elsewhere(
+    mission: &Mission,
+    node: &MissionNode,
+    pulls: Option<&GithubProjectSnapshot>,
+) -> Option<bool> {
+    if mission.deciding_on(&node.key) {
         return Some(true);
     }
     worker_waits(node, pulls)
@@ -809,7 +1041,7 @@ mod tests {
             .collect();
         let mut out = apply_plan(&mission(), &plan(inputs), 2).unwrap();
         out.status = MissionStatus::Running;
-        out.scope = MissionScope::Merge;
+        out.scope = crate::missions::MissionScope::Merge;
         for node in &mut out.nodes {
             node.status = NodeStatus::Working;
             node.branch = Some(format!("feat/{}", node.key));
@@ -870,7 +1102,6 @@ mod tests {
             agent: None,
             key: 1,
             since_unix_ms: 1,
-            operator_at_unix_ms: None,
             notified: false,
         }
     }
@@ -1215,7 +1446,7 @@ mod tests {
     #[test]
     fn a_pr_scope_node_finishes_on_an_approved_green_pull_request() {
         let mut m = running(&["a"]);
-        m.scope = MissionScope::Pr;
+        m.scope = crate::missions::MissionScope::Pr;
         m.nodes[0].prs = vec![7];
         let mut open = pull(7, "feat/a", PullRequestBadge::Open);
         let pulls = listed(vec![open.clone()]);
@@ -1343,6 +1574,7 @@ mod tests {
             from_unix_ms: from,
             since_unix_ms: from,
             told_unix_ms: Some(from),
+            cause: None,
         }
     }
 
@@ -1352,23 +1584,24 @@ mod tests {
     fn a_review_failed_twice_in_a_row_warns_until_it_passes() {
         let mut m = reviewed();
         m.nodes[0].criteria[1].fails_in_a_row = 1;
-        assert!(warn_acts(&m, None, 10).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
         m.nodes[0].criteria[1].fails_in_a_row = 2;
         assert_eq!(
-            warn_acts(&m, None, 10),
+            warn_acts(&m, None, &[], &[], 10),
             [WarnAct::Raise {
                 node: 0,
                 kind: WarningKind::ReviewFails,
                 from: 5,
+                cause: None,
             }]
         );
         // Standing, a third failure raises nothing more.
         m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
         m.nodes[0].criteria[1].fails_in_a_row = 3;
-        assert!(warn_acts(&m, None, 10).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
         m.nodes[0].criteria[1].fails_in_a_row = 0;
         assert_eq!(
-            warn_acts(&m, None, 10),
+            warn_acts(&m, None, &[], &[], 10),
             [WarnAct::Clear {
                 node: 0,
                 kind: WarningKind::ReviewFails,
@@ -1381,20 +1614,21 @@ mod tests {
     #[test]
     fn a_change_ninety_minutes_without_a_push_warns_until_the_next_push() {
         let mut m = reviewed();
-        assert!(warn_acts(&m, None, 90 * MINUTE - 1).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 90 * MINUTE - 1).is_empty());
         assert_eq!(
-            warn_acts(&m, None, 90 * MINUTE),
+            warn_acts(&m, None, &[], &[], 90 * MINUTE),
             [WarnAct::Raise {
                 node: 0,
                 kind: WarningKind::NoPush,
                 from: 0,
+                cause: None,
             }]
         );
         m.nodes[0].warnings.push(warn(WarningKind::NoPush, 0));
-        assert!(warn_acts(&m, None, 200 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 200 * MINUTE).is_empty());
         m.nodes[0].pushed_at_unix_ms = Some(100 * MINUTE);
         assert_eq!(
-            warn_acts(&m, None, 101 * MINUTE),
+            warn_acts(&m, None, &[], &[], 101 * MINUTE),
             [WarnAct::Clear {
                 node: 0,
                 kind: WarningKind::NoPush,
@@ -1402,8 +1636,8 @@ mod tests {
         );
         // Counted again from that push.
         m.nodes[0].warnings.clear();
-        assert!(warn_acts(&m, None, 189 * MINUTE).is_empty());
-        assert_eq!(warn_acts(&m, None, 190 * MINUTE).len(), 1);
+        assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
+        assert_eq!(warn_acts(&m, None, &[], &[], 190 * MINUTE).len(), 1);
     }
 
     /// with-hide/hide-private#552: a pull request that only waits on CI, a
@@ -1417,13 +1651,13 @@ mod tests {
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
         let late = 120 * MINUTE;
         let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
-        assert!(warn_acts(&m, Some(&waiting), late).is_empty());
-        assert!(warn_acts(&m, None, late).is_empty());
+        assert!(warn_acts(&m, Some(&waiting), &[], &[], late).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], late).is_empty());
         let mut failing = waiting.clone();
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
-        assert_eq!(warn_acts(&m, Some(&waiting), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&waiting), &[], &[], late).len(), 1);
     }
 
     /// with-hide/hide#2300: a node that waits on the operator's answer, to
@@ -1438,7 +1672,7 @@ mod tests {
         let late = 120 * MINUTE;
         let mut failing = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
         m.decision = Some("첫 줄 캡처가 괜찮나요?".into());
         m.question = Some(crate::missions::Question {
             key: 1,
@@ -1451,14 +1685,14 @@ mod tests {
             views: Vec::new(),
             material_asked: false,
         });
-        assert!(warn_acts(&m, Some(&failing), late).is_empty());
+        assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
         // A question about another node, or about none, leaves it its worker's.
         m.question.as_mut().unwrap().node = None;
-        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
         m.decision = None;
         m.question = None;
         m.nodes[0].attention = Some(attention(AttentionReason::PrClosed, Some(7)));
-        assert!(warn_acts(&m, Some(&failing), late).is_empty());
+        assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
     }
 
     /// with-hide/hide-private#552: only a node at work in a running mission
@@ -1474,7 +1708,7 @@ mod tests {
         ];
         m.nodes[0].status = NodeStatus::Done;
         assert_eq!(
-            warn_acts(&m, None, 100 * MINUTE),
+            warn_acts(&m, None, &[], &[], 100 * MINUTE),
             [
                 WarnAct::Clear {
                     node: 0,
@@ -1490,13 +1724,13 @@ mod tests {
         m.nodes[0].criteria[1].fails_in_a_row = 0;
         m.nodes[0].status = NodeStatus::Working;
         m.nodes[0].back_to_work(100 * MINUTE);
-        assert!(warn_acts(&m, None, 189 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
         m.status = MissionStatus::Cancelled;
-        assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
         m.status = MissionStatus::Running;
         m.nodes[0].kind = NodeKind::Research;
         m.nodes[0].delivery = None;
-        assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
+        assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
     }
 
     fn stall(node: usize, reason: AttentionReason, pr: Option<u32>) -> Stall {

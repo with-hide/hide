@@ -147,7 +147,8 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 The engine's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
-Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request; the local measurement tool that once repeated that scene matrix is retired.
+Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request.
+Every screen a bell can meet is a scene each agent declares, with the door the journey opens it through and the finding a survey recorded ([VERIFICATION.md](VERIFICATION.md#agent-scenes)); every finding is unknown until a survey closes it, and `bell` is still declared by hand, so no declaration changes until a finding does.
 The adapter declaration is a reviewed product decision, never changed by a measurement.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
@@ -368,6 +369,10 @@ The doorbell submits one line through the engine's prompt operation: `🦉 <writ
 🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
 
+A pane shows the line, and the rows the agent wraps it onto, as blue-grey words on a pale band ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#the-doorbells-lines-in-a-terminal)).
+How the agent echoes it is the adapter's declaration: the glyph its composer begins with (`composer.marker`) comes before the owl, and `BellEcho::chrome` names the marks its own output rows begin with, which end a wrapped line.
+Every agent whose `bell` types the line declares a `bell_echo` and no other does, which `hide-agent-adapter`'s contract test holds, so a new bell target that has not said how it echoes the line fails there rather than showing a bright letter; the web shell reads the projection in `contracts/agent-adapters.json`.
+
 The kind and the count are worded in the operator's interface language, the one Hide AI writes in (`Runtime::interface_language`: the language chosen in Settings, else this machine's primary language read once at launch, else English), which the doorbell reads with the recipient's connector under the runtime's lock from state the runtime holds, with no I/O.
 
 | Kind | en | ko | zh-CN | ja |
@@ -383,6 +388,7 @@ The kind and the count are worded in the operator's interface language, the one 
 A kind this build does not know reads as a letter (letter, 편지, 信, 手紙).
 Nothing reads the words back: a letter's turn is recognized by the whole line its ledger kept when it rang ([Recognizing the bell](#recognizing-the-bell)), so a change of language between the ring and the turn changes nothing.
 The writer is the name the sender registered under (`hide agent register`, `hide agent spawn --name`), else the title Hide's screens give it while its pane still hosts that session, else its runtime's name, such as Codex; never a pane id and never its registration id, which belong to the letter's envelope ([Names](#names-on-the-wire-and-on-screen)).
+The line is for a person, so nothing compares it: when the doorbell types it, it records for the label beside the line the writer's wire name and the letter's kind (`labels::input::Letter`), which the judged message keeps, and that wire name is what a child's lineage names its parent by ([status-model.md: A question still waiting](status-model.md#a-question-still-waiting)).
 A watch warning is named by the agent it watches, and its first line says for how long nothing moved, that the agent stopped with a question, or that it is blocked at a prompt ([Watch activity and completion](#watch-activity-and-completion)).
 Both are looked up in memory when the bell rings, on the doorbell's thread, never on the session-sync thread.
 The first line is the body's first line that has anything to show, cut to 60 characters with `…`, and the writer is cut to 32; a body with no such line leaves the colon and summary out.
@@ -737,6 +743,31 @@ In the run before the fresh session read (41195283433), Antigravity on Windows t
 With the fresh read before the verdict, the same lane recorded it after one typing on all three systems.
 The Codex 0.163.0 start with another program's entries at the front of `hooks.json` reproduced the incident in the local setup: without this change the brief went to the hooks review and nothing followed; with it the parent was told, and after its screen was answered through `hide pane send` the brief was typed again and the prompt hook confirmed it.
 
+### A blocked child
+
+A delegated child held at a blocked prompt is its parent's to handle first, and the operator's only once the parent had a minute (`hide-core/src/runtime/blocked_children.rs`).
+The prompt is whatever made its row `blocked`: its hook's wait for a permission or an answer, a question or plan approval its session read holds, or the engine's prompt ([status-model.md](status-model.md#where-each-axis-comes-from)).
+
+1. The parent hears at once.
+   The session projection pass that first reads the child blocked records the block's start, and the next coordinator tick (250 ms) sends the parent one `progress` letter with `--now` from the code-owned identity `hide:blocked`, under the intent `child-blocked:<pane>:<start>`, so a working parent reads it at its next tool call and a repeated send converges on the first.
+   Its first line is `<child> is blocked at a prompt: read it with hide pane read <pane>.`; the rest says to answer it with `hide pane send <pane> --key <name>` or text and `--enter`, or to send the child a safer instruction, that its runtime may time the prompt out on its own (Claude Code's built-in `rm` check gives up after two minutes, 2026-10-16), when the operator is asked, and the same words on answering another agent's screen as the [unconfirmed-input notice](#input-an-agent-did-not-take).
+   The note goes to the parent observed in its pane, running the session the child's lineage names, or to that pane's agent asleep, whose mailbox keeps it for its next wake; a `progress` letter wakes no one.
+   A parent Hide cannot address, and a note that cannot be sent, are logged (`child_blocked.note_unaddressed`, `child_blocked.note_unsent`) and not tried again: the grace runs, and the operator gets the child when it ends.
+   A parent that is itself blocked keeps the note pending like any letter, and the note raises nothing, since only a child's own letters do.
+   A child that declared a person's turn gets no note: it skips its parent and rises at once ([A person's turn](#a-persons-turn)).
+2. The root is raised after the grace.
+   The child's lineage root enters Needs You with the child's ask (`child_blocked`) once the same block has lasted `CHILD_BLOCKED_GRACE_MS`, 60 seconds from its start (`agent_state/escalation.rs`); the session projection's one deadline, checked on the existing coordinator tick, wakes at that moment, and the ask's time is the block's start.
+   A minute leaves the parent time to act and the operator time to answer before a runtime that times its prompt out at two minutes does; a two-minute grace would lose that prompt.
+   During the grace the child draws `waiting` and its root only turns unread through the descendant signal ([status-model.md](status-model.md#the-mark)), and every other escalation cause keeps its own clock.
+3. A block ends when the core reads the child settled and not blocked (a numbered state it knows, `agent_state::settled`), when another known session runs in its pane, or when the pane goes; the next block is a new start, a new note and a new grace.
+   A pane still being restored (sequence 0, `unknown`, no session named yet, its lineage not given back yet) and a disconnected device's last row keep the block, so a device whose link comes back keeps the same start, deadline and note.
+   A block that ends and returns between two reads of the agent list, about a second apart, reads as one block.
+
+Known limit, accepted as a rare edge that clears itself: the block's start is the core's memory, so a restart of hided while a child is blocked starts its grace again once, taking its root out of Needs You until a minute after the restored pane reads blocked, and may send its parent one more note.
+Keeping the start across a restart would need a durable record in the delivery ledger, which this does not add.
+
+Regression owners: the escalation tests in `agent_state/escalation.rs` (`a_blocked_child_rises_only_once_its_grace_from_the_blocks_start_ends`, `within_its_grace_a_blocked_child_still_rises_for_another_cause`), the block tests in `runtime/blocked_children.rs`, and `runtime/tests/blocked_children.rs` for the note, the grace's end on the tick, a parent that cannot be told and a device's reconnect.
+
 ## Persistence, clocks and limits
 
 The mailbox lives at the state directory's `delivery-ledger.json`, named by `hide_kit::layout::delivery_ledger`.
@@ -824,12 +855,12 @@ There is no cached response or retry during the same tick.
 Three consecutive read failures produce a rate-limited diagnostic.
 The ledger counts failures only up to those three (`watch::READ_FAILURES_REPORTED`): a read that keeps failing is still reported every ten minutes, and changes nothing the file holds, where counting every tick rewrote the whole file every minute while one watched target could not be read.
 
-A target that stopped on a question it asked only in its own pane, or that the engine holds at a blocked prompt, is told to a pane observer after one tick, 60 seconds of no activity, instead of 20 minutes, so the parent decides within about a minute whether to answer the child or ask the operator.
-The fact is the target's own row while its pane runs the watched session: for a question, activity stopped, a question demand ([status-model.md](status-model.md#where-each-axis-comes-from)) and no blocked prompt, where the question is not Hide's own about input it typed (`AskSubject::InputUnconfirmed`, laid on the row as a question but told to the parent by its notice, [Input an agent did not take](#input-an-agent-did-not-take)); for a prompt, the row's `blocked`, whatever its activity, since the engine reports no activity for a pane it holds at a menu.
-A blocked child also rises to the operator ([Delegated escalation](status-model.md#task-identity)); the parent is told as well because a native runtime can time the prompt out on its own (Claude Code's built-in `rm` check gives up after two minutes, 2026-10-16), and a parent that hears in a minute can still tell the operator or send the child a safer command.
+A target that stopped on a question it asked only in its own pane is told to a pane observer after one tick, 60 seconds of no activity, instead of 20 minutes, so the parent decides within about a minute whether to answer the child or ask the operator.
+The fact is the target's own row while its pane runs the watched session: activity stopped, a question demand ([status-model.md](status-model.md#where-each-axis-comes-from)) and no blocked prompt, where the question is not Hide's own about input it typed (`AskSubject::InputUnconfirmed`, laid on the row as a question but told to the parent by its notice, [Input an agent did not take](#input-an-agent-did-not-take)).
+A target held at a blocked prompt is not the watch's: its parent is told at once by a note of its own and its root is raised after a grace ([A blocked child](#a-blocked-child)), so the watch keeps its ordinary window for it.
 A child that works, such as Codex while its async question stays open, keeps the 20 minutes.
-A question the target already sent this observer as a `request` or `block` letter still awaiting its answer keeps the 20 minutes too, since that letter rang the observer's doorbell; a blocked prompt rang nothing, so it is told whatever letters wait.
-The early warning is the episode's first warning, and only its first line differs: `Stopped with a question (watch <id>).` or `Blocked at a prompt (watch <id>).` instead of `No activity for N minutes`.
+A question the target already sent this observer as a `request` or `block` letter still awaiting its answer keeps the 20 minutes too, since that letter rang the observer's doorbell.
+The early warning is the episode's first warning, and only its first line differs: `Stopped with a question (watch <id>).` instead of `No activity for N minutes`.
 The second warning, the unanswered-parent human notice and the escalation to the operator follow from its time exactly as from a 20-minute warning, and new activity of the target starts a new episode, so one question gives at most one early warning.
 The runtime reads the row it already holds when it hands each watch to the tick, under the lock that builds the tick's work; nothing is added to the tick's reads, threads or timers.
 
@@ -968,6 +999,9 @@ With `--parent here` or the caller's own id, the agent is delegated: its parent 
 Without `--parent`, the work is handed off to the operator: the agent is an independent root, has no lineage edge to the spawner and starts no automatic watch.
 Both modes create a separate tab, in an existing checkout or a new worktree, without changing the current screen or keyboard focus.
 A new worktree's branch starts where New worktree's does: from `origin/<branch>` as last fetched when the repository folder's own branch has no commits origin lacks, else from that branch ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)); on a device whose helper is not connected the spawn cannot read that and leaves the start to the engine, the folder's own HEAD.
+A spawn a mission admitted into the mission's own project starts its new worktree from the mission's destination instead of the repository folder's own branch, by the same rule ([Missions](#missions)); a destination the repository does not have refuses the spawn with Git's reason, and nothing else is started from in its place.
+A spawn into another repository of that machine starts from that repository's own branch, since the destination is a branch of the mission's project; a repository the worktree catalog does not list yet, as after a restart no window has followed, is compared by the path the spawn named.
+The destination a mission records at its creation is the branch the worktree catalog last read for the checkout, with no Git call of its own: with no window showing the project, or right after a `git switch`, that can be the branch from before, so the guide has the Conductor compare `도착` with the checkout's branch and name the right one in the plan.
 With `--beside` the child opens in the caller's own tab instead: its pane is split right of the caller's (the engine's split, unfocused, the call Fork agent to the side uses), drawn at once on this machine's screen and replaced by the engine's layout when it arrives (a runtime that cannot draw it logs `beside.draw_skipped` and the spawn goes on), and the rest of the start (the agent, its brief, its session and the child record) is the tab path's.
 Placement says who answers for the agent: one beside its caller is the operator's to watch, an operator-owned root with the caller as its origin, so `--beside` with `--parent` is refused `beside_with_parent` before anything is checked, registered or created, and a supervised child opens in a tab of its own; a child beside its parent that an earlier build made keeps its parent, and delegated-child relocation leaves it in its caller's tab across restarts ([ARCHITECTURE.md](ARCHITECTURE.md)).
 It is only for the caller's own checkout on the caller's own device, and everything else is refused before anything is registered, reserved or created, with the next action to run the command again without `--beside`: `beside_other_checkout` when `--repo` and `--branch` (and `--path`) name no existing worktree or another one than the caller's, so a new worktree or another branch never opens beside; `beside_other_machine` when `--machine` names another device, whose engine cannot hold a pane in the caller's tab; and `beside_needs_agent_pane` for a code-owned caller with no pane of its own (a shell that is no agent pane is refused earlier, as every agent command is, with `agent_pane_required`); a caller's worktree that is gone by the time the pane is made is `beside_other_checkout` too, since a spawn beside never makes a worktree.
@@ -1032,14 +1066,30 @@ The unsupported reconciliation/resume/session flags and relay, escalate, graph a
 The pane closes only while it is still the registration's: one the engine no longer has, or whose id now runs another terminal than the one the registration recorded, answers `"pane": "gone"`, one that shows another conversation now stays open with `"pane": "other_agent"`, and a pane of a registration from before Hide recorded terminals stays open with `"pane": "left"` when no agent shows in it, since nothing proves it is still the registration's.
 A registration whose agent never reported its session (a Codex worker before its first turn) cannot be told from another conversation once its pane shows one, so such a pane answers `other_agent` and stays open with its holder; end it from the pane, or close the pane.
 The close is the engine's own (`hide-core/src/coordination/end.rs`), as a spawn closes the panes of its unstarted attempts: it enters no Reopen closed, and a tab it empties closes and the operator's screen moves to its neighbour, as for any tab the engine closed.
-The conversation that ran there is kept as an archived session of its own under 보관됨, where 이어가기 resumes it as a new root ([ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)): the answer says `"conversation": "archived"`, `"none"` when no agent showed in the pane, its checkout is not listed or Hide does not know its session (the `agent.end_pane` line says which), or `"archive_full"` when the archive already holds its 256 sessions, which is also logged as `agent.end_not_archived`, and the pane closes all the same; a record Hide could not form answers `"none"` and is logged there as `archive_refused`.
+The conversation that ran there is kept as an archived session of its own under 보관됨, where 이어가기 resumes it as a new root ([ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
+The answer says `"conversation": "archived"`, or `"none"` when no agent showed in the pane, its checkout is not listed or Hide does not know its session (the `agent.end_pane` line says which).
+At 256 archived sessions, admission makes room from the oldest archived root at rest, taking its descendants with it through the existing delete path; only when no eligible roots can make enough room does the answer say `"archive_full"`, also logged as `agent.end_not_archived`.
+Until both the plan and mission books have been read successfully, an admission needing eviction also answers `"archive_full"`, with `session_archive.eviction_unavailable` naming the unavailable book.
+If an already queued delete fails, its record stays as on manual delete; the next admission removes enough eligible roots to recover the cap, including that retained excess.
+A record Hide could not form, or an eviction whose deletes could not be enqueued, answers `"none"` and is logged there as `archive_refused`.
+The pane closes all the same.
 The conversation is archived before the pane closes, so a close that ends the pane but not the command still leaves it under 보관됨, and its row stands there once the pane left its machine's listing; a close that failed with the pane still there takes the record back, since the conversation runs on in it.
 The session the agent registered with proves the conversation when Hide's label reader has not confirmed the session file yet, as for an agent ended right after its first turn.
 The registration ends first, so a close the engine does not take answers `pane_close_failed` with the registration ended and logs `agent.end_pane_failed`, and the same command closes the pane; every outcome is logged as `agent.end_pane` with the agent, machine and pane.
 The pane is read from the engine's topology, and its close ends the pane on its node within 50 s (`hide_node_link::link_panes::END_WAIT`: the holder's close, 20 s, then its tree's pids), which the CLI waits beyond an ordinary command (`END_ANSWER_WAIT`).
 Every open pane holds one of its machine's 128 pane holders (`hide-kit/src/panes/reservation.rs`), so a finished agent ended this way gives its holder back, and one kept with `--keep-pane`, or asleep in its pane, keeps it.
 
-A registration ends when the engine no longer has its pane, so its name and the watches on it do not outlive the pane; the ended record stays in the ledger, like one `hide agent end` ended, and still counts against the 2048-registration limit.
+A registration ends when the engine no longer has its pane, so its name and the watches on it do not outlive the pane; the ended record stays as history until room is needed at the 2048-registration limit.
+At that limit a new registration drops the oldest ended registration nothing still names, together with the finished spawn records naming it; at the 4096-spawn limit a new spawn drops the oldest finished spawn record nothing still holds (`coordination::room`).
+Oldest means first registered or reserved, the order the ledger keeps; neither record stores an end time.
+A spawn has finished when its child ended, or, without a child, its parent ended.
+Eligibility comes from the published ledger: a record ended or finished only in the batch being saved waits for publication before a later batch may drop it.
+This keeps a live record visible to a concurrent mission binding until that binding can no longer be admitted; a batch with no previously finished eligible record still answers `capacity`.
+Registrations named by other registrations, unfinished or held spawns, identity waits, human turns, open letters or watches stay, and the loaded mission and plan books protect the records they still need; their contracts live in with-hide/hide-private `docs/missions.md` and `docs/plans.md`.
+A book not yet read or unreadable is handled conservatively: every registration stays until the mission book is known, and mission or plan spawns stay while their book is unknown.
+Sleeping, archived and reopenable sessions keep registrations that have not ended, so they are never eviction candidates.
+When nothing can go, the new operation still answers `capacity` and writes one diagnostic with the registration and spawn counts.
+Only retained history can answer an old registration id or replay an old spawn intent; an evicted registration is unavailable, and a spawn intent evicted with its finished record is a new intent on retry, as for a dropped finished letter.
 The core reads that from its own session sync of the host's engine, never from a separate poll: a pane the in-sync replica listed and then stops listing was closed, and a pane missing from the fresh session snapshot of a connect is gone for every registration made before that snapshot was asked for, which is how registrations left by panes that closed while no Hide was running end on the first connect.
 Nothing ends on uncertainty: a stream that lost events, an engine restart and an unreachable engine publish no read until a fresh snapshot replaces it, a disconnected device publishes none, a sleeping or resumed agent keeps its pane, a session asleep with its pane closed keeps its registration and the watches on it until its wake continues them or lets them go, an archived session keeps them the same way until 이어가기 continues them or the archive is deleted, an agent closed through Hide keeps them while its Reopen closed entry is listed, a registration seen continuing in another pane keeps them until the store moves them there, a registration on another engine of the same machine is not judged by this one's read, and a registration made after the snapshot was asked for waits until a read lists its pane.
 The delivery store ends it with the watches on it and the answer waits of the letters it sent or received, as `hide agent end` does, and logs `agent.ended` once with the agent id, machine, pane and reason (`pane_left` or `pane_absent`); nothing reaches the screen.
@@ -1096,7 +1146,7 @@ The receipt lives on the existing warning letters and survives daemon restart an
 The second agent warning introduces no second human notification schedule.
 An overdue letter's notification key is its ID plus the cause and sends once.
 A phone that cannot be reached is not sent to, and a failed send records a diagnostic without retry.
-The phone is skipped before any send when the push mode is off (`mode_off`) or is app-closed-only while a desktop or web shell is connected (`app_open`), Mobile is off (`mobile_off`) or no paired phone has a Web Push subscription or an iOS app registration (`no_subscription`); the first that applies is the reason, and a send that fails (a Web Push phone while the push key is missing included) or finds every subscription gone is `send_failed` or `subscription_gone`.
+The phone is skipped before any send when its desktop pause choice is on while an attached desktop host reports system input within ten minutes, unlocked and awake, and an attached desktop window enables Needs You notifications (`computer_in_use`), Mobile is off (`mobile_off`) or no paired phone has a Web Push subscription or an iOS app registration (`no_subscription`); the first that applies is the reason, and a send that fails (a Web Push phone while the push key is missing included) or finds every subscription gone is `send_failed` or `subscription_gone`.
 The core's own engine shows no notification, so the phone is the one channel.
 When the phone was not reached, one `human.channels_failed` record in `Logs/core.jsonl` carries the notice (`letter_undelivered`, `observer_unconfirmed` or `mission_attention`), the letter id and `push` (the reason); it never carries a letter's text, a phone endpoint or a key.
 The claim stays consumed, so the same letter or warning is never announced again, and nothing is drawn on screen: an operator with phone push off learns of a held letter from that record only.
@@ -1215,6 +1265,7 @@ Like `hide agent catalog`, it needs the running daemon and a Hide credential but
 ## Missions
 
 Moved to a private document: `docs/missions.md` in with-hide/hide-private.
+Its section "A merge the plan leaves to the operator" owns per-node merge ownership, the ready-PR turn and the quiet `pr` scope.
 
 ## Plans
 

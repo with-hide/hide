@@ -336,6 +336,7 @@ pub(crate) fn apply(
     id: &str,
     settle: &Settle,
     now: u64,
+    holds: &dyn super::Holds,
 ) -> Result<Value, String> {
     let Some(index) = ledger.identity_waits.iter().position(|wait| wait.id == id) else {
         return Ok(json!({"settled": "absent"}));
@@ -349,7 +350,7 @@ pub(crate) fn apply(
     };
     let wait = ledger.identity_waits[index].clone();
     let mut trial = ledger.clone();
-    match bind(&mut trial, &wait, record, now) {
+    match bind(&mut trial, &wait, record, now, holds) {
         Ok(agent) => {
             trial.identity_waits.retain(|wait| wait.id != id);
             *ledger = trial;
@@ -368,6 +369,7 @@ fn bind(
     wait: &IdentityWait,
     record: &AgentRecord,
     now: u64,
+    holds: &dyn super::Holds,
 ) -> Result<String, String> {
     if record.pane != wait.pane
         || record.machine != wait.machine
@@ -388,7 +390,7 @@ fn bind(
                 .and_then(|record| super::resolve_actor(ledger, &record.parent))
                 .cloned()
                 .ok_or("parent_unavailable")?;
-            super::apply(
+            super::apply_with(
                 ledger,
                 &parent,
                 &Mutation::BindChild {
@@ -396,6 +398,7 @@ fn bind(
                     record: record.clone(),
                 },
                 now,
+                holds,
             )?;
             // A spawn whose brief is still to be typed is completed by the
             // same command asked again, which types it once and then binds
@@ -406,11 +409,12 @@ fn bind(
                 .iter()
                 .any(|record| &record.id == spawn && record.brief_phase().settled());
             if settled {
-                super::apply(
+                super::apply_with(
                     ledger,
                     &parent,
                     &Mutation::Complete { id: spawn.clone() },
                     now,
+                    holds,
                 )?;
             }
             ledger
@@ -430,7 +434,7 @@ fn bind(
             {
                 return Err("parent_unavailable".into());
             }
-            super::insert_record(ledger, record, false)?["id"]
+            super::insert_record(ledger, record, false, holds)?["id"]
                 .as_str()
                 .map(str::to_owned)
                 .ok_or_else(|| "child_unavailable".into())
@@ -441,6 +445,7 @@ fn bind(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coordination::Held;
     use crate::sidebar::SessionAgentSessionPayload;
 
     const NODE: &str = crate::node::TEST_NODE;
@@ -635,7 +640,7 @@ mod tests {
         record.origin = Some("agent-1".into());
         record.forked = true;
         let settle = Settle::Bind(Box::new(record));
-        let answer = apply(&mut ledger, &wait.id, &settle, 1).unwrap();
+        let answer = apply(&mut ledger, &wait.id, &settle, 1, &Held::default()).unwrap();
         let id = answer["bound"].as_str().unwrap().to_owned();
         let fork = ledger.agents.iter().find(|agent| agent.id == id).unwrap();
         assert_eq!(
@@ -646,7 +651,7 @@ mod tests {
         assert!(ledger.identity_waits.is_empty());
         super::super::validate_records(&ledger).unwrap();
         assert_eq!(
-            apply(&mut ledger, &wait.id, &settle, 2).unwrap(),
+            apply(&mut ledger, &wait.id, &settle, 2, &Held::default()).unwrap(),
             json!({"settled": "absent"})
         );
         assert_eq!(ledger.agents.len(), 2);
@@ -659,7 +664,14 @@ mod tests {
         let (mut ledger, wait) = forked();
         let mut record = registration("", "w2:p1", "fork");
         record.name = Some("another-name".into());
-        let answer = apply(&mut ledger, &wait.id, &Settle::Bind(Box::new(record)), 1).unwrap();
+        let answer = apply(
+            &mut ledger,
+            &wait.id,
+            &Settle::Bind(Box::new(record)),
+            1,
+            &Held::default(),
+        )
+        .unwrap();
         assert_eq!(answer, json!({"ended": "child_identity_changed"}));
         assert!(ledger.identity_waits.is_empty());
         assert_eq!(ledger.agents.len(), 1);

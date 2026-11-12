@@ -271,6 +271,9 @@ pub struct SessionAgentPayload {
     /// core's hook facts, never read from the engine (`agent_hooks::facts`).
     #[serde(skip)]
     pub(crate) hook: Option<hide_node_link::panes::HookTurn>,
+    /// Why the provider refused the turn `hook` says ended; laid with it.
+    #[serde(skip)]
+    pub(crate) hook_refused: Option<crate::agent_hooks::facts::TurnRefused>,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize, Eq, PartialEq)]
@@ -851,6 +854,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
             .and_then(|facts| facts.user_turn.clone()),
         ask_subject: None,
         laid_since_unix_ms: None,
+        blocked_since_unix_ms: None,
         laid_more: 0,
         laid_asks: BTreeSet::new(),
         open_asks: None,
@@ -904,6 +908,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         declared_parent_session: non_empty(agent.declared_parent_session.as_deref())
             .map(str::to_owned),
         lineage_session: non_empty(agent.lineage_session.as_deref()).map(str::to_owned),
+        refused: agent.hook_refused.clone(),
         server_mark: crate::engine::tokens::server_mark(&agent.tokens),
         delegated: false,
         descendant_counts: crate::model::DescendantCountsSnapshot::default(),

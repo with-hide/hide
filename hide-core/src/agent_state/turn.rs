@@ -1225,6 +1225,54 @@ pub mod push {
         roots
     }
 
+    /// The notice a root says in `state`, worded from its row as it is now.
+    fn notice_of(
+        key: &AgentKey,
+        agent: &PhoneAgent,
+        state: NoticeState,
+        look: bool,
+        subject: Option<crate::model::AskSubject>,
+    ) -> Notice {
+        Notice {
+            key: key.clone(),
+            title: agent.title.clone(),
+            state,
+            // `look` is the eye's word, `볼 것`, and the newest View is the
+            // sentence (`볼 것 · report.html · app`).
+            status_code: Some(if look {
+                "look".to_owned()
+            } else {
+                agent.status_code.clone()
+            }),
+            detail: if look {
+                agent.look.clone()
+            } else {
+                agent.detail.clone()
+            },
+            subject: if look { None } else { subject },
+            place: agent
+                .place
+                .as_deref()
+                .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The notice a root that waits on the operator says now: the person's
+    /// turn `declared` while it still stands on the row, otherwise the row's
+    /// own ask, so a notice held back for a moment says the row's latest state.
+    pub fn waiting_notice(
+        key: &AgentKey,
+        agent: &PhoneAgent,
+        declared: Option<&crate::model::AskSubject>,
+    ) -> Notice {
+        let subject = declared
+            .filter(|declared| agent.human_turns.values().any(|turn| turn == *declared))
+            .cloned()
+            .or_else(|| agent.subject.clone());
+        notice_of(key, agent, NoticeState::NeedsYou, false, subject)
+    }
+
     /// Follows root agents across projections and says which entered Needs You
     /// or Done, and which the desktop made Seen. The first projection it sees
     /// only seeds it: nothing that was already waiting is announced.
@@ -1240,7 +1288,11 @@ pub mod push {
     /// What a root was last seen as: its state and the person's turns
     /// declared on it or raised to it (PRD ask-human), so a new declaration
     /// is announced once even while the state stays Needs You.
-    type Seen = (Effective, BTreeSet<String>);
+    #[derive(Clone)]
+    struct Seen {
+        state: Effective,
+        declared: BTreeSet<String>,
+    }
 
     /// How long a vanished agent's state is kept for its return.
     pub const VANISHED_TTL: Duration = Duration::from_secs(10 * 60);
@@ -1254,6 +1306,33 @@ pub mod push {
         /// Whether a projection has seeded it since it was made or reset.
         pub fn seeded(&self) -> bool {
             self.last.is_some()
+        }
+
+        /// Whether the last projection observed has `key` waiting on the
+        /// operator's answer: a question, an approval, a block, a raised ask
+        /// or a person's turn, unread; never a finished turn or a View alone.
+        pub fn waits_on_operator(&self, key: &AgentKey) -> bool {
+            self.last
+                .as_ref()
+                .and_then(|last| last.get(key))
+                .is_some_and(|seen| seen.state == Effective::NeedsYou)
+        }
+
+        /// Whether `key` was in the last projection observed: a root absent
+        /// from it is in the disappearance grace, not gone.
+        pub fn present(&self, key: &AgentKey) -> bool {
+            self.last
+                .as_ref()
+                .is_some_and(|last| last.contains_key(key))
+        }
+
+        /// The roots the last projection observed has waiting on the operator.
+        pub fn waiting(&self) -> impl Iterator<Item = &AgentKey> {
+            self.last.iter().flat_map(|last| {
+                last.iter()
+                    .filter(|(_, seen)| seen.state == Effective::NeedsYou)
+                    .map(|(key, _)| key)
+            })
         }
 
         pub fn observe(&mut self, projection: &Projection) -> (Vec<Notice>, BTreeSet<AgentKey>) {
@@ -1271,7 +1350,10 @@ pub mod push {
                 .map(|(key, (state, agent))| {
                     (
                         key.clone(),
-                        (*state, agent.human_turns.keys().cloned().collect()),
+                        Seen {
+                            state: *state,
+                            declared: agent.human_turns.keys().cloned().collect(),
+                        },
                     )
                 })
                 .collect();
@@ -1281,26 +1363,31 @@ pub mod push {
             let mut notices = Vec::new();
             let mut seen = BTreeSet::new();
             for (key, (state, agent)) in &now {
-                let (before, declared) = last
+                let before = last
                     .get(key)
                     .cloned()
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
-                    .unwrap_or((Effective::Other, BTreeSet::new()));
+                    .unwrap_or(Seen {
+                        state: Effective::Other,
+                        declared: BTreeSet::new(),
+                    });
                 // Each declaration not seen before is a notice of its own,
                 // in its own words, also on a row already in Needs You (B17).
                 let declared_now: Vec<_> = agent
                     .human_turns
                     .iter()
-                    .filter(|(id, _)| !declared.contains(*id))
+                    .filter(|(id, _)| !before.declared.contains(*id))
                     .map(|(_, subject)| subject)
                     .collect();
-                if before == *state && (declared_now.is_empty() || *state != Effective::NeedsYou) {
+                if before.state == *state
+                    && (declared_now.is_empty() || *state != Effective::NeedsYou)
+                {
                     continue;
                 }
                 // The row stays in Needs You, or the View's notice already
                 // carried the finished turn: nothing new to say.
                 let absorbed = matches!(
-                    (before, *state),
+                    (before.state, *state),
                     (Effective::NeedsYou, Effective::Look) | (Effective::Look, Effective::Done)
                 );
                 let announced = state.announced().filter(|_| !absorbed);
@@ -1308,7 +1395,7 @@ pub mod push {
                     let look = *state == Effective::Look;
                     // The row's own notice when it moved, then every new
                     // declaration it does not already say.
-                    let entered = (before != *state).then(|| agent.subject.clone());
+                    let entered = (before.state != *state).then(|| agent.subject.clone());
                     let declarations = declared_now
                         .iter()
                         .filter(|subject| {
@@ -1321,34 +1408,12 @@ pub mod push {
                         .map(|subject| Some((*subject).clone()))
                         .collect::<Vec<_>>();
                     for subject in entered.into_iter().chain(declarations) {
-                        notices.push(Notice {
-                            key: key.clone(),
-                            title: agent.title.clone(),
-                            state: announced,
-                            // `look` is the eye's word, `볼 것`, and the newest
-                            // View is the sentence (`볼 것 · report.html · app`).
-                            status_code: Some(if look {
-                                "look".to_owned()
-                            } else {
-                                agent.status_code.clone()
-                            }),
-                            detail: if look {
-                                agent.look.clone()
-                            } else {
-                                agent.detail.clone()
-                            },
-                            subject: if look { None } else { subject },
-                            place: agent
-                                .place
-                                .as_deref()
-                                .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
-                                .unwrap_or_default(),
-                        });
+                        notices.push(notice_of(key, agent, announced, look, subject));
                     }
                 } else if (*state == Effective::Seen
-                    && matches!(before, Effective::NeedsYou | Effective::Done))
-                    || (before == Effective::Look && *state != Effective::NeedsYou)
-                    || (before == Effective::Done
+                    && matches!(before.state, Effective::NeedsYou | Effective::Done))
+                    || (before.state == Effective::Look && *state != Effective::NeedsYou)
+                    || (before.state == Effective::Done
                         && agent.wait.as_deref() == Some("children")
                         && !agent.unread)
                 {
@@ -1367,11 +1432,11 @@ pub mod push {
                 }
             }
             // An agent gone for good: its notification is closed on the next push.
-            self.vanished.retain(|key, ((before, _), since)| {
+            self.vanished.retain(|key, (before, since)| {
                 let expired = at.duration_since(*since) >= VANISHED_TTL;
                 if expired
                     && matches!(
-                        before,
+                        before.state,
                         Effective::NeedsYou | Effective::Look | Effective::Done
                     )
                 {

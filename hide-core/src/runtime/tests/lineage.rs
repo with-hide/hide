@@ -62,7 +62,10 @@ fn local_lineage_agent<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgent
         .unwrap()
 }
 
-fn remote_lineage_agent<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgentSnapshot {
+pub(super) fn remote_lineage_agent<'a>(
+    runtime: &'a Runtime,
+    pane: &str,
+) -> &'a SidebarAgentSnapshot {
     runtime.snapshot.status.remote[0]
         .session
         .as_ref()
@@ -75,7 +78,7 @@ fn remote_lineage_agent<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgen
 
 /// A local pair and a pair on the device `mini`, each child declared by the
 /// other machine's parent, with every machine identity known.
-fn cross_machine_runtime() -> Runtime {
+pub(super) fn cross_machine_runtime() -> Runtime {
     let mut runtime = runtime();
     runtime.node = crate::node::NodeId::parse("machine-local").unwrap();
     runtime
@@ -1222,7 +1225,7 @@ fn a_delegated_childs_demand_and_completion_stay_off_the_operators_groups() {
 /// One ingest of a root and its descendants, each with the state the test
 /// names. The parent's tab and the children's tabs are all in one checkout,
 /// which is the ordinary shape sasu's dispatch leaves behind.
-fn ingest_lineage(runtime: &mut Runtime, rows: &[(&str, Option<&str>, &str, &str)]) {
+pub(super) fn ingest_lineage(runtime: &mut Runtime, rows: &[(&str, Option<&str>, &str, &str)]) {
     let agents = rows
         .iter()
         .map(|(pane, parent, status, token)| {
@@ -1269,7 +1272,7 @@ fn ingest_lineage(runtime: &mut Runtime, rows: &[(&str, Option<&str>, &str, &str
     .expect("session payload")));
 }
 
-fn agent_row<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgentSnapshot {
+pub(super) fn agent_row<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgentSnapshot {
     runtime
         .snapshot
         .navigator
@@ -1277,6 +1280,16 @@ fn agent_row<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgentSnapshot {
         .iter()
         .find(|row| row.pane_id == pane)
         .unwrap_or_else(|| panic!("{pane} is a row"))
+}
+
+/// Runs the session clock to the end of the grace of `pane`'s block: its
+/// parent had its minute, so its lineage root is raised from now on
+/// (docs/delivery.md, A blocked child).
+pub(super) fn pass_grace(runtime: &mut Runtime, pane: &str) {
+    let start = agent_row(runtime, pane)
+        .blocked_since_unix_ms
+        .unwrap_or_else(|| panic!("{pane} is a blocked child"));
+    runtime.tick_session_window(start + crate::agent_state::escalation::CHILD_BLOCKED_GRACE_MS);
 }
 
 /// The operator looks at one pane: the same path a sidebar click takes.
@@ -1470,6 +1483,11 @@ fn a_blocked_grandchild_raises_its_lineage_root_once_and_never_itself() {
             ("w1:p3", Some("w1:p2"), "blocked", ""),
         ],
     );
+    assert!(
+        agent_row(&runtime, "w1:p1").raised.is_empty(),
+        "the grace first"
+    );
+    pass_grace(&mut runtime, "w1:p3");
     let root = agent_row(&runtime, "w1:p1");
     assert_eq!(root.group, "needs_you");
     assert_eq!(root.raised.len(), 1);
@@ -1872,6 +1890,7 @@ fn escalation_is_explicit_while_ownership_remains_operator_or_delegated() {
             ("w1:p2", Some("w1:p1"), "blocked", ""),
         ],
     );
+    pass_grace(&mut runtime, "w1:p2");
     let payload = runtime.snapshot_delta_payload(0);
     let bytes = crate::runtime::serialize_snapshot_delta(&payload).expect("snapshot encodes");
     let text = String::from_utf8(bytes).unwrap();

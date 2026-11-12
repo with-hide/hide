@@ -85,7 +85,7 @@ export async function startPhoneRelay(port = 0) {
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, dropInputReply: false, refuseMission: "", html: null as string | null };
+  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device" };
   const wire = { binaryFrames: 0 };
   const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }], groups: [
     { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent & { kind: "agent" }] },
@@ -124,14 +124,14 @@ export async function startPhoneRelay(port = 0) {
         await send(id, { type: "refused", reason: state.refusal || "revoked" }); active.get(id)?.close(); return;
       }
       if (data.pair) await send(id, { type: "paired", credential, phone_id: "phone-one", name: "Phone" });
-      await send(id, { type: "hello", mac_name: pairing.name, phone_id: "phone-one", name: "Phone", vapid_public_key: vapid.getPublicKey().toString("base64url"), notifications: "unasked" });
+      await send(id, { type: "hello", mac_name: pairing.name, phone_id: "phone-one", name: "Phone", vapid_public_key: vapid.getPublicKey().toString("base64url"), notifications: state.notifications });
       await send(id, { type: "meta", push_mode: state.push ? "app_closed" : "off", other_phones: 0 });
       await send(id, groups());
       await send(id, missions());
     } else if (data.type === "ping") await send(id, { type: "pong", id: Number(data.id) });
     else if (data.type === "open" || data.type === "view") {
       await send(id, { type: "conversation", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "The encrypted connection is ready.", truncated: false, at_ms: 1 }], before: null });
-      await send(id, { type: "rows", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", text: "terminal output from device", lines: 1, more: false });
+      await send(id, { type: "rows", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", text: state.rows, lines: 1, more: false });
       // An HTML file the agent opened, sent as hided sends it: one document with its files folded in.
       if (state.html !== null) await send(id, { type: "looks", device_id: agent.device_id, pane_id: agent.pane_id, views: [{ id: "v-html", kind: "html", name: "mockup.html", unseen: true, at: Date.now() }], omitted: 0 });
     } else if (data.type === "look_open" && state.html !== null) {
@@ -140,7 +140,10 @@ export async function startPhoneRelay(port = 0) {
       await send(id, { type: "look_head", request_id, view_id: "v-html", mode: "html", size: bytes.length, total: bytes.length, truncated: false, chunks: 1 });
       await send(id, { type: "look_chunk", request_id, seq: 0, data: bytes.toString("base64") });
       await send(id, { type: "look_end", request_id, view_id: "v-html" });
-    } else if (data.type === "push_subscription") await send(id, { type: "push_state", notifications: "on" });
+    } else if (data.type === "push_subscription") {
+      state.notifications = "on";
+      await send(id, { type: "push_state", notifications: "on" });
+    } else if (data.type === "push_permission") state.notifications = data.state === "denied" ? "off" : "unasked";
     else if (data.type === "input") {
       appliedInputs.push(String(data.text ?? data.key));
       // The device applied the input, but the acknowledgement never reaches the phone.

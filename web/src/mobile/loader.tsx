@@ -7,9 +7,9 @@ import { useLoaderTranslation } from "./loaderTranslation";
 import { Button } from "../components/ui/button";
 import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
-import { ScanQr, scanInApp } from "./ScanQr";
-import { FirstScreen, StartSettings } from "./StartScreens";
-import { bundlePath, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
+import { scanInApp } from "./ScanQr";
+import { AddScreen, FirstScreen, StartSettings } from "./StartScreens";
+import { bundlePath, HOST_LIST_LINK, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
 import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
@@ -57,18 +57,29 @@ function Loader() {
   // How many computers this phone knows: none shows the first screen, any shows the list (one opens at once, hostToOpen). Null while it is read.
   const [known, setKnown] = useState<number | null>(null);
   const [settings, setSettings] = useState(false);
+  const [openingNotice, setOpeningNotice] = useState(appHost() && new URLSearchParams(location.search).has("open"));
   useEffect(() => {
     // A pairing link that arrives while the list is read wins over opening a computer by itself.
     let paired = false;
-    const query = new URLSearchParams(location.search);
-    void pairing.then((qr) => { if (qr) { paired = true; setPair(qr); } }, () => { paired = true; setError("qrError"); })
-      .then(() => hostStore().list())
-      .then((hosts) => {
-        // The computer the address names, or the only one kept, opens without the list; both land in one render.
-        const open = paired ? null : hostToOpen(query, hosts);
-        if (open) setTarget(open);
-        setKnown(hosts.length);
-      }, () => { setKnown(-1); if (query.has("host")) setError("storage"); });
+    const hosts = pairing.then((qr) => { if (qr) { paired = true; setPair(qr); } }, () => { paired = true; setError("qrError"); })
+      .then(() => hostStore().list());
+    // Read the native launch intent alongside the saved computers. A notification chooses its computer in this
+    // loader, rather than loading the start page a second time after it has already painted another destination.
+    let ready!: () => void;
+    const initialOpen = new Promise<void>((resolve) => { ready = resolve; });
+    const stopOpens = followPushOpens((opened) => {
+      window.history.replaceState(null, "", pushOpenAddress(opened));
+      setOpeningNotice(true);
+      void hosts.then((saved) => {
+        if (!paired) setTarget(hostToOpen(new URLSearchParams(location.search), saved));
+      }, () => setError("storage"));
+    }, ready);
+    void Promise.all([hosts, initialOpen]).then(([hosts]) => {
+      // The computer the address names, or the only one kept, opens without the list; both land in one render.
+      const open = paired ? null : hostToOpen(new URLSearchParams(location.search), hosts);
+      if (open) setTarget(open);
+      setKnown(hosts.length);
+    }, () => { setKnown(-1); if (new URLSearchParams(location.search).has("host")) setError("storage"); });
     const followQr = () => {
       void takePairing().then((qr) => {
         if (!qr) return;
@@ -80,8 +91,6 @@ function Loader() {
     // A link that opened the app lands on the same pairing screen a scanned QR does, and waits for the person's tap.
     const stopLinks = followNativeLinks((qr) => { paired = true; setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
     if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
-    // A tap on a notification of the app: the start page finds the computer and hands the agent on to its bundle.
-    const stopOpens = followPushOpens((opened) => window.location.assign(pushOpenAddress(opened)));
     return () => { window.removeEventListener("hashchange", followQr); stopLinks(); stopOpens(); };
   }, []);
   useEffect(() => {
@@ -133,6 +142,7 @@ function Loader() {
     {target ? <Button variant="ghost" className="min-h-(--size-touch-target) text-body" onClick={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
     {error ? <p role="alert" className="max-w-(--size-mobile-copy) text-body text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </Landing>;
+  if (target && openingNotice && !error) return <main className="min-h-full" />;
   if (target) return <DeviceConnecting t={t} name={target.name} error={error}
     onChoose={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }} />;
   const demo = () => window.location.assign(`/p/${PHONE_PROTOCOL}/?demo=1`);
@@ -146,18 +156,19 @@ function Loader() {
       {error ? <p role="alert" className="px-xl pb-lg text-center text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
     </>;
   }
+  // Back from the add page: the list when a computer is kept, else the first screen, at an address that opens neither by itself.
+  if (adding) return <AddScreen t={t} full={(known ?? 0) >= MAX_HOSTS} onPair={(qr) => { setError(null); setPair(qr); setAdding(false); }}
+    onBack={() => { setError(null); setAdding(false); window.history.replaceState(null, "", known ? HOST_LIST_LINK : "/"); }} />;
   return <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col gap-lg px-xl">
     <h1 className="pt-lg text-headline font-semibold">hide</h1>
-    {adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
-      <h2 className="text-title">{t("mobile.relay.devices")}</h2>
-      <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
-      <div className="flex flex-col gap-xs">
-        <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={demo}>
-          <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
-        </Button>
-        <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>
-      </div>
-    </>}
+    <h2 className="text-title">{t("mobile.relay.devices")}</h2>
+    <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
+    <div className="flex flex-col gap-xs">
+      <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm px-sm text-body" data-phone-demo-entry="true" onClick={demo}>
+        <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
+      </Button>
+      <p className="px-sm text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>
+    </div>
     {error ? <p role="alert" className="text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </main>;
 }

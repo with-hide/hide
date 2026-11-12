@@ -35,7 +35,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionStopCause, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
@@ -155,12 +155,12 @@ function plan(state: string, now: number): MissionNode[] {
     node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), agent_id: "agent-1481", plan: workerPlan("worker-1481", ["빈 목록 재현", "필터 상태 보존", "구현 PR"], 3), launched: { agent_id: "agent-1481", agent: "codex", model: "Astra 2", effort: "high" }, ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, pr_url: "https://github.com/with-hide/hide/pull/1505", stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
-      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) }, agent_runtime: "ended" as const, attention: { reason: "worker_ended" as const, pr: null, to: "operator" as const, since_unix_ms: ago(2), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } } : { ...review(30), pr_state: "pending" as const }),
+      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) }, agent_runtime: "ended" as const, attention: { reason: "worker_ended" as const, pr: null, to: "conductor" as const, since_unix_ms: ago(2), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } } : { ...review(30), pr_state: "pending" as const }),
       ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", tally: { passed: stack ? 2 : 1, total: 2 }, checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", landing: stack && state !== "no-conductor" ? MERGE_LEFT : MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")),
       // Merged with a line left unrecorded and no Conductor to ask: it waits on the operator (PRD mission-node-simple B13, B14).
-      ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "operator" as const, since_unix_ms: ago(6), on_row: false, item: true, choices: ["done" as const] } } : {}) }),
+      ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "conductor" as const, since_unix_ms: ago(6), on_row: false, item: false, choices: ["done" as const] } } : {}) }),
     node("fix-1487", `${no(1487)} 수정`, {
       depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, pr_url: "https://github.com/with-hide/hide/pull/1506", stage: 3, reopened: stack ? 0 : 1, branch: "fix/1487-reopen-cells",
       plan: workerPlan("worker-1487", ["reopen 재현 테스트", "셀 초기화 순서 고치기", "실제 세션 replay", "전체 검사", "구현 PR"], stack ? 5 : 2),
@@ -222,6 +222,33 @@ function stalled(one: MissionNode): MissionNode {
       return { ...one, work: { state: "working" } };
     case "api":
       return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "no_worker" } };
+    default:
+      return one;
+  }
+}
+
+/**
+ * The stopped state (mission-56): the search fix's worker stopped on an API
+ * error six minutes ago and Hide told the Conductor; the reopen fix's worker
+ * stopped on a usage limit with the reset time in the agent's own line; the
+ * screen's worker ended its turn with no report two minutes ago, not told
+ * yet; the API change's worker is back at work after the Conductor's letter.
+ */
+function stopped(one: MissionNode, now: number): MissionNode {
+  const told = (since: number, cause: MissionStopCause) => [{ kind: "stopped" as const, from_unix_ms: since, since_unix_ms: since + 5 * MINUTE, told_unix_ms: since + 5 * MINUTE, cause }];
+  switch (one.key) {
+    case "fix-1490": {
+      const cause = { kind: "error" as const, line: "API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}" };
+      return { ...one, work: { state: "stopped", cause, since_unix_ms: now - 6 * MINUTE }, warnings: told(now - 6 * MINUTE, cause) };
+    }
+    case "fix-1487": {
+      const cause = { kind: "limit" as const, line: "You've hit your limit · resets 4pm (Asia/Seoul)" };
+      return { ...one, work: { state: "stopped", cause, since_unix_ms: now - 42 * MINUTE }, warnings: told(now - 42 * MINUTE, cause) };
+    }
+    case "screen":
+      return { ...one, work: { state: "stopped", cause: null, since_unix_ms: now - 2 * MINUTE } };
+    case "api":
+      return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "working" } };
     default:
       return one;
   }
@@ -309,10 +336,25 @@ function gated(one: MissionNode, state: MissionGateState, look: string, extra: P
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+  // A still-open PR remains the merge target after the most recently held PR merged.
+  if (shown === "operator-merge" || shown === "pr-ready") {
+    const fixture = missionFixture("running", now);
+    const one = fixture.mission.nodes.find((node) => node.key === "api")!;
+    one.prs = [{ number: 1503, state: "mergeable", url: null }, { number: 1505, state: "merged", url: null }];
+    one.pr = 1505;
+    one.pr_state = "merged";
+    one.landing = MERGE_LEFT;
+    one.merge = { by: "operator", state: shown === "operator-merge" ? "due" : "ahead", prs: [1503], ...(shown === "operator-merge" ? { why: "DB 변경은 직접 확인" } : {}) };
+    fixture.mission.scope = shown === "operator-merge" ? "merge" : "pr";
+    fixture.mission.landing_order = [one.key];
+    return fixture;
+  }
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
-  // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, and reached the operator; `hold`: its Conductor holds one node back for nine hours.
+  // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, unsettled 31 minutes behind the safety net; `hold`: its Conductor holds one node back for nine hours.
   if (shown === "delay" || shown === "stall" || shown === "hold") return stalledOrHeld(missionFixture("running", now), now, shown);
+  // `decided`: nothing is the operator's turn and the Conductor's own skips are listed; `net`: one cause on five nodes behind one safety net card.
+  if (shown === "decided" || shown === "net") return decidedOrNet(missionFixture("running", now), now, shown);
   // An answer sent from the banner draws the decision with that answer on it.
   const held = shown.startsWith("decision-hold-") ? (shown.slice("decision-hold-".length) as MissionAnswerHold) : undefined;
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed" || held !== undefined;
@@ -324,10 +366,10 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const adhoc = shown === "gate-all";
   // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
   const remote = shown === "remote" || shown === "remote-long" || shown === "stalled";
-  const state = answered || looking ? "decision" : shown === "gate-plan" ? "plan" : shown === "gate-nocond" ? "no-conductor" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || gating || adhoc || remote ? "running" : shown;
+  const state = answered || looking ? "decision" : shown === "gate-plan" ? "plan" : shown === "gate-nocond" ? "no-conductor" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || shown === "stopped" || gating || adhoc || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
-  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : one)));
+  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : shown === "stopped" ? stopped(one, now) : one)));
   const at = (key: string) => nodes.find((one) => one.key === key)!;
   if (shown === "gate-plan") {
     gated(at("cause"), "ahead", "원인 결론");
@@ -430,10 +472,18 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       if (session.pane_id === SCREEN_PANE || session.pane_id === REVIEW_PANE) session.device_id = "mini";
     }
   }
+  // With no Conductor, the raises it would settle stand behind the safety net at once, as the core derives it.
+  if (!mission.conductor.present) mission.safety_net = absentNet(mission);
   return { mission, rest };
 }
 
-/** The running mission held as a whole (`delay`), with one node held back (`hold`), or with one node stalled and raised to the operator (`stall`). */
+/** The safety net of a mission no Conductor holds: every raise the Conductor would settle, oldest first. */
+function absentNet(mission: Mission): Mission["safety_net"] {
+  const nodes = mission.nodes.flatMap((one) => (one.attention?.to === "conductor" ? [{ key: one.key, title: one.title, reason: one.attention.reason, pr: one.attention.pr, since_unix_ms: one.attention.since_unix_ms }] : [])).sort((a, b) => a.since_unix_ms - b.since_unix_ms);
+  return nodes.length > 0 ? { conductor_present: false, since_unix_ms: nodes[0]!.since_unix_ms, nodes } : null;
+}
+
+/** The running mission held as a whole (`delay`), with one node held back (`hold`), or with one node stalled and its raise unsettled behind the safety net (`stall`). */
 function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "delay" | "stall" | "hold"): { mission: Mission; rest: SnapshotRest } {
   mission.decision = null;
   mission.question = null;
@@ -447,11 +497,39 @@ function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest
     node.hold = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE };
     return { mission, rest };
   }
-  node.attention = { reason: "not_started", pr: null, to: "operator", since_unix_ms: now - 31 * MINUTE, on_row: false, item: true, choices: ["leave", "drop"] };
+  // The raise is the Conductor's; standing 31 minutes unsettled, it is the mission's safety net.
+  node.attention = { reason: "not_started", pr: null, to: "conductor", since_unix_ms: now - 31 * MINUTE, on_row: false, item: false, choices: ["leave", "drop"] };
+  mission.safety_net = { conductor_present: true, since_unix_ms: now - 31 * MINUTE, nodes: [{ key: node.key, title: node.title, reason: "not_started", pr: null, since_unix_ms: now - 31 * MINUTE }] };
   return { mission, rest };
 }
 
-/** The no-Conductor mission with every node done and its close refused for three empty check lines, raised on the first node and waiting on the operator. */
+/**
+ * The running mission with nothing on the operator's turn and the lines its
+ * Conductor skipped on its own listed beside the map (`decided`), or with one
+ * cause raised on five nodes that its Conductor left unsettled 25 minutes,
+ * one safety net card for all five (`net`).
+ */
+function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "decided" | "net"): { mission: Mission; rest: SnapshotRest } {
+  mission.decision = null;
+  mission.question = null;
+  if (shown === "decided") {
+    mission.skipped_alone = [
+      { node: "fix-1481", title: mission.nodes.find((one) => one.key === "fix-1481")?.title ?? "fix-1481", line: "check", kind: "check", reason: "이 저장소에는 check 명령이 없음", by: "이슈 정리 · Conductor", at_unix_ms: now - 18 * MINUTE },
+      { node: "screen", title: mission.nodes.find((one) => one.key === "screen")?.title ?? "screen", line: "ci", kind: "ci", reason: "문서만 바뀌어 CI가 돌지 않음", by: "이슈 정리 · Conductor", at_unix_ms: now - 4 * MINUTE },
+    ];
+    return { mission, rest };
+  }
+  const raised = mission.nodes.filter((one) => one.status === "working" || one.status === "planned").slice(0, 5);
+  const held = raised.map((one, index) => {
+    const since = now - (25 - index) * MINUTE;
+    one.attention = { reason: "wake_refused", pr: null, to: "conductor", since_unix_ms: since, on_row: false, item: false, choices: ["leave", "drop"] };
+    return { key: one.key, title: one.title, reason: "wake_refused" as const, pr: null, since_unix_ms: since };
+  });
+  mission.safety_net = { conductor_present: true, since_unix_ms: now - 25 * MINUTE, nodes: held };
+  return { mission, rest };
+}
+
+/** The no-Conductor mission with every node done and its close refused for three empty check lines, raised on the first node and held by its safety net. */
 function closeRefused({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number): { mission: Mission; rest: SnapshotRest } {
   mission.nodes.forEach((one, index) => {
     Object.assign(one, { status: "done", finished_at_unix_ms: now - (30 - index) * MINUTE, attention: null, hide: null, landing: null, warnings: [], agent_runtime: null });
@@ -460,8 +538,9 @@ function closeRefused({ mission, rest }: { mission: Mission; rest: SnapshotRest 
   });
   const first = mission.nodes[0]!;
   first.title = "카톡 통화 기록";
-  first.attention = { reason: "close_refused", pr: null, to: "operator", since_unix_ms: now - 6 * MINUTE, on_row: false, item: true, choices: ["done"], unmet_nodes: 3 };
+  first.attention = { reason: "close_refused", pr: null, to: "conductor", since_unix_ms: now - 6 * MINUTE, on_row: false, item: false, choices: ["done"], unmet_nodes: 3 };
   mission.decision = null;
+  mission.safety_net = absentNet(mission);
   return { mission, rest };
 }
 

@@ -1,13 +1,12 @@
 // The phone's Settings tab: the fourth place of the bottom bar. In this order: the computers this phone is connected to
 // (switch, connect another, remove after a confirmation), notifications, language and appearance as one-line values that
 // open a sheet to choose from, the privacy policy and support, and the versions. The same screen in a browser, in the
-// iOS app and in the demo; only what a place cannot do differs (the app's notifications are a switch of its own, the demo
-// has one sample computer). A choice applies at once and is kept on this phone only (settings.ts).
+// iOS app and in the demo; only platform permission and recovery differ, and the demo
+// has one sample computer. A choice applies at once and is kept on this phone only (settings.ts).
 
-import { BellIcon, ChevronRightIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BellIcon } from "lucide-react";
+import { useEffect, type ReactNode } from "react";
 import { Button } from "../components/ui/button";
-import { RowButton } from "../components/ui/row-button";
 import { Switch } from "../components/ui/switch";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { appHost } from "./appHost";
@@ -15,42 +14,50 @@ import { push } from "./appBridge";
 import { appPushRow, refreshAppPush, turnOffAppPush, turnOnAppPush, useAppPush } from "./appPush";
 import { DemoHostRows } from "./Demo";
 import { HostList } from "./HostList";
-import { notificationRow } from "./protocol";
-import { enableNotifications, permission, pushSupported } from "./push";
+import { disableNotifications, enableNotifications, pushSupported, refreshBrowserPush, syncPush, useBrowserPush } from "./push";
 import { AboutSection, DisplaySection, ROW_INSET, Section, ValueRow } from "./SettingsParts";
 import { usePhone } from "./store";
 import { TabBar } from "./TabBar";
 
-/** Turn on notifications in a browser, the Home Screen first, or the OS setting that is off (B30). The app has no such control. */
+/** The browser keeps its own receiving choice, independently of the desktop's pause switch. */
 function BrowserNotifications() {
   const { t } = useInterfaceTranslation();
-  const pushMode = usePhone((s) => s.pushMode);
-  const notifications = usePhone((s) => s.notifications);
-  const [asking, setAsking] = useState(false);
-  const row = notificationRow({ pushMode, notifications, permission: permission(), supported: pushSupported() });
-  if (!row) return <ValueRow label={t("mobile.settings.notifications")} value={t("mobile.settings.on")} marker="notifications" />;
-  if (row === "enable") {
-    return (
-      <RowButton
-        disabled={asking}
-        data-phone-notifications="enable"
-        className={`min-h-(--size-touch-target) gap-md rounded-none py-sm text-title text-foreground ${ROW_INSET}`}
-        onClick={() => {
-          setAsking(true);
-          void enableNotifications().finally(() => setAsking(false));
-        }}
-      >
-        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">{t("mobile.notifications.enable")}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-      </RowButton>
-    );
-  }
+  const state = useBrowserPush();
+  useEffect(() => {
+    const refresh = () => { refreshBrowserPush(); if (!document.hidden) void syncPush(); };
+    refresh();
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("storage", refresh);
+    return () => { document.removeEventListener("visibilitychange", refresh); window.removeEventListener("storage", refresh); };
+  }, []);
+  const row = !pushSupported() ? "install_first" : state.stopping ? "stopping" : state.asking ? "asking" : state.permission === "denied" ? "denied"
+    : state.failure ? "failed" : state.enabled && state.permission === "granted" ? "on" : "off";
+  const hint = row === "install_first" ? t("mobile.notifications.installFirst")
+    : row === "asking" ? t("mobile.settings.notificationsBrowserAsking")
+    : row === "denied" ? t("mobile.notifications.denied")
+    : row === "failed" ? t(state.failure === "off" ? "mobile.settings.notificationsOffFailed" : "mobile.settings.notificationsFailed")
+    : !state.kept ? t("mobile.settings.notKept")
+    : t(row === "on" ? "mobile.settings.notificationsOnHint" : "mobile.settings.notificationsOffHint");
+  return <NotificationSwitch row={row} hint={hint} checked={row === "on" || row === "asking" || state.failure === "off"}
+    disabled={row === "asking" || row === "stopping" || row === "denied" || row === "install_first"}
+    change={(on) => { void (on ? enableNotifications() : disableNotifications()); }} />;
+}
+
+/** The same receiving control in the browser and the iOS app, with platform-specific recovery below it. */
+function NotificationSwitch({ row, hint, checked, disabled, change, children }: {
+  row: string; hint: string; checked: boolean; disabled: boolean; change: (on: boolean) => void; children?: ReactNode;
+}) {
+  const { t } = useInterfaceTranslation();
   return (
-    <p className={`flex items-start gap-md py-sm text-body leading-relaxed break-keep text-muted-foreground wrap-anywhere ${ROW_INSET}`} data-phone-notifications={row}>
-      <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
-      <span>{row === "denied" ? t("mobile.notifications.denied") : t("mobile.notifications.installFirst")}</span>
-    </p>
+    <div className={`flex flex-col gap-xs py-sm ${ROW_INSET}`} data-phone-notifications={row}>
+      <div className="flex min-h-(--size-touch-target) items-center gap-md">
+        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+        <span id="phone-notifications-label" className="min-w-0 flex-1 text-title text-foreground">{t("mobile.settings.receiveNotifications")}</span>
+        <Switch aria-labelledby="phone-notifications-label" checked={checked} disabled={disabled} onCheckedChange={change} />
+      </div>
+      <p className="break-keep pl-xl text-body leading-relaxed text-muted-foreground wrap-anywhere" role={row === "failed" ? "alert" : "status"}>{hint}</p>
+      {children}
+    </div>
   );
 }
 
@@ -76,20 +83,11 @@ function AppNotifications() {
     : row === "on" ? t(state.outdated ? "mobile.settings.notificationsOutdated" : "mobile.settings.notificationsOnHint")
     : t("mobile.settings.notificationsOffHint");
   return (
-    <div className={`flex flex-col gap-xs py-sm ${ROW_INSET}`} data-phone-notifications={row}>
-      <div className="flex min-h-(--size-touch-target) items-center gap-md">
-        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        <span id="app-notifications-label" className="min-w-0 flex-1 text-title text-foreground">{t("mobile.settings.notifications")}</span>
-        <Switch
-          aria-labelledby="app-notifications-label"
-          checked={row === "on" || row === "asking"}
-          disabled={row === "asking" || row === "refused"}
-          onCheckedChange={(on) => { void (on ? turnOnAppPush() : turnOffAppPush()); }}
-        />
-      </div>
-      <p className="break-keep pl-xl text-body leading-relaxed text-muted-foreground wrap-anywhere" role={row === "failed" ? "alert" : "status"}>{hint}</p>
+    <NotificationSwitch row={row} hint={hint} checked={row === "on" || row === "asking"}
+      disabled={row === "asking" || row === "refused"}
+      change={(on) => { void (on ? turnOnAppPush() : turnOffAppPush()); }}>
       {row === "refused" ? <Button variant="text" className="min-h-(--size-touch-target) self-start px-none pl-xl text-body" data-phone-notifications-settings="true" onClick={() => void push.openSettings().catch(() => undefined)}>{t("mobile.settings.notificationsOpenSettings")}</Button> : null}
-    </div>
+    </NotificationSwitch>
   );
 }
 
@@ -109,7 +107,9 @@ export function SettingsScreen({ openSheet = null }: { /** The gallery's: the sh
         {demo ? <DemoHostRows /> : <HostList t={t} machines={devices} active={{ online: connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} />}
       </Section>
       <Section title={t("mobile.settings.notifications")} data-phone-settings-section="notifications">
-        {inApp ? <AppNotifications /> : <BrowserNotifications />}
+        {inApp ? <AppNotifications /> : demo
+          ? <ValueRow label={t("mobile.settings.notifications")} value={t("mobile.demo.sample")} marker="notifications" />
+          : <BrowserNotifications />}
       </Section>
       <DisplaySection t={t} openSheet={openSheet} />
       <AboutSection t={t} />

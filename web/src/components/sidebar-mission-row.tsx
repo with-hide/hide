@@ -7,7 +7,7 @@ import { machineName } from "../screenMachine";
 import { useInterfaceTranslation } from "../i18n/client";
 import { MissionTakeOver } from "../MissionTakeOver";
 import { cn } from "../lib/utils";
-import { missionAsks, projectAsks, type MissionAsk } from "../missions";
+import { mergePull, missionAskWhat, missionAsks, projectAsks, safetyNetLine, type MissionAsk } from "../missions";
 import { catalogWorkspaces, type SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { AskLine } from "./agent-tree";
@@ -65,8 +65,21 @@ export function useMissionPlace(ask: MissionAsk): string | null {
   return useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === workspace_id && row.device_id === device_id)?.label ?? null);
 }
 
-/** The line a carried ask reads, for the mission's oldest waiting node: `확인 필요 · <node> · <why>`, `외 N건`; a reached gate names what to look at after the node (PRD mission-human-gate D-23). */
+/**
+ * The line a carried ask reads: for the mission's oldest waiting node
+ * `확인 필요 · <node> · <why>`, `외 N건`, a reached gate naming what to look at
+ * after the node (PRD mission-human-gate D-23), a merge left to the operator
+ * `<node> · 머지할 차례 PR #n` (PRD mission-destination D-11); for its safety net the held
+ * count and what is missing (`걸린 일 N건 · Conductor가 아직 풀지 못했어요`).
+ */
 export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?: string }) {
+  const { t } = useInterfaceTranslation();
+  if (ask.kind === "net") return <AskLine ask={{ verb: "answer", what: safetyNetLine(ask.net, t), more: ask.more }} className={className} />;
+  // A ready pull request the plan left to the operator: the node and its merge (PRD mission-destination D-11).
+  if (ask.kind === "merge") {
+    const pr = mergePull(ask.node);
+    return <AskLine ask={{ verb: "answer", what: `${ask.node.title} · ${t("mission.merge.due", { pr: pr.number ?? "" })}${pr.more > 0 ? ` +${pr.more}` : ""}`, more: ask.more }} className={className} />;
+  }
   const look = ask.attention.reason === "human_gate" ? ask.node.gate?.look : undefined;
   const node = look ? `${ask.node.title} · ${look}` : ask.node.title;
   const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node, reason: ask.attention.reason, unmet: ask.attention.unmet_nodes } };
@@ -74,17 +87,24 @@ export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?
 }
 
 /**
- * 확인하기, which opens the mission where its 내 차례 card says what happened,
- * why it came to the operator and offers the node's choices, wherever the
- * mission is its own Needs You item; led by 이어받기 while no Conductor holds
- * the mission. The choices are not drawn here: read without the card's
- * context they left the operator guessing (operator report on M41).
+ * 확인하기, which opens the mission where its 내 차례 card says what waits
+ * and offers its choices, wherever the mission is its own Needs You item;
+ * led by 지휘 다시 열기 while no Conductor holds the mission, and for a safety
+ * net by 터미널로 이동 to the Conductor that has not settled it. The choices
+ * are not drawn here: read without the card's context they left the operator
+ * guessing (operator report on M41).
  */
 export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk; actions: Actions; className?: string }) {
   const { t } = useInterfaceTranslation();
+  const present = ask.mission.conductor.present;
   return (
     <span className={cn("flex min-w-0 flex-wrap items-center gap-xs", className)} data-mission-ask-choices={ask.mission.id}>
-      {ask.mission.conductor.present ? null : <MissionTakeOver mission={ask.mission} actions={actions} />}
+      {present ? null : <MissionTakeOver mission={ask.mission} actions={actions} />}
+      {present && ask.kind === "net" ? (
+        <Button size="sm" variant="secondary" onClick={() => actions.openAgent(ask.mission.conductor.pane_id)} data-mission-ask-conductor={ask.mission.id}>
+          {t("mission.toTerminal")}
+        </Button>
+      ) : null}
       <Button size="sm" variant="secondary" onClick={() => actions.openMission(ask.mission.id)} data-mission-ask-look={ask.mission.id}>
         {t("missionScreen.pill.attention")}
       </Button>
@@ -97,8 +117,10 @@ export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk
  * B14): no Conductor or worker row stands to carry what waits on the
  * operator, so the mission's title is the row, with the Needs You mark and
  * the line a carried one reads (`확인 필요 · <node> · <why>`, `외 N건`).
- * Under it are 이어받기 while no Conductor holds the mission, which starts
- * one, and 확인하기; opening the row, or 확인하기, opens the mission's map.
+ * A safety net reads its held count instead (`MissionAskLine`). Under it
+ * are 지휘 다시 열기 while no Conductor holds the mission, which starts one,
+ * 터미널로 이동 for a safety net its Conductor holds, and 확인하기; opening
+ * the row, or 확인하기, opens the mission's map.
  * It reads as the agent rows beside it do: the mission's mark in the logo's
  * place (shown as the logos are), how long the node has waited at the end of
  * the title line, the project as the place line, and the buttons on the
@@ -115,9 +137,9 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
   const project = useMissionPlace(ask);
   const place = placed ? project : null;
   const device = useMissionDevice(ask);
-  const name = [ask.mission.title, device, t("mission.attention"), ask.node.title, place].filter(Boolean).join(", ");
+  const name = [ask.mission.title, device, t("mission.attention"), missionAskWhat(ask, t), place].filter(Boolean).join(", ");
   return (
-    <li data-mission-ask={ask.mission.id} data-mission-ask-node={ask.node.key} className={cn("group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent")} style={{ paddingLeft: inset }}>
+    <li data-mission-ask={ask.mission.id} data-mission-ask-node={ask.kind === "net" ? undefined : ask.node.key} data-mission-ask-net={ask.kind === "net" || undefined} className={cn("group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent")} style={{ paddingLeft: inset }}>
       <Hint label={name} reveals>
         <Button
           variant="text"
@@ -138,7 +160,7 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
         head={<>
           <span aria-hidden="true" className="pointer-events-none min-w-0 flex-1 truncate text-foreground">{ask.mission.title}</span>
           {device ? <DeviceChip label={device} className="pointer-events-none max-w-2/5" /> : null}
-          <Elapsed since={ask.attention.since_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-mission-ask-elapsed="true" />
+          <Elapsed since={ask.since_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-mission-ask-elapsed="true" />
           <FoldLane />
         </>}
       >

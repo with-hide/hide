@@ -43,6 +43,7 @@ The code works for five minutes, and one phone uses it once.
 Keep your computer awake and connected: when it sleeps or goes offline the phone says it cannot connect and retries when the computer returns.
 Each computer allows four paired phones; Settings > Mobile lists them under **Connected phones** and lets you **Revoke** any.
 To get notifications, allow them in the phone app, then choose when the computer pushes them in Settings > Notifications: `Off`, `Only when the app is closed` or `Always`.
+The phone is told only when an agent needs your answer, a question, an approval or a block, and an agent that settles on its question within a few seconds is one notification.
 Tailscale remains as an advanced direct option under `Advanced · Connect directly with Tailscale`.
 If the connection does not work, see [Troubleshooting](/docs/reference/troubleshooting/).
 

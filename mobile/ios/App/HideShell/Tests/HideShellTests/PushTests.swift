@@ -35,6 +35,17 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(failed, .failure(.unavailable))
     }
 
+    func testTheSceneAndDelegateDeliverOneLaunchIntent() {
+        let inbox = PushOpenInbox()
+        let info: [AnyHashable: Any] = ["room": room, "device_id": "mini", "pane_id": "w1:p1"]
+        XCTAssertTrue(inbox.offer(info, notificationID: "first"))
+        XCTAssertNotNil(inbox.take())
+        XCTAssertFalse(inbox.offer(info, notificationID: "first"))
+        XCTAssertNil(inbox.take(), "the delegate must not reopen the detail after the scene delivered it")
+        XCTAssertTrue(inbox.offer(info, notificationID: "second"))
+        XCTAssertNotNil(inbox.take(), "a later notification of the same agent still opens it")
+    }
+
     func testTheTokenGivesUpWhenAppleDoesNotAnswer() {
         let token = PushToken()
         token.register = {}
@@ -89,16 +100,11 @@ final class PushTests: XCTestCase {
         #endif
     }
 
-    /// The Reply action is the only one, it asks for Face ID or the passcode first, and it takes text; a notification that is
-    /// not a question has no action.
-    func testTheCategoriesOfferOnlyAReplyThatNeedsAnUnlock() throws {
+    func testNewAndAlreadyDeliveredNotificationsOfferNoActions() throws {
         let categories = Dictionary(uniqueKeysWithValues: PushCategories.all().map { ($0.identifier, $0) })
-        XCTAssertEqual(Set(categories.keys), [NoticeCategory.reply, NoticeCategory.open])
-        XCTAssertTrue(try XCTUnwrap(categories[NoticeCategory.open]).actions.isEmpty)
-        let actions = try XCTUnwrap(categories[NoticeCategory.reply]).actions
-        XCTAssertEqual(actions.map(\.identifier), [PushCategories.replyAction])
-        XCTAssertTrue(actions[0].options.contains(.authenticationRequired))
-        XCTAssertFalse(actions[0].options.contains(.foreground), "the app does not open")
-        XCTAssertTrue(actions[0] is UNTextInputNotificationAction)
+        XCTAssertEqual(Set(categories.keys), [NoticeCategory.open, "hide.reply"])
+        for category in categories.values {
+            XCTAssertTrue(category.actions.isEmpty, "a notification opens its conversation; it offers no Reply action")
+        }
     }
 }

@@ -363,6 +363,8 @@ fn checkout_status(status: &str) -> Result<hide_node_link::worktrees::CheckoutGi
                 }
                 facts.head_sha = Some(head.to_owned());
             }
+        } else if let Some(branch) = record.strip_prefix("# branch.head ") {
+            facts.branch = (branch != "(detached)").then(|| branch.to_owned());
         } else if let Some(upstream) = record.strip_prefix("# branch.upstream ") {
             facts.upstream = Some(upstream.to_owned());
         } else if let Some(counts) = record.strip_prefix("# branch.ab ") {

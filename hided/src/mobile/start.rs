@@ -391,6 +391,7 @@ type Seen = HashMap<String, VecDeque<(String, Option<Value>)>>;
 #[derive(Default)]
 pub struct Desk {
     seen: std::sync::Mutex<Seen>,
+    accepted: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 enum Claim {
@@ -399,6 +400,13 @@ enum Claim {
 }
 
 impl Desk {
+    pub fn new(accepted: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            accepted: Some(Box::new(accepted)),
+            ..Self::default()
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Seen> {
         self.seen
             .lock()
@@ -428,7 +436,12 @@ impl Desk {
         match answer {
             Some(answer) => {
                 if let Some(entry) = ids.iter_mut().find(|(id, _)| id == request_id) {
+                    let first_success = answer["ok"] == true
+                        && entry.1.as_ref().is_none_or(|old| old["ok"] != true);
                     entry.1 = Some(answer.clone());
+                    if first_success && let Some(accepted) = &self.accepted {
+                        accepted();
+                    }
                 }
             }
             None => ids.retain(|(id, _)| id != request_id),
@@ -582,6 +595,74 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn only_a_first_successful_start_receipt_takes_phone_routing() {
+        let desktop = Arc::new(crate::desktop_notices::DesktopNotices::default());
+        let t = std::time::Instant::now();
+        desktop.set_waiting(1, true);
+        desktop.activity_at(1, true, t);
+        let desk = Desk::new({
+            let desktop = Arc::clone(&desktop);
+            move || desktop.phone_input(t + Duration::from_secs(2))
+        });
+        let answers = tokio::sync::watch::channel(Arc::new(vec![
+            (
+                "bad".to_owned(),
+                Answer::Failed {
+                    reason: "refused".to_owned(),
+                },
+            ),
+            (
+                "good".to_owned(),
+                Answer::Started {
+                    device_id: "mini".to_owned(),
+                    pane_id: "pane".to_owned(),
+                },
+            ),
+        ]))
+        .1;
+        let failed = desk
+            .start_event(
+                "phone",
+                "bad",
+                Ok(json!({})),
+                answers.clone(),
+                ANSWER_LIMIT,
+                |_| Ok(()),
+            )
+            .await;
+        assert_eq!(failed["ok"], false);
+        assert!(desktop.rests_phone(), "a refused start never takes over");
+        let started = desk
+            .start_event(
+                "phone",
+                "good",
+                Ok(json!({})),
+                answers.clone(),
+                ANSWER_LIMIT,
+                |_| Ok(()),
+            )
+            .await;
+        assert_eq!(started["ok"], true);
+        assert!(!desktop.rests_phone(), "a successful start takes over");
+        desktop.activity_at(1, true, t + Duration::from_secs(3));
+        let repeated = desk
+            .start_event(
+                "phone",
+                "good",
+                Ok(json!({})),
+                answers,
+                ANSWER_LIMIT,
+                |_| panic!("a duplicate never dispatches"),
+            )
+            .await;
+        assert_eq!(repeated, started);
+        assert!(
+            desktop.rests_phone(),
+            "its duplicate cannot take over again"
+        );
+    }
 
     fn rest() -> Value {
         json!({

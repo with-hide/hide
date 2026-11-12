@@ -191,7 +191,7 @@ fn restart_with_a_different_hook_never_projects_the_old_record() {
     assert!(row.facts.is_none());
 }
 
-struct QuietLinks;
+pub(super) struct QuietLinks;
 impl crate::links::worker::Sink for QuietLinks {
     fn summaries(&self, _: std::collections::BTreeMap<String, crate::links::ProjectLinkSummary>) {}
     fn panel(&self, _: u64, _: Result<crate::links::worker::PanelAnswer, String>) {}

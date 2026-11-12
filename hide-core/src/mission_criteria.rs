@@ -356,14 +356,14 @@ impl Criterion {
         }
     }
 
-    /// Whether the line is one only the operator's answer goes past (D-13):
-    /// the check command and the CI on an answered decision, a human gate
-    /// only by the operator's answer itself (`Runtime::settle_gate`).
+    /// Whether the line, as it is shown now, is one only the operator's
+    /// answer goes past (D-13, narrowed by the principle of 2026-11-11): a
+    /// failed CI, on an answered decision. A check line and a CI line with
+    /// no failed answer are the Conductor's to skip with its reason; a human
+    /// gate is passed only by the operator's answer itself
+    /// (`Runtime::settle_gate`) and never skipped.
     pub(crate) fn protected(&self) -> bool {
-        matches!(
-            self.kind,
-            CriterionKind::Check | CriterionKind::Ci | CriterionKind::Human
-        )
+        self.kind == CriterionKind::Ci && self.state == CriterionState::Fail
     }
 
     /// The operator passes the node's human gate with `words` from `via`
@@ -698,13 +698,17 @@ impl Criterion {
             self.sent_back,
             self.commit.clone(),
         );
+        // A skip made while the head was not known (GitHub could not be read)
+        // was for the head that read now names: it stands, and a later head
+        // opens the line again.
+        let blind_skip = !same && self.commit.is_none() && self.skip.is_some();
         if !same {
             self.commit = Some(head.to_owned());
             self.reruns = 0;
             self.rerunning = false;
             self.sent_back = false;
-            self.state = CriterionState::Open;
-            if self.skip.is_some() {
+            if !blind_skip {
+                self.state = CriterionState::Open;
                 // A skip was for the commit the operator was asked about.
                 self.skip = None;
             }
@@ -749,7 +753,7 @@ impl Criterion {
                 self.sent_back,
                 self.commit.clone(),
             );
-        if changed {
+        if changed && !blind_skip {
             self.by = Some(Recorded {
                 role: Role::Hide,
                 name: "hide".into(),
@@ -759,6 +763,31 @@ impl Criterion {
         }
         Effect { changed, spent }
     }
+}
+
+/// The index of the node's CI line, made open when it has none: after the
+/// check command, before the reviews. A node with a pull request holds one
+/// whether or not GitHub can be read, so a Conductor can see it and skip it
+/// on the operator's answer; a read that finds no checks takes it away again.
+/// Whether it was made is the second answer.
+pub(crate) fn ensure_ci_line(criteria: &mut Vec<Criterion>) -> (usize, bool) {
+    if let Some(at) = criteria
+        .iter()
+        .position(|line| line.kind == CriterionKind::Ci)
+    {
+        return (at, false);
+    }
+    let place = criteria
+        .iter()
+        .position(|line| {
+            matches!(
+                line.kind,
+                CriterionKind::Review | CriterionKind::Verify | CriterionKind::Defect
+            )
+        })
+        .unwrap_or(criteria.len());
+    criteria.insert(place, Criterion::new("ci", CriterionKind::Ci));
+    (place, true)
 }
 
 /// The lines a plan makes of a node (B1-B3): its own criteria in order,
@@ -1446,6 +1475,24 @@ mod tests {
             line.read_ci(A, CiEnd::Ended(CiResult::Failed), 3).spent,
             "its rerun failed"
         );
+    }
+
+    /// with-hide/hide#2463: a CI line skipped while no head was known (GitHub
+    /// could not be read) keeps the skip, and who made it, when the first read
+    /// names a head; a later head opens it again.
+    #[test]
+    fn a_skip_made_before_any_head_was_read_stands_for_the_first_head_read() {
+        let mut line = Criterion::new("ci", CriterionKind::Ci);
+        assert!(line.skip("GitHub unreadable".into(), None, by(Role::Conductor)));
+        let effect = line.read_ci(A, CiEnd::Ended(CiResult::Failed), 5);
+        assert!(effect.changed, "the head is recorded");
+        assert_eq!(line.state, CriterionState::Skipped);
+        assert!(line.skip.is_some());
+        assert_eq!(line.by.as_ref().map(|by| by.role), Some(Role::Conductor));
+        assert_eq!(line.commit.as_deref(), Some(A));
+        line.read_ci(B, CiEnd::Running, 6);
+        assert_eq!(line.state, CriterionState::Open);
+        assert!(line.skip.is_none());
     }
 
     #[test]

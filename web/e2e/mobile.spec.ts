@@ -3,7 +3,7 @@
 // its four checklist states to a QR; an iPhone-sized touch page pairs with the
 // QR's code, lists the agents in four groups, opens a detail, and its reply
 // and quick keys reach the pane's PTY; a loopback push endpoint decrypts
-// what hided sends and proves the three modes, the viewing rule and the Seen
+// what hided sends and proves the pause switch, the viewing rule and the Seen
 // clear; revoke, the phone limit, the seven-day revoke, the unreachable line
 // and the empty list follow; the start sheet starts an agent in a checkout and
 // in Home and keeps its text while the phone is away; and no code, credential
@@ -19,7 +19,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, coreLog, loggedCount, openProject, sendKeys, untilLogged, withControl } from "./daemon-actions";
+import { closePane, coreLog, openProject, sendKeys, withControl } from "./daemon-actions";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
@@ -102,24 +102,27 @@ async function phoneContext(browser: Browser, push?: { endpoint: string; p256dh:
       const record = { subscribed: 0, unsubscribed: 0, permission: "default" as NotificationPermission };
       (window as unknown as { __push: typeof record }).__push = record;
       let current: unknown = null;
-      const fake = {
+      const fake = (applicationServerKey: ArrayBuffer) => ({
         endpoint: subscription.endpoint,
+        options: { applicationServerKey, userVisibleOnly: true },
         toJSON: () => ({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }),
         unsubscribe: async () => {
           record.unsubscribed += 1;
           current = null;
           return true;
         },
-      };
+      });
       Object.defineProperty(Notification, "permission", { configurable: true, get: () => record.permission });
       Notification.requestPermission = async () => {
         record.permission = "granted";
         return "granted";
       };
-      PushManager.prototype.subscribe = async function () {
+      PushManager.prototype.subscribe = async function (options) {
+        const key = options!.applicationServerKey as BufferSource;
+        const bytes = ArrayBuffer.isView(key) ? new Uint8Array(key.buffer, key.byteOffset, key.byteLength) : new Uint8Array(key);
         record.subscribed += 1;
-        current = fake;
-        return fake as unknown as PushSubscription;
+        current = fake(bytes.slice().buffer);
+        return current as PushSubscription;
       };
       PushManager.prototype.getSubscription = async function () {
         return current as PushSubscription | null;
@@ -185,21 +188,21 @@ async function showPairing(page: Page): Promise<void> {
   await page.locator('[data-mobile-show-code="true"]').click({ timeout: 20_000 });
 }
 
-/** Picks a push mode in the one dropdown on Settings > Notifications (PRD settings-left-nav B6), and returns to Mobile. */
-async function choosePush(page: Page, mode: "off" | "app_closed" | "always"): Promise<void> {
+/** Changes the phone pause switch on Settings > Notifications (PRD settings-left-nav B6), and returns to Mobile. */
+async function choosePush(page: Page, mode: "app_closed" | "always"): Promise<void> {
   await page.locator('[data-settings-tab="notifications"]').click();
-  await page.locator("[data-push-select]").click();
-  await page.locator(`[data-push-choice="${mode}"]`).click();
-  await expect(page.locator(`[data-push-detail="${mode}"]`)).toBeVisible();
+  const toggle = page.locator("[data-phone-push-rest]");
+  if ((await toggle.getAttribute("aria-checked")) !== String(mode === "app_closed")) await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", String(mode === "app_closed"));
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
   await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The push mode Settings > Notifications shows, read there before returning to Mobile. */
-async function expectPush(page: Page, label: string): Promise<void> {
+async function expectPush(page: Page, rest: boolean): Promise<void> {
   await page.locator('[data-settings-tab="notifications"]').click();
-  await expect(page.locator("[data-push-select]")).toHaveText(label);
+  await expect(page.locator("[data-phone-push-rest]")).toHaveAttribute("aria-checked", String(rest));
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
   await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
@@ -267,20 +270,6 @@ function noPushBeyond(received: Push[], count: number): void {
   expect(received).toHaveLength(count);
 }
 
-/**
- * Runs `act`, which raises a notice the push setting must not send, and returns once the daemon has logged that it
- * skipped one for the setting, with the push list still `count` long. The daemon decides per notice, before it queues
- * any send, so the test waits for that record and not for a time in which a push would have arrived. The count is
- * taken before `act`, because one taken after can already include the record.
- */
-async function pushSkippedByMode(daemon: Daemon, received: Push[], count: number, act: () => Promise<void>): Promise<void> {
-  const skipped = { component: "mobile_push", kind: "push.skipped", reason: "mode" };
-  const before = loggedCount(daemon, skipped);
-  await act();
-  await untilLogged(daemon, skipped, before + 1, "a push skipped for the push setting");
-  noPushBeyond(received, count);
-}
-
 test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture();
@@ -299,8 +288,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await openMobileSettings(page, daemon);
     const toggle = page.locator('[data-mobile-switch="true"]');
     await expect(toggle).toHaveAttribute("aria-checked", "false");
-    await expect(page.locator("[data-push-select]")).toHaveCount(0);
-    await expectPush(page, "Off");
+    await expect(page.locator("[data-phone-push-rest]")).toHaveCount(0);
+    await expectPush(page, true);
     expect(tailscale.calls()).toBe("");
 
     // B2: the CLI is missing, so the first step carries the download link and the rest wait.
@@ -452,8 +441,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(rows).not.toContainText("line 001");
     const scrollback = phone.locator("[data-phone-scrollback]");
     expect(await scrollback.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(48);
-    // B24: a row as wide as the desktop pane wraps at the phone's width; nothing scrolls sideways.
-    await expect(rows).toContainText("wide www");
+    // B24: a line wider than the desktop pane comes as one line, which wraps at the phone's width
+    // rather than at the pane's; nothing scrolls sideways.
+    await expect(rows.locator("span", { hasText: `wide ${"w".repeat(300)}` }).first()).toBeVisible();
     expect(await scrollback.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
     expect(await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
     // B25: pulling to the top brings the older rows, up to what the pane holds.
@@ -499,25 +489,25 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     });
     await screenshot(phone, "mobile-phone-detail");
 
-    // B30: with push on, the list offers Turn on notifications; allowing it registers the subscription.
+    // The phone owns receiving: turning its switch on registers the subscription.
     await choosePush(page, "always");
     await phone.locator('[data-phone-back="true"]').tap(); await phone.locator('[data-phone-tab="settings"]').tap();
-    const enable = phone.locator('[data-phone-notifications="enable"]');
+    const enable = phone.getByRole("switch", { name: "Receive notifications", exact: true });
     await expect(enable).toBeVisible({ timeout: 20_000 });
     await enable.tap();
-    await expect(enable).toHaveCount(0, { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
+    await expect(enable).toHaveAttribute("aria-checked", "true", { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
     await expect(page.locator("[data-mobile-phone-line]")).toHaveText("Just now · Receiving notifications");
 
-    // B31, B33 (always): two finishes; one notification for it, with no terminal content.
-    await finish(two);
+    // B31, B33 (always): two finishes, then asks; a finish is never pushed (2026-11-11), so the one push is the question.
+    await finish(two); await ask(fixture, daemon!, two, "배포할까요?");
     await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(1);
-    const done = push.received[0]!;
-    expect(done.payload.title).toBe("Agent two");
-    expect(done.payload.state).toBe("done");
-    expect(done.payload.tag).toBe(`${done.payload.device_id}|${two}`);
-    expect(done.payload.pane_id).toBe(two);
-    expect(JSON.stringify(done.payload)).not.toContain("fixture %");
-    expect(done.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
+    const asked = push.received[0]!;
+    expect(asked.payload.title).toBe("Agent two");
+    expect(asked.payload.state).toBe("needs_you");
+    expect(asked.payload.tag).toBe(`${asked.payload.device_id}|${two}`);
+    expect(asked.payload.pane_id).toBe(two);
+    expect(JSON.stringify(asked.payload)).not.toContain("fixture %");
+    expect(asked.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
 
     // B33: while the phone views one, its ask is read as under the desktop's focus (listed read, never announced).
     await oneRow.tap();
@@ -531,31 +521,24 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     noPushBeyond(push.received, 1);
     await phone.locator('[data-phone-back="true"]').tap();
 
-    // B33 (off): nothing.
-    await choosePush(page, "off");
-    await work(daemon!, two);
-    await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await pushSkippedByMode(daemon!, push.received, 1, () => ask(fixture, daemon!, two, "끔에서는 조용히"));
-    await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
-
-    // B33 (only while the app is closed): nothing while the desktop is connected. The
-    // desktop then reads two, which clears its notification (B34).
+    // A browser tab reports no system activity and cannot replace desktop notices,
+    // so the pause switch still sends here. Reading two clears its notice (B34).
     await choosePush(page, "app_closed");
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await pushSkippedByMode(daemon!, push.received, 1, () => finish(two));
-    await expect.poll(() => groupOf(frames, two)).toBe("done");
-    await expect.poll(() => coreLog(daemon as Daemon)).toContain('"mode":"app_closed","renderers":1');
+    await ask(fixture, daemon!, two, "브라우저가 열려 있을 때");
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2); // wait-ok: the browser-open question reaches the phone push endpoint
+    await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);
     await page.locator(`nav[data-sidebar] [data-project] [data-agent-open="${two}"]`).click();
-    await expect(phone.locator('[data-phone-group="seen"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => readOf(frames, two), { timeout: 20_000 }).toBe(true); // a read ask stays in Needs You (B11)
     await page.close();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "데스크톱이 닫혔을 때");
-    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2);
-    const closed = push.received[1]!;
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(3);
+    const closed = push.received[2]!;
     expect(closed.payload.title).toBe("Agent one");
     expect(closed.payload.state).toBe("needs_you");
     expect(closed.payload.clear).toContain(`${closed.payload.device_id}|${two}`);
@@ -600,6 +583,47 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     daemon?.stop();
     fixture.stop();
     tailscale.remove();
+  }
+});
+
+// The direct phone uses the real daemon and /m/ worker; components cannot observe worker lookup and cleanup.
+test("a directly connected phone retries failed notification cleanup and can receive again", async ({ browser, page }) => {
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale(); tailscale.install(); tailscale.ready();
+  const push = await pushService();
+  let daemon: Daemon | null = null;
+  let context: BrowserContext | null = null;
+  try {
+    daemon = await startHided(fixture, "mobile-receiving", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    await openMobileSettings(page, daemon);
+    await page.locator('[data-mobile-switch="true"]').click();
+    context = await phoneContext(browser, push);
+    const phone = await context.newPage();
+    await phone.goto(await shownPairingUrl(page, daemon));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
+    await phone.locator('[data-phone-tab="settings"]').tap();
+    const receive = phone.getByRole("switch", { name: "Receive notifications", exact: true });
+    await receive.tap();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await phone.evaluate(() => {
+      const get = navigator.serviceWorker.getRegistration.bind(navigator.serviceWorker);
+      let fail = true;
+      navigator.serviceWorker.getRegistration = async (scope) => {
+        if (fail) { fail = false; throw new Error("fixture_worker_lookup"); }
+        return get(scope);
+      };
+    });
+    await receive.tap();
+    await expect(phone.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+    await receive.tap();
+    await expect(phone.locator('[data-phone-notifications="off"]')).toBeVisible();
+    await expect.poll(() => phone.evaluate(() => (window as unknown as { __push: { unsubscribed: number } }).__push.unsubscribed)).toBe(1);
+    await receive.tap();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await expect.poll(() => phone.evaluate(() => (window as unknown as { __push: { subscribed: number } }).__push.subscribed)).toBe(2);
+  } finally {
+    await context?.close(); push.close(); daemon?.stop(); fixture.stop(); tailscale.remove();
   }
 });
 
@@ -749,7 +773,7 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
 
     // B29: the push mode survived the restart.
     await openMobileSettings(page, daemon);
-    await expectPush(page, "Only when the app is closed");
+    await expectPush(page, true);
 
     // B14: three more phones on record make four; a fifth is refused with the reason.
     const record = (id: string, lastSeen: number) => ({

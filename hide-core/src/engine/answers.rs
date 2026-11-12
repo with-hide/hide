@@ -173,6 +173,15 @@ pub struct PaneText {
     pub truncated: bool,
 }
 
+/// Styled recent rows, with the mode the existing holder watch last reported.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaneRows {
+    pub text: String,
+    pub truncated: bool,
+    /// The latest mode the pane's existing holder watch reported.
+    pub alternate_screen: bool,
+}
+
 /// What an engine says of itself when pinged.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerPong {

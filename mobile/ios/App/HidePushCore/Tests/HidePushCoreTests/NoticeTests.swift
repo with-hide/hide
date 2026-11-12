@@ -14,7 +14,7 @@ final class NoticeTests: XCTestCase {
         var object: [String: Any] = [
             "title": "fix the build", "state": "needs_you", "status_code": "question", "detail": "Which branch?", "place": "contong",
             "tag": "mini|w2:p1", "device_id": "mini", "pane_id": "w2:p1", "room": room, "clear": [],
-            "ask": ["kind": "question", "turn": "1790000000000"],
+            "ask": ["kind": "question"],
         ]
         object.merge(extra) { $1 }
         return try! JSONSerialization.data(withJSONObject: object)
@@ -25,10 +25,7 @@ final class NoticeTests: XCTestCase {
         let body = try encrypt(notice(room: room), for: mine)
         let opened = try XCTUnwrap(NoticeOpener.open(hide: body, keys: [theirs, mine]))
         XCTAssertEqual(opened.title, "fix the build")
-        XCTAssertEqual(opened.askKind, "question")
-        XCTAssertEqual(opened.askTurn, "1790000000000")
-        XCTAssertEqual(NoticeCategory.of(opened), NoticeCategory.reply)
-        XCTAssertEqual(NoticeInfo.of(opened), ["room": room, "device_id": "mini", "pane_id": "w2:p1", "turn": "1790000000000"])
+        XCTAssertEqual(NoticeInfo.of(opened), ["room": room, "device_id": "mini", "pane_id": "w2:p1"])
     }
 
     func testStaysClosedWithNoKeyWithAKeyOfAnotherComputerAndForARoomTheKeyIsNot() throws {
@@ -41,16 +38,15 @@ final class NoticeTests: XCTestCase {
         XCTAssertNil(NoticeOpener.open(hide: wrongRoom, keys: [mine]), "this key's computer did not send a notice naming another")
     }
 
-    func testReadsNoOddlyShapedNoticeAndOffersAnActionOnlyForAQuestion() throws {
+    func testReadsNoOddlyShapedNoticeAndIgnoresTheOlderComputersAsk() throws {
         XCTAssertNil(Notice(json: notice(room: room, extra: ["title": ""])))
         XCTAssertNil(Notice(json: notice(room: room, extra: ["room": "short"])))
         XCTAssertNil(Notice(json: Data(repeating: 0x20, count: 5000)))
-        let approval = try XCTUnwrap(Notice(json: notice(room: room, extra: ["ask": ["kind": "approval", "turn": "5"]])))
-        XCTAssertEqual(NoticeCategory.of(approval), NoticeCategory.open, "an approval has no action in this version")
-        let badTurn = try XCTUnwrap(Notice(json: notice(room: room, extra: ["ask": ["kind": "question", "turn": "12ab"]])))
-        XCTAssertNil(badTurn.askKind, "a turn that is not a number carries no ask")
-        let done = try XCTUnwrap(Notice(json: notice(room: room, extra: ["state": "done", "status_code": "done", "ask": NSNull()])))
-        XCTAssertEqual(NoticeCategory.of(done), NoticeCategory.open)
+        let asks: [Any] = [["kind": "question", "turn": "12ab"], ["kind": "approval", "turn": "5"], NSNull()]
+        for ask in asks {
+            let opened = try XCTUnwrap(Notice(json: notice(room: room, extra: ["ask": ask])))
+            XCTAssertEqual(NoticeInfo.of(opened), ["room": room, "device_id": "mini", "pane_id": "w2:p1"])
+        }
     }
 
     func testWordsTheBodyInThePhonesLanguageAndFallsBackToEnglish() throws {
@@ -63,10 +59,9 @@ final class NoticeTests: XCTestCase {
         XCTAssertEqual(letter.body(words: NoticeWords.forLanguages(["en"])), "Letter not delivered · letter-7")
     }
 
-    func testTheDemoSampleIsWordedAndCategorisedAsARealQuestionIs() {
+    func testTheDemoSampleIsWordedAsARealQuestionIs() {
         let sample = Notice(sampleTitle: "Address review comments", statusCode: "question", state: "needs_you", detail: "Apply all 3 review comments?", place: "demo · fix/review")
         XCTAssertEqual(sample.title, "Address review comments")
         XCTAssertEqual(sample.body(words: NoticeWords.forLanguages(["en"])), "Question · Apply all 3 review comments? · demo · fix/review")
-        XCTAssertEqual(NoticeCategory.of(sample), NoticeCategory.reply)
     }
 }

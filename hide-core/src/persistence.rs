@@ -1105,6 +1105,8 @@ mod tests {
                     ],
                     7,
                 ),
+                &|_| false,
+                &|_| false,
             )
             .unwrap();
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "../i18n/instance";
-import { MAX_MESSAGES, boxDrawingRow, headerLine, listedAgents, machinesName, mergeConversation, messageTime, macNameOf, noticeText, notificationRow, openKey, parseFragment, replyProblem, rowsProblem, staleTags, toBase64Url, type AgentGroup, type ConversationMessage, type PhoneAgent } from "./protocol";
+import { MAX_MESSAGES, boxDrawingRow, headerLine, listedAgents, machinesName, mergeConversation, messageTime, macNameOf, noticeText, openKey, parseFragment, replyProblem, rowsProblem, staleTags, toBase64Url, type AgentGroup, type ConversationMessage, type PhoneAgent } from "./protocol";
 
 const CREDENTIAL = "a".repeat(64);
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
@@ -79,21 +79,6 @@ describe("staleTags", () => {
     ];
     expect(staleTags(["local|root"], groups)).toEqual([]);
     expect(staleTags(["local|root"], [{ group: "seen", count: 1, rows: [{ kind: "agent", ...agent("seen", "root") }] }])).toEqual(["local|root"]);
-  });
-});
-
-describe("notificationRow", () => {
-  const base = { pushMode: "always" as const, notifications: "unasked" as const, permission: "default" as const, supported: true };
-
-  it("offers the notification switch only while push is on and the phone has not answered", () => {
-    expect(notificationRow(base)).toBe("enable");
-    expect(notificationRow({ ...base, pushMode: "off" })).toBeNull();
-    expect(notificationRow({ ...base, notifications: "on", permission: "granted" })).toBeNull();
-  });
-
-  it("sends a Safari tab to the Home Screen first and names a refused permission", () => {
-    expect(notificationRow({ ...base, supported: false, permission: "unsupported" })).toBe("install_first");
-    expect(notificationRow({ ...base, permission: "denied" })).toBe("denied");
   });
 });
 

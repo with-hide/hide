@@ -467,6 +467,7 @@ impl Runtime {
                         Call::BranchCatchUp {
                             root: worker_target.root.path.clone(),
                             head,
+                            branch: None,
                         },
                         hide_node_link::branch::CATCH_UP_WAIT,
                     )
@@ -539,6 +540,7 @@ impl Runtime {
             Ok(
                 outcome @ (CatchUpOutcome::Diverged
                 | CatchUpOutcome::HeadMoved
+                | CatchUpOutcome::OtherBranch { .. }
                 | CatchUpOutcome::NoUpstream),
             ) => {
                 catch_up_diagnostic(

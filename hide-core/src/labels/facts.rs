@@ -23,7 +23,7 @@ use hide_session::{ConversationCheckpoint, PrSighting};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::input::{Bell, Submit};
+use super::input::{Bell, Letter, Submit};
 
 /// The most of a request's text kept.
 pub(crate) const MAX_TEXT_BYTES: usize = 8 * 1024;
@@ -100,6 +100,11 @@ pub(crate) struct Request {
 struct Verdict {
     offset: u64,
     requester: Requester,
+    /// The letter a bell line Hide typed carried, kept as it was judged, so
+    /// a later read does not depend on the bounded memory of bells (a
+    /// restart empties it); absent on a verdict kept before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    letter: Option<Letter>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -428,6 +433,27 @@ impl SessionFacts {
             .map(|verdict| &verdict.requester)
     }
 
+    /// The letter `event` is, by its writer's wire name and its kind: an
+    /// envelope says both, and a bell line Hide typed has them from the
+    /// record its verdict kept (D-19). The operator's own letter (View
+    /// feedback) is the operator's message, not a letter.
+    pub(crate) fn letter_of(&self, event: &LabelEvent) -> Option<Letter> {
+        if hide_session::envelope_from_operator(&event.text) {
+            return None;
+        }
+        if let Some((from, kind)) = hide_session::envelope_header(&event.text) {
+            return Some(Letter {
+                from,
+                kind,
+                operator: false,
+            });
+        }
+        self.verdicts
+            .iter()
+            .find(|verdict| verdict.offset == event.offset)
+            .and_then(|verdict| verdict.letter.clone())
+    }
+
     /// Work is given by the operator for roots, and by the parent for
     /// delegated sessions. Reuse the kept input verdict and canonical letter.
     pub(crate) fn feeds_work(&self, event: &LabelEvent, parent: Option<&str>) -> bool {
@@ -499,13 +525,14 @@ impl SessionFacts {
         {
             Some(verdict) => verdict.requester.clone(),
             None => {
-                let requester = judge(event, input, log);
+                let (requester, letter) = judge(event, input, log);
                 if self.verdicts.len() >= MAX_VERDICTS {
                     self.verdicts.pop_front();
                 }
                 self.verdicts.push_back(Verdict {
                     offset: event.offset,
                     requester: requester.clone(),
+                    letter,
                 });
                 requester
             }
@@ -569,7 +596,7 @@ pub(crate) struct LogTarget<'a> {
 }
 
 /// The bell Hide typed that wrote `event`, by the record it kept (D-19).
-pub(crate) fn rang<'a>(bells: &'a [Bell], event: &LabelEvent) -> Option<&'a Bell> {
+fn rang<'a>(bells: &'a [Bell], event: &LabelEvent) -> Option<&'a Bell> {
     bells.iter().rev().find(|bell| {
         bell.line == event.text.trim()
             && bell.at_unix_ms <= event.at_unix_ms.saturating_add(CLOCK_SLACK_MS)
@@ -577,20 +604,34 @@ pub(crate) fn rang<'a>(bells: &'a [Bell], event: &LabelEvent) -> Option<&'a Bell
     })
 }
 
-fn judge(event: &LabelEvent, input: &mut InputView<'_>, log: &LogTarget<'_>) -> Requester {
+/// Who sent `event`, and the letter a bell line Hide typed for it carried.
+fn judge(
+    event: &LabelEvent,
+    input: &mut InputView<'_>,
+    log: &LogTarget<'_>,
+) -> (Requester, Option<Letter>) {
     // A letter the operator's Send made reads as the operator's request
     // (PRD view-opener-feedback D-11).
     if event.sender.is_some() && hide_session::envelope_from_operator(&event.text) {
-        return Requester::Operator;
+        return (Requester::Operator, None);
     }
     if let Some(sender) = event.sender.as_ref() {
-        return Requester::Named(sender.clone());
+        return (Requester::Named(sender.clone()), None);
     }
     // A bell line Hide typed is the letter's, by the record Hide kept when
     // it typed it, not by how the words look (D-19).
     if let Some(bell) = rang(input.bells, event) {
-        return Requester::Named(bell.sender.clone());
+        return (
+            Requester::Named(bell.sender.clone()),
+            Some(bell.letter.clone()),
+        );
     }
+    (judge_typed(event, input, log), None)
+}
+
+/// Who sent a message no envelope or bell names: the operator, by a submit
+/// Hide saw, or another agent.
+fn judge_typed(event: &LabelEvent, input: &mut InputView<'_>, log: &LogTarget<'_>) -> Requester {
     if event.at_unix_ms < input.observed_since_unix_ms {
         return Requester::Unobserved;
     }
@@ -854,7 +895,11 @@ mod tests {
             at_unix_ms: 10_100,
             line: "🦉 letter from ci-lead".into(),
             sender: "ci-lead".into(),
-            kind: "request".into(),
+            letter: Letter {
+                from: "agent-7".into(),
+                kind: "request".into(),
+                operator: false,
+            },
         }];
         fold_with_bells(
             &mut facts,

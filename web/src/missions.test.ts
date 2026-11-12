@@ -5,8 +5,11 @@ import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { missionEntry } from "./missionList";
+import { missionEntries } from "./mobile/missionModel";
+import type { PhoneMission } from "./mobile/protocol";
 import { forgetCatalogs } from "./agentPicker";
-import type { AgentRow, BackgroundAi, Device, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
+import { MISSION_ATTENTION_REASONS, type AgentRow, type BackgroundAi, type Device, type Mission, type MissionAttention, type MissionAttentionReason, type MissionCriterion, type MissionEvent, type MissionLanding, type MissionNode, type PullRequest, type SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -35,6 +38,12 @@ describe("the wire values", () => {
     for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
     for (const kind of contract.mission_warning_kind) expect(english).toHaveProperty(`mission.warning.${kind}.short`);
+    // Who merges and where that stands (PRD mission-destination D-45): only `due` is the operator's turn.
+    for (const by of contract.mission_merge_by) expect(["operator", "conductor"]).toContain(by);
+    for (const state of contract.mission_merge_step) {
+      const n = node("n", { status: "done", pr: 1, landing: { state: "left", action: "merge" }, merge: { by: "operator", why: "w", state } });
+      expect(turnItems(mission("m", { nodes: [n], landing_order: ["n"] }), () => null).length).toBe(state === "due" ? 1 : 0);
+    }
     for (const action of contract.mission_landing_action) {
       expect(english).toHaveProperty(`mission.landing.${action}`);
       expect(landingLeft(node("n", { status: "done", landing: { state: "left", action } }))).toBe(action);
@@ -487,6 +496,33 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     expect(turnItems(mission("m", { conductor: gone }), none).map((item) => item.kind)).toEqual(["takeover"]);
     expect(turnItems(mission("m", { status: "done", conductor: gone, decision: "old" }), none)).toEqual([]);
   });
+
+  it("gives at most one turn item for one cause on five nodes, whatever the raise's reason, with or without a Conductor (hide-private docs/missions.md, the principle of 2026-11-11)", () => {
+    const gone = { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: false };
+    // The reasons only the operator settles stay theirs per node: a gate reached with no Conductor, and a Conductor's failure from before.
+    const operatorFirst: Record<MissionAttentionReason, boolean> = { merged_unproven: false, worker_ended: false, pr_closed: false, unplanned_pr: false, conductor_failed: true, wake_refused: false, close_refused: false, human_gate: true, not_started: false, warning_stood: false, wait_stood: false };
+    const wrong: string[] = [];
+    for (const reason of MISSION_ATTENTION_REASONS) {
+      const keys = ["a", "b", "c", "d", "e"];
+      const to = operatorFirst[reason] ? "operator" : "conductor";
+      const nodes = keys.map((key, index) => node(key, { status: "working", attention: { ...raised(to, reason), since_unix_ms: 100 + index } }));
+      const held = operatorFirst[reason] ? [] : keys.map((key, index) => ({ key, title: key, reason, pr: null, since_unix_ms: 100 + index }));
+      const net = (present: boolean) => (held.length > 0 ? { conductor_present: present, since_unix_ms: 100, nodes: held } : null);
+      const cases = [
+        ["conductor, before 20 minutes", mission("m", { nodes })],
+        ["conductor, 20 minutes", mission("m", { nodes, safety_net: net(true) })],
+        ["no conductor", mission("m", { nodes, conductor: gone, safety_net: net(false) })],
+      ] as const;
+      for (const [name, one] of cases) {
+        const kinds = turnItems(one, none).map((item) => item.kind);
+        const expected = operatorFirst[reason]
+          ? [...(one.conductor.present ? [] : ["takeover"]), ...keys.map(() => "attention")]
+          : name === "conductor, before 20 minutes" ? [] : [one.conductor.present ? "safety_net" : "takeover"];
+        if (JSON.stringify(kinds) !== JSON.stringify(expected)) wrong.push(`${reason} / ${name}: ${kinds.join(" ")}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
 });
 
 describe("a finished mission's results and the map's summary (PRD mission-tool B12, B19-B21)", () => {
@@ -561,8 +597,59 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     const other = mission("b", { nodes: [node("n", { status: "working", attention: waiting(40, false) })] });
     const unnamed = mission("c", { nodes: [node("n", { status: "working", attention: waiting(1, false) })] });
     const asks = missionAsks([orphan, other, unnamed], ["b", "a"]);
-    expect(asks.map((ask) => [ask.mission.id, ask.node.key, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
+    expect(asks.map((ask) => [ask.mission.id, ask.kind === "node" ? ask.node.key : ask.kind, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
     expect(missionAsks([orphan], [])).toEqual([]);
+  });
+
+  it("draws a mission whose raises its Conductor has not settled as one Needs You item for its safety net, however many nodes it holds", () => {
+    const held = ["a", "b", "c", "d", "e"].map((key, index) => ({ key, title: key, reason: "worker_ended" as const, pr: null, since_unix_ms: 100 + index }));
+    const nodes = held.map((one) => node(one.key, { status: "working", attention: { ...raised("conductor", "worker_ended"), since_unix_ms: one.since_unix_ms } }));
+    const net = { conductor_present: true, since_unix_ms: 100, nodes: held };
+    const asks = missionAsks([mission("m", { nodes, safety_net: net })], ["m"]);
+    expect(asks).toEqual([{ kind: "net", mission: expect.objectContaining({ id: "m" }), net, since_unix_ms: 100, more: 0 }]);
+    // A raise only the operator settles leads, and the safety net is one more thing the mission waits on.
+    const failed = node("f", { status: "working", attention: { ...raised("operator", "conductor_failed"), since_unix_ms: 300, item: true } });
+    const [first] = missionAsks([mission("m", { nodes: [...nodes, failed], safety_net: net })], ["m"]);
+    expect(first && first.kind === "node" ? [first.node.key, first.more] : null).toEqual(["f", 1]);
+  });
+
+  it("raises a ready pull request the plan left to the operator as one turn and one Needs You item while the mission runs, and never one of a scope pr mission (PRD mission-destination B20, B21, D-35)", () => {
+    const none = () => null;
+    const left = { state: "left", action: "merge" } as const;
+    const mine = (state: "ahead" | "due" | "merged") => ({ by: "operator" as const, why: "DB는 직접", state });
+    const ko = initializeInterfaceI18n("ko").getFixedT(null, "translation");
+    const db = (state: "ahead" | "due" | "merged", extra: Partial<MissionNode> = {}) => node("db", { status: "done", pr: 33, landing: left, finished_at_unix_ms: 50, merge: mine(state), ...extra });
+    const api = node("api", { status: "working", pr: 31 });
+    // Ahead of its turn: nothing asks, on any surface the one rule feeds.
+    const ahead = mission("m", { scope: "merge", nodes: [db("ahead", { status: "working", landing: null }), api], landing_order: [] });
+    expect(turnItems(ahead, none)).toEqual([]);
+    expect(missionTurn(ahead)).toBeNull();
+    expect(missionEntry(ahead, none).group).toBe("running");
+    expect(missionAsks([ahead], ["m"])).toEqual([]);
+    // Due: 내 차례 says 머지할 차례 with the node, the list stands it in 내 차례 with 머지하기, and the mission is its Needs You item.
+    const due = mission("m", { scope: "merge", nodes: [db("due"), api], landing_order: ["db"] });
+    const [item] = turnItems(due, none);
+    expect(item).toMatchObject({ kind: "landing", git: false, due: true });
+    expect(item!.kind === "landing" && item!.nodes.map((n) => n.key)).toEqual(["db"]);
+    expect(missionEntry(due, none).group).toBe("turn");
+    const [ask] = missionAsks([due], ["m"]);
+    expect(ask && ask.kind === "merge" ? [ask.node.key, ask.since_unix_ms, ask.more] : ask).toEqual(["db", 50, 0]);
+    expect(ko("mission.merge.due", { pr: 33 })).toBe("머지할 차례 PR #33");
+    // Merged on GitHub: it asks nothing more.
+    const merged = mission("m", { scope: "merge", nodes: [db("merged", { landing: { state: "landed", proof: { by: "merged" } } }), api], landing_order: [] });
+    expect(turnItems(merged, none)).toEqual([]);
+    expect(missionAsks([merged], ["m"])).toEqual([]);
+    // A scope pr mission's ready pull request is the operator's, never due: no turn while it runs.
+    const scopePr = mission("m", { scope: "pr", nodes: [db("ahead", { merge: { by: "operator", state: "ahead" } }), api], landing_order: ["db"] });
+    expect(turnItems(scopePr, none)).toEqual([]);
+    expect(missionAsks([scopePr], ["m"])).toEqual([]);
+    // Once it waits on the merges, the landing turn is as before, for both.
+    for (const nodes of [[db("due")], [db("ahead", { merge: { by: "operator", state: "ahead" } })]]) {
+      expect(turnItems(mission("m", { status: "merge_wait", nodes, landing_order: ["db"] }), none)[0]).toMatchObject({ kind: "landing", git: false, due: false });
+    }
+    // The phone reads the same rule from the merge its core sends.
+    const phone = { ...due, nodes: due.nodes.map((n) => ({ ...n, worker_agent: null, agent: null, escalation: null })) } as unknown as PhoneMission;
+    expect(missionEntries([phone])[0]!.group).toBe("turn");
   });
 
   it("names the pull request a raise is about, with the state the project's list reads", () => {
@@ -641,6 +728,14 @@ describe("a node's warnings", () => {
     expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
   });
 
+  it("says a stopped worker's warning with how long and why (mission-56)", () => {
+    const stopped = { kind: "stopped" as const, from_unix_ms: 0, since_unix_ms: 6 * 60_000, told_unix_ms: 6 * 60_000, cause: { kind: "error" as const, line: "API Error: 500" } };
+    expect(warningWords(mission("m"), { ...warned, warnings: [stopped] }, t)).toEqual({
+      short: "Stopped",
+      full: ["Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"],
+    });
+  });
+
   it("says a warning told only once its letter was queued", () => {
     const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
     expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: no push for 95 minutes"]);
@@ -665,6 +760,38 @@ describe("missionTurn", () => {
     expect(missionTone(mission("m", { nodes: [raised("operator")] }))).toBe("hold");
     expect(missionTurn(mission("m", { nodes: [raised("conductor")] }))).toBeNull();
     expect(missionTurn(mission("m", { status: "cancelled", nodes: [raised("operator")] }))).toBeNull();
+  });
+
+  it("gives chips, the map and desktop/phone lists the same turn reason", () => {
+    const gate = node("gate", { attention: { ...raised("operator").attention!, reason: "human_gate" } });
+    const cases = [
+      { name: "held letters alone", extra: { conductor_letters: { count: 2, reason: "draft" as const, since_unix_ms: 1 } }, kind: "letters", turn: "attention" },
+      { name: "decision", extra: { decision: "Which?" }, kind: "decision", turn: "decision" },
+      { name: "safety net", extra: { safety_net: { conductor_present: true, since_unix_ms: 1, nodes: [{ key: "a", title: "A", reason: "worker_ended" as const, pr: null, since_unix_ms: 1 }] } }, kind: "safety_net", turn: "attention" },
+      { name: "gate", extra: { nodes: [gate] }, kind: "attention", turn: "attention" },
+    ] satisfies { name: string; extra: Partial<Mission>; kind: string; turn: string }[];
+    for (const row of cases) {
+      const one = mission("m", row.extra);
+      expect(missionTurn(one), row.name).toBe(row.turn);
+      expect(paneChipWords(one).turn, row.name).toBe(row.turn);
+      expect(missionTone(one), row.name).toBe("hold");
+      expect(turnItems(one, () => null).map((item) => item.kind), row.name).toEqual([row.kind]);
+      const entry = missionEntry(one, () => null);
+      expect(entry.group, row.name).toBe("turn");
+      expect(entry.turn.map((item) => item.kind), row.name).toEqual([row.kind]);
+      const phone: PhoneMission = {
+        ...one, device_label: null,
+        conductor: { ...one.conductor, agent: null },
+        nodes: one.nodes.map((node) => ({ ...node, agent_runtime: null, worker_agent: null, agent: null, escalation: null })),
+      };
+      const [phoneEntry] = missionEntries([phone]);
+      expect(phoneEntry?.group, row.name).toBe("turn");
+      expect(phoneEntry?.turn.map((item) => item.kind), row.name).toEqual([row.kind]);
+      const closed = { ...one, status: "done" as const };
+      expect(missionTurn(closed), row.name).toBeNull();
+      expect(turnItems(closed, () => null), row.name).toEqual([]);
+      expect(missionEntry(closed, () => null).group, row.name).toBe("closed");
+    }
   });
 
   it("names a delay only while the mission is open", () => {
@@ -720,8 +847,12 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
     for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
     const states = contract.mission_node_work as string[];
-    expect(states).toEqual(["working", "waiting", "no_worker"]);
+    expect(states).toEqual(["working", "waiting", "stopped", "no_worker"]);
     expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    // A stopped worker says why: a usage limit with the agent's own line, an API error, or no report (mission-56).
+    expect(nodeWorkWords({ state: "stopped", cause: { kind: "limit", line: "resets 4pm" }, since_unix_ms: 1 }, t)).toBe("Stopped · usage limit · resets 4pm");
+    expect(nodeWorkWords({ state: "stopped", cause: { kind: "error", line: "API Error: 500" }, since_unix_ms: 1 }, t)).toBe("Stopped · API error");
+    expect(nodeWorkWords({ state: "stopped", cause: null, since_unix_ms: 1 }, t)).toBe("Stopped · no report");
     expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("No worker");
     for (const kind of ["decision", "blocked", "start", "worker", "review", "verify", "ci", "merge", "conductor"] as const) {
       expect(nodeWorkWords({ state: "waiting", on: { kind } }, t)).toMatch(/^Waiting · \S/);

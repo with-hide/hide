@@ -76,7 +76,8 @@ pub enum PaneEnd {
 pub enum ConversationEnd {
     /// Kept under 보관됨, where 이어가기 resumes it.
     Archived,
-    /// Not kept: the archive already holds as many sessions as it keeps.
+    /// Not kept: the archive holds as many sessions as it keeps, and none of
+    /// them is at rest to make room.
     ArchiveFull,
     /// Nothing was archived: the pane stayed, was gone, showed no
     /// conversation Hide knows, or Hide could not form the record (its

@@ -129,6 +129,7 @@ export type SnapshotSections =
   | TerminalFrame
   | AgentNotice
   | DesktopNoticesPayload
+  | DesktopActivityPayload
   | HumanTurnDonePayload;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
@@ -858,6 +859,16 @@ export interface AgentNotice {
  */
 export interface DesktopNoticesPayload {
   wanted: boolean;
+  /**
+   * Needs You enabled in this window; absent on older clients means wanted.
+   */
+  needs_you?: boolean;
+}
+/**
+ * Desktop-only desktop_activity event, never dispatched to the core. The main host reports system use on connection, use transitions and input resumed after a five-second pause; disconnect withdraws it. A true report counts as computer input. hided rests phone pushes only while any desktop reports in_use, at least one wants Needs You notifications and no later accepted phone action has taken over.
+ */
+export interface DesktopActivityPayload {
+  in_use: boolean;
 }
 /**
  * Payload of the `human_turn_done` client event (PRD ask-human B18): the operator's Done on the person's turn whose declaration is `declaration` (a row's `human_turn.id`). The core sends the declaring agent one letter and takes the declaration down; a declaration that no longer stands is ignored, so a repeat from any surface sends nothing more.

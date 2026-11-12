@@ -7,8 +7,8 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
-import type { Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
+import { mergePull, attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, safetyNetLine, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
+import type { Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionSafetyNet, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
 export const MISSION_GROUPS = ["turn", "running", "merge_wait", "closed"] as const;
@@ -95,6 +95,7 @@ export function missionPillKey(mission: Pick<Mission, "status">, turn: Pick<Turn
 const TURN_PILL: Record<TurnItem["kind"], MessageKey> = {
   decision: "missionScreen.pill.answer",
   takeover: "mission.takeOver",
+  safety_net: "missionScreen.pill.attention",
   letters: "missionScreen.pill.letters",
   attention: "missionScreen.pill.attention",
   worker_blocked: "missionScreen.pill.blocked",
@@ -119,6 +120,7 @@ export const STATE_PILL: Record<MissionStatus, MessageKey> = {
 export type RowLine<N extends MissionNodeBrief = MissionNodeBrief> =
   | { kind: "decision"; text: string }
   | { kind: "takeover"; left: number }
+  | { kind: "safety_net"; net: MissionSafetyNet }
   | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
   | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
@@ -132,9 +134,13 @@ export function rowLine<M extends MissionBrief>(mission: M, turn: TurnItem<M["no
       case "decision":
         return { kind: "decision", text: mission.decision ?? "" };
       case "takeover": {
+        // With raises held, the line names them; else what is left for the one who takes it.
+        if (turn.net) return { kind: "safety_net", net: turn.net };
         const { done, total } = missionCounts(mission);
         return { kind: "takeover", left: total - done };
       }
+      case "safety_net":
+        return { kind: "safety_net", net: turn.net };
       case "letters":
         return { kind: "letters", letters: turn.letters };
       case "worker_blocked":
@@ -163,6 +169,8 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
     case "takeover":
       return line.left > 0 ? t("missionScreen.takeoverLeft", { count: line.left }) : t("missionScreen.takeoverReport");
+    case "safety_net":
+      return safetyNetLine(line.net, t);
     case "letters":
       return heldLettersText(line.letters, t);
     case "worker_blocked":
@@ -170,7 +178,7 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     case "attention":
       return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes)}`;
     case "landing":
-      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => (node.pr != null ? `#${node.pr}` : node.title)).join(" → ")}`;
+      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => { const pr = line.join ? { number: node.pr, more: 0 } : mergePull(node); return pr.number != null ? `#${pr.number}${pr.more > 0 ? ` +${pr.more}` : ""}` : node.title; }).join(" → ")}`;
     case "planning":
       return t("mission.planning");
     case "now":

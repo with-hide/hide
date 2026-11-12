@@ -20,7 +20,7 @@ function fixture(state: string): MobileState {
     foreign_target: null, failure: state === "cleanup" ? {step:"remove",message:"Tailscale CLI unavailable"} : null, url: "https://app.withhide.dev/", qr: state === "qr" ? qr : null,
     code_expires_at_ms: state === "qr" ? now + 300_000 : null,
     phones: state === "phones" ? [{id:"gallery-phone",name:"iPhone",last_seen_ms:now,connected:true,notifications:"on",revoke_at_ms:now+604800000}] : [],
-    max_phones:4, push_mode:"off", now_ms:now,
+    max_phones:4, push_mode:"app_closed", now_ms:now,
   };
 }
 /** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-list-cut`, `phone-devices`, `phone-missions`, `phone-missions-cut`, `phone-mission`, `phone-mission-views`, `phone-prs`, `phone-pr`, `phone-pr-agent`, `phone-pr-merge`, `phone-pr-delegate`, `phone-looks` and the `phone-look-*` viewers; `offline=1` dims the 볼 것 ones). */

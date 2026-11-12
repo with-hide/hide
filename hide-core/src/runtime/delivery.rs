@@ -926,6 +926,19 @@ impl Runtime {
             .collect()
     }
 
+    /// The registrations and spawn records the core's books still need,
+    /// which a full delivery ledger keeps when it makes room
+    /// (`coordination::room`): an open mission's and a plan step's still
+    /// handed. Read only when a registration or spawn finds the ledger full.
+    pub(crate) fn delivery_held(&self) -> Result<crate::coordination::Held, String> {
+        let ledger = self.delivery_state()?;
+        let mut held = crate::coordination::Held::default();
+        held.keep_published(&ledger);
+        self.mission_holds(Some(&ledger), &mut held);
+        self.plan_holds(Some(&ledger), &mut held);
+        Ok(held)
+    }
+
     /// The registrations the delivery store has still to end.
     pub(crate) fn delivery_registrations_gone(
         &self,
@@ -2057,6 +2070,7 @@ impl Runtime {
                 || *actor == Actor::hide(crate::delivery::typed::INPUT_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::unreadable_letters::DELIVERY_ROLE, self.node.as_str())
+                || *actor == Actor::hide(super::blocked_children::BLOCKED_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(
                         super::transition_letters::TRANSITION_ROLE,
@@ -2397,15 +2411,14 @@ impl Runtime {
                     },
                 };
                 // The target's own row, while its pane still runs the watched
-                // session: stopped on a question, or held at an engine-blocked
-                // prompt. A blocked one also raises the child to the operator
-                // (Delegated escalation); a working one, such as Codex's async
-                // question, has not stopped.
+                // session: stopped on a question. A working one, such as
+                // Codex's async question, has not stopped, and one held at a
+                // blocked prompt is told to its parent at once by its own
+                // note (`blocked_children.rs`).
                 let row = observation
                     .as_ref()
                     .and_then(|_| self.agent_row(&watch.target.pane_id))
                     .filter(|row| row.lineage_session == watch.target.session);
-                let blocked = row.is_some_and(|row| row.blocked);
                 // Input Hide typed and the agent did not confirm is laid on
                 // the row as a question (`AskSubject::InputUnconfirmed`), but
                 // it is Hide's, which its own notice already told the parent,
@@ -2433,7 +2446,6 @@ impl Runtime {
                     folder,
                     inactivity_ms: None,
                     asking,
-                    blocked,
                     waits,
                 }
             })

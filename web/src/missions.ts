@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -183,7 +183,7 @@ export function nodeMark(node: Pick<MissionNode, "status" | "blocked" | "agent_r
 }
 
 /** The Conductor row's mark (B14): `미션 n/m` while it runs, its plan or its wait otherwise. */
-export function chipWords(mission: Mission): { key: MessageKey; counts: string | null } {
+export function chipWords(mission: MissionBrief): { key: MessageKey; counts: string | null } {
   const { done, total } = missionCounts(mission);
   switch (mission.status) {
     case "planning":
@@ -202,16 +202,10 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
 /** The Conductor pane's chip (PRD mission-pane-chip B2): the state it reads as, its word and its count. */
 export type PaneChipState = "planning" | "running" | "turn" | "merge_wait" | "done" | "cancelled";
 
-/**
- * Whether an open mission is the operator's turn, which its chips mark `!`
- * in 내 차례's colour while keeping their progress: its decision first, else
- * a node whose raise reached the operator. Null otherwise, and for a mission
- * that ended.
- */
+/** The chips read the same operator-turn reasons as the map and both lists. */
 export function missionTurn(mission: Mission): MissionTurn | null {
-  if (missionDeciding(mission)) return "decision";
-  if (!missionOpen(mission)) return null;
-  return mission.nodes.some((node) => openAttention(mission, node)?.to === "operator") ? "attention" : null;
+  const [first] = turnItems(mission, () => null);
+  return first ? (first.kind === "decision" ? "decision" : "attention") : null;
 }
 
 /** The words a chip's name says for its `!`. */
@@ -485,7 +479,7 @@ export function workerAsleep(node: Pick<MissionNode, "status" | "agent_runtime">
   return node.status === "working" && node.agent_runtime === "asleep";
 }
 
-export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
+export function nodeLook<N extends Pick<MissionNode, "status" | "kind" | "blocked">>(mission: Pick<Mission, "status">, node: N): NodeLook {
   if (node.status === "dropped") return "dropped";
   if (node.status === "done") return "done";
   if (mission.status === "cancelled") return "cancelled";
@@ -549,6 +543,12 @@ export function criterionName(line: MissionCriterion, t: TFunction<"translation"
       return who ? t(`mission.line.${line.kind}.by`, { who }) : t(`mission.line.${line.kind}`);
     }
   }
+}
+
+/** A line the Conductor skipped on its own as `Conductor가 정한 것` names it (`<line> 넘김`): a line the plan wrote by its words, the rest by its kind's short name (`검사 넘김`). */
+export function skipWords(skip: MissionSkip, t: TFunction<"translation">): string {
+  const line = skip.kind === "own" || skip.kind === "defect" || skip.kind === "human" ? (skip.text ?? skip.line) : t(`mission.line.short.${skip.kind}`);
+  return t("mission.decided.skip", { line });
 }
 
 /** A line in one word for `남음: 리뷰, CI` (B28): a criterion by its number, the rest by kind. */
@@ -663,21 +663,29 @@ export function landingOrder<N extends MissionNodeBrief>(mission: { nodes: reado
 export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 
 /**
- * What only the operator can do now (B25; PRD mission-node-simple B14): answer
- * the decision, take over a mission no Conductor holds, settle a node the
- * core raised to the operator (`! 나`), clear a worker the core raised past
- * its parent (one of the escalation causes, a person's turn aside: its step
- * says it and the Conductor's row carries it), and merge or join what
- * waits for main. What waits on the Conductor stays on its card, and a
- * finished or cancelled mission has nothing here.
+ * What only the operator can do now (B25; PRD mission-node-simple B14; the
+ * principle of 2026-11-11 in hide-private docs/missions.md): answer the
+ * decision, take over a mission no Conductor holds (naming the nodes its
+ * safety net holds), go to a Conductor that left its raises unsettled 20
+ * minutes (`safety_net`, one item however many nodes), settle a raise only
+ * the operator settles (the Conductor's failure, or a gate reached with no
+ * Conductor that no decision asks yet), clear a worker the core raised past its
+ * parent (one of the escalation causes, a person's turn aside: its step says
+ * it and the Conductor's row carries it), merge or join what a waiting
+ * mission left, and, while the mission runs, merge a ready pull request its
+ * plan gave the operator (`due`, PRD mission-destination D-11; a scope `pr`
+ * mission's ready pull request is never one, D-35). A node raised to the
+ * Conductor is never here, and a finished or cancelled mission has nothing
+ * here.
  */
 export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
-  | { kind: "takeover" }
+  | { kind: "takeover"; net: MissionSafetyNet | null }
+  | { kind: "safety_net"; net: MissionSafetyNet }
   | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
-  | { kind: "landing"; nodes: N[]; git: boolean };
+  | { kind: "landing"; nodes: N[]; git: boolean; due: boolean };
 
 /** A worker row the core raised past its parent: the cause, the line its blocked turn left, and for a person's turn what and where (PRD ask-human B25). */
 export type WorkerEscalation = { cause: EscalationCause; line: string | null; human?: { kind: HumanKind; place: string } | null };
@@ -710,17 +718,28 @@ export function shownEscalation(mission: { conductor_letters?: MissionHeldLetter
   return escalation && mission.conductor_letters && LETTER_CAUSES.has(escalation.cause) ? null : escalation;
 }
 
+/** The safety net in one line, as a mission's row and a Needs You row say it: the held count with what is missing, a Conductor that has not settled them or no Conductor at all. */
+export function safetyNetLine(net: MissionSafetyNet, t: TFunction<"translation">): string {
+  const count = net.nodes.length;
+  return net.conductor_present ? t("mission.net.line", { count }) : t("mission.net.noConductor", { count });
+}
+
 /** `escalationOf` answers for a node's worker: the desktop reads its row, the phone the escalation its core sent with the node. */
 export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, escalationOf: (node: N) => WorkerEscalation | null): TurnItem<N>[] {
   if (!missionOpen(mission)) return [];
   const items: TurnItem<N>[] = [];
+  const net = mission.safety_net ?? null;
   if (mission.decision) items.push({ kind: "decision" });
-  else if (!mission.conductor.present) items.push({ kind: "takeover" });
+  else if (!mission.conductor.present) items.push({ kind: "takeover", net });
+  else if (net) items.push({ kind: "safety_net", net });
   // Letters the Conductor has not got stop the mission as surely as a decision (hide-private issue 678); the core counts only what the operator can lift.
   if (mission.conductor_letters) items.push({ kind: "letters", letters: mission.conductor_letters });
+  // A gate the decision asks now is answered on its card, never as an item of its own too (PRD mission-human-gate D-25); one no decision asks says what to look at here (D-23).
+  const asked = mission.question?.key ?? null;
   for (const node of orderedNodes(mission)) {
     const attention = openAttention(mission, node);
-    if (attention?.to === "operator") items.push({ kind: "attention", node, attention });
+    const gateOnCard = attention?.reason === "human_gate" && asked !== null && node.gate?.state === "open" && node.gate.ask === asked;
+    if (attention?.to === "operator" && !gateOnCard) items.push({ kind: "attention", node, attention });
   }
   for (const node of orderedNodes(mission)) {
     const escalation = node.status === "working" ? shownEscalation(mission, escalationOf(node)) : null;
@@ -729,7 +748,11 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);
-    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null), due: false });
+  } else if (mission.nodes.some((node) => node.merge?.state === "due")) {
+    // A node whose own plan gives the operator its merge is theirs once its pull request is ready, while the rest still runs; a scope `pr` mission's ready pull request is never due (PRD mission-destination D-11, D-35).
+    const nodes = landingOrder(mission).filter((node) => node.merge?.state === "due");
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: false, due: true });
   }
   return items;
 }
@@ -759,7 +782,7 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 없음`. */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `일꾼 없음`; a stop's age is the card's, at the line's end. */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
@@ -768,7 +791,21 @@ export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">
       return t("mission.work.noWorker");
     case "waiting":
       return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+    case "stopped":
+      return t("mission.work.stopped", { why: stopCauseWords(work.cause, t) });
   }
+}
+
+/**
+ * Why a node's worker stopped, in the words its card and warning say it:
+ * a usage limit with the agent's own line (its reset time when it gave
+ * one), an API error, or no report. The line is the agent's as it wrote it;
+ * an API error's line is in `full` only, since its first words say the same.
+ */
+export function stopCauseWords(cause: MissionStopCause | null | undefined, t: TFunction<"translation">, full = false): string {
+  if (!cause) return t("mission.work.stop.none");
+  if (cause.kind === "limit") return t("mission.work.stop.limit", { line: cause.line });
+  return full ? t("mission.work.stop.errorLine", { line: cause.line }) : t("mission.work.stop.error");
 }
 
 /** What a resting worker's node waits on, in one or two words. */
@@ -930,28 +967,65 @@ export function openAttention<A extends Omit<MissionAttention, "choices">>(missi
  * node stands, so the mission itself is the item, its oldest such node first
  * and `more` for the rest.
  */
-export type MissionAsk = { mission: Mission; node: MissionNode; attention: MissionAttention; more: number };
+/**
+ * A mission that is its own Needs You item: a raise only the operator settles
+ * that no row carries (`node`), with `more` the other things it waits on, or
+ * else its safety net (`net`), one item however many nodes it holds.
+ * `since_unix_ms` is how long it has waited.
+ */
+export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number } & ({ kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } | { kind: "net"; net: MissionSafetyNet });
+
+/** The last still-open held PR and the other open PRs, from the core's
+ * merge reading. Older cores omit `prs` and keep their previous PR display. */
+export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; more: number } {
+  const open = node.merge?.prs;
+  const number = open === undefined ? node.pr : (open.at(-1) ?? null);
+  const state = number === node.pr ? node.pr_state : (node.prs?.find((pr) => pr.number === number)?.state ?? null);
+  return { number, state, more: Math.max(0, (open?.length ?? 1) - 1) };
+}
+
+/**
+ * Since when a node's merge has been the operator's turn (`merge.state` `due`,
+ * PRD mission-destination D-11): from its finish, as the core counts it in
+ * `mission_asks`; null for a node whose merge is not due.
+ */
+export function mergeDueSince(node: Pick<MissionNode, "merge" | "finished_at_unix_ms">): number | null {
+  return node.merge?.state === "due" ? (node.finished_at_unix_ms ?? 0) : null;
+}
 
 /**
  * The missions a device's scope names as its own Needs You items
  * (`agent_scope.mission_asks`, oldest first), each with its oldest node that
- * waits on the operator and no row carries (`on_row`). The scope counts the
- * same missions in its Needs You number, so a list drawn from this agrees
- * with the Overview and the device rail.
+ * waits on the operator and no row carries (`on_row`), else its safety net.
+ * The scope counts the same missions in its Needs You number, so a list drawn
+ * from this agrees with the Overview and the device rail.
  */
 export function missionAsks(missions: readonly Mission[], ids: readonly string[]): MissionAsk[] {
   const byId = new Map(missions.map((mission) => [mission.id, mission]));
-  return ids.flatMap((id) => {
+  return ids.flatMap((id): MissionAsk[] => {
     const mission = byId.get(id);
     if (!mission) return [];
-    // The core decides which raises the mission itself carries (`item`), the
-    // same rule its count reads.
-    const waiting = mission.nodes
-      .flatMap((node) => (node.attention?.item ? [{ node, attention: node.attention }] : []))
-      .sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
+    // The core decides which raises the mission itself carries (`item`) and
+    // which merges are the operator's now (`due`), the same rule its count reads.
+    type Waiting = { since: number; ask: { kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } };
+    const waiting: Waiting[] = mission.nodes.flatMap((node): Waiting[] => {
+      const out: Waiting[] = [];
+      if (node.attention?.item) out.push({ since: node.attention.since_unix_ms, ask: { kind: "node", node, attention: node.attention } });
+      const due = mergeDueSince(node);
+      if (due !== null) out.push({ since: due, ask: { kind: "merge", node } });
+      return out;
+    });
+    waiting.sort((a, b) => a.since - b.since);
+    const net = mission.safety_net ?? null;
     const first = waiting[0];
-    return first ? [{ mission, node: first.node, attention: first.attention, more: waiting.length - 1 }] : [];
+    if (first) return [{ ...first.ask, mission, since_unix_ms: first.since, more: waiting.length - 1 + (net ? 1 : 0) }];
+    return net ? [{ kind: "net", mission, net, since_unix_ms: net.since_unix_ms, more: 0 }] : [];
   });
+}
+
+/** What a mission's Needs You item is about in a few words, for its accessible name: the node, or the safety net's line. */
+export function missionAskWhat(ask: MissionAsk, t: TFunction<"translation">): string {
+  return ask.kind === "net" ? safetyNetLine(ask.net, t) : ask.node.title;
 }
 
 /** The asks of the missions of project `projectId` (a workspace id), or every ask when no project is chosen. */
@@ -995,10 +1069,17 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
   const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []);
   const first = warnings[0];
   if (!first) return null;
-  const words = (warning: MissionNodeWarning, form: "short" | "full") =>
-    warning.kind === "review_fails"
-      ? t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 })
-      : t(`mission.warning.no_push.${form}`, { minutes: String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000)) });
+  const minutes = (warning: MissionNodeWarning) => String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000));
+  const words = (warning: MissionNodeWarning, form: "short" | "full") => {
+    switch (warning.kind) {
+      case "review_fails":
+        return t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 });
+      case "no_push":
+        return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
+      case "stopped":
+        return form === "short" ? t("mission.warning.stopped.short") : t("mission.warning.stopped.full", { minutes: minutes(warning), why: stopCauseWords(warning.cause, t, true) });
+    }
+  };
   const more = warnings.length - 1;
   return {
     short: more > 0 ? `${words(first, "short")} +${more}` : words(first, "short"),
@@ -1036,21 +1117,6 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
   if (facts === 0) return false;
   const written = events?.filter((event) => event.node === node.key && event.line === node.line).at(-1)?.at_unix_ms ?? null;
   return written === null || facts > written;
-}
-
-/** The reasons only the operator settles, which reach them at once rather than after the Conductor's ten minutes (D-05, B26). */
-const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["conductor_failed"];
-
-/**
- * Why a raise reached the operator, as 내 차례's card says it: the core gives
- * a raise to the Conductor first and to the operator once it stood
- * unsettled (`waited`), at once with no Conductor (`noConductor`), and at
- * once for a reason the operator settles first (`failed`, the Conductor's
- * own failure).
- */
-export function raisedWhy(mission: Pick<Mission, "conductor">, attention: Pick<MissionAttention, "reason">): "failed" | "noConductor" | "waited" {
-  if (OPERATOR_FIRST.includes(attention.reason)) return "failed";
-  return mission.conductor.present ? "waited" : "noConductor";
 }
 
 /**

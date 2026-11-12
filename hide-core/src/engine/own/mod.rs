@@ -2318,10 +2318,16 @@ impl<'g> Engine for OwnEngine<'g> {
         self.read_styled(pane, StyledRead::Screen)
     }
 
-    fn read_rows(&self, _wait: Wait, pane: &str, lines: u32) -> Answer<PaneText> {
+    fn read_rows(&self, _wait: Wait, pane: &str, lines: u32) -> Answer<super::PaneRows> {
         self.check()?;
         let lines = u16::try_from(lines.min(READ_LINES_CAP)).unwrap_or(u16::MAX);
-        self.read_styled(pane, StyledRead::Rows(lines))
+        let read = self.read_styled(pane, StyledRead::Rows(lines))?;
+        let alternate_screen = self.topology().pane(pane)?.live.facts.alternate_screen;
+        Ok(super::PaneRows {
+            text: read.text,
+            truncated: read.truncated,
+            alternate_screen,
+        })
     }
 
     fn send_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
@@ -6143,8 +6149,9 @@ mod tests {
                 session_start: false,
                 waiting: None,
                 account: None,
+                refused: None,
             };
-            facts.record(&pane, &report).unwrap();
+            facts.record(&pane, &report, 0).unwrap();
             engine.hook_session(&pane, "claude-code", "s-1").unwrap();
             let mut published = engine.session(WAIT).unwrap().project();
             let tokens = facts.lay(&mut published, str::to_owned, |_| true);

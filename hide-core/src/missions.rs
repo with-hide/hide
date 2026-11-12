@@ -6,8 +6,8 @@
 //!
 //! The record is the core's: the Conductor changes it only through the
 //! pane-bound `hide mission` commands (D-23), each one event applied under
-//! the runtime lock, and the file is written by its own save thread
-//! (`LatestFile`). What a node should do next, how a failure is retried and
+//! the runtime lock, and the files are written by the missions' save thread
+//! (`mission_events::MissionEventStore`). What a node should do next, how a failure is retried and
 //! when to ask the operator are the Conductor's judgement (D-37); the record
 //! holds only the facts the map shows and the contracts Hide enforces: one
 //! Conductor per mission, no worker before the plan is approved, and the
@@ -24,21 +24,18 @@
 //! has none and reads as it was.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::delivery::Actor;
-use crate::latest_file::read_capped;
 use crate::mission_criteria::{CheckInput, Criterion};
 
-const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 /// The schema before node criteria, read and converted (D-19).
-const SCHEMA_BEFORE_CRITERIA: u32 = 1;
+pub(crate) const SCHEMA_BEFORE_CRITERIA: u32 = 1;
 /// The schema before a node's three states and its pull request list (PRD
 /// mission-node-simple D-16).
-const SCHEMA_BEFORE_SIMPLE: u32 = 2;
+pub(crate) const SCHEMA_BEFORE_SIMPLE: u32 = 2;
 /// The schema before a node's human gate (PRD mission-human-gate D-02): a
 /// book of it has no `human` line and reads unchanged, but a build that knows
 /// only it cannot read a gate, so it reads no schema 4 book.
@@ -46,9 +43,6 @@ const SCHEMA_BEFORE_GATES: u32 = 3;
 /// Answered decisions a mission keeps for a skip of a protected line; past
 /// this the oldest goes and is logged.
 pub const DECIDED_LIMIT: usize = 32;
-/// Missions kept at once, closed ones included. A mission is deleted with
-/// its Conductor's session (D-22), so a full book is refused, never evicted.
-pub const MISSION_LIMIT: usize = 128;
 /// Nodes in one mission's plan, the cap every dependency graph shares.
 pub use crate::dag::NODE_LIMIT;
 /// The highest concurrency cap a mission or the settings may name.
@@ -90,9 +84,12 @@ pub fn answer_text(text: &str) -> Option<String> {
         && !text.chars().any(char::is_control))
     .then(|| text.to_owned())
 }
-const READ_CAP: u64 = 8 * 1024 * 1024;
-/// The size a change may bring the saved book to: under the read cap with
-/// room for the file's own framing, so what is written is always read back.
+/// What a start reads of one mission's file, or of the book builds before
+/// the mission folder kept (`mission_store`).
+pub(crate) const READ_CAP: u64 = 8 * 1024 * 1024;
+/// The size a change may bring one mission's saved file to: under the read
+/// cap with room for the file's own framing, so what is written is always
+/// read back.
 const WRITE_BUDGET: usize = 7 * 1024 * 1024;
 
 /// Where a mission stands. A cancelled mission is an end that nothing
@@ -271,8 +268,8 @@ pub enum AttentionReason {
     /// (`mission_health::stall_acts`).
     NotStarted,
     /// A warning its Conductor was sent stood with nothing moving
-    /// (`mission_health::stall_acts`): the Conductor already had its letter,
-    /// so it reaches the operator at once.
+    /// (`mission_health::stall_acts`): raised to the Conductor as every
+    /// other stall is.
     WarningStood,
     /// The node's pull request waited on CI, a review or the merge for longer
     /// than any of those takes (`mission_health::stall_acts`).
@@ -280,13 +277,16 @@ pub enum AttentionReason {
 }
 
 impl AttentionReason {
-    /// A reason only the operator can settle goes to them at once (B26);
-    /// the others ask the Conductor first (D-05).
+    /// A reason only the operator can settle reaches them at once (B26): a
+    /// planned human gate with no Conductor to ask it (PRD
+    /// mission-human-gate) and a failure recorded before schema 3. Every
+    /// other raise is the Conductor's to settle and never reaches the
+    /// operator by itself; a mission whose Conductor does not settle its
+    /// raises is the operator's once, through the safety net
+    /// (`mission_health::safety_net`, hide-private docs/missions.md, the
+    /// principle of 2026-11-11).
     pub fn operator_first(self) -> bool {
-        matches!(
-            self,
-            Self::ConductorFailed | Self::HumanGate | Self::WarningStood
-        )
+        matches!(self, Self::ConductorFailed | Self::HumanGate)
     }
 
     /// The operator's choices for a raise of this reason, in the order the
@@ -349,9 +349,11 @@ impl AttentionReason {
     }
 }
 
-/// What waits on someone for a node (D-02, D-05): raised to the Conductor
-/// at `since`, and to the operator at `operator_at` once it stood ten
-/// minutes, or at once with no Conductor there.
+/// What waits on someone for a node (D-02, D-05): raised at `since` to the
+/// Conductor, or to the operator for a reason only they settle
+/// (`AttentionReason::operator_first`). A book from before keeps an
+/// `operator_at_unix_ms` on a raise its ten minutes handed to the operator;
+/// it is not read, so that raise is the Conductor's again.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Attention {
     pub reason: AttentionReason,
@@ -363,10 +365,9 @@ pub struct Attention {
     /// The mission's count of raises, which names this one in its letters.
     pub key: u64,
     pub since_unix_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator_at_unix_ms: Option<u64>,
     /// The operator was told outside Needs You, because no row stood to lay
-    /// it on: once per cause, kept across a restart.
+    /// it on, or the safety net it holds up was: once per cause, kept
+    /// across a restart.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notified: bool,
 }
@@ -433,6 +434,11 @@ pub enum WarningKind {
     /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
     /// request does not just wait on others.
     NoPush,
+    /// Its worker's program runs, its turn ended and it waits on nothing
+    /// (`mission_health::stopped_worker`), for
+    /// `mission_health::STOPPED_THAT_WARNS_MS` (hide-private
+    /// docs/missions.md, A stopped worker).
+    Stopped,
 }
 
 impl WarningKind {
@@ -440,6 +446,29 @@ impl WarningKind {
         match self {
             Self::ReviewFails => "review_fails",
             Self::NoPush => "no_push",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+/// Why a node's worker stopped, as its agent's hook reported the turn's
+/// end: the provider refused it for the account's usage limit, or failed or
+/// refused it otherwise (an API error). `line` is the agent's own first line
+/// for it, a limit's reset time included when the agent gave one. A stop
+/// with no cause has none of these.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StopCause {
+    Limit { line: String },
+    Error { line: String },
+}
+
+impl StopCause {
+    pub(crate) fn of(refused: &hide_node_link::panes::HookRefusal) -> Self {
+        let line = refused.line.clone();
+        match refused.kind {
+            hide_node_link::panes::RefusalKind::Limit => Self::Limit { line },
+            hide_node_link::panes::RefusalKind::Error => Self::Error { line },
         }
     }
 }
@@ -460,6 +489,10 @@ pub struct NodeWarning {
     /// was full, so each evaluation after asks again until it is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub told_unix_ms: Option<u64>,
+    /// A stopped worker's cause, as it stood when the warning rose, which
+    /// its letter carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<StopCause>,
 }
 
 /// What Hide itself did to a node last (D-07, D-15): the card's small Hide
@@ -750,9 +783,9 @@ pub struct Question {
     #[serde(default)]
     pub node: Option<String>,
     /// The other nodes the decision is about, beside `node`
-    /// (`hide mission decide --node <key>...`): while it is open their
-    /// raises stay with the Conductor (`Mission::deciding_on`), and its card
-    /// names them.
+    /// (`hide mission decide --node <key>...`): while it is open they wait
+    /// on the operator's answer (`Mission::deciding_on`), and its card names
+    /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<String>,
     pub asked_at_unix_ms: u64,
@@ -1122,7 +1155,18 @@ pub struct MissionNode {
     /// itself (`Runtime::stall_missions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold: Option<NodeHold>,
+    /// The plan has the operator merge this node's pull request, against a
+    /// mission whose scope has the Conductor merge (PRD mission-destination
+    /// D-10): why, in one line. The node is done once its pull request is
+    /// ready, and the merge is left to the operator (`Mission::operator_merges`).
+    /// None for every node of a mission written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_merge: Option<String>,
 }
+
+/// The longest reason a plan gives for the operator merging a node
+/// (`MissionNode::operator_merge`): one line, as long as a gate's.
+pub const OPERATOR_MERGE_CHARS: usize = 80;
 
 /// Why and until when a node is held (`MissionNode::hold`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1262,6 +1306,15 @@ impl MissionNode {
         self.prs.push(number);
     }
 
+    /// Gives a node with a pull request its CI line, open until GitHub's
+    /// checks are read (`mission_criteria::ensure_ci_line`); an external node,
+    /// which Hide finishes itself, has none. Whether the line was made.
+    pub(crate) fn ensure_ci_line(&mut self) -> bool {
+        self.kind != NodeKind::External
+            && self.current_pr().is_some()
+            && crate::mission_criteria::ensure_ci_line(&mut self.criteria).1
+    }
+
     /// The mark a person leaves by taking the node back to work from done
     /// or dropped: Hide does not finish it again on the facts it was taken
     /// back on, only once it holds another pull request or a line is
@@ -1386,6 +1439,16 @@ pub struct Decided {
     pub node: String,
 }
 
+/// The line a closing pull added to a mission's report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FolderLine {
+    pub text: String,
+    /// The checkout held the destination when the line was written: the
+    /// pull brought it there or found it there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Mission {
     pub id: String,
@@ -1405,6 +1468,13 @@ pub struct Mission {
     pub conductor: Conductor,
     pub status: MissionStatus,
     pub scope: MissionScope,
+    /// The branch the mission's results go to (PRD mission-destination
+    /// D-02): its changes start from it, a `direct` change is merged into
+    /// it, and whether a change is in is asked of it. None for a mission
+    /// written before it, or made while the project's branches were not
+    /// read yet, which stands for the project's default branch (D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub cap: u8,
     /// Settings › Mission's worker candidates when the mission was
     /// created (D-34, B48); a book written before them has none, which
@@ -1473,6 +1543,12 @@ pub struct Mission {
     pub delay_until_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
+    /// The line about the operator's checkout Hide added to `report` when
+    /// the mission closed (`runtime/mission_pull.rs`, PRD
+    /// mission-destination D-28), so a later close replaces it rather than
+    /// adding a second. A build from before it ignores and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_line: Option<FolderLine>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     #[serde(default)]
@@ -1574,6 +1650,16 @@ impl Mission {
 
     pub(crate) fn node(&self, key: &str) -> Option<&MissionNode> {
         self.nodes.iter().find(|node| node.key == key)
+    }
+
+    /// Whether the operator, not the Conductor, merges `node`'s pull
+    /// request (PRD mission-destination D-10, D-35): every one of a mission
+    /// whose scope ends at ready pull requests, and one the plan gave the
+    /// operator in a mission that goes through the merge. Such a node is
+    /// done once its pull request is ready, and its merge is left. The one
+    /// rule the done check, the map and `hide mission show` read.
+    pub(crate) fn operator_merges(&self, node: &MissionNode) -> bool {
+        self.scope == MissionScope::Pr || node.operator_merge.is_some()
     }
 
     /// Whether the open decision is about node `key` (`Question::names`):
@@ -1917,16 +2003,88 @@ pub(crate) fn check_worker(
     Ok(())
 }
 
-/// Every mission the core keeps, and the next id to give.
+/// Every mission the core keeps, and the next id to give: the missions it
+/// holds whole, and the closed ones it keeps on disk only (`shelved`,
+/// `mission_store`), each by its index line.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MissionBook {
     #[serde(default)]
     pub missions: Vec<Mission>,
     #[serde(default)]
     pub next: u64,
+    /// The closed missions past `mission_store::LOADED_CLOSED_LIMIT`,
+    /// oldest gone first: their files stay, and `hide mission show` and
+    /// `reopen` read one back. Never in a file's book.
+    #[serde(skip)]
+    pub shelved: Vec<MissionLine>,
+}
+
+/// What the mission folder's index says of one mission without its body:
+/// its CLI list fields, whether it may be shelved, how old its close is,
+/// and the Conductor session it is deleted with (D-22). A line changes with a create, a
+/// status, a close, a take, an ask on a closed mission and a delete, so a
+/// node's change rewrites the mission's file alone.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MissionLine {
+    pub id: String,
+    pub title: String,
+    pub project: String,
+    pub device_id: String,
+    pub conductor: Conductor,
+    pub status: MissionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at_unix_ms: Option<u64>,
+    /// A done mission whose node or decision still asks someone: it stays
+    /// loaded, so what it asks keeps reaching the operator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asks: bool,
+}
+
+impl MissionLine {
+    pub(crate) fn of(mission: &Mission) -> Self {
+        Self {
+            id: mission.id.clone(),
+            title: mission.title.clone(),
+            project: mission.project.clone(),
+            device_id: mission.device_id.clone(),
+            conductor: mission.conductor.clone(),
+            status: mission.status,
+            closed_at_unix_ms: mission.closed_at_unix_ms,
+            asks: mission.status == MissionStatus::Done
+                && (mission.decision.is_some()
+                    || mission.nodes.iter().any(|node| node.attention.is_some())),
+        }
+    }
+
+    /// Finished and asking no one: what may be shelved (engineering #15).
+    pub(crate) fn at_rest(&self) -> bool {
+        !self.status.open() && !self.asks
+    }
+
+    /// When it closed, for shelving the oldest first; a closed mission
+    /// recorded without the time is the oldest.
+    pub(crate) fn closed_order(&self) -> (u64, u64) {
+        (
+            self.closed_at_unix_ms.unwrap_or(0),
+            mission_number(&self.id),
+        )
+    }
+}
+
+/// The number in a mission's id (`MissionBook::allocate`), 0 for an id of
+/// another form.
+pub(crate) fn mission_number(id: &str) -> u64 {
+    id.strip_prefix("mission-")
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
 }
 
 impl MissionBook {
+    /// The line of a shelved mission `id`.
+    pub(crate) fn shelf(&self, id: &str) -> Option<&MissionLine> {
+        self.shelved.iter().find(|line| line.id == id)
+    }
+
     pub(crate) fn get(&self, id: &str) -> Option<&Mission> {
         self.missions.iter().find(|mission| mission.id == id)
     }
@@ -2275,6 +2433,10 @@ pub struct PlanInput {
     pub title: Option<String>,
     #[serde(default)]
     pub scope: Option<MissionScope>,
+    /// The branch the results go to (`Mission::destination`); left out, the
+    /// mission keeps the one it has.
+    #[serde(default)]
+    pub destination: Option<String>,
     #[serde(default)]
     pub cap: Option<u8>,
     #[serde(default)]
@@ -2338,6 +2500,16 @@ pub struct NodeInput {
         skip_serializing_if = "Option::is_none"
     )]
     pub gate: Option<Vec<String>>,
+    /// The operator merges this node's pull request, and why in one line
+    /// of at most `OPERATOR_MERGE_CHARS` characters (PRD mission-destination
+    /// D-10). Left out, a replan keeps what the node has; `null` gives the
+    /// merge back to the mission's scope.
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub operator_merge: Option<Option<String>>,
 }
 
 /// A change to one node. An absent field is kept, `null` clears it, so a
@@ -2562,6 +2734,13 @@ pub(crate) fn apply_plan(
     {
         return Err("mission_text_invalid".into());
     }
+    if input
+        .destination
+        .as_deref()
+        .is_some_and(|branch| !valid_destination(branch))
+    {
+        return Err("mission_destination_invalid".into());
+    }
     if input.cap.is_some_and(|cap| !(1..=CAP_LIMIT).contains(&cap)) {
         return Err("mission_cap_out_of_range".into());
     }
@@ -2603,6 +2782,7 @@ pub(crate) fn apply_plan(
             ));
         }
         check_gate(mission, node)?;
+        check_operator_merge(mission, input, node)?;
         check_checkers(node)?;
         if node.kind == NodeKind::Change && node.delivery.is_none() {
             return Err("mission_delivery_required".into());
@@ -2705,6 +2885,7 @@ pub(crate) fn apply_plan(
                 worked_at_unix_ms: None,
                 warnings: Vec::new(),
                 hold: None,
+                operator_merge: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -2741,6 +2922,9 @@ pub(crate) fn apply_plan(
             }
             if let Some(steps) = &input.steps {
                 node.steps = steps.iter().map(|step| step.trim().to_owned()).collect();
+            }
+            if let Some(merge) = &input.operator_merge {
+                node.operator_merge = merge.as_deref().map(|why| why.trim().to_owned());
             }
             node.external.clone_from(&input.external);
             node.issues.clone_from(&input.issues);
@@ -2780,8 +2964,29 @@ pub(crate) fn apply_plan(
     if input.github.is_some() {
         next.github.clone_from(&input.github);
     }
+    if input.destination.is_some() && input.destination != next.destination {
+        next.destination.clone_from(&input.destination);
+        // What Hide read of each branch was read against the destination
+        // before; the next read answers for this one.
+        for node in &mut next.nodes {
+            node.in_main = None;
+        }
+    }
     next.updated_at_unix_ms = now;
     Ok(next)
+}
+
+/// Whether `branch` can name a destination: one line that Git takes as a
+/// branch and never as an option, a range or a remote's copy, since Hide
+/// reads `<branch>` and `origin/<branch>` itself.
+fn valid_destination(branch: &str) -> bool {
+    valid_text(branch, TITLE_LIMIT)
+        && branch == branch.trim()
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && !branch.chars().any(char::is_whitespace)
+        && !branch.starts_with("origin/")
+        && branch != "HEAD"
 }
 
 /// A node's steps: at most `STEP_LIMIT`, each one line of text.
@@ -2829,6 +3034,41 @@ fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
         .is_some_and(|before| before.status == NodeStatus::Done);
     if done && now != text {
         return refused("mission_gate_node_done");
+    }
+    Ok(())
+}
+
+/// Who merges a node as the plan leaves it (PRD mission-destination D-10):
+/// the operator only for a change delivered by pull request, in a mission
+/// whose scope has the Conductor merge (with scope `pr` every such node is
+/// the operator's already), with why in one line. What a replan leaves out
+/// is what the node has, so it is judged too.
+fn check_operator_merge(
+    mission: &Mission,
+    input: &PlanInput,
+    node: &NodeInput,
+) -> Result<(), String> {
+    let why = match &node.operator_merge {
+        Some(merge) => merge.as_deref(),
+        None => mission
+            .node(&node.key)
+            .and_then(|before| before.operator_merge.as_deref()),
+    };
+    let Some(why) = why.map(str::trim) else {
+        return Ok(());
+    };
+    let scope = input.scope.unwrap_or(mission.scope);
+    if why.is_empty()
+        || why.chars().any(char::is_control)
+        || why.chars().count() > OPERATOR_MERGE_CHARS
+        || node.kind != NodeKind::Change
+        || node.delivery != Some(Delivery::Pr)
+        || scope != MissionScope::Merge
+    {
+        return Err(crate::coordination::refusal(
+            "mission_operator_merge_invalid",
+            &node.key,
+        ));
     }
     Ok(())
 }
@@ -3213,7 +3453,9 @@ pub fn next_action(code: &str) -> &'static str {
             "Show the plan to the operator and run hide mission start after they approve it"
         }
         "mission_no_nodes" => "Set a plan with hide mission plan before starting",
-        "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
+        "mission_full" => {
+            "Shorten this mission plan or its recorded text; a mission file must fit its save budget"
+        }
         "mission_show_unknown" => {
             "Name a View of your own checkout from hide view list, or give --show a path to open"
         }
@@ -3255,6 +3497,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_commit_invalid" => "Give the commit as 7 to 64 hexadecimal digits",
         "mission_checks_invalid" => {
             "Give --checks as <passed>/<total> with total above 0 and passed at most total"
+        }
+        "mission_destination_invalid" => {
+            "Name the plan's destination as one branch name, such as feat/login, with no remote before it"
         }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
@@ -3318,7 +3563,7 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_skip_reason_missing" => "Give the reason with --reason <text>",
         "mission_criteria_protected" => {
-            "The check command and CI are skipped only on the operator's answer: ask with hide mission decide --line <question> --node <key>, and once answered skip with --decision <its key>"
+            "A failed CI line is skipped only on the operator's answer: run the CI again, or ask with hide mission decide --line <question> --node <key> and once answered skip with --decision <its key>"
         }
         "mission_criteria_unmet" => {
             "Finish the remaining lines first: have the owner finish the check and record it, skip a line with hide mission skip <node> <line> --reason <text>, or ask the operator with hide mission decide --node <key>"
@@ -3331,6 +3576,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_gate_too_long" | "mission_gate_invalid" => {
             "Write the gate as one line of at most 80 characters naming what the operator looks at, such as the map screen"
+        }
+        "mission_operator_merge_invalid" => {
+            "Give \"operator_merge\" only to a change delivered by pull request in a mission whose scope is merge, as one line of at most 80 characters saying why the operator merges it; with scope pr every pull request is the operator's already, and null gives the node back to the scope"
         }
         "mission_gate_exempt" => {
             "A mission made before node criteria takes no gate: ask the operator with hide mission decide instead"
@@ -3383,21 +3631,31 @@ struct Stored {
     book: MissionBook,
 }
 
-pub(crate) fn encode(book: &Arc<MissionBook>) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&Stored {
+/// One mission's file: a book of that one mission in the book's schema, so
+/// it is read, and an older schema converted, as a book is, and every key a
+/// core move or a device rename rewrites in a book (`node_migration`'s
+/// `/missions/*/…` rows) is where it is in the book.
+#[derive(Serialize)]
+struct StoredMission<'a> {
+    schema_version: u32,
+    missions: [&'a Mission; 1],
+}
+
+pub(crate) fn encode_mission(mission: &Mission) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&StoredMission {
         schema_version: SCHEMA_VERSION,
-        book: MissionBook::clone(book),
+        missions: [mission],
     })
     .map_err(|error| format!("could not be encoded: {error}"))
 }
 
 /// A book read back, and the schema it was written in.
-struct Decoded {
-    book: MissionBook,
-    from: u32,
+pub(crate) struct Decoded {
+    pub(crate) book: MissionBook,
+    pub(crate) from: u32,
 }
 
-fn decode(bytes: &[u8]) -> Result<Decoded, String> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     let decoded = |error: serde_json::Error| format!("could not be decoded: {error}");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(decoded)?;
     let from = value
@@ -3431,14 +3689,13 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         line.carry_spent_rerun();
         line.count_tally();
     }
-    if stored.book.missions.len() > MISSION_LIMIT
-        || stored
-            .book
-            .missions
-            .iter()
-            .any(|mission| mission.nodes.len() > NODE_LIMIT)
+    if stored
+        .book
+        .missions
+        .iter()
+        .any(|mission| mission.nodes.len() > NODE_LIMIT)
     {
-        return Err("holds more missions or nodes than the limits allow".to_owned());
+        return Err("holds a mission with more nodes than the limit allows".to_owned());
     }
     Ok(Decoded {
         book: stored.book,
@@ -3551,7 +3808,6 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
                     agent: None,
                     key: seq,
                     since_unix_ms: at,
-                    operator_at_unix_ms: Some(at),
                     notified: false,
                 };
                 node.insert(
@@ -3590,10 +3846,10 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-/// The size of the book as it would be saved, counted without keeping the
-/// bytes and stopped just past `limit`, so a check costs at most that much
-/// encoding.
-fn saved_size(book: &MissionBook, limit: usize) -> usize {
+/// The size of one mission as its file would be saved, counted without
+/// keeping the bytes and stopped just past `limit`, so a check costs at most
+/// that much encoding.
+fn saved_size(mission: &Mission, limit: usize) -> usize {
     struct Counter(usize, usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -3608,103 +3864,37 @@ fn saved_size(book: &MissionBook, limit: usize) -> usize {
         }
     }
     let mut counter = Counter(0, limit);
-    let _ = serde_json::to_writer(&mut counter, book);
+    let _ = serde_json::to_writer(&mut counter, mission);
     counter.0
 }
 
-/// Whether the book, as it would be saved, stays within what a start reads
-/// back.
-pub(crate) fn fits(book: &MissionBook) -> bool {
-    saved_size(book, WRITE_BUDGET) <= WRITE_BUDGET
+/// Whether one mission, as its file would be saved, stays within what a
+/// start reads back.
+pub(crate) fn fits(mission: &Mission) -> bool {
+    saved_size(mission, WRITE_BUDGET) <= WRITE_BUDGET
 }
 
-/// Whether a change from `before` to `after` may be kept: one that stays in
-/// the budget, or one that makes a book already past it smaller, so a
-/// close or a smaller plan is never refused.
+/// Whether a change from `before` to `after` may be kept: each mission it
+/// changed stays in its file's budget, or is made smaller when it was
+/// already past it, so a close or a smaller plan is never refused. Other
+/// missions are not counted: each has a file of its own.
 pub(crate) fn may_keep(before: &MissionBook, after: &MissionBook) -> bool {
-    // A book past the budget came from a file the read cap let in, so both
-    // are counted to just past that cap.
+    // A mission past the budget came from a file the read cap let in, so
+    // both are counted to just past that cap.
     let limit = READ_CAP as usize;
-    fits(after) || saved_size(after, limit) < saved_size(before, limit)
-}
-
-/// Where a restored book came from: a file this build cannot use is kept
-/// aside rather than replaced, so a downgrade does not erase missions.
-pub(crate) enum Restored {
-    Fresh,
-    Read(MissionBook),
-    Unreadable(String),
-}
-
-/// Where the book lives and how it is read at launch; it is written by the
-/// missions' one writer, after the histories it goes with
-/// (`mission_events::MissionEventStore`).
-pub(crate) struct MissionStore {
-    path: PathBuf,
-}
-
-impl MissionStore {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    /// Reads the book at launch, before the runtime lock is taken. An older
-    /// schema's book is converted, and the file it came from is copied aside
-    /// once before anything writes the current schema over it.
-    pub(crate) fn restore(&self) -> Restored {
-        match read_capped(&self.path, READ_CAP) {
-            Ok(None) => Restored::Fresh,
-            Ok(Some(bytes)) => match decode(&bytes) {
-                Ok(Decoded { book, from }) => {
-                    // With no copy kept the converted book is not written
-                    // over the old one: it is read as unreadable, which
-                    // keeps the file as it is.
-                    if from != SCHEMA_VERSION
-                        && let Err(reason) = self.keep_before_conversion(&bytes, from)
-                    {
-                        return Restored::Unreadable(reason);
-                    }
-                    Restored::Read(book)
-                }
-                Err(reason) => Restored::Unreadable(reason),
-            },
-            Err(reason) => Restored::Unreadable(reason),
-        }
-    }
-
-    /// The copy a downgrade is restored from; an existing copy is the
-    /// earliest one and is kept.
-    fn keep_before_conversion(&self, bytes: &[u8], from: u32) -> Result<(), String> {
-        let Some(directory) = self.path.parent() else {
-            return Err("has no folder to keep its copy before conversion in".to_owned());
-        };
-        let backup = match from {
-            SCHEMA_BEFORE_CRITERIA => hide_kit::layout::missions_before_criteria(directory),
-            SCHEMA_BEFORE_SIMPLE => hide_kit::layout::missions_before_simple(directory),
-            _ => hide_kit::layout::missions_before_gates(directory),
-        };
-        let outcome = crate::latest_file::keep_first_copy(&backup, bytes);
-        crate::diagnostic!(serde_json::json!({
-            "component": "missions",
-            "kind": "missions.converted",
-            "from": from,
-            "to": SCHEMA_VERSION,
-            "backup": backup.to_string_lossy(),
-            "written": outcome.as_ref().ok(),
-            "message": outcome.as_ref().err().map(ToString::to_string),
-        }));
-        outcome
-            .map(|_| ())
-            .map_err(|error| format!("could not keep its copy before conversion: {error}"))
-    }
-
-    pub(crate) fn path(&self) -> &std::path::Path {
-        &self.path
-    }
+    after
+        .missions
+        .iter()
+        .all(|mission| match before.get(&mission.id) {
+            Some(was) if was == mission => true,
+            Some(was) => fits(mission) || saved_size(mission, limit) < saved_size(was, limit),
+            None => fits(mission),
+        })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::mission_store::{MissionStore, Restored};
 
     /// B15, B16 (with-hide/hide#2227): `leave` comes first while a Conductor
     /// holds the mission, and for an unplanned pull request also without
@@ -3773,6 +3963,7 @@ pub(crate) mod tests {
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
+            destination: None,
             cap: 4,
             candidates: Vec::new(),
             strength: None,
@@ -3792,6 +3983,7 @@ pub(crate) mod tests {
             delay: None,
             delay_until_unix_ms: None,
             report: None,
+            folder_line: None,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
             started_at_unix_ms: None,
@@ -3806,26 +3998,37 @@ pub(crate) mod tests {
         }
     }
 
-    /// A book is only kept when its save stays under what a start reads
-    /// back, so the file Hide writes never comes back unreadable.
+    /// A change is only kept when the file of each mission it changed stays
+    /// under what a start reads back, so a file Hide writes never comes back
+    /// unreadable; the other missions' files are not counted.
     #[test]
-    fn a_book_past_what_a_start_reads_back_does_not_fit() {
+    fn a_mission_past_what_a_start_reads_back_does_not_fit() {
         let mut large = mission();
         large.report = Some("x".repeat(WRITE_BUDGET / 2));
+        assert!(fits(&large));
         let mut book = MissionBook::default();
         book.missions.push(large.clone());
-        assert!(fits(&book));
+        // Another mission as large has a file of its own.
+        let mut other = large.clone();
+        other.id = "mission-2".into();
         let before = book.clone();
-        book.missions.push(large);
-        assert!(!fits(&book));
-        assert!(!may_keep(&before, &book));
-        // A change that makes a book already past the budget smaller is kept.
-        let mut over = book.clone();
-        over.missions.push(over.missions[0].clone());
-        let mut smaller = over.clone();
-        smaller.missions[2].report = Some("x".into());
-        assert!(!fits(&smaller));
-        assert!(may_keep(&over, &smaller));
+        book.missions.push(other);
+        assert!(may_keep(&before, &book));
+        // One mission past the budget is not kept.
+        let mut grown = book.clone();
+        grown.missions[0].title = "y".repeat(WRITE_BUDGET / 2 + 1);
+        assert!(!fits(&grown.missions[0]));
+        assert!(!may_keep(&book, &grown));
+        // A change that makes a mission already past the budget smaller is
+        // kept.
+        let mut smaller = grown.clone();
+        smaller.missions[0].report = Some("x".into());
+        assert!(
+            fits(&smaller.missions[0])
+                || saved_size(&smaller.missions[0], READ_CAP as usize)
+                    < saved_size(&grown.missions[0], READ_CAP as usize)
+        );
+        assert!(may_keep(&grown, &smaller));
         // A move that finds a mission's registration gone writes null.
         let mut stored = serde_json::to_value(&book.missions[0]).unwrap();
         stored["workspace_id"] = serde_json::Value::Null;
@@ -3853,6 +4056,7 @@ pub(crate) mod tests {
             paths: Vec::new(),
             change: None,
             gate: None,
+            operator_merge: None,
         }
     }
 
@@ -3860,6 +4064,7 @@ pub(crate) mod tests {
         PlanInput {
             title: None,
             scope: None,
+            destination: None,
             cap: None,
             github: None,
             check: None,
@@ -4092,20 +4297,47 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_book_past_its_limits_or_of_another_version_is_not_used() {
-        let book = MissionBook {
-            missions: vec![mission(); MISSION_LIMIT + 1],
-            next: 1,
-        };
-        let bytes = encode(&Arc::new(book)).unwrap();
-        assert!(decode(&bytes).is_err());
+    fn a_mission_past_its_node_limit_or_of_another_version_is_not_used() {
+        let mut over = mission();
+        over.nodes = (0..=NODE_LIMIT)
+            .map(|index| {
+                apply_plan(
+                    &mission(),
+                    &plan(vec![node(&format!("n{index}"), NodeKind::Change, &[])]),
+                    2,
+                )
+                .unwrap()
+                .nodes
+                .remove(0)
+            })
+            .collect();
+        assert!(decode(&encode_mission(&over).unwrap()).is_err());
         let other = serde_json::to_vec(
             &serde_json::json!({"schema_version": 99, "missions": [], "next": 0}),
         )
         .unwrap();
         assert!(decode(&other).is_err());
-        let ok = encode(&Arc::new(MissionBook::default())).unwrap();
-        assert_eq!(decode(&ok).unwrap().book, MissionBook::default());
+        assert_eq!(
+            saved_again(&MissionBook {
+                missions: vec![mission()],
+                ..MissionBook::default()
+            }),
+            vec![mission()]
+        );
+    }
+
+    /// What the mission folder writes of `book` reads back as it: each
+    /// mission's file in the current schema.
+    fn saved_again(book: &MissionBook) -> Vec<Mission> {
+        book.missions
+            .iter()
+            .map(|mission| {
+                let again = decode(&encode_mission(mission).unwrap()).unwrap();
+                assert_eq!(again.from, SCHEMA_VERSION);
+                let [one]: [Mission; 1] = again.book.missions.try_into().unwrap();
+                one
+            })
+            .collect()
     }
 
     #[test]
@@ -4243,6 +4475,7 @@ pub(crate) mod tests {
             book: MissionBook {
                 missions: vec![planned],
                 next: 2,
+                shelved: Vec::new(),
             },
         })
         .unwrap();
@@ -4255,7 +4488,7 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let Restored::Read(mut book) = MissionStore::new(path).restore() else {
+        let Restored::Moving(mut book) = MissionStore::new(folder.path()).restore() else {
             panic!("the book reads");
         };
         let line = book.missions[0].nodes[0]
@@ -4295,8 +4528,8 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, &bytes).unwrap();
-        let store = MissionStore::new(path.clone());
-        let Restored::Read(book) = store.restore() else {
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
             panic!("a schema 1 book reads");
         };
         let read = &book.missions[0];
@@ -4311,12 +4544,10 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         // The first copy is the one kept.
         std::fs::write(&path, b"{\"schema_version\": 1, \"missions\": []}").unwrap();
-        assert!(matches!(store.restore(), Restored::Read(_)));
+        assert!(matches!(store.restore(), Restored::Moving(_)));
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         // What is saved is the current schema and reads back the same.
-        let saved = encode(&Arc::new(book.clone())).unwrap();
-        let again = decode(&saved).unwrap();
-        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+        assert_eq!(saved_again(&book), book.missions);
     }
 
     /// PRD mission-node-simple D-16, B26: a schema 2 book reads in the
@@ -4352,8 +4583,8 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, &bytes).unwrap();
-        let store = MissionStore::new(path);
-        let Restored::Read(book) = store.restore() else {
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
             panic!("a schema 2 book reads");
         };
         let read = &book.missions[0];
@@ -4376,9 +4607,10 @@ pub(crate) mod tests {
             .as_ref()
             .expect("a failed node asks the operator");
         assert_eq!(
-            (failed.reason, failed.operator_at_unix_ms, failed.key),
-            (AttentionReason::ConductorFailed, Some(50), 1)
+            (failed.reason, failed.since_unix_ms, failed.key),
+            (AttentionReason::ConductorFailed, 50, 1)
         );
+        assert!(failed.reason.operator_first());
         assert_eq!(read.attention_seq, 1);
         assert!(
             read.nodes
@@ -4389,9 +4621,7 @@ pub(crate) mod tests {
         let backup = hide_kit::layout::missions_before_simple(folder.path());
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         // Saved again it is schema 3, and it is not moved a second time.
-        let saved = encode(&Arc::new(book.clone())).unwrap();
-        let again = decode(&saved).unwrap();
-        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+        assert_eq!(saved_again(&book), book.missions);
     }
 
     /// PRD mission-human-gate D-02, B12: a schema 3 book, written before a
@@ -4411,8 +4641,8 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("missions.json");
         std::fs::write(&path, &bytes).unwrap();
-        let store = MissionStore::new(path.clone());
-        let Restored::Read(book) = store.restore() else {
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
             panic!("a schema 3 book reads");
         };
         let node = &book.missions[0].nodes[0];
@@ -4428,15 +4658,13 @@ pub(crate) mod tests {
         let backup = hide_kit::layout::missions_before_gates(folder.path());
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
         std::fs::write(&path, b"{\"schema_version\": 3, \"missions\": []}").unwrap();
-        assert!(matches!(store.restore(), Restored::Read(_)));
+        assert!(matches!(store.restore(), Restored::Moving(_)));
         assert_eq!(
             std::fs::read(&backup).unwrap(),
             bytes,
             "the first copy is kept"
         );
-        let saved = encode(&Arc::new(book.clone())).unwrap();
-        let again = decode(&saved).unwrap();
-        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+        assert_eq!(saved_again(&book), book.missions);
     }
 
     /// PRD mission-human-gate D-13, D-15, B3: a plan names at most one gate
@@ -4562,7 +4790,7 @@ pub(crate) mod tests {
                 .unwrap();
             return;
         }
-        let restored = MissionStore::new(path.clone()).restore();
+        let restored = MissionStore::new(folder.path()).restore();
         std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(matches!(restored, Restored::Unreadable(_)));
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
@@ -4618,6 +4846,35 @@ pub(crate) mod tests {
         let planned = apply_plan(&read, &input, 2).unwrap();
         assert_eq!(planned.strength, Some(Strength::Thorough));
         assert_eq!(planned.checkers, Some(recorded));
+    }
+
+    /// PRD mission-destination B15, D-10: a node recorded before the
+    /// operator's merge has no such field, reads with none and is written
+    /// back as it was, so its scope alone says who merges; only a node the
+    /// plan gave the operator carries the field, which a build before it
+    /// skips as a field it does not know.
+    #[test]
+    fn a_node_from_before_the_operators_merge_reads_and_writes_as_it_was() {
+        let mut planned = mission();
+        planned.scope = MissionScope::Merge;
+        let planned =
+            apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let stored = serde_json::to_value(&planned).unwrap();
+        assert!(
+            stored["nodes"][0].get("operator_merge").is_none(),
+            "{stored}"
+        );
+        let read: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(read.nodes[0].operator_merge, None);
+        assert!(!read.operator_merges(&read.nodes[0]));
+        assert_eq!(serde_json::to_value(&read).unwrap(), stored);
+
+        let mut input = node("a", NodeKind::Change, &[]);
+        input.operator_merge = Some(Some("직접 보고 머지".into()));
+        let mine = apply_plan(&read, &plan(vec![input]), 3).unwrap();
+        assert!(mine.operator_merges(&mine.nodes[0]));
+        let written = serde_json::to_value(&mine).unwrap();
+        assert_eq!(written["nodes"][0]["operator_merge"], "직접 보고 머지");
     }
 
     /// A question's View link recorded before links kept their View, or

@@ -80,7 +80,7 @@ export class DemoSocket implements PhoneSocket {
   private hello(): void {
     this.later(0, () => {
       this.emit({ type: "hello", mac_name: translate("mobile.demo.host"), phone_id: "demo", name: null, vapid_public_key: "", notifications: "off" });
-      this.emit({ type: "meta", push_mode: "off", other_phones: 0 });
+      this.emit({ type: "meta", push_mode: "app_closed", other_phones: 0 });
       this.lists();
     });
   }

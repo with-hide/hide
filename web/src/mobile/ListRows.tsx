@@ -3,7 +3,13 @@
 // tree, the order and what is folded (`hide-core` `phone/tree.rs`); this
 // draws it and keeps only which parents and folds this phone opened.
 
+import { useMemo } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
+import { chipWords, missionToneOf } from "../missions";
+import { CLOSED_DIM, PR_LOOK, prMarkParts } from "../prMark";
+import { cn } from "../lib/utils";
+import { agentLinks, type AgentLinks } from "./missionModel";
 import { useElapsed } from "../components/elapsed";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
@@ -131,13 +137,55 @@ function Pill({ mark, count, words }: { mark: "turn" | "going" | "done"; count: 
 
 const LINE_TONE = { warning: "text-warning", news: "text-foreground", subtle: "text-subtle-foreground" } as const;
 
+/** What the row's marks show: the open missions this agent conducts (a step's worker gets none, as on the desktop) and the pull requests that name it. */
+function useRowLinks(agent: PhoneAgent): AgentLinks {
+  const missions = usePhone((s) => s.missions);
+  const prs = usePhone((s) => s.prs?.items ?? null);
+  return useMemo(() => {
+    const links = agentLinks({ device_id: agent.device_id, pane_id: agent.pane_id }, missions, prs);
+    return { ...links, missions: links.missions.filter((link) => link.node === null) };
+  }, [agent.device_id, agent.pane_id, missions, prs]);
+}
+
+/**
+ * The desktop row's marks after the title, in its order (`sidebar-agent-row.tsx`): the pull requests (one as its state's mark
+ * and `#number`, several as each state's mark and count) and the mission chip with `!` for the operator's turn and `k/n`. They
+ * never shrink, so a narrow phone cuts the title first; the row opens the detail, whose chips open the pages.
+ */
+function RowMarks({ links }: { links: AgentLinks }) {
+  const parts = prMarkParts(links.prs);
+  if (!parts && links.missions.length === 0) return null;
+  return (
+    <span aria-hidden="true" className="flex shrink-0 items-center gap-sm font-mono text-body" data-phone-row-marks="true">
+      {parts && "counts" in parts ? parts.counts.map(({ state, count }) => {
+        const { icon: Icon, tone } = PR_LOOK[state];
+        return <span key={state} className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-phone-row-pr={state}><Icon className="size-(--size-pr-icon) shrink-0" />{count}</span>;
+      }) : parts ? (() => {
+        const { icon: Icon, tone } = PR_LOOK[parts.state];
+        return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />#{parts.number}</span>;
+      })() : null}
+      {links.missions.map(({ mission, turn }) => (
+        <span key={mission.id} className={cn("flex items-center gap-xxs rounded-xs bg-secondary px-xs", TONE_TEXT[missionToneOf(mission.status, turn)])} data-phone-row-mission={mission.id}>
+          <MissionChipFace turn={turn} delay={false} status={mission.status} counts={chipWords(mission).counts} icon="size-(--size-icon)" />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** The row's own button: it opens the agent, never its children (B2). */
 function AgentRow({ agent }: { agent: PhoneAgent }) {
   const { t } = useInterfaceTranslation();
   const elapsed = useElapsed(agent.changed_at_unix_ms);
   // Opening a row on the phone does not wake it, so the desktop's "wakes when opened" is not said here.
   const words = agent.status_code === "sleeping" && agent.mark === "asleep" ? t("panes.sleep.sleeping") : markWords(t, agent);
-  const label = [words, agent.title, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
+  const links = useRowLinks(agent);
+  const marks = [
+    agent.starred ? t("taskLens.revisit.starred") : null,
+    ...links.prs.map((pr) => `#${pr.number}`),
+    ...links.missions.map(({ mission }) => `${t("mobile.tab.missions")} ${mission.title}`),
+  ];
+  const label = [words, agent.title, ...marks, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
   return (
     <RowButton
       aria-label={label}
@@ -150,6 +198,7 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
         <span className="min-w-0 flex-1">
           <AgentHead agent={agent} large={false} />
         </span>
+        <RowMarks links={links} />
         <span className="shrink-0 font-mono text-body text-muted-foreground">{elapsed}</span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>

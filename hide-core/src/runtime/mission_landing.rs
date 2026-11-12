@@ -49,6 +49,90 @@ pub enum LandingAction {
     Join,
 }
 
+/// Who merges a node's pull request and where that merge stands (PRD
+/// mission-destination D-10, D-11, D-35, D-45): what the card's `👤`
+/// station and its second-line strip draw, and what the operator's turn
+/// reads. Only for a change delivered by pull request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeMerge {
+    pub by: MergeBy,
+    /// Why the plan has the operator merge this node; none when the
+    /// mission's scope decides who merges it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    pub state: MergeStep,
+    /// Still-open held PRs in held order, from the same read as landing.
+    pub prs: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeBy {
+    Operator,
+    Conductor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStep {
+    /// Not merged, and not the operator's to do now.
+    Ahead,
+    /// The operator's turn: a node the plan gave the operator is done, its
+    /// pull request ready as GitHub last answered and not merged, in a
+    /// mission still open. A node the scope gives the operator is never
+    /// due: the operator chose to merge them all after the report (D-35).
+    Due,
+    /// GitHub answered its pull request merged.
+    Merged,
+}
+
+/// Who merges `node` of `mission` and where it stands; `ready` is whether
+/// every pull request it holds that is not closed is ready to merge as
+/// GitHub last answered (`mission_health::pr_ready`). None for a node that
+/// merges nothing of the mission's: research, verify, an outside node and
+/// a `direct` change.
+pub(super) fn node_merge(mission: &Mission, node: &MissionNode, ready: bool) -> Option<NodeMerge> {
+    if node.kind != NodeKind::Change || node.delivery != Some(Delivery::Pr) {
+        return None;
+    }
+    let by = if mission.operator_merges(node) {
+        MergeBy::Operator
+    } else {
+        MergeBy::Conductor
+    };
+    let why = node.operator_merge.clone();
+    let state = match pull_state(node) {
+        Some(PullState::Merged) => MergeStep::Merged,
+        Some(PullState::Open)
+            if why.is_some()
+                && ready
+                && node.status == NodeStatus::Done
+                && matches!(
+                    mission.status,
+                    MissionStatus::Running | MissionStatus::MergeWait
+                ) =>
+        {
+            MergeStep::Due
+        }
+        _ => MergeStep::Ahead,
+    };
+    Some(NodeMerge {
+        by,
+        why,
+        state,
+        prs: open_pulls(node).collect(),
+    })
+}
+
+/// Held PRs GitHub last read open. Unknown PRs are not evidence of an
+/// open merge; settled PRs stay in the history but never in a merge turn.
+pub(super) fn open_pulls(node: &MissionNode) -> impl Iterator<Item = u32> + '_ {
+    node.prs.iter().copied().filter(|number| {
+        node.seen(*number)
+            .is_some_and(|seen| !seen.merged && !seen.closed)
+    })
+}
+
 /// A change that reaches main as its branch, with no pull request.
 pub(super) fn lands_by_branch(node: &MissionNode) -> bool {
     node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct) && node.prs.is_empty()

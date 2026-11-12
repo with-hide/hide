@@ -55,12 +55,13 @@ it("offers take over and 확인하기 on the mission's own Needs You item, and �
   }
 });
 
-// A mission whose Conductor is at work offers only the node's choices: 지휘 다시 열기 there read as a second, unrelated thing to do (operator report on M41).
-it("offers no take over while a Conductor holds the mission", async () => {
+// A mission whose Conductor is at work offers no 지휘 다시 열기: there it read as a second, unrelated thing to do (operator report on M41).
+// Its safety net offers the Conductor's terminal, where the raises it left are settled.
+it("offers no take over while a Conductor holds the mission, and its terminal for a safety net it left unsettled", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("ko");
   const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
-  const held = { ...mission, conductor: { ...mission.conductor, present: true } };
+  const held = { ...mission, conductor: { ...mission.conductor, present: true }, safety_net: { ...mission.safety_net!, conductor_present: true } };
   useShellStore.setState({ rest, connection: "live" });
   const [ask] = missionAsks([held], [held.id]);
   const container = document.createElement("ul");
@@ -69,9 +70,37 @@ it("offers no take over while a Conductor holds the mission", async () => {
   await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={createActions(() => true)} /></TooltipProvider>));
   try {
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
-    expect(buttons).toEqual(["확인하기"]);
+    expect(buttons).toEqual(["터미널로 이동", "확인하기"]);
+    expect(container.querySelector("[data-mission-ask-net]")?.textContent).toContain("걸린 일 1건 · Conductor가 아직 풀지 못했어요");
   } finally {
     await act(async () => root.unmount());
   }
 });
 
+
+// PRD mission-destination B21, D-22: a ready pull request the plan left to the operator makes the mission its own
+// Needs You item, its line naming the node and the pull request to merge, with 확인하기 opening the mission.
+it("says which node's pull request is the operator's to merge on the mission's own Needs You item", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  await clientI18n.changeLanguage("ko");
+  const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
+  const [first] = mission.nodes;
+  const ready = { ...first!, status: "done" as const, pr: 37, pr_state: "merged" as const, finished_at_unix_ms: 1, attention: null, merge: { by: "operator" as const, why: "DB는 직접", state: "due" as const, prs: [31, 33] } };
+  const due = { ...mission, conductor: { ...mission.conductor, present: true }, safety_net: null, nodes: [ready] };
+  useShellStore.setState({ rest, connection: "live" });
+  const [ask] = missionAsks([due], [due.id]);
+  expect(ask?.kind).toBe("merge");
+  const container = document.createElement("ul");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={createActions(() => true)} /></TooltipProvider>));
+  try {
+    const row = container.querySelector<HTMLElement>(`[data-mission-ask="${due.id}"]`)!;
+    expect(row.dataset.missionAskNode).toBe(ready.key);
+    expect(row.querySelector("[data-ask-line]")?.textContent).toContain(`${ready.title} · 머지할 차례 PR #33 +1`);
+    const buttons = [...row.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
+    expect(buttons).toEqual(["확인하기"]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

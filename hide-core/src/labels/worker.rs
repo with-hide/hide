@@ -53,8 +53,9 @@ use crate::links::worker::LinkClient;
 use crate::suggestions::ledger::{ImprovementKind, Signal};
 
 /// The minimum interval between native-file current-metadata reads, also
-/// used for the single follow-up when a starting turn has no prompt yet.
-const FOLLOW_UP_READ: Duration = Duration::from_secs(3);
+/// used for the single follow-up when a starting turn has no prompt yet and
+/// for the first read again of a stop whose answer was not written yet.
+pub(crate) const FOLLOW_UP_READ: Duration = Duration::from_secs(3);
 /// How long a turn must have been working before its start is asked. About
 /// a quarter of turns end within 15 s (2,384 turns measured 2026-10-16: 23%
 /// within 15 s, 38% within 30 s), and the end call names the goal too, so a
@@ -320,7 +321,7 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
-    asks_answered: bool,
+    asks_answered: Option<crate::links::ledger::AsksAnswered>,
     /// The ledger names the pane's parent, so its header shows its newest
     /// request, whoever sent it, rather than the operator's.
     delegated: bool,
@@ -438,6 +439,9 @@ struct PaneState {
     /// working again, the switch going off or the generator role changing
     /// hands starts it over.
     context_wait: Option<(u64, Instant)>,
+    /// The stop whose turn's answer its session file did not hold yet when
+    /// it was read; see [`LabelWorker::await_answer`].
+    answer_unwritten: Option<AnswerWait>,
     /// The skip reasons already logged, so a cap that holds on every read
     /// (more subagent files than one read takes) is logged once.
     skip_reasons_logged: std::collections::BTreeSet<String>,
@@ -447,6 +451,22 @@ struct PaneState {
     /// The session whose waits were handed on as suggestion records, and
     /// which kinds, so a wait is sent once a session.
     waits_sent: Option<(String, Vec<&'static str>)>,
+}
+
+/// A stop read before its turn's answer was written, and the reads again it
+/// owns. The budget belongs to one session's one stop: another session or
+/// another stop starts its own, and the read it scheduled ends with it.
+#[derive(Debug)]
+struct AnswerWait {
+    /// The session the stop was read in (`PaneRecord::owner`).
+    owner: String,
+    /// The engine's `state_change_seq` of the stop.
+    stop: u64,
+    /// The reads made for it so far, counted against `FOLLOW_UP_READ` and
+    /// then `READ_RETRY_BACKOFF`.
+    spent: u8,
+    /// When its next read is due; `None` once the schedule is spent.
+    due: Option<Instant>,
 }
 
 impl PaneState {
@@ -749,6 +769,7 @@ impl LabelWorker {
                             claimed_submit: None,
                             end_retried: None,
                             context_wait: None,
+                            answer_unwritten: None,
                             skip_reasons_logged: Default::default(),
                             tools: None,
                             waits_sent: None,
@@ -768,6 +789,7 @@ impl LabelWorker {
                         pane.events_loaded = false;
                         pane.next_analysis_at = None;
                         pane.follow_up_at = None;
+                        pane.answer_unwritten = None;
                         pane.read_retries = 0;
                         pane.refused = None;
                         pane.needs_read = true;
@@ -803,6 +825,13 @@ impl LabelWorker {
                     // for its context afresh.
                     if status == "working" {
                         pane.context_wait = None;
+                    }
+                    // A stop waiting for its answer ends when the agent works
+                    // again or another stop comes, and its read with it.
+                    if pane.answer_unwritten.as_ref().is_some_and(|wait| {
+                        status == "working" || wait.stop != observed.state_change_seq
+                    }) {
+                        pane.answer_unwritten = None;
                     }
                     pane.agent = agent;
                     pane.status = status;
@@ -997,6 +1026,12 @@ impl LabelWorker {
             let pane = self.panes.get_mut(&id).expect("listed above");
             if pane.follow_up_at.is_some_and(|at| now >= at) {
                 pane.follow_up_at = None;
+                pane.needs_read = true;
+            }
+            if let Some(wait) = pane.answer_unwritten.as_mut()
+                && wait.due.is_some_and(|at| now >= at)
+            {
+                wait.due = None;
                 pane.needs_read = true;
             }
             if pane.next_analysis_at.is_some_and(|at| now >= at) {
@@ -1544,6 +1579,7 @@ impl LabelWorker {
             pane.events.clear();
             pane.events_loaded = false;
             pane.next_analysis_at = None;
+            pane.answer_unwritten = None;
             pane.metadata_saved = None;
             pane.metadata_observed = None;
             pane.metadata_loaded = false;
@@ -2092,6 +2128,7 @@ impl LabelWorker {
                 pane.follow_up_at = Some(now + FOLLOW_UP_READ);
             }
         }
+        self.await_answer(pane_id, now);
         // One serialized, budgeted read per native-file pane, no sooner than
         // three seconds after its last result. The existing worker owns the
         // I/O; unchanged facts neither publish nor rewrite the saved store.
@@ -2101,6 +2138,64 @@ impl LabelWorker {
             pane.follow_up_at = Some(now + FOLLOW_UP_READ);
         }
         changed
+    }
+
+    /// The engine reads a stop from the agent's screen, and the agent writes
+    /// its records after: a read under the stop can find the operator's
+    /// message still last, the turn's answer not yet in the file, and with
+    /// nothing else moving no read would come again, so the turn's end would
+    /// never be judged. Such a stop reads its session again after
+    /// `FOLLOW_UP_READ` and then on `READ_RETRY_BACKOFF`, on a deadline of
+    /// its own ([`AnswerWait`]), until a read finds the answer, the agent
+    /// works again, another stop comes or the pane reads another session;
+    /// past the backoff it waits for the agent's next state change and says
+    /// so once. An agent whose session is read on a cadence of its own
+    /// (`requires_native_file_proof`) needs none.
+    fn await_answer(&mut self, pane_id: &str, now: Instant) {
+        let (Some(pane), Some(record)) = (self.panes.get_mut(pane_id), self.records.get(pane_id))
+        else {
+            return;
+        };
+        // The newest event being the operator's message is a turn whose end
+        // `decide` has not judged: only an answer or an interruption ends it.
+        let owner = record.owner.as_ref().filter(|_| {
+            self.summaries
+                && !pane.agent.requires_native_file_proof()
+                && matches!(pane.status.as_str(), "idle" | "done")
+                && newest_user_is_last(pane.events.make_contiguous())
+        });
+        let Some(owner) = owner else {
+            pane.answer_unwritten = None;
+            return;
+        };
+        let seq = record.state_change_seq;
+        let spent = match &pane.answer_unwritten {
+            Some(wait) if wait.owner == *owner && wait.stop == seq => wait.spent,
+            _ => 0,
+        };
+        // The answer usually lands within a second of the stop, so the first
+        // read again comes at the follow-up interval and the backoff after it.
+        let wait = match usize::from(spent) {
+            0 => Some(FOLLOW_UP_READ),
+            spent => READ_RETRY_BACKOFF.get(spent - 1).copied(),
+        };
+        if wait.is_none() && usize::from(spent) == READ_RETRY_BACKOFF.len() + 1 {
+            crate::diagnostic!(json!({
+                "component": "labels",
+                "kind": "turn_end.unwritten",
+                "target": self.target,
+                "pane_id": pane_id,
+                "session_id": record.native_session_id,
+                "state_change_seq": seq,
+                "message": "A stopped turn's answer never reached its session file; its end waits for the agent's next state change",
+            }));
+        }
+        pane.answer_unwritten = Some(AnswerWait {
+            owner: owner.clone(),
+            stop: seq,
+            spent: spent.saturating_add(1),
+            due: wait.map(|wait| now + wait),
+        });
     }
 
     /// A failed reread cannot certify the previous native wait for this state.
@@ -2170,6 +2265,7 @@ impl LabelWorker {
                 pane.events.clear();
                 pane.events_loaded = false;
                 pane.claimed_submit = None;
+                pane.answer_unwritten = None;
             }
             self.waiting.retain(|id| id != pane_id);
             self.dirty |= changed;
@@ -2463,20 +2559,39 @@ impl LabelWorker {
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
             .is_some_and(|event| facts.feeds_work(event, ledger.parent_name.as_deref()));
-        // A delegated session asks its parent, whose letters answer it, or
-        // the operator typing into its pane (B12); an ask still waiting after
-        // a mere progress letter is the one the label lists again.
+        // A delegated session asks its parent, whose reply or request
+        // letter answers it, or the operator typing into its pane (B12). The
+        // parent is matched by the name the lineage gives it, its wire name,
+        // never by the name a bell line shows, which is its pane's title.
+        // The operator's own answer, a person's turn they marked done
+        // included, settles every question; the parent's settles all but the
+        // operator's own steps.
         let parent = ledger.parent_name.as_deref();
-        let bells = self.input.bells(&self.target, pane_id);
-        let asks_answered = turn_events.iter().any(|event| {
-            event.kind == LabelEventKind::Human
-                && (facts.feeds_work(event, parent)
-                    || matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Operator))
-                    || parent.is_some_and(|parent| {
-                        matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Named(name)) if name == parent)
-                            && letter_answers(event, &bells)
-                    }))
-        });
+        let answered_by = |event: &LabelEvent| {
+            use crate::links::ledger::AsksAnswered;
+            if event.kind != LabelEventKind::Human {
+                return None;
+            }
+            let letter = facts.letter_of(event);
+            if matches!(
+                facts.requester_at(event.offset),
+                Some(super::facts::Requester::Operator)
+            ) || letter.as_ref().is_some_and(|letter| letter.operator)
+                || (parent.is_none() && facts.feeds_work(event, None))
+            {
+                return Some(AsksAnswered::Operator);
+            }
+            let parent = parent?;
+            (facts.feeds_work(event, Some(parent))
+                || letter.is_some_and(|letter| letter.from == parent && letter.answers()))
+            .then_some(AsksAnswered::Parent)
+        };
+        let answers: Vec<_> = turn_events.iter().filter_map(answered_by).collect();
+        let asks_answered = answers
+            .iter()
+            .copied()
+            .find(|by| *by == crate::links::ledger::AsksAnswered::Operator)
+            .or(answers.first().copied());
         let turn_witness = events
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
@@ -3055,21 +3170,6 @@ fn settle_recovery_notice(record: &mut PaneRecord, target: &str, pane_id: &str) 
         "target": target, "pane_id": pane_id, "state_change_seq": seq,
     }));
     true
-}
-
-/// Whether a parent's letter can answer what its delegated session asked: a
-/// reply or a request does, a progress, report, block or watch letter does
-/// not (B12). An envelope names its kind; a bell line is judged by the kind
-/// Hide recorded when it typed it, never by its words.
-pub(super) fn letter_answers(event: &LabelEvent, bells: &[super::input::Bell]) -> bool {
-    let kind = match hide_session::envelope_header(&event.text) {
-        Some((_, kind)) => kind,
-        None => match super::facts::rang(bells, event) {
-            Some(bell) => bell.kind.clone(),
-            None => return false,
-        },
-    };
-    matches!(kind.as_str(), "request" | "reply")
 }
 
 /// Whether the agent has a `/goal` command: Claude Code and Codex.

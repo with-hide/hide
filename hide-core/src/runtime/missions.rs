@@ -19,11 +19,12 @@ use super::mission_landing::{
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionKind, CriterionState};
 use crate::mission_events::History;
+use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
-    ConductorSettings, Delivery, External, MISSION_LIMIT, Mission, MissionBook, MissionCommand,
-    MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
-    PendingWake, PrSeen, Question, Restored, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
+    ConductorSettings, Delivery, External, Mission, MissionBook, MissionCommand, MissionEnd,
+    MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
+    PendingWake, PrSeen, Question, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -56,6 +57,11 @@ pub struct MissionView {
     pub device_id: String,
     pub status: MissionStatus,
     pub scope: MissionScope,
+    /// The branch the mission's results go to (`Mission::destination`);
+    /// absent for a mission that records none, whose destination is the
+    /// project's default branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub cap: u8,
     /// Made before node criteria: its nodes show their sentence only and
     /// nothing is gated (PRD mission-map-git-criteria B23).
@@ -104,6 +110,17 @@ pub struct MissionView {
     /// When the delay ends by itself (`Mission::delay_until_unix_ms`).
     pub delay_until_unix_ms: Option<u64>,
     pub report: Option<String>,
+    /// The mission's one card for the raises its Conductor has not settled
+    /// (`mission_health::safety_net`): none while nothing is held, with no
+    /// Conductor at once, and with one once the oldest held raise stood 20
+    /// minutes. The operator's turn for raised nodes is this and nothing
+    /// per node (hide-private docs/missions.md, the principle of
+    /// 2026-11-11).
+    pub safety_net: Option<SafetyNetView>,
+    /// The lines the Conductor skipped on its own, with no decision of the
+    /// operator's, oldest first: what the map's `Conductor가 정한 것` and the
+    /// close report list.
+    pub skipped_alone: Vec<SkippedAloneView>,
     pub created_at_unix_ms: u64,
     pub started_at_unix_ms: Option<u64>,
     pub closed_at_unix_ms: Option<u64>,
@@ -274,25 +291,44 @@ pub struct NodeView {
     /// stands (PRD mission-human-gate D-09); absent for a node without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<super::mission_gates::GateView>,
+    /// Who merges its pull request and where that merge stands (PRD
+    /// mission-destination D-10, D-35, D-45): the `👤` station, the
+    /// second-line strip and the operator's turn read it. Absent for a node
+    /// that is no change delivered by pull request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<super::mission_landing::NodeMerge>,
 }
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
 /// its worker works, its worker rests and the node waits on someone
-/// (`waiting_on`, said beside it), or no worker stands for it.
+/// (`waiting_on`, said beside it), its worker stopped with no one to wait
+/// on (`mission_health::stopped_worker`), since when and why, or no worker
+/// stands for it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum NodeWork {
     Working,
-    Waiting { on: WaitingOn },
+    Waiting {
+        on: WaitingOn,
+    },
+    Stopped {
+        cause: Option<crate::missions::StopCause>,
+        since_unix_ms: u64,
+    },
     NoWorker,
 }
 
 /// What `view`, a node of a running mission, is doing now: from its
 /// worker's registration (none or ended is no worker, asleep rests) and,
 /// for a running one, its agent row's activity (`working` works, `stopped`
-/// rests); a row Hide cannot see, or whose activity it does not know, says
-/// nothing rather than a guess.
-fn node_work(mission: &Mission, view: &NodeView, row_activity: Option<&str>) -> Option<NodeWork> {
+/// rests, or stands stopped when `stopped` says so); a row Hide cannot see,
+/// or whose activity it does not know, says nothing rather than a guess.
+fn node_work(
+    mission: &Mission,
+    view: &NodeView,
+    row_activity: Option<&str>,
+    stopped: Option<&crate::mission_health::WorkerStopped>,
+) -> Option<NodeWork> {
     use crate::delivery::answer::Runtime as Life;
     if !mission.status.open()
         || view.status != NodeStatus::Working
@@ -306,7 +342,13 @@ fn node_work(mission: &Mission, view: &NodeView, row_activity: Option<&str>) -> 
         Some(Life::Asleep) => waiting(),
         Some(Life::Running) => match row_activity? {
             "working" => Some(NodeWork::Working),
-            "stopped" => waiting(),
+            "stopped" => match stopped {
+                Some(stop) => Some(NodeWork::Stopped {
+                    cause: stop.cause.clone(),
+                    since_unix_ms: stop.since_unix_ms,
+                }),
+                None => waiting(),
+            },
             _ => None,
         },
     }
@@ -373,7 +415,9 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
                 Some(CriterionKind::Human) => WaitingOn::Decision,
                 Some(CriterionKind::Review) => WaitingOn::Review,
                 Some(CriterionKind::Verify) => WaitingOn::Verify,
-                Some(CriterionKind::Ci) => WaitingOn::Ci,
+                // A CI line open for want of a read waits on no run.
+                Some(CriterionKind::Ci) if view.pr_state.is_some() => WaitingOn::Ci,
+                Some(CriterionKind::Ci) => WaitingOn::Conductor,
                 Some(_) => WaitingOn::Worker,
                 None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
                     WaitingOn::Merge
@@ -447,6 +491,83 @@ pub struct NodePrView {
     pub number: u32,
     pub state: Option<PrState>,
     pub url: Option<String>,
+    /// The branch it merges into, as GitHub last answered (PRD
+    /// mission-destination D-14): the destination, the lower pull
+    /// request's branch of a stack, or another base. Absent while GitHub
+    /// has not answered for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+}
+
+/// The mission's safety net as its card draws it (`MissionView::safety_net`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SafetyNetView {
+    /// A Conductor holds the mission: the card leads to its terminal;
+    /// without one it offers 지휘 다시 열기.
+    pub conductor_present: bool,
+    /// What the card counts its minutes from: the oldest held raise, or the
+    /// Conductor's arrival when that is later.
+    pub since_unix_ms: u64,
+    /// The held nodes, oldest raise first.
+    pub nodes: Vec<HeldNodeView>,
+}
+
+/// One node the safety net holds: its raise's reason and since when it
+/// stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HeldNodeView {
+    pub key: String,
+    pub title: String,
+    pub reason: crate::missions::AttentionReason,
+    pub pr: Option<u32>,
+    pub since_unix_ms: u64,
+}
+
+/// A line the Conductor skipped on its own (no decision of the
+/// operator's): the node, the line, why, who and when.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SkippedAloneView {
+    pub node: String,
+    pub title: String,
+    pub line: String,
+    pub kind: CriterionKind,
+    /// The line's own words, for a line the plan wrote (`own`, `defect`);
+    /// a check, a CI, a review or a verification is named by its kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub reason: String,
+    pub by: String,
+    pub at_unix_ms: u64,
+}
+
+/// The lines of `mission` its Conductor skipped with no decision of the
+/// operator's, oldest first.
+pub(crate) fn skipped_alone(mission: &Mission) -> Vec<SkippedAloneView> {
+    let mut out: Vec<SkippedAloneView> = mission
+        .nodes
+        .iter()
+        .flat_map(|node| {
+            node.criteria.iter().filter_map(move |line| {
+                let skip = line.skip.as_ref().filter(|skip| skip.decision.is_none())?;
+                let by = line
+                    .by
+                    .as_ref()
+                    .filter(|by| by.role == crate::mission_criteria::Role::Conductor)?;
+                (line.state == CriterionState::Skipped).then(|| SkippedAloneView {
+                    node: node.key.clone(),
+                    title: node.title.clone(),
+                    line: line.key.clone(),
+                    kind: line.kind,
+                    text: line.text.clone(),
+                    reason: skip.reason.clone(),
+                    by: by.name.clone(),
+                    at_unix_ms: by.at_unix_ms,
+                })
+            })
+        })
+        .collect();
+    out.sort_by_key(|skip| skip.at_unix_ms);
+    out
 }
 
 /// The `!` a node's card carries and the line its hover says.
@@ -454,8 +575,11 @@ pub struct NodePrView {
 pub struct AttentionView {
     pub reason: crate::missions::AttentionReason,
     pub pr: Option<u32>,
+    /// The operator only for a reason only they settle
+    /// (`AttentionReason::operator_first`); every other raise is the
+    /// Conductor's, and the safety net is the mission's.
     pub to: AttentionTo,
-    /// When it reached whom it waits on now.
+    /// When it was raised, which names it in the operator's answer.
     pub since_unix_ms: u64,
     /// Waiting on the operator, a Needs You row carries it: its Conductor's
     /// or its worker's. Without one the mission itself is the Needs You
@@ -495,6 +619,11 @@ pub(crate) struct SpawnWorker<'a> {
 pub struct MissionAdmission {
     pub mission: String,
     pub cap: u8,
+    /// The mission's destination, where a new worktree of its starts (PRD
+    /// mission-destination D-04); none for a mission that records none,
+    /// which starts from the branch the repository's own folder has out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     /// The registrations closed now, which Reopen closed holds and which
     /// hold no place under the cap (`closed_registrations.rs`).
     #[serde(default)]
@@ -514,7 +643,7 @@ struct Wake {
 #[derive(Default)]
 pub(crate) struct MissionRuntime {
     pub(crate) book: MissionBook,
-    pub(crate) store: Option<crate::missions::MissionStore>,
+    pub(crate) store: Option<crate::mission_store::MissionStore>,
     /// Why the stored record was not used; commands are refused while it
     /// stands so the file is not replaced by an empty book.
     pub(crate) unreadable: Option<String>,
@@ -578,9 +707,18 @@ pub(crate) struct MissionRuntime {
     /// rested before it is raised at once; an entry goes once its stall
     /// stops standing, so it holds at most one per node standing.
     pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
+    /// Since when this daemon has seen each mission's Conductor present
+    /// (`Runtime::note_conductors_seen`), which the safety net counts a
+    /// Conductor's 20 minutes from when it came after the raise. Memory only,
+    /// at most one entry per mission of the book: a restart, a take or a
+    /// resume starts it again.
+    pub(super) conductor_seen: std::collections::HashMap<String, u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
+    /// The pulls of the operator's checkout that closes owe
+    /// (`mission_pull.rs`).
+    pub(super) pulls: super::mission_pull::MissionPulls,
     /// The projects, by device and path, a worker's letter or a Conductor's
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
@@ -916,19 +1054,56 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     .iter()
                     .find(|warning| Some(warning.kind) == wake.warning)
             });
-            let what = match (wake.warning, node, warning) {
-                (Some(WarningKind::ReviewFails), Some(node), _) => {
-                    format!("failed its review {} times in a row", node.review_fails())
-                }
-                (Some(WarningKind::NoPush), _, Some(warning)) => format!(
-                    "has worked {} minutes with no push",
-                    warning.since_unix_ms.saturating_sub(warning.from_unix_ms) / 60_000
+            let minutes = |warning: &crate::missions::NodeWarning| {
+                warning.since_unix_ms.saturating_sub(warning.from_unix_ms) / 60_000
+            };
+            let read = format!(
+                "Read it with `hide mission show {} --mission {}`",
+                wake.node, mission.id
+            );
+            let (what, ask) = match (wake.warning, node, warning) {
+                (Some(WarningKind::ReviewFails), Some(node), _) => (
+                    format!("failed its review {} times in a row", node.review_fails()),
+                    "judge whether its worker needs another approach or the node a fresh worker",
                 ),
-                _ => "shows signs its worker is stuck".to_owned(),
+                (Some(WarningKind::NoPush), _, Some(warning)) => (
+                    format!("has worked {} minutes with no push", minutes(warning)),
+                    "judge whether its worker needs another approach or the node a fresh worker",
+                ),
+                (Some(WarningKind::Stopped), _, Some(warning)) => {
+                    use crate::missions::StopCause;
+                    let why = match &warning.cause {
+                        Some(StopCause::Limit { line }) => {
+                            format!("on a usage limit: \"{line}\"")
+                        }
+                        Some(StopCause::Error { line }) => {
+                            format!("on an API error: \"{line}\"")
+                        }
+                        None => "with no report and no error".to_owned(),
+                    };
+                    (
+                        format!(
+                            "has a worker whose turn ended {} minutes ago {why}, and it waits on nothing",
+                            minutes(warning)
+                        ),
+                        match warning.cause {
+                            Some(StopCause::Limit { .. }) => {
+                                "send it on with a letter once the limit resets, hold the mission until then with `hide mission delay`, or give the node a fresh worker on another model"
+                            }
+                            _ => {
+                                "send it on with a letter saying what is left, or give the node a fresh worker"
+                            }
+                        },
+                    )
+                }
+                _ => (
+                    "shows signs its worker is stuck".to_owned(),
+                    "judge whether its worker needs another approach or the node a fresh worker",
+                ),
             };
             format!(
-                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is told if the warning still stands in 30 minutes.",
-                wake.node, mission.id, mission.title, wake.node, mission.id
+                "Node {} {what} (mission {} \"{}\").\n{read} and {ask}; if the warning still stands in 30 minutes it is raised on the node for you to settle.",
+                wake.node, mission.id, mission.title
             )
         }
     }
@@ -1187,12 +1362,12 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
 impl Runtime {
     pub(crate) fn install_mission_store(
         &mut self,
-        store: crate::missions::MissionStore,
+        store: crate::mission_store::MissionStore,
         restored: Restored,
     ) {
         match restored {
             Restored::Fresh => {}
-            Restored::Read(mut book) => {
+            Restored::Read(mut book) | Restored::Moving(mut book) => {
                 settle_typed_answers(&mut book);
                 self.missions.book = book;
             }
@@ -1315,6 +1490,9 @@ impl Runtime {
         if status == MissionStatus::MergeWait {
             self.follow_outside_stored(&place.0, &place.1);
         }
+        if matches!(status, MissionStatus::Done | MissionStatus::MergeWait) {
+            self.owe_folder_pull(id);
+        }
         Ok(changed)
     }
 
@@ -1346,6 +1524,7 @@ impl Runtime {
         }));
         self.missions.answers_held.remove(id);
         self.record_mission_events(id, events);
+        self.owe_folder_pull(id);
         true
     }
 
@@ -1437,7 +1616,7 @@ impl Runtime {
         }
     }
 
-    pub(super) fn save_missions(&mut self) {
+    pub(crate) fn save_missions(&mut self) {
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         // A reopened mission is held open until a node moves (B18); the
         // move is seen here, where every change is saved, so a node that
@@ -1458,19 +1637,141 @@ impl Runtime {
         if self.missions.unreadable.is_some() {
             return;
         }
+        let leaving = self.shelve_missions();
+        self.trim_shelved_missions(&leaving);
         if let Some(store) = &self.missions.event_store {
-            store.save_book(Arc::new(self.missions.book.clone()));
+            store.save_book(Arc::new(self.missions.book.clone()), leaving);
+        }
+    }
+
+    /// Shelves the oldest closed missions that ask no one past
+    /// `LOADED_CLOSED_LIMIT` (engineering #15): their lines stay in the
+    /// book and their files on disk, and their bodies go to the writer
+    /// once, for the last state their files take, with their histories
+    /// let go from memory. Returns those bodies.
+    fn shelve_missions(&mut self) -> Vec<Mission> {
+        let book = &mut self.missions.book;
+        let resting = book
+            .missions
+            .iter()
+            .filter(|mission| crate::missions::MissionLine::of(mission).at_rest())
+            .count();
+        let Some(mut over) = resting.checked_sub(crate::mission_store::LOADED_CLOSED_LIMIT) else {
+            return Vec::new();
+        };
+        if let Some(store) = &self.missions.event_store {
+            over = over.min(
+                crate::mission_events::PENDING_SHELVED_LIMIT
+                    .saturating_sub(store.unsaved_shelved().len()),
+            );
+        }
+        if over == 0 {
+            return Vec::new();
+        }
+        let mut oldest: Vec<(u64, u64)> = book
+            .missions
+            .iter()
+            .map(crate::missions::MissionLine::of)
+            .filter(crate::missions::MissionLine::at_rest)
+            .map(|line| line.closed_order())
+            .collect();
+        oldest.sort_unstable();
+        let cut = oldest[over - 1];
+        let (leaving, kept): (Vec<Mission>, Vec<Mission>) = std::mem::take(&mut book.missions)
+            .into_iter()
+            .partition(|mission| {
+                let line = crate::missions::MissionLine::of(mission);
+                line.at_rest() && line.closed_order() <= cut
+            });
+        book.missions = kept;
+        for mission in &leaving {
+            book.shelved.push(crate::missions::MissionLine::of(mission));
+            self.missions.events.remove(&mission.id);
+            if let Some(store) = &self.missions.event_store {
+                store.release(&mission.id);
+            }
+        }
+        self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "missions.shelved",
+            "missions": leaving.iter().map(|mission| mission.id.as_str()).collect::<Vec<_>>(),
+        }));
+        let known: Vec<String> = book
+            .missions
+            .iter()
+            .map(|mission| mission.id.clone())
+            .collect();
+        self.drop_detail_items(|item| match item {
+            DetailItem::Mission { mission } => known.contains(mission),
+            _ => true,
+        });
+        if self
+            .missions
+            .shown
+            .as_ref()
+            .is_some_and(|shown| !known.contains(shown))
+        {
+            self.missions.shown = None;
+        }
+        leaving
+    }
+
+    /// Finished records are discarded oldest first, never new work refused
+    /// for a full shelf. The writer removes their body/history after index.
+    fn trim_shelved_missions(&mut self, leaving: &[Mission]) {
+        let lines = &mut self.missions.book.shelved;
+        let mut resting = lines.iter().filter(|line| line.at_rest()).count();
+        if resting <= crate::mission_store::SHELVED_LIMIT {
+            return;
+        }
+        let mut protected = self
+            .missions
+            .event_store
+            .as_ref()
+            .map(|store| store.unsaved_shelved())
+            .unwrap_or_default();
+        protected.extend(leaving.iter().map(|mission| mission.id.clone()));
+        lines.sort_by_key(crate::missions::MissionLine::closed_order);
+        let mut gone = Vec::new();
+        while resting > crate::mission_store::SHELVED_LIMIT {
+            let Some(at) = lines
+                .iter()
+                .position(|line| line.at_rest() && !protected.contains(&line.id))
+            else {
+                break;
+            };
+            gone.push(lines.remove(at));
+            resting -= 1;
+        }
+        for line in gone {
+            crate::diagnostic!(
+                json!({"component":"missions","kind":"missions.shelved_evicted","mission":line.id})
+            );
         }
     }
 
     /// Runs a `hide mission` command from `caller`'s pane on `device`.
     /// Returns the answer and whether anything changed.
+    #[cfg(test)]
     pub(crate) fn mission_command(
         &mut self,
         device: &str,
         caller: &str,
         expected: &Context,
         command: MissionCommand,
+    ) -> Result<(Value, bool), String> {
+        self.mission_command_with(device, caller, expected, command, None)
+    }
+
+    /// `mission_command`, with the shelved mission the command names read
+    /// back off the lock (`Core::mission_command`), or why it could not be.
+    pub(crate) fn mission_command_with(
+        &mut self,
+        device: &str,
+        caller: &str,
+        expected: &Context,
+        command: MissionCommand,
+        visiting: Option<Result<Visiting, String>>,
     ) -> Result<(Value, bool), String> {
         // Only a command that can change the record is measured, and only
         // it pays for the copy a refusal puts back.
@@ -1479,7 +1780,7 @@ impl Runtime {
             MissionCommand::Take { mission, .. } => Some(mission.clone()),
             _ => None,
         };
-        let answer = self.apply_mission_command(device, caller, expected, command)?;
+        let answer = self.apply_mission_command(device, caller, expected, command, visiting)?;
         let Some(before) = before.filter(|_| answer.1) else {
             return Ok(answer);
         };
@@ -1523,6 +1824,7 @@ impl Runtime {
         caller: &str,
         expected: &Context,
         command: MissionCommand,
+        visiting: Option<Result<Visiting, String>>,
     ) -> Result<(Value, bool), String> {
         if !command.valid() {
             return Err("mission_text_invalid".into());
@@ -1562,8 +1864,17 @@ impl Runtime {
                 if self.missions.book.conducted_open(&actor).is_some() {
                     return Err("mission_already_conducting".into());
                 }
-                if self.missions.book.missions.len() >= MISSION_LIMIT {
-                    return Err("mission_full".into());
+                if let Some(store) = &self.missions.event_store {
+                    let pending = store.unsaved_shelved().len();
+                    if pending >= crate::mission_events::PENDING_SHELVED_LIMIT {
+                        crate::diagnostic!(
+                            json!({"component":"missions","kind":"missions.save_pending_full","pending":pending,"limit":crate::mission_events::PENDING_SHELVED_LIMIT})
+                        );
+                        return Err(crate::coordination::refusal(
+                            "mission_save_pending",
+                            "32 shelved mission saves are pending; fix storage and retry",
+                        ));
+                    }
                 }
                 let project = match project {
                     Some(project) => project,
@@ -1578,6 +1889,8 @@ impl Runtime {
                 if !(1..=crate::missions::CAP_LIMIT).contains(&cap) {
                     return Err("mission_cap_out_of_range".into());
                 }
+                let destination =
+                    self.checkout_destination(device, &project, &context.checkout_path);
                 let id = self.missions.book.allocate();
                 let mission = Mission {
                     id: id.clone(),
@@ -1589,6 +1902,7 @@ impl Runtime {
                     conductor: self.conductor_of(device, &pane, actor),
                     status: MissionStatus::Planning,
                     scope: scope.unwrap_or(settings.default_scope),
+                    destination,
                     cap,
                     candidates: settings.candidates.clone(),
                     strength: Some(settings.default_strength),
@@ -1608,6 +1922,7 @@ impl Runtime {
                     delay: None,
                     delay_until_unix_ms: None,
                     report: None,
+                    folder_line: None,
                     created_at_unix_ms: now,
                     updated_at_unix_ms: now,
                     started_at_unix_ms: None,
@@ -1735,15 +2050,25 @@ impl Runtime {
                     patch.verifier.as_deref(),
                     patch.agent_id.as_ref().and_then(Option::as_deref),
                 ];
-                // An agent from another machine is bound only where a spawn
-                // for this node would start it; one it holds already stays.
+                // A new binding requires a live registration. Existing
+                // bindings, including a replan's history, remain valid.
+                // Another machine is admitted only where a spawn for this
+                // node would start it.
                 let held = &current.nodes[index];
                 for id in named.into_iter().flatten() {
-                    if held.agent_id.as_deref() != Some(id)
-                        && !Self::checks_node(held, id)
-                        && let Some(machine) = self.registered_elsewhere(current, id)?
-                    {
-                        self.admit_elsewhere(current, &machine, Some(held))?;
+                    if held.agent_id.as_deref() != Some(id) && !Self::checks_node(held, id) {
+                        let ledger = self.delivery_state()?;
+                        let record = ledger
+                            .agents
+                            .iter()
+                            .find(|record| record.id == id)
+                            .ok_or("agent_unavailable")?;
+                        if record.ended {
+                            return Err("agent_ended".into());
+                        }
+                        if record.machine != current.device_id {
+                            self.admit_elsewhere(current, &record.machine, Some(held))?;
+                        }
                     }
                 }
                 let mut bound = current.nodes[index].clone();
@@ -1899,6 +2224,9 @@ impl Runtime {
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Reopen { mission } => {
+                if let Some(id) = mission.as_deref() {
+                    self.unshelve_mission(id, &actor, visiting)?;
+                }
                 let id = self.conducted_mission(&actor, mission.as_deref(), false)?;
                 let changed = self.reopen_mission(&id, now)?;
                 if changed {
@@ -1992,16 +2320,15 @@ impl Runtime {
                     .ok_or("mission_unknown")?;
                 target.conductor = conductor;
                 target.handover = None;
-                // What reached the operator because the Conductor taken
-                // over did not answer goes to the new one first (B15).
-                if present {
-                    super::mission_health::ask_new_conductor(target, now);
-                }
+                // The new Conductor is told each raise it now settles, and its
+                // safety-net time starts now.
+                super::mission_health::tell_new_conductor(target);
                 target.updated_at_unix_ms = now;
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.taken",
                     "mission": mission, "pane": pane, "handed": handed,
                 }));
+                self.note_conductor_arrived(&mission, now);
                 self.save_missions();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
@@ -2013,6 +2340,7 @@ impl Runtime {
                             .book
                             .get(&id)
                             .map(|mission| mission.id.clone())
+                            .or_else(|| self.missions.book.shelf(&id).map(|line| line.id.clone()))
                             .ok_or("mission_unknown")?,
                         node,
                         None,
@@ -2027,10 +2355,26 @@ impl Runtime {
                         (id, node, Some(caller))
                     }
                 };
+                // Resolve node-key precedence before using an off-lock shelf read.
+                let shelved = if self.missions.book.shelf(&id).is_some() {
+                    Some(
+                        visiting
+                            .ok_or("mission_unavailable")?
+                            .map_err(|reason| self.shelved_unreadable(&id, &reason))?
+                            .mission,
+                    )
+                } else {
+                    None
+                };
                 // One pass over the ledger's agents serves the view and both
                 // letter lists: the one that found the caller's mission, else
                 // one for the mission's workers and checkers.
-                let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+                let mission = self
+                    .missions
+                    .book
+                    .get(&id)
+                    .or(shelved.as_ref())
+                    .ok_or("mission_unknown")?;
                 let agents = match &caller {
                     Some(caller) => caller.records_of(mission),
                     None => worker_records(ledger.as_deref(), std::iter::once(mission)),
@@ -2057,35 +2401,60 @@ impl Runtime {
                 let mut shown = json!(view);
                 self.name_worker_items(mission, &view, &mut shown);
                 let node = mission.node(&key).ok_or("mission_node_unknown")?;
-                Ok((
-                    json!({
-                        "mission_id": id,
-                        "node": shown,
-                        "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
-                        "checker_letters": ledger
-                            .as_deref()
-                            .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
-                    }),
-                    false,
-                ))
+                let mut answer = json!({
+                    "mission_id": id,
+                    "node": shown,
+                    "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
+                    "checker_letters": ledger
+                        .as_deref()
+                        .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
+                });
+                // Where the node's change goes, which its worker reads here
+                // for its pull request's base; a mission that records none
+                // answers as it did.
+                if let Some(destination) = &mission.destination {
+                    answer["destination"] = json!(destination);
+                }
+                // Why Hide could not read where the node's branch is, such
+                // as a destination that is gone; the snapshot says only
+                // that it is unread.
+                if let Some(reason) = self.missions.outside.unread_reason(&id, &key) {
+                    answer["unread_reason"] = json!(reason);
+                }
+                Ok((answer, false))
             }
             MissionCommand::List => {
-                let items: Vec<Value> = self
+                let mut lines: Vec<_> = self
                     .missions
                     .book
                     .missions
                     .iter()
-                    .filter(|mission| {
-                        mission.device_id == device && Some(&mission.project) == project.as_ref()
+                    .map(|mission| (crate::missions::MissionLine::of(mission), false))
+                    .chain(
+                        self.missions
+                            .book
+                            .shelved
+                            .iter()
+                            .cloned()
+                            .map(|line| (line, true)),
+                    )
+                    .filter(|(line, _)| {
+                        line.device_id == device && Some(&line.project) == project.as_ref()
                     })
-                    .map(|mission| {
+                    .collect();
+                lines.sort_by_key(|(line, _)| crate::missions::mission_number(&line.id));
+                let items: Vec<Value> = lines
+                    .iter()
+                    .map(|(line, shelved)| {
                         json!({
-                            "id": mission.id,
-                            "title": mission.title,
-                            "status": mission.status,
-                            "conductor": mission.conductor.actor.name,
-                            "present": self.conductor_present(&mission.conductor.actor),
-                            "yours": mission.conductor.actor.same_identity(&actor),
+                            "id": line.id,
+                            "title": line.title,
+                            "project": line.project,
+                            "status": line.status,
+                            "conductor": line.conductor.actor.name,
+                            "present": self.conductor_present(&line.conductor.actor),
+                            "yours": line.conductor.actor.same_identity(&actor),
+                            "shelved": shelved,
                         })
                     })
                     .collect();
@@ -2135,9 +2504,9 @@ impl Runtime {
         let taken = self.mission_meant(caller);
         if let Some(key) = &node
             && !matches!(&taken, Ok(Some(mission)) if mission.node(key).is_some())
-            && let Some(named) = self.missions.book.get(key)
+            && (self.missions.book.get(key).is_some() || self.missions.book.shelf(key).is_some())
         {
-            return Ok((named.id.clone(), None));
+            return Ok((key.clone(), None));
         }
         let mission = taken?.ok_or("mission_none")?;
         Ok((mission.id.clone(), node))
@@ -2191,6 +2560,99 @@ impl Runtime {
     /// it must conduct, or the one it conducts. `changing` refuses a mission
     /// that is closed, since a plan or a node of one moves only once it is
     /// reopened.
+    /// The shelved mission a command needs read back, if it names one:
+    /// where its file and, for a reopen, its history are, read off the lock
+    /// (`Core::mission_command`).
+    pub(crate) fn shelved_files(
+        &self,
+        command: &MissionCommand,
+    ) -> Option<crate::mission_store::ShelfRead> {
+        let (id, history) = match command {
+            MissionCommand::Show { mission, node } => (mission.as_ref().or(node.as_ref())?, false),
+            MissionCommand::Reopen { mission: Some(id) } => (id, true),
+            _ => return None,
+        };
+        self.missions.book.shelf(id)?;
+        let dir = self.missions.store.as_ref()?.dir().to_path_buf();
+        let events = history
+            .then(|| {
+                self.missions
+                    .event_store
+                    .as_ref()
+                    .map(|store| store.dir().to_path_buf())
+            })
+            .flatten();
+        Some(crate::mission_store::ShelfRead {
+            id: id.clone(),
+            dir,
+            events,
+            barrier: self
+                .missions
+                .event_store
+                .as_ref()
+                .map(|store| store.read_barrier()),
+        })
+    }
+
+    fn shelved_unreadable(&self, id: &str, reason: &str) -> String {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "missions.shelved_unreadable",
+            "mission": id, "message": reason,
+        }));
+        "mission_unavailable".into()
+    }
+
+    /// Takes shelved mission `id` back into the book for its Conductor's
+    /// reopen, with its history, so the reopen and every later change go on
+    /// from what its file held. Refused as the reopen would refuse the
+    /// mission, so a refusal leaves it shelved.
+    fn unshelve_mission(
+        &mut self,
+        id: &str,
+        actor: &Actor,
+        visiting: Option<Result<Visiting, String>>,
+    ) -> Result<(), String> {
+        if self.missions.book.shelf(id).is_none() {
+            return Ok(());
+        }
+        let Some(read) = visiting else {
+            return Err("mission_closed".into());
+        };
+        let Visiting { mission, history } =
+            read.map_err(|reason| self.shelved_unreadable(id, &reason))?;
+        if mission.id != id {
+            return Err(self.shelved_unreadable(id, "holds another mission"));
+        }
+        if !mission.conductor.actor.same_identity(actor) {
+            return Err("mission_not_conductor".into());
+        }
+        if mission.status == MissionStatus::Cancelled {
+            return Err("mission_cancelled".into());
+        }
+        if self.missions.book.conducted_open(actor).is_some() {
+            return Err("mission_already_conducting".into());
+        }
+        let book = &mut self.missions.book;
+        book.shelved.retain(|line| line.id != id);
+        let at = book.missions.partition_point(|kept| {
+            crate::missions::mission_number(&kept.id) < crate::missions::mission_number(id)
+        });
+        book.missions.insert(at, mission);
+        if let Some(log) = history {
+            self.missions
+                .events
+                .insert(id.to_owned(), History::from(log.clone()));
+            if let Some(store) = &self.missions.event_store {
+                store.adopt(id, log);
+            }
+            self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "missions.unshelved", "mission": id,
+        }));
+        Ok(())
+    }
+
     fn conducted_mission(
         &self,
         actor: &Actor,
@@ -2198,7 +2660,19 @@ impl Runtime {
         changing: bool,
     ) -> Result<String, String> {
         let mission = match named {
-            Some(id) => self.missions.book.get(id).ok_or("mission_unknown")?,
+            Some(id) => match self.missions.book.get(id) {
+                Some(mission) => mission,
+                // Only `show` and `reopen` read a shelved mission back.
+                None => {
+                    return Err(match self.missions.book.shelf(id) {
+                        Some(line) if line.status == MissionStatus::Cancelled => {
+                            "mission_cancelled".into()
+                        }
+                        Some(_) => "mission_closed".into(),
+                        None => "mission_unknown".into(),
+                    });
+                }
+            },
             None => self.missions.book.conducted(actor).ok_or("mission_none")?,
         };
         if !mission.conductor.actor.same_identity(actor) {
@@ -2485,6 +2959,7 @@ impl Runtime {
             if let Some(mission) = self.missions.book.get_mut(&id) {
                 record_wake(mission, String::new(), None, WakeEvent::Resumed, None, None);
             }
+            self.note_conductor_arrived(&id, now);
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.conductor_resumed",
                 "mission": id, "pane": pane,
@@ -2512,6 +2987,22 @@ impl Runtime {
             .get(mission)
             .and_then(|mission| mission.intent_node(intent))
             .is_some_and(|node| node.hold.is_some())
+    }
+
+    /// The branch a mission made in `checkout` of `project` sends its
+    /// results to (PRD mission-destination D-02, D-42): the branch that
+    /// checkout has out, as the worktree catalog last read it; for a
+    /// detached checkout, or one the catalog does not list, the project's
+    /// default branch; none while even that is not read, which stands for
+    /// the default branch whenever it is asked.
+    fn checkout_destination(&self, device: &str, project: &str, checkout: &str) -> Option<String> {
+        let listed = self.project_worktrees_on(device, project)?;
+        listed
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.path == checkout)
+            .and_then(|worktree| worktree.branch.clone())
+            .or_else(|| listed.base_branch.clone())
     }
 
     pub(crate) fn mission_spawn_admission(
@@ -2553,9 +3044,24 @@ impl Runtime {
                 &started,
             ));
         }
+        // The destination is a branch of the mission's project: a spawn
+        // into another repository of that machine starts from that
+        // repository's own branch, as it did. A worker on another machine
+        // was admitted above as the same GitHub repository. A repository
+        // the catalog does not list yet (no window since the restart) is
+        // compared as it was named, as a project's profile is
+        // (`project_agent_profile`).
+        let destination = mission.destination.clone().filter(|_| {
+            worker_machine != mission.device_id
+                || self
+                    .catalog_project_of(worker_machine, worker.repo)
+                    .map_or(worker.repo, |project| project.root_path.as_str())
+                    == mission.project
+        });
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
+            destination,
             closed: self.closed_registration_ids().into_iter().collect(),
         }))
     }
@@ -2922,8 +3428,8 @@ impl Runtime {
     }
 
     /// The machine registration `id` runs on, when the ledger has it on
-    /// another machine than `mission`'s. A ledger Hide could not read is its
-    /// own refusal, since it cannot say where the agent runs.
+    /// another machine than `mission`'s. A replan retains existing ended
+    /// or missing history; only new bindings require a live registration.
     fn registered_elsewhere(&self, mission: &Mission, id: &str) -> Result<Option<String>, String> {
         Ok(self
             .delivery_state()?
@@ -2949,7 +3455,21 @@ impl Runtime {
             }
             keep
         });
-        let dropped = before - self.missions.book.missions.len();
+        // Shelved missions keep the same machine/session identity in the index.
+        let shelved = self.missions.book.shelved.len();
+        self.missions.book.shelved.retain(|line| {
+            let keep = !line.conductor.session.as_ref().is_some_and(|session| {
+                sessions
+                    .iter()
+                    .any(|(machine, id)| session.device_id == *machine && session.session_id == *id)
+            });
+            if !keep {
+                gone.push(line.id.clone());
+            }
+            keep
+        });
+        let dropped =
+            before - self.missions.book.missions.len() + shelved - self.missions.book.shelved.len();
         if dropped == 0 {
             return false;
         }
@@ -3219,9 +3739,11 @@ impl Runtime {
                 }
             }
         }
+        let mut closed = Vec::with_capacity(ended.len());
         for (id, events) in ended {
             self.missions.answers_held.remove(&id);
             self.stage_mission_events(&id, events);
+            closed.push(id);
         }
         for id in reopened {
             // Two done missions of one Conductor changed in one read: the
@@ -3235,6 +3757,9 @@ impl Runtime {
         // One save keeps every change of this read with its events (B27).
         if changed {
             self.save_missions();
+        }
+        for id in closed {
+            self.owe_folder_pull(&id);
         }
         // The outside nodes follow the same answer (B19, B20).
         for project in self.outside_projects(device) {
@@ -3510,10 +4035,12 @@ impl Runtime {
 
     /// What `ViewsMadeFrom::rows_and_holds` compares while a mission runs,
     /// zero with none running: each open mission's workers' and checkers'
-    /// activity as a node's `work` reads it (`worker_activity`), and the
-    /// doorbell's holds by the operator's part in them, which a Conductor's
-    /// held letters read. Rows no mission holds are not read, so an
-    /// unrelated agent's turn rebuilds no mission; one pass over the
+    /// rows as a node's `work` reads them, their activity
+    /// (`worker_activity`) and what they say of a stop
+    /// (`worker_row_stopped`), and the doorbell's holds by the operator's part
+    /// in them, which a Conductor's held letters read. Rows no mission holds
+    /// are not read, so an unrelated agent's turn rebuilds no mission; one
+    /// pass over the
     /// missions' registrations and the holds, both bounded by the ledger.
     pub(super) fn rows_and_holds_digest(
         &self,
@@ -3531,9 +4058,15 @@ impl Runtime {
             return 0;
         }
         let records = worker_records(ledger, open);
-        let mut workers: Vec<(&str, Option<&str>)> = records
+        let mut workers: Vec<_> = records
             .iter()
-            .map(|(id, record)| (*id, self.worker_activity(record)))
+            .map(|(id, record)| {
+                (
+                    *id,
+                    self.worker_activity(record),
+                    self.worker_row_stopped(record),
+                )
+            })
             .collect();
         workers.sort_unstable();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -3597,6 +4130,7 @@ impl Runtime {
                                 PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                             }),
                             url: pull.map(|pull| pull.url.clone()),
+                            base: pull.map(|pull| pull.base_branch.clone()),
                         }
                     })
                     .collect();
@@ -3667,7 +4201,7 @@ impl Runtime {
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(record)),
                     attention: node.attention.as_ref().map(|attention| {
-                        let operator = attention.operator_at_unix_ms.is_some();
+                        let operator = attention.reason.operator_first();
                         let on_row =
                             operator && self.mission_attention_has_row(ledger, mission, node);
                         AttentionView {
@@ -3678,9 +4212,7 @@ impl Runtime {
                             } else {
                                 AttentionTo::Conductor
                             },
-                            since_unix_ms: attention
-                                .operator_at_unix_ms
-                                .unwrap_or(attention.since_unix_ms),
+                            since_unix_ms: attention.since_unix_ms,
                             on_row,
                             // A cancelled mission and a dropped node keep
                             // their record but ask nothing now.
@@ -3708,10 +4240,29 @@ impl Runtime {
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),
+                    merge: super::mission_landing::node_merge(
+                        mission,
+                        node,
+                        github.is_some_and(|pulls| crate::mission_health::merge_ready(node, pulls)),
+                    ),
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
-                view.work = node_work(mission, &view, activity);
+                let fact = crate::mission_health::NodeFacts {
+                    worker: Some(crate::mission_health::WorkerLife::Running),
+                    stopped: record.and_then(|record| {
+                        self.worker_stopped(record, ledger, &mission.conductor.actor)
+                    }),
+                    ..Default::default()
+                };
+                let stopped = crate::mission_health::stopped_worker(
+                    mission,
+                    node,
+                    &fact,
+                    self.mission_pulls(mission),
+                    self.gate_open(mission, node),
+                );
+                view.work = node_work(mission, &view, activity, stopped);
                 view
             })
             .collect();
@@ -3733,6 +4284,7 @@ impl Runtime {
             device_id: mission.device_id.clone(),
             status: mission.status,
             scope: mission.scope,
+            destination: mission.destination.clone(),
             cap: mission.cap,
             exempt: mission.exempt,
             strength: mission.strength,
@@ -3820,6 +4372,28 @@ impl Runtime {
             delay: mission.delay.clone(),
             delay_until_unix_ms: mission.delay.as_ref().and(mission.delay_until_unix_ms),
             report: mission.report.clone(),
+            safety_net: self
+                .mission_safety_net(mission, crate::delivery::worker::now())
+                .map(|net| SafetyNetView {
+                    conductor_present: net.conductor_present,
+                    since_unix_ms: net.since_unix_ms,
+                    nodes: net
+                        .nodes
+                        .iter()
+                        .filter_map(|&at| {
+                            let node = &mission.nodes[at];
+                            let attention = node.attention.as_ref()?;
+                            Some(HeldNodeView {
+                                key: node.key.clone(),
+                                title: node.title.clone(),
+                                reason: attention.reason,
+                                pr: attention.pr,
+                                since_unix_ms: attention.since_unix_ms,
+                            })
+                        })
+                        .collect(),
+                }),
+            skipped_alone: skipped_alone(mission),
             created_at_unix_ms: mission.created_at_unix_ms,
             started_at_unix_ms: mission.started_at_unix_ms,
             closed_at_unix_ms: mission.closed_at_unix_ms,
@@ -3960,6 +4534,17 @@ impl Runtime {
             .filter_map(|mission| self.conductor_letters(mission, ledger.as_deref(), now).1)
             .min()
             .unwrap_or(u64::MAX);
+        // A safety net that comes up with nothing else moving is drawn when
+        // its 20 minutes pass.
+        let net_due = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter_map(|mission| self.mission_safety_net_due(mission, now))
+            .min()
+            .unwrap_or(u64::MAX);
+        let held_due = held_due.min(net_due);
         let until = ledger.as_deref().map_or(u64::MAX, |ledger| {
             crate::coordination::mission_reservations_end(ledger, now)
         });
@@ -3989,10 +4574,15 @@ impl Runtime {
 }
 
 impl Runtime {
-    /// Lays each device's missions that are their own Needs You item (no
-    /// Conductor or worker row carries what waits on the operator, B14) on
-    /// that device's scope, oldest first, so its Needs You number counts
-    /// them; run after the mission views, which decide `on_row`.
+    /// Lays each device's missions that are their own Needs You item on that
+    /// device's scope, oldest first, so its Needs You number counts them: a
+    /// mission whose safety net holds, one with a raise only the operator
+    /// settles that no Conductor or worker row carries (B14), and one with a
+    /// ready pull request its plan left to the operator to merge (PRD
+    /// mission-destination D-11, D-22; `MergeStep::Due`, never a scope `pr`
+    /// mission's), waited on since its node was done. One per mission,
+    /// however many nodes it holds. Run after the mission views, which
+    /// decide `on_row`, the safety net and the merge.
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
@@ -4003,6 +4593,8 @@ impl Runtime {
                 .filter_map(|node| node.attention.as_ref())
                 .filter(|attention| attention.item)
                 .map(|attention| attention.since_unix_ms)
+                .chain(mission.nodes.iter().filter_map(merge_due_since))
+                .chain(mission.safety_net.as_ref().map(|net| net.since_unix_ms))
                 .min();
             if let Some(since) = oldest {
                 waiting
@@ -4022,13 +4614,21 @@ impl Runtime {
     }
 }
 
-/// Whether a node of `mission` waits on the operator.
+/// Since when `node`'s merge has been the operator's turn: from its finish,
+/// which a ready pull request the operator merges makes (`MergeStep::Due`);
+/// none for a node whose merge is not due.
+fn merge_due_since(node: &NodeView) -> Option<u64> {
+    node.merge
+        .as_ref()
+        .filter(|merge| merge.state == super::mission_landing::MergeStep::Due)
+        .map(|_| node.finished_at_unix_ms.unwrap_or_default())
+}
+
+/// Whether a node of a closed `mission` may wait on the operator: any raise
+/// it holds, since its Conductor has finished with it and the safety net
+/// holds it at once.
 fn operator_waits(mission: &Mission) -> bool {
-    mission.nodes.iter().any(|node| {
-        node.attention
-            .as_ref()
-            .is_some_and(|attention| attention.operator_at_unix_ms.is_some())
-    })
+    mission.nodes.iter().any(|node| node.attention.is_some())
 }
 
 /// The newest letters `node`'s worker sent or got, newest first, at most
@@ -4081,6 +4681,49 @@ pub(super) fn worker_life(
     match crate::coordination::life(record, sleeping) {
         Life::Closed => Life::Ended,
         life => life,
+    }
+}
+
+impl Runtime {
+    /// What the open missions still need from the delivery ledger: their
+    /// Conductors, and their nodes' workers and bound checkers, whose
+    /// health and letters are read from their registrations. Before the
+    /// book is read, or while it cannot be, every registration is held:
+    /// a Conductor or a directly bound worker need not have a mission spawn.
+    pub(super) fn mission_holds(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        held: &mut crate::coordination::Held,
+    ) {
+        if self.missions.store.is_none() || self.missions.unreadable.is_some() {
+            held.agents.extend(
+                ledger
+                    .into_iter()
+                    .flat_map(|ledger| &ledger.agents)
+                    .map(|agent| agent.id.clone()),
+            );
+            for spawn in ledger
+                .into_iter()
+                .flat_map(|ledger| &ledger.spawns)
+                .filter(|spawn| spawn.mission.is_some())
+            {
+                held.spawns.insert(spawn.id.clone());
+                held.agents.extend(spawn.child.clone());
+            }
+            return;
+        }
+        let open = || {
+            self.missions
+                .book
+                .missions
+                .iter()
+                .filter(|mission| mission.status.open())
+        };
+        held.agents.extend(
+            open()
+                .filter_map(|mission| mission.conductor.agent_id.clone())
+                .chain(named_agents(open()).into_iter().map(str::to_owned)),
+        );
     }
 }
 

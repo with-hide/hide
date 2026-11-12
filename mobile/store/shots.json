@@ -91,7 +91,7 @@
             "it needs you."
           ],
           "accent": "Know",
-          "support": "Encrypted notifications. Reply right from the notification."
+          "support": "Encrypted notifications. Tap to open the conversation."
         },
         "ko": {
           "headline": [
@@ -99,7 +99,7 @@
             "바로 알려 줘요"
           ],
           "accent": "바로",
-          "support": "암호화된 알림이 오고, 알림에서 바로 답해요."
+          "support": "암호화된 알림을 누르면 바로 그 대화가 열려요."
         }
       }
     },
@@ -110,7 +110,8 @@
       "steps": [
         "[data-phone-demo-entry]",
         "[data-phone-tab=\"missions\"]",
-        "[data-phone-mission=\"mission-release\"]"
+        "[data-phone-mission=\"mission-release\"]",
+        "[data-phone-mission-steps]::^"
       ],
       "settleSeconds": 10,
       "text": {

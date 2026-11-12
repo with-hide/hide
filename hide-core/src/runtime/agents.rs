@@ -4196,6 +4196,7 @@ impl Runtime {
             resolve(&mut agent, None, &mut unresolved);
             agents.push(agent);
         }
+        let local_count = agents.len();
         for remote in &self.snapshot.status.remote {
             if let Some(session) = &remote.session {
                 workspaces.extend(session.workspaces.clone());
@@ -4237,6 +4238,17 @@ impl Runtime {
             &workspaces,
             &self.snapshot.ui_state.expanded_agent_pane_ids,
         );
+        // The lineage has just said which of this machine's rows are
+        // delegated; a question laid before it knew is lifted from them here,
+        // so every caller reads one answer (`settle_delegated_asks`).
+        let node = self.node.as_str().to_owned();
+        if self.settle_delegated_asks(&node, &mut agents[..local_count]) {
+            crate::agent_state::apply_lineage(
+                &mut agents,
+                &workspaces,
+                &self.snapshot.ui_state.expanded_agent_pane_ids,
+            );
+        }
         if !unreachable.is_empty() {
             for agent in &mut agents {
                 agent

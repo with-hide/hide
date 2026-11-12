@@ -16,10 +16,9 @@ import { Button } from "./ui/button";
 // B13): its agent's mark, `Conductor`, the model its pane was launched with,
 // its state, and `터미널로 ›`, which brings its pane forward with the keyboard
 // in it, on whichever device it runs. An open mission no Conductor holds
-// shows `Conductor 없음` and `이어받기` instead, and a Conductor that let a
-// raise reach the operator unanswered keeps its row with `이어받기` beside
-// `터미널로` (PRD mission-node-simple B15). No record button: the task row
-// and the Overview open the record.
+// shows `Conductor 없음` and `지휘 다시 열기` instead, unless raises stand:
+// the safety net card under it then says both. No record button: the task
+// row and the Overview open the record.
 
 const STATE_WORD: Record<Exclude<ConductorState, "gone" | "unknown">, MessageKey> = {
   working: "mission.conductor.state.working",
@@ -44,6 +43,8 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
   if (!state) return null;
   const frame = OWNER_ROW;
   if (state === "gone") {
+    // With raises standing, the safety net card under it says there is no Conductor and holds 지휘 다시 열기, so this row steps aside.
+    if (mission.safety_net) return null;
     return (
       <div className={frame} data-mission-conductor="gone">
         <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full border border-dashed border-muted-foreground" />

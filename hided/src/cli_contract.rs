@@ -1057,6 +1057,8 @@ pub const COMMANDS: &[Spec] = &[
             "mission_steps_invalid",
             "mission_checkers_invalid",
             "mission_external_invalid",
+            "mission_destination_invalid",
+            "mission_operator_merge_invalid",
             "mission_machine_node_refused",
             "mission_profile_unknown",
             "mission_candidate_refused",

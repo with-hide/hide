@@ -106,7 +106,7 @@ function bandRows(entries: readonly TaskEntry[], missions: readonly MissionAsk[]
     for (const entry of entries.filter((entry) => deviceOf(entry) === device)) {
       // An unread ask waits since its request, the core's own key; a read ask or a block lets every mission stand first.
       const unread = entry.card.state === "needs_you" && !entry.card.read;
-      while (next < waiting.length && (!unread || waiting[next]!.attention.since_unix_ms < (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "mission", ask: waiting[next++]! });
+      while (next < waiting.length && (!unread || waiting[next]!.since_unix_ms < (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "mission", ask: waiting[next++]! });
       rows.push({ kind: "task", entry });
     }
     for (const ask of waiting.slice(next)) rows.push({ kind: "mission", ask });

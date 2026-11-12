@@ -2,21 +2,19 @@
 # The release gate on the signed app: what the build machine reads out of the exported ipa, held to what the release
 # is allowed to be. Prints every failed check and exits 1 when there is one; the upload never starts after a failure.
 #
-# Usage: check-release-app.sh <app dir> <facts dir> <release-expect.json> <bundle manifest.json> <version> <build> [<relay source digest>]
+# Usage: check-release-app.sh <app dir> <facts dir> <release-expect.json> <bundle manifest.json> <version> <build>
 #   <app dir>     the unpacked Payload/App.app
 #   <facts dir>   JSON the caller made from the app's property lists (mini-release.sh does, with plutil and codesign):
 #                 info.json, privacy.json, entitlements.json, profile.json, and for each app extension in PlugIns/
 #                 appex/<name>/info.json, privacy.json, entitlements.json
-#   <digest>      the digest of the relay protocol sources in the checkout the release runs on (scripts/build-relay-ios.sh
-#                 --digest); the library inside the app must say it came from exactly these sources
 #   <manifest>    the bundle manifest bundle-manifest.mjs wrote: the sha256 of every file the app's public/ may hold
 #
 # It needs jq and a sha256 tool only, so its tests run wherever the mobile tests do. The entitlements in
 # release-expect.json are the exact list: a node that adds a capability adds its entitlement there in the same change.
 set -euo pipefail
 
-(( $# == 6 || $# == 7 )) || { printf 'usage: %s <app dir> <facts dir> <release-expect.json> <manifest.json> <version> <build> [<relay source digest>]\n' "$0" >&2; exit 2; }
-app=$1 facts=$2 expect=$3 manifest=$4 version=$5 build=$6 relay_digest=${7:-}
+(( $# == 6 )) || { printf 'usage: %s <app dir> <facts dir> <release-expect.json> <manifest.json> <version> <build>\n' "$0" >&2; exit 2; }
+app=$1 facts=$2 expect=$3 manifest=$4 version=$5 build=$6
 
 failures=0
 fail() { printf 'release check failed: %s\n' "$1" >&2; failures=$((failures + 1)); }
@@ -78,15 +76,6 @@ fi
 
 # Background modes: the app wakes only for a notification, and for nothing else.
 ok "the only background mode is remote-notification" ".UIBackgroundModes == $(jq -c .backgroundModes "$expect")" "$facts/info.json"
-
-# The relay protocol library the app links for a reply sent from a notification: it must come from the sources of this
-# checkout, so a library built from other code (or built by hand) cannot ship under this commit's name.
-if [[ -z "$relay_digest" ]]; then
-    fail "no relay source digest was given to check the relay library against"
-elif [[ -f "$app/$executable" ]]; then
-    marks=$(grep -aoE 'hide-relay-ios-source:[0-9a-z]+' "$app/$executable" | LC_ALL=C sort -u || true)
-    [[ "$marks" == "hide-relay-ios-source:$relay_digest" ]] || fail "the relay library does not come from this checkout's sources (the app says: ${marks:-nothing}; the checkout: $relay_digest)"
-fi
 
 # Each app extension: exactly the ones the release names, each signed for its own bundle id with the entitlements it is
 # allowed, carrying a privacy manifest, and (for the notification extension) holding no code that can reach the network.

@@ -416,7 +416,11 @@ use crate::error::HostError;
 /// 95: `HerdrStop` is gone. Hide no longer stops an earlier Hide's Herdr on a
 /// device; the import only reads its save (`HerdrSave`). A helper on 94
 /// would still offer the call, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 95;
+/// 96: a hook's report of a turn the provider refused carries why
+/// (`panes::HookStatusReport::refused`, Claude Code's `StopFailure`), which a
+/// core on 95 refuses as a field it does not know, so a helper upgrades with
+/// its core.
+pub const PROTOCOL_VERSION: u32 = 96;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -813,11 +817,14 @@ pub enum Call {
     /// Moves the branch checked out in the worktree at `root` to its
     /// upstream as last fetched (`hide_host::branch_merge::catch_up`):
     /// fast-forward only, no fetch, no push, and only while `HEAD` is still
-    /// `head`, the commit the operator was shown. The answer is a
+    /// `head`, the commit the operator was shown, and, with `branch`, while
+    /// that branch is the one `HEAD` has out. The answer is a
     /// [`crate::branch::CatchUpOutcome`] and only `Updated` changes anything.
     BranchCatchUp {
         root: String,
         head: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
     },
     /// Retires a worktree owned by a completed or discarded background task.
     WorktreeRetire {
@@ -1794,11 +1801,18 @@ mod tests {
         let catch_up = Call::BranchCatchUp {
             root: "/repo".into(),
             head: "c".repeat(40),
+            branch: None,
         };
         assert_eq!(
             serde_json::to_value(&catch_up).unwrap(),
             serde_json::json!({"op": "branch_catch_up", "root": "/repo", "head": "c".repeat(40)})
         );
+        let on_branch = Call::BranchCatchUp {
+            root: "/repo".into(),
+            head: "c".repeat(40),
+            branch: Some("feat".into()),
+        };
+        assert_eq!(serde_json::to_value(&on_branch).unwrap()["branch"], "feat");
         let merge_push = Call::BranchMergePush {
             root: "/repo".into(),
             branch: "feat".into(),

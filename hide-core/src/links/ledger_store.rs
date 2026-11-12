@@ -185,6 +185,14 @@ CREATE TABLE IF NOT EXISTS ledger_plans(device TEXT NOT NULL, agent TEXT NOT NUL
  plan TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(device,agent,id));
 ";
 
+/// Version 16: a question keeps whether only the operator can take its step
+/// (`operator_only`, unknown on every line written before) and, once Hide
+/// AI folds it, why (`reason`). Nothing recorded changes.
+pub(super) const ASK_FOLD_SCHEMA: &str = "
+ALTER TABLE ledger_missed ADD COLUMN operator_only INTEGER;
+ALTER TABLE ledger_missed ADD COLUMN reason TEXT;
+";
+
 /// The inverse of [`FLOW_SCHEMA`], for tests that open a version 6 record.
 #[cfg(test)]
 pub(super) const UNDO_FLOW_SCHEMA: &str = "
@@ -316,7 +324,7 @@ fn ledger_missed_rows(
     let mut missed_items = Vec::new();
     let mut statement=connection.prepare("SELECT missed,kind,text,status,at,turn_offset,issue_repo,issue_number, \
         EXISTS(SELECT 1 FROM ledger_issue_attempts a WHERE a.device=m.device AND a.agent=m.agent AND a.id=m.id \
-        AND a.missed=m.missed AND a.state='creating'),turn_witness,backlog_key FROM ledger_missed m WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC").map_err(failed)?;
+        AND a.missed=m.missed AND a.state='creating'),turn_witness,backlog_key,reason FROM ledger_missed m WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC").map_err(failed)?;
     let missed = statement
         .query_map(
             params![session.device_id, session.agent, session.session_id],
@@ -333,13 +341,26 @@ fn ledger_missed_rows(
                     r.get::<_, bool>(8)?,
                     r.get::<_, Option<String>>(9)?,
                     r.get::<_, Option<String>>(10)?,
+                    r.get::<_, Option<String>>(11)?,
                 ))
             },
         )
         .map_err(failed)?;
     for missed in missed {
-        let (id, kind, text, status, at, offset, repo, number, creating, witness, backlog_key) =
-            missed.map_err(failed)?;
+        let (
+            id,
+            kind,
+            text,
+            status,
+            at,
+            offset,
+            repo,
+            number,
+            creating,
+            witness,
+            backlog_key,
+            reason,
+        ) = missed.map_err(failed)?;
         missed_items.push(MissedWork {
             id,
             kind: decoded(kind)?,
@@ -352,6 +373,7 @@ fn ledger_missed_rows(
             issue_number: number,
             backlog_key,
             creating,
+            reason,
         });
     }
     Ok(missed_items)
@@ -1172,7 +1194,13 @@ impl LinkStore {
                 if turn_recorded(&tx, session, *offset)? {
                     return Ok(());
                 }
-                if judgment.missed.len() > NEW_MISSED_LIMIT
+                if judgment.missed.len() > TURN_MISSED_LIMIT
+                    || judgment
+                        .missed
+                        .iter()
+                        .filter(|missed| missed.same_as.is_none())
+                        .count()
+                        > NEW_MISSED_LIMIT
                     || judgment.resolved.len() > MISSED_LIMIT
                     || judgment.artifacts.len() > ARTIFACTS_PER_TURN
                 {
@@ -1234,11 +1262,15 @@ impl LinkStore {
                 )
                 .map_err(failed)?;
                 // A reply answers what was asked before it (B12): an ask the
-                // agent still waits on is listed again by this turn.
-                if *asks_answered {
+                // agent still waits on is listed again by this turn. A
+                // parent's letter cannot take the operator's own step, so
+                // only the operator's answer settles one of those.
+                let operator_answered = *asks_answered == Some(AsksAnswered::Operator);
+                if asks_answered.is_some() {
                     tx.execute(
                         "UPDATE ledger_missed SET status=?4,resolved_turn_offset=?5 \
-                        WHERE device=?1 AND agent=?2 AND id=?3 AND kind=?6 AND status=?7 AND turn_offset<?5",
+                        WHERE device=?1 AND agent=?2 AND id=?3 AND kind=?6 AND status=?7 AND turn_offset<?5 \
+                        AND (?8 OR COALESCE(operator_only,0)=0)",
                         params![
                             session.device_id,
                             session.agent,
@@ -1246,7 +1278,8 @@ impl LinkStore {
                             encoded(&MissedStatus::Resolved)?,
                             *offset as i64,
                             encoded(&MissedKind::Ask)?,
-                            encoded(&MissedStatus::Open)?
+                            encoded(&MissedStatus::Open)?,
+                            operator_answered
                         ],
                     )
                     .map_err(failed)?;
@@ -1254,6 +1287,35 @@ impl LinkStore {
                 for (index, missed) in judgment.missed.iter().enumerate() {
                     if missed.text.trim().is_empty() || missed.text.chars().count() > MISSED_CHARS {
                         return Err("ledger_missed_invalid".to_owned());
+                    }
+                    // Only a question has a step to take.
+                    let operator_only = missed
+                        .operator_only
+                        .filter(|_| missed.kind == MissedKind::Ask);
+                    // A question the turn names as one still open stays that
+                    // one line, however the turn worded it. One a reply just
+                    // closed above is not open, so it is listed anew.
+                    if missed.kind == MissedKind::Ask
+                        && let Some(same_as) = &missed.same_as
+                        && tx
+                            .query_row(
+                                "SELECT 1 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 \
+                                AND missed=?4 AND kind=?5 AND status=?6",
+                                params![
+                                    session.device_id,
+                                    session.agent,
+                                    session.session_id,
+                                    same_as,
+                                    encoded(&MissedKind::Ask)?,
+                                    encoded(&MissedStatus::Open)?
+                                ],
+                                |_| Ok(()),
+                            )
+                            .optional()
+                            .map_err(failed)?
+                            .is_some()
+                    {
+                        continue;
                     }
                     // A turn a letter woke repeats a question still open, or one
                     // the operator put away: one line, and a put-away one stays put away.
@@ -1282,10 +1344,10 @@ impl LinkStore {
                     {
                         continue;
                     }
-                    tx.execute("INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset,turn_witness) \
-                        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    tx.execute("INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset,turn_witness,operator_only) \
+                        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                         params![session.device_id,session.agent,session.session_id,format!("missed-{offset}-{index}"),
-                            encoded(&missed.kind)?,missed.text,encoded(&MissedStatus::Open)?,*at_unix_ms as i64,*offset as i64,turn_witness]).map_err(failed)?;
+                            encoded(&missed.kind)?,missed.text,encoded(&MissedStatus::Open)?,*at_unix_ms as i64,*offset as i64,turn_witness,operator_only]).map_err(failed)?;
                 }
                 for resolved in &judgment.resolved {
                     // A printed existing issue is insufficient: only this
@@ -1315,10 +1377,13 @@ impl LinkStore {
                         MissedStatus::Resolved
                     };
                     // Only an answer closes a question the operator was asked
-                    // (B12): the label cannot resolve one in a turn none came in.
-                    tx.execute(
+                    // (B12): the label cannot resolve one in a turn none came
+                    // in, and a parent's answer not one of the operator's
+                    // own steps.
+                    let closed = tx.execute(
                         "UPDATE ledger_missed SET status=?5,issue_repo=?6,issue_number=?7,resolved_issue_number=?9,resolved_turn_offset=?10 \
-                        WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8 AND (kind!=?11 OR ?12)",
+                        WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8 \
+                        AND (kind!=?11 OR ?12 OR (?13 AND COALESCE(operator_only,0)=0))",
                         params![
                             session.device_id,
                             session.agent,
@@ -1334,10 +1399,45 @@ impl LinkStore {
                             resolved.issue_number.map(|number| number as i64),
                             *offset as i64,
                             encoded(&MissedKind::Ask)?,
-                            *asks_answered
+                            operator_answered,
+                            asks_answered.is_some()
                         ],
                     )
                     .map_err(failed)?;
+                    // A question the label reads as settled with no answer
+                    // in this turn is folded with the reason it gave, never
+                    // closed, and only one known not to be the operator's
+                    // own step.
+                    let reason = resolved
+                        .reason
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|reason| !reason.is_empty());
+                    if let Some(reason) = reason
+                        && closed == 0
+                        && asks_answered.is_none()
+                    {
+                        if reason.chars().count() > MISSED_CHARS {
+                            return Err("ledger_missed_invalid".to_owned());
+                        }
+                        tx.execute(
+                            "UPDATE ledger_missed SET status=?5,reason=?6,resolved_turn_offset=?7 \
+                            WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8 AND kind=?9 \
+                            AND operator_only=0",
+                            params![
+                                session.device_id,
+                                session.agent,
+                                session.session_id,
+                                resolved.id,
+                                encoded(&MissedStatus::Folded)?,
+                                reason,
+                                *offset as i64,
+                                encoded(&MissedStatus::Open)?,
+                                encoded(&MissedKind::Ask)?
+                            ],
+                        )
+                        .map_err(failed)?;
+                    }
                 }
                 cap(&tx, session, "ledger_missed", MISSED_LIMIT)?;
                 tx.execute("DELETE FROM ledger_issue_attempts WHERE device=?1 AND agent=?2 AND id=?3 AND state!='creating' AND NOT EXISTS(SELECT 1 FROM ledger_missed m WHERE m.device=ledger_issue_attempts.device AND m.agent=ledger_issue_attempts.agent AND m.id=ledger_issue_attempts.id AND m.missed=ledger_issue_attempts.missed)",params![session.device_id,session.agent,session.session_id]).map_err(failed)?;
@@ -1354,11 +1454,15 @@ impl LinkStore {
                 if !matches!(status, MissedStatus::Open | MissedStatus::Dismissed) {
                     return Err("ledger_status_invalid".to_owned());
                 }
-                let changed=tx.execute("UPDATE ledger_missed SET status=?5,issue_repo=NULL,issue_number=NULL,resolved_issue_number=NULL,resolved_turn_offset=NULL \
+                // A folded question the operator opens again is theirs to
+                // settle: Hide AI never folds it again, and only their own
+                // answer closes it.
+                let changed=tx.execute("UPDATE ledger_missed SET status=?5,issue_repo=NULL,issue_number=NULL,resolved_issue_number=NULL,resolved_turn_offset=NULL, \
+                    operator_only=CASE WHEN status=?8 AND ?5=?9 THEN 1 ELSE operator_only END,reason=NULL \
                     WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status!=?6 AND status!=?7 \
                     AND NOT EXISTS(SELECT 1 FROM ledger_issue_attempts a WHERE a.device=?1 AND a.agent=?2 \
                     AND a.id=?3 AND a.missed=?4 AND a.state='creating')",
-                    params![session.device_id,session.agent,session.session_id,id,encoded(status)?,encoded(&MissedStatus::Issue)?,encoded(&MissedStatus::Backlog)?]).map_err(failed)?;
+                    params![session.device_id,session.agent,session.session_id,id,encoded(status)?,encoded(&MissedStatus::Issue)?,encoded(&MissedStatus::Backlog)?,encoded(&MissedStatus::Folded)?,encoded(&MissedStatus::Open)?]).map_err(failed)?;
                 if changed == 0 {
                     return Err("ledger_missed_unavailable".to_owned());
                 }
@@ -1593,10 +1697,9 @@ impl LinkStore {
             }
         }
         record.missed = self.ledger_missed(session)?;
-        record.asks = open_asks(
-            &record.missed,
-            chapters.last().map(|chapter| chapter.at_unix_ms),
-        );
+        let flow_start = chapters.last().map(|chapter| chapter.at_unix_ms);
+        record.asks = open_asks(&record.missed, flow_start);
+        record.folded_asks = asks_of(&record.missed, MissedStatus::Folded, flow_start);
         let mut statement = self
             .connection
             .prepare(
@@ -2471,11 +2574,20 @@ fn waits(missed: &MissedWork, current_start: Option<u64>) -> bool {
 /// operator, oldest first: the record's `나를 기다리는 것` and the row's
 /// open questions read this one list.
 fn open_asks(missed: &[MissedWork], current_start: Option<u64>) -> Vec<MissedWork> {
+    asks_of(missed, MissedStatus::Open, current_start)
+}
+
+/// The current flow's questions in `status`, oldest first.
+fn asks_of(
+    missed: &[MissedWork],
+    status: MissedStatus,
+    current_start: Option<u64>,
+) -> Vec<MissedWork> {
     let mut asks: Vec<MissedWork> = missed
         .iter()
         .filter(|missed| {
             missed.kind == MissedKind::Ask
-                && missed.status == MissedStatus::Open
+                && missed.status == status
                 && waits(missed, current_start)
         })
         .cloned()

@@ -41,6 +41,7 @@ import { keyPayload, noteTerminalFocus } from "./keyTarget";
 import { autoscrollRows, bufferRow, drawnSelection, orderPoints, selectionToText, type CellRow, type HistoryPoint } from "./selection";
 import { followWraps, forgetWraps, paneRowWraps } from "./terminalWrap";
 import { followView, forgetView, terminalView, type View } from "./terminalView";
+import { forgetBellLines, queueBellLines, type BellColors } from "./terminalBellLines";
 import { osc8Handler, registerTerminalLinks, terminalLinkAtCell, terminalPathOwner, type LinkState, type TerminalContextLink, type TerminalLinkActions } from "./terminalLinkProvider";
 import { isHtmlFile } from "./browserViews";
 import { pointerModifiers, wheelRows } from "./wheel";
@@ -274,7 +275,10 @@ function terminalTheme(): ITheme {
  */
 export function applyTerminalTheme() {
   const theme = terminalTheme();
-  for (const instance of instances.values()) instance.term.options.theme = theme;
+  for (const instance of instances.values()) {
+    instance.term.options.theme = theme;
+    queueBellLines(instance.term, bellLineColors);
+  }
 }
 
 function tokenPx(name: string): number {
@@ -404,6 +408,7 @@ export function resetAllTerminals() {
     instance.term.reset();
     forgetWraps(instance.term);
     forgetView(instance.term);
+    forgetBellLines(instance.term);
     instance.lastView = null;
     instance.grid = null;
     if (!instance.host) instance.stale = true;
@@ -482,6 +487,7 @@ function disposeInstance(paneId: string, instance: Instance) {
   instance.disposeHandlers();
   instance.font.release();
   instance.renderer?.dispose();
+  forgetBellLines(instance.term);
   instance.term.dispose();
   instance.element.remove();
   instances.delete(paneId);
@@ -642,7 +648,13 @@ function ownText(instance: Instance, selection: Selection): string | null {
  * a drag follows its pointer onto the rows the frame brought; and the
  * selection reads the rows it shows and draws its part on screen.
  */
+/** The words and the band a bell line is drawn in, from the tokens, so they follow the theme. */
+function bellLineColors(): BellColors {
+  return { foreground: token("--terminal-letter-text"), background: token("--terminal-letter-band") };
+}
+
 function afterFrame(instance: Instance) {
+  queueBellLines(instance.term, bellLineColors);
   const view = terminalView(instance.term);
   const selection = instance.selection;
   const last = instance.lastView;

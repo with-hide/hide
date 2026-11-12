@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_journey.cells import CELLS, excluded_cells  # noqa: E402
 from agent_journey.ci import FIXTURE_AGENTS, FIXTURE_CELLS  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_journey.scene import lane_status  # noqa: E402
 from agent_live_check.protection import ProtectionError  # noqa: E402
 
 LANES = {"fixture": "fixture", "fake": "fake_model"}
@@ -103,7 +104,7 @@ def judge(report, lane, contract=None, agents=None):
                     notes.append(annotation("error", f"agent journey {agent}",
                                             f"{name} must explicitly record excluded: {reason}"))
                 continue
-            expected = "pass" if row["cells"][name] else "N/A"
+            expected = lane_status(row, name)
             status = cell.get("status")
             if status != expected:
                 passed = False

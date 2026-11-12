@@ -881,12 +881,25 @@
       "required": ["declaration"],
       "properties": { "declaration": { "type": "string", "minLength": 1 } }
     },
+    "desktopActivityPayload": {
+      "description": "Desktop-only desktop_activity event, never dispatched to the core. The main host reports system use on connection, use transitions and input resumed after a five-second pause; disconnect withdraws it. A true report counts as computer input. hided rests phone pushes only while any desktop reports in_use, at least one wants Needs You notifications and no later accepted phone action has taken over.",
+      "type": "object",
+      "required": [
+        "in_use"
+      ],
+      "properties": {
+        "in_use": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "desktopNoticesPayload": {
       "description": "Payload of the `desktop_notices` client event, accepted only from a desktop window and never sent to the core: wanted says whether this window shows agent notifications. The daemon judges agent changes while any window wants them, and a window's closing withdraws its wish; turning on announces nothing that was already waiting.",
       "type": "object",
       "additionalProperties": false,
       "required": ["wanted"],
-      "properties": { "wanted": { "type": "boolean" } }
+      "properties": { "wanted": { "type": "boolean" }, "needs_you": { "type": "boolean", "description": "Needs You enabled in this window; absent on older clients means wanted." } }
     },
     "clientEvent": {
       "type": "object",

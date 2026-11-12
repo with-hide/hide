@@ -71,6 +71,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 pub mod record;
+pub mod styled;
 
 /// The version of this protocol this build speaks as a holder.
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -229,6 +230,9 @@ pub enum Capability {
     /// holds the terminal ([`Facts::foreground_unread`]), which a node built
     /// before it reads as the pane's own program holding it.
     ForegroundUnread,
+    /// Facts include whether the pane uses the alternate screen. Older
+    /// watchers receive no extension and keep the original frame shape.
+    AlternateScreen,
     /// The holder reads [`ClientMessage::Submit`]; a node sends it only to a
     /// holder whose welcome names this.
     Submit,
@@ -256,6 +260,7 @@ impl Capability {
             Self::Keys => "keys",
             Self::LineEditing => "line_editing",
             Self::ForegroundUnread => "foreground_unread",
+            Self::AlternateScreen => "alternate_screen",
             Self::Submit => "submit",
             Self::Clipboard => "clipboard",
             Self::MouseOutside => "mouse_outside",
@@ -272,6 +277,7 @@ impl Capability {
             "keys" => Self::Keys,
             "line_editing" => Self::LineEditing,
             "foreground_unread" => Self::ForegroundUnread,
+            "alternate_screen" => Self::AlternateScreen,
             "submit" => Self::Submit,
             "clipboard" => Self::Clipboard,
             "mouse_outside" => Self::MouseOutside,
@@ -374,6 +380,8 @@ pub struct Facts {
     /// watch that accepted [`Capability::ForegroundUnread`] and in no other
     /// (`None`).
     pub foreground_unread: Option<bool>,
+    /// Present exactly when the watch accepted [`Capability::AlternateScreen`].
+    pub alternate_screen: Option<bool>,
 }
 
 /// The facts extensions a watch agreed: each is in every facts frame of that
@@ -382,6 +390,7 @@ pub struct Facts {
 struct Extensions {
     line_editing: bool,
     foreground_unread: bool,
+    alternate_screen: bool,
 }
 
 impl Extensions {
@@ -389,6 +398,7 @@ impl Extensions {
         Self {
             line_editing: agreed.contains(&Capability::LineEditing),
             foreground_unread: agreed.contains(&Capability::ForegroundUnread),
+            alternate_screen: agreed.contains(&Capability::AlternateScreen),
         }
     }
 }
@@ -905,10 +915,10 @@ pub enum Ask {
     /// their styling as escape sequences. A holder built before styled reads refuses it
     /// `hello_invalid`.
     Screen,
-    /// The last `lines` rows of the screen and its scrollback as the
-    /// terminal drew them, soft wraps kept, with their styling as escape
-    /// sequences, at most
-    /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads.
+    /// The last `lines` rows of the screen and its scrollback, soft wraps
+    /// joined, with their styling as escape sequences, at most
+    /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads. A
+    /// holder built before it joined them answers the rows as drawn.
     Rows { lines: u16 },
     /// Where the screen is scrolled to in its scrollback, answered
     /// [`Answer::Scroll`].
@@ -2348,6 +2358,9 @@ impl Facts {
         if let Some(unread) = self.foreground_unread {
             payload.push(u8::from(unread));
         }
+        if let Some(alternate) = self.alternate_screen {
+            payload.push(u8::from(alternate));
+        }
         // No extension is the original facts frame. Older watchers are
         // handed a program with no package by the negotiated writer.
         if let Some(package) = self.foreground.as_ref().and_then(|p| p.package.as_deref()) {
@@ -2420,6 +2433,11 @@ impl Facts {
         } else {
             None
         };
+        let alternate_screen = if agreed.alternate_screen {
+            Some(payload.u8()? != 0)
+        } else {
+            None
+        };
         if !payload.0.is_empty() {
             let program = foreground.as_mut().ok_or_else(|| {
                 FrameError::Malformed("a package without a foreground program".to_owned())
@@ -2436,6 +2454,7 @@ impl Facts {
             screen,
             line_editing,
             foreground_unread,
+            alternate_screen,
         })
     }
 }
@@ -2488,6 +2507,7 @@ mod tests {
             Capability::ProgramPackage,
             Capability::LineEditing,
             Capability::ForegroundUnread,
+            Capability::AlternateScreen,
         ];
         for editing in [
             LineEditing::ReadsKeys,
@@ -2497,11 +2517,12 @@ mod tests {
             let sent = Facts {
                 line_editing: Some(editing),
                 foreground_unread: Some(false),
+                alternate_screen: Some(editing == LineEditing::ReadsKeys),
                 ..facts.clone()
             };
             let mut bytes = Vec::new();
             write_holder(&mut bytes, &HolderMessage::Facts(sent.clone())).unwrap();
-            assert_eq!(bytes.len(), original.len() + 2);
+            assert_eq!(bytes.len(), original.len() + 3);
             assert_eq!(
                 read_watch_holder(&mut &bytes[..], &agreed).unwrap(),
                 HolderMessage::Facts(sent)
@@ -2510,6 +2531,7 @@ mod tests {
         let unread = Facts {
             line_editing: Some(LineEditing::Unknown),
             foreground_unread: Some(true),
+            alternate_screen: Some(true),
             ..Facts::default()
         };
         let mut bytes = Vec::new();
@@ -2712,6 +2734,7 @@ mod tests {
                 },
                 line_editing: None,
                 foreground_unread: None,
+                alternate_screen: None,
             }),
             HolderMessage::Facts(Facts {
                 screen: ScreenRead::Unknown {

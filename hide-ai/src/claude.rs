@@ -60,6 +60,21 @@ pub const DEFAULT_MODEL: &str = "sonnet";
 /// the attempt line's `thinking_tokens` shows.
 pub const THINKING_OFF: (&str, &str) = ("MAX_THINKING_TOKENS", "0");
 
+/// The variable and value that write a model turn's prompt cache for five
+/// minutes instead of an hour.
+///
+/// Every request is a new child with its own transcript, so of what a turn
+/// writes to the cache only the fixed prefix (the system prompt and the
+/// schema) is ever read again; the transcript is written and never read. On
+/// a subscription the CLI writes for an hour, which the API prices at twice
+/// the input rate, and five minutes at 1.25 times. Measured 2026-11-11 on
+/// claude 2.1.322 with claude-haiku-5-5: a second call with the same system
+/// prompt read the 2,281-token prefix and wrote its 3,472-token transcript,
+/// and with this variable wrote its transcript as five-minute writes. It is
+/// set on the child whatever the operator's environment says, like
+/// [`THINKING_OFF`].
+pub const PROMPT_CACHE_TTL: (&str, &str) = ("CLAUDE_CODE_PROMPT_CACHE_TTL", "5m");
+
 /// How long the account's model list is kept before the CLI is asked again.
 /// Settings reads the list while the Hide AI tab is on screen, and a model list
 /// is not worth a child process every few seconds.
@@ -466,6 +481,7 @@ impl AiBackend for ClaudeCliBackend {
             .resolved_binary()
             .ok_or_else(|| AiError::ProviderUnavailable("claude_not_installed".to_owned()))?;
         let mut variables = self.config.run.set();
+        variables.push((PROMPT_CACHE_TTL.0, PROMPT_CACHE_TTL.1.to_owned()));
         // Print mode thinks by default; see `THINKING_OFF`. A picked effort
         // is a request for thinking, so it is left on.
         if request.effort(ProviderId::CLAUDE).is_none() {

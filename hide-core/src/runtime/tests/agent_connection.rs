@@ -77,6 +77,7 @@ pub(super) fn hook_reported(
         session_start: false,
         waiting: None,
         account: None,
+        refused: None,
     };
     runtime
         .ingest_hook_status(crate::node::TEST_NODE, pane, &report)
@@ -1155,6 +1156,7 @@ fn a_waiting_hook_report_reaches_the_row_as_an_approval_until_the_turn_runs_agai
             session_start: false,
             waiting: None,
             account: None,
+            refused: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
@@ -1219,6 +1221,7 @@ fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
             session_start: false,
             waiting: Some(waiting.iter().map(|call| (*call).to_owned()).collect()),
             account: None,
+            refused: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
@@ -1278,6 +1281,7 @@ fn an_agent_started_again_in_its_pane_follows_its_hook_over_the_engine_s_earlier
             session_start: turn.is_none(),
             waiting: None,
             account: None,
+            refused: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
@@ -1395,6 +1399,7 @@ fn turns_a_hook_reports_ask_for_one_read_of_each_open_pane() {
         session_start: false,
         waiting: None,
         account: None,
+        refused: None,
     };
     let ingest = |runtime: &mut Runtime, pane: &str, turn| {
         runtime

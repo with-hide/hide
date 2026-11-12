@@ -1198,13 +1198,15 @@ pub(super) fn seed_missed_turn(
             at_unix_ms: now - 1_500,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
-            asks_answered: true,
+            asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
             line: String::new(),
             turn_witness: witness,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {
                     kind: MissedKind::FollowUp,
                     text: missed.into(),
+                    same_as: None,
+                    operator_only: None,
                 }],
                 ..Default::default()
             },

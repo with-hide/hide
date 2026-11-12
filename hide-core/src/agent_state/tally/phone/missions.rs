@@ -67,6 +67,14 @@ pub struct PhoneMission {
     /// The Conductor's letters only the operator can let through
     /// (`MissionView::conductor_letters`), which the shared 내 차례 rule reads.
     pub conductor_letters: Option<PhoneHeldLetters>,
+    /// The mission's one card for the raises its Conductor has not settled
+    /// (`MissionView::safety_net`), which the shared 내 차례 rule reads.
+    pub safety_net: Option<PhoneSafetyNet>,
+    /// The lines the Conductor skipped on its own (`MissionView::skipped_alone`):
+    /// the detail's `Conductor가 정한 것`. Left out with the steps of a
+    /// finished mission that has no room for them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped_alone: Vec<PhoneSkip>,
     pub nodes: Vec<PhoneNode>,
     /// The steps a finished mission left behind on the Mac because the frame
     /// had no room for them; `nodes` and `landing_order` are empty then.
@@ -87,6 +95,39 @@ pub struct PhoneHeldLetters {
     pub count: u32,
     pub reason: String,
     pub since_unix_ms: u64,
+}
+
+/// The safety net as its card draws it (`SafetyNetView`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneSafetyNet {
+    pub conductor_present: bool,
+    pub since_unix_ms: u64,
+    pub nodes: Vec<PhoneHeldNode>,
+}
+
+/// One node the safety net holds (`HeldNodeView`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneHeldNode {
+    pub key: String,
+    pub title: String,
+    pub reason: String,
+    #[serde(default)]
+    pub pr: Option<u32>,
+    pub since_unix_ms: u64,
+}
+
+/// One line the Conductor skipped on its own (`SkippedAloneView`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneSkip {
+    pub node: String,
+    pub title: String,
+    pub line: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub reason: String,
+    pub by: String,
+    pub at_unix_ms: u64,
 }
 
 /// Where the operator's answer is: `sending`, `waiting` or `unconfirmed`.
@@ -174,6 +215,25 @@ pub struct PhoneNode {
     /// (`GateView`, PRD mission-human-gate B13); absent for a step without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<PhoneGate>,
+    /// Who merges the step's pull request and where that stands
+    /// (`NodeMerge`, PRD mission-destination D-45): the operator's turn on a
+    /// ready one the plan gave them reads it; absent for a step that is no
+    /// change by pull request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<PhoneMerge>,
+}
+
+/// A step's merge as the map reads it (`NodeMerge`), copied field by field:
+/// a field the core adds stays on the Mac until it is named here.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneMerge {
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    pub state: String,
+    /// Still-open held PRs; absent only from cores before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prs: Option<Vec<u32>>,
 }
 
 /// A step's gate as the map reads it (`GateView`), copied field by field: a
@@ -269,6 +329,10 @@ struct MissionIn {
     #[serde(default)]
     conductor_letters: Option<PhoneHeldLetters>,
     #[serde(default)]
+    safety_net: Option<PhoneSafetyNet>,
+    #[serde(default)]
+    skipped_alone: Vec<PhoneSkip>,
+    #[serde(default)]
     nodes: Vec<NodeIn>,
     #[serde(default)]
     landing_order: Vec<String>,
@@ -322,6 +386,8 @@ struct NodeIn {
     worker: Option<WorkerIn>,
     #[serde(default)]
     gate: Option<PhoneGate>,
+    #[serde(default)]
+    merge: Option<PhoneMerge>,
 }
 
 #[derive(Deserialize)]
@@ -428,6 +494,7 @@ fn fit(open: &mut Vec<PhoneMission>, closed: &mut Vec<PhoneMission>, budget: usi
         mission.nodes_omitted = mission.nodes.len();
         mission.nodes.clear();
         mission.landing_order.clear();
+        mission.skipped_alone.clear();
         let stripped = wire_len(mission);
         total -= *size - stripped;
         *size = stripped;
@@ -508,6 +575,10 @@ fn phone_mission(
                     said: gate.said.as_deref().map(cut),
                     ..gate
                 }),
+                merge: source.merge.map(|merge| PhoneMerge {
+                    why: merge.why.as_deref().map(cut),
+                    ..merge
+                }),
             }
         })
         .collect();
@@ -531,6 +602,28 @@ fn phone_mission(
             .collect(),
         conductor,
         conductor_letters: mission.conductor_letters,
+        safety_net: mission.safety_net.map(|net| PhoneSafetyNet {
+            nodes: net
+                .nodes
+                .into_iter()
+                .map(|node| PhoneHeldNode {
+                    title: cut(&node.title),
+                    ..node
+                })
+                .collect(),
+            ..net
+        }),
+        skipped_alone: mission
+            .skipped_alone
+            .into_iter()
+            .map(|skip| PhoneSkip {
+                title: cut(&skip.title),
+                text: skip.text.as_deref().map(cut),
+                reason: cut(&skip.reason),
+                by: cut(&skip.by),
+                ..skip
+            })
+            .collect(),
         nodes,
         nodes_omitted: 0,
         landing_order: mission.landing_order,
@@ -724,6 +817,31 @@ mod tests {
             sent[1]["landing"],
             json!({"state": "left", "action": "merge"})
         );
+        assert!(!sent.to_string().contains("private"));
+    }
+
+    /// PRD mission-destination D-45, B17: who merges a step's pull request
+    /// and where it stands reach the phone by their named fields, so its
+    /// 내 차례 rises on a due merge as the desktop's does; a step with none,
+    /// as every step of a core before it, sends no key at all.
+    #[test]
+    fn a_steps_merge_reaches_the_phone_by_its_named_fields_only() {
+        let due = json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "prs": [31, 33], "note": "private"});
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![node("a", json!({"merge": due})), node("b", json!({}))],
+            )],
+            json!({}),
+        );
+        let sent = serde_json::to_value(&projected(&rest).items[0].nodes).unwrap();
+        assert_eq!(
+            sent[0]["merge"],
+            json!({"by": "operator", "why": "DB 변경은 직접", "state": "due", "prs": [31, 33]})
+        );
+        assert!(sent[1].get("merge").is_none(), "{}", sent[1]);
         assert!(!sent.to_string().contains("private"));
     }
 

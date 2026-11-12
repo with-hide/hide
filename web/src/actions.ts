@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -1370,7 +1370,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     revokePhone(phoneId: string) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
     },
-    setPushMode(mode: "off" | "app_closed" | "always") {
+    setPushMode(mode: "app_closed" | "always") {
       dispatch({ schema_version: 2, kind: "mobile_push_mode", payload: { mode } });
     },
     observeAgents(observing: boolean) {
@@ -1502,8 +1502,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** This desktop window shows agent notifications, or stops; hided judges agent changes only while one does. */
-    wantAgentNotices(wanted: boolean) {
-      dispatch({ schema_version: 2, kind: "desktop_notices", payload: { wanted } });
+    wantAgentNotices(wanted: boolean, needsYou = wanted) {
+      dispatch({ schema_version: 2, kind: "desktop_notices", payload: { wanted, needs_you: needsYou } });
+    },
+
+    reportComputerUse(inUse: boolean) {
+      dispatch({ schema_version: 2, kind: "desktop_activity", payload: { in_use: inUse } satisfies DesktopActivityPayload });
     },
 
     /** An agent's switch on its machine's row (agent adapters): its skill and hook go in or come out. */
@@ -2790,8 +2794,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     cancelPaneMovePreview(requestId: string) {
       dispatch({ schema_version: 2, kind: "pane_move_preview_cancel", payload: { request_id: requestId } });
     },
-    checkPaneMove(requestId: string) {
-      dispatch({ schema_version: 2, kind: "pane_move_check", payload: { request_id: requestId } });
+    /** Asks the core to settle a move whose answer this page did not get; `request` is the move this page sent, so a move the core never received is settled too. */
+    checkPaneMove(requestId: string, request?: import("./paneMove").PaneMoveIntent) {
+      dispatch({ schema_version: 2, kind: "pane_move_check", payload: request ? { request_id: requestId, request } : { request_id: requestId } });
     },
     runAgentCommand,
 

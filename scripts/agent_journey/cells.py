@@ -36,13 +36,22 @@ def assistant_after(events, after=0):
     """Whether the agent said anything from `after` on."""
     return any(event.get("role") == "assistant" for event in events[after:])
 
+# Every scene of the contract in the order of `Scene::ALL` (hide-agent-adapter
+# `scene.rs`, which owns the list; the contract test pins this copy to it).
+ALL_SCENES = ("rest", "rest_draft", "working", "interrupted", "session_picker", "model_picker", "popup",
+              "tool_approval", "question", "plan_approval", "trust_dialog", "hooks_review", "first_run",
+              "update_notice")
+# The two scenes `letter` and `letter_busy` prove, which have no cell of their own.
+PROVEN_BY_CELL = ("rest", "working")
+# One cell for each other scene: the ones the journey opens itself (scene.py).
+SCENE_CELLS = tuple("scene_" + name for name in ALL_SCENES if name not in PROVEN_BY_CELL)
 # The contract's cell names in table order (contracts/agent-journey.json).
 CELLS = ("start", "start_untrusted", "launch_brief", "reply", "integration", "guidance_memory", "letter",
-         "letter_busy", "letter_menu", "composer", "sleep_wake", "resume", "fork", "title", "usage", "profile")
+         "letter_busy", *SCENE_CELLS, "composer", "sleep_wake", "resume", "fork", "title", "usage", "profile")
 # A cell that cannot be measured until another one passed: a fork, a title
 # and usage need a conversation with an answer in it.
 PREREQUISITE = {"reply": "start", "integration": "start", "guidance_memory": "start", "letter": "start",
-                "letter_busy": "letter", "letter_menu": "letter", "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply",
+                "letter_busy": "letter", **{name: "letter" for name in SCENE_CELLS}, "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply",
                 "profile": "start"}
 # The cells a profile's journey runs again in the profile's account (the
 # `profile` cell): its start and first reply, a letter, and Sleep, Wake and
@@ -373,7 +382,7 @@ def composer_check(records, agent):
 
 
 def menu_letter_verdict(shown, read, session, token, after):
-    """A letter sent while a picker of the agent's own was open is delivered
+    """A letter sent while a scene of the agent's own was open is delivered
     after one bell and answered from `after` on: a bell line the picker took
     as its choice starts no turn, so it would ring again or never answer."""
     if not isinstance(shown, dict):

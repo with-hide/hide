@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { stop, start } from "./connection";
+import { openDetail, stop, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { SettingsScreen } from "./SettingsScreen";
 import { PRIVACY_POLICY_URL } from "./SettingsParts";
@@ -20,6 +20,7 @@ const settle = (ms = 400) => act(async () => { await vi.advanceTimersByTimeAsync
 
 beforeAll(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
   vi.useFakeTimers();
   network = blockNetwork((name, value) => vi.stubGlobal(name, value), () => vi.unstubAllGlobals());
   window.history.replaceState(null, "", "/p/5/?demo=1");
@@ -54,12 +55,41 @@ describe("the sample host's screens", () => {
     expect(network.calls).toEqual([]);
   });
 
+  it("mark a row as the desktop's row does: its pull request, the mission it conducts, and the operator's star", () => {
+    const rowOf = (pane: string) => document.querySelector(`[data-phone-agent="local|${pane}"]`)!;
+    // A Conductor's row wears its mission's chip with `!` while the mission waits on the operator; a step's worker gets none.
+    const chip = rowOf("a1").querySelector('[data-phone-row-mission="mission-release"]');
+    expect(chip?.textContent).toBe("!2/6");
+    expect(rowOf("a3").querySelector("[data-phone-row-mission]")).toBeNull();
+    expect(rowOf("a3").querySelector('[data-phone-row-pr="pending"]')?.textContent).toContain("2091");
+    // In 다시 볼 것 the star takes the mark's place, and the row's name says it.
+    const starred = rowOf("a7");
+    expect(starred.closest('[data-phone-group="revisit"]')).not.toBeNull();
+    expect(starred.querySelector('[data-phone-mark="star"]')).not.toBeNull();
+    expect(starred.getAttribute("aria-label")).toContain("Starred to revisit");
+    expect(rowOf("a5").querySelector("[data-revisit-star]")).toBeNull();
+  });
+
   it("list the agents by group, with a parent's children under it", () => {
     expect(document.querySelector('[data-phone-group="needs_you"]')).not.toBeNull();
     expect(document.querySelector('[data-phone-group="working"]')).not.toBeNull();
     expect(document.querySelector('[data-phone-group="done"]')).not.toBeNull();
     expect(text()).toContain("Address review comments");
     expect(text()).toContain("Fix the Windows path test");
+  });
+
+  it("link a step's worker to its mission and its pull request, and a chip opens that page", async () => {
+    await act(async () => openDetail({ device_id: "local", pane_id: "a3" }));
+    await settle(50);
+    const mission = document.querySelector<HTMLElement>('[data-phone-detail-mission="mission-release"]')!;
+    expect(mission.textContent).toContain("Prepare release 1.2.0");
+    expect(mission.textContent).toContain("Rehearse the migration");
+    expect(document.querySelector("[data-phone-detail-pr]")?.textContent).toContain("2091");
+    await act(async () => mission.click());
+    expect(usePhone.getState().detail).toBeNull();
+    expect(usePhone.getState().tab).toBe("missions");
+    expect(usePhone.getState().missionOpen).toBe("mission-release");
+    await act(async () => setTab("agents"));
   });
 
   it("open the host sheet on the sample host, which leads to the real connect flow and back", async () => {
@@ -78,6 +108,10 @@ describe("the sample host's screens", () => {
     expect(text()).toContain("Prepare release 1.2.0");
     await act(async () => openMission("mission-release"));
     expect(text()).toContain("The signing certificate expired");
+    const graph = document.querySelector("[data-phone-mission-steps]")!;
+    expect(graph.querySelectorAll("[data-mission-node]")).toHaveLength(6);
+    expect(graph.querySelector("[data-dependency-graph]")).not.toBeNull();
+    expect(graph.querySelector("[data-mission-report]")?.textContent).toContain("Report");
     await act(async () => setTab("prs"));
     expect(text()).toContain("fix: keep Windows paths on the wire");
     expect(text()).toContain("feat: show children on the phone list");
