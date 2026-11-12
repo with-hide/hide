@@ -132,7 +132,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   When answers stand on different heads, the newest answer's head decides, so a review of the next head replaces the failure of the head before; a checker bound after the line passed opens it again until it answers.
   Which nodes get one, and how many, follows the mission's verification strength (below).
 - A `gate` is a place the operator looks before the node is done: one short line of what to look at, at most 80 characters and one per node (`mission_gate_too_long`, `mission_gate_too_many`, `mission_gate_invalid`, each naming the node).
-  Hide adds it as the node's `human` line, which only the operator's answer passes; it asks once the node's other lines are met (below).
+  Hide adds it as the node's `human` line, which only the operator's answer passes; it asks once the node's other lines are met, unless the operator said it is right before that (below).
   A start gate, `"gate": {"look": "<what to look at>", "when": "start"}`, asks before the node starts instead: once every node it depends on is done, and until the operator passes it its worker cannot be bound (`hide mission node <key> --agent-id` or `--status working`, and a spawn under its intent, are refused `mission_gate_before_start`); start the worker after their pass.
   A plan cannot put a start gate on a node that already started (`mission_gate_node_started`).
   A dropped node's start gate cannot ask, so `--status working` on it is refused too: plan its work again as a new node with a new key, whose start gate asks, or, on the operator's word only, give the dropped node `"gate": null`; the operator setting it to work from the map goes past the gate as their own answer.
@@ -274,6 +274,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
 - While a node waits on CI, start the next work that does not depend on it, as the cap allows.
   A node's reviewer and verifier are such work: start them the moment its pull request opens and read the head they record with `--commit`, so the review and CI run together; never hold a checker until the CI letter comes.
+  The one exception is a node whose gate is a screen the operator has not said is right yet: its checkers start after their OK (below).
   A later push needs the next review round only when the strength allows one, and that round reads only what changed.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
 - A node whose approach fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
@@ -288,13 +289,19 @@ Every worker's brief, code or general, says in its first line what the node is, 
   Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
   The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it; that answer has already taken the decision off the map, so there is nothing to clear.
   Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.
+- A gate on a screen is a look the operator refines in rounds, so keep each round short: while it has not passed, have the node's worker send you its screens (captures of an isolated candidate build) right after each fix, before the tests, the docs and the push, and open them at once with `hide browser open`; their words go back to the worker as a letter.
+  Once they say it is right, relay their OK (below), and only then have the worker finish the tests, the docs and the push and start the node's checkers, so a round of feedback takes minutes, not a full review and CI.
+  When a fix after their OK changes what they saw, show the new screens with your next report.
+  When they have the screens and give no answer, do not hold the node for it: start its checkers, and the gate asks on the map once its other lines are met, as before.
 - A gate asks by itself: once its node's other lines are met, Hide puts its question on the map as your decision (`<what to look at> 확인하고 알려 주세요`, with `계속 진행` and `고칠 점 있음`, naming the node), with the Views you and the node's worker opened.
   While a question of yours holds the decision, the gate waits for it; your next `decide --line` replaces the gate's question and the gate asks again once the decision is free, and `decide --clear` cannot take it off (`mission_gate_operator_only`).
   `계속 진행` passes it and the node may finish; `고칠 점 있음` or the operator's own words keep it open and go to the node's worker as a defect line, the node works again, and the gate asks anew once that line is met. Either way Hide tells you in a letter, and nothing passes the gate on its own.
   A start gate asks the same way once its node could start, with nothing linked from a worker it does not have yet: `계속 진행` lets you start the worker; `고칠 점 있음` or their words become a defect line and free the decision, and the gate asks again only once that line is met, as an end gate does.
   The node has no worker yet, so make the fix yourself (a replan, a brief, the change they asked for) and record the line with `hide mission record <node> <line> --pass --evidence <what shows it>`, which you may on a node that never had a worker.
   When the operator answers in your conversation instead ("ㄱㄱ", "고쳐서 다시"), relay it with their words quoted: `hide mission gate <node> --pass --said "ㄱㄱ"` or `--fix --said "<their words>"`; it settles the gate exactly as the card does, and records that the answer came from your pane.
-  Without their words it is refused (`mission_gate_words_missing`), and so is a gate not asking yet (`mission_gate_not_open`), so never relay your own judgment.
+  Their OK on an end gate can come before it asks, on screens you showed while the node works: `--pass` takes it then too, the gate passes and asks nothing later, and the node's other lines still hold it until they are met; a start gate takes an answer only once it asks.
+  A `--fix` before the gate asks is refused (`mission_gate_not_open`): send their words to the worker as a letter instead.
+  Without their words either is refused (`mission_gate_words_missing`), so never relay your own judgment.
   A check you meet by chance while the mission runs stays an ordinary `decide`, with no gate behind it.
 - An upstream node that was dropped holds everything after it; the map shows it blocked. Replan before anything after it starts.
   To give a node up, drop it with its reason in `--change`, or ask the operator with `hide mission decide --node`.
@@ -469,3 +476,4 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   Anything else on a node (its status, stack base, agents, checkers and verdicts), and any other node, is refused as the Conductor's (`mission_not_conductor`).
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.
 - A node's `human` line is the operator's look at your work, and only their answer passes it; when they ask for a fix, Hide sends you their words as a new line of your node, and you fix it and record that line like your own.
+  While a screen's look has not passed, send your Conductor the screens right after each fix (captures of an isolated candidate build), before the tests, the docs and the push, and finish those once the Conductor tells you the operator said it is right.

@@ -11446,13 +11446,13 @@ fn reached_gate(runtime: &mut Runtime) -> u64 {
     command(runtime, "sender", json!({"op": "start"})).unwrap();
     with_worker_and_reviewer(runtime);
     checkout_at(runtime, HEAD);
-    // Not reached while its other lines are open: nothing to relay yet.
+    // Not reached while its other lines are open: no fix to relay yet.
     assert_eq!(
         crate::coordination::split_refusal(
             &command(
                 runtime,
                 "sender",
-                json!({"op": "gate", "node": "fix", "pass": true, "said": "ㄱㄱ"}),
+                json!({"op": "gate", "node": "fix", "pass": false, "said": "고쳐 줘"}),
             )
             .unwrap_err()
         )
@@ -11583,6 +11583,86 @@ fn a_gated_node_is_done_only_after_the_operator_passes_its_gate() {
         .unwrap()
         .1
     );
+}
+
+/// The operator's OK on screens the Conductor showed while the node still
+/// works, relayed from the Conductor's pane before the gate asks, passes
+/// the gate with their words; the node still waits on its other lines, and
+/// once they are met the gate asks nothing and the node may be done. A fix
+/// relayed that early is still refused: it goes to the worker as a letter.
+#[test]
+fn an_ok_relayed_before_the_gate_asks_passes_it_and_the_node_still_waits_on_its_lines() {
+    use crate::mission_criteria::GateVia;
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let refusal = |runtime: &mut Runtime, value: Value| {
+        crate::coordination::split_refusal(&command(runtime, "sender", value).unwrap_err())
+            .0
+            .to_owned()
+    };
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            json!({"op": "gate", "node": "fix", "pass": false, "said": "고쳐 줘"})
+        ),
+        "mission_gate_not_open"
+    );
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate", "node": "fix", "pass": true, "said": "카드 OK"}),
+    )
+    .unwrap();
+    let gate = node_view(&runtime, "fix").gate.unwrap();
+    assert_eq!(
+        (gate.state, gate.via, gate.said.as_deref()),
+        (GateState::Passed, Some(GateVia::Pane), Some("카드 OK"))
+    );
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            json!({"op": "node", "node": "fix", "patch": {"status": "done"}})
+        ),
+        "mission_criteria_unmet"
+    );
+
+    met_fix(&mut runtime);
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .is_none(),
+        "a gate the operator passed early asks nothing once the lines are met"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
 }
 
 /// PRD mission-human-gate D-11, B7, B21: an answer that is not `계속 진행`,
@@ -11811,6 +11891,19 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
     );
     assert_eq!(asked_gate(&runtime), None);
     assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    // The early OK is an end gate's: a start gate takes no pass before it asks.
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(
+                &mut runtime,
+                "sender",
+                json!({"op": "gate", "node": "ship", "pass": true, "said": "ㄱㄱ"}),
+            )
+            .unwrap_err()
+        )
+        .0,
+        "mission_gate_not_open"
+    );
     runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status = NodeStatus::Done;
     runtime.missions.book_edit += 1;
     runtime.drive_mission_health(crate::runtime::unix_milliseconds());

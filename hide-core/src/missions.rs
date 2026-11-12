@@ -3935,7 +3935,7 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_gate_none" => "The node has no gate; hide mission show <node> lists its lines",
         "mission_gate_not_open" => {
-            "The node's gate does not wait on the operator now: its other lines are not all met yet, or it already passed (hide mission show <node>)"
+            "The node's gate does not take this answer now: a fix waits until the gate asks, once the node's other lines are met; an early pass needs an end gate on a node working in a running mission; or it already passed (hide mission show <node>)"
         }
         "mission_defects_too_many" => {
             "The node holds 16 defects; ask the operator how to go on with it"
