@@ -252,8 +252,8 @@ pub struct NodeView {
     pub criteria_met: u32,
     pub criteria_skipped: u32,
     pub external: Option<External>,
-    /// Where an outside node's work goes, for its station line (PRD
-    /// mission-destination D-14); shown only, its done stays the merge or
+    /// Where an outside node's work goes, the end of its branch line (PRD
+    /// mission-destination D-14, D-52); shown only, its done stays the merge or
     /// landing it waits on (D-07). Absent for a node that is not outside.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside: Option<OutsideView>,
@@ -301,9 +301,10 @@ pub struct NodeView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<super::mission_gates::GateView>,
     /// Who merges its pull request and where that merge stands (PRD
-    /// mission-destination D-10, D-35, D-45): the `👤` station, the
-    /// second-line strip and the operator's turn read it. Absent for a node
-    /// that is no change delivered by pull request.
+    /// mission-destination D-10, D-35, D-45): the person before the branch
+    /// line's destination, the `머지할 차례` band under the title and the
+    /// operator's turn read it (D-53). Absent for a node that is no change
+    /// delivered by pull request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge: Option<super::mission_landing::NodeMerge>,
 }

@@ -13822,7 +13822,7 @@ fn a_mission_that_records_no_destination_is_drawn_with_the_default_branch_it_is_
 }
 
 /// PRD mission-destination D-14, B26: an outside node's view says where its
-/// work goes, for its station line: an outside pull request's base and state
+/// work goes, the end of its branch line: an outside pull request's base and state
 /// as GitHub answers them, open, merged or closed, and an outside branch the
 /// project's default branch it is judged against, which moves the published
 /// map with the catalog however the mission's own destination stands. Neither

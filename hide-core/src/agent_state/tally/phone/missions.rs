@@ -213,21 +213,21 @@ pub struct PhoneNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_base: Option<String>,
     /// How many pull requests the step holds besides its current one, the
-    /// `+N` beside its number on the branch line (D-52); left out at zero.
+    /// `+N` after its number (D-37); left out at zero.
     #[serde(skip_serializing_if = "is_zero")]
     pub pr_more: usize,
-    /// The pull request an outside step watches (`External::Pr`), which its
-    /// branch line names; absent for one that watches a branch, for every
-    /// other step and from a core before it.
+    /// The pull request an outside step watches (`External::Pr`), its
+    /// `↗#n`; absent for one that watches a branch, for every other step
+    /// and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_pr: Option<u32>,
-    /// The branch an outside step watches (`External::Branch`), which its
-    /// line names; absent otherwise and from a core before it.
+    /// The branch an outside step watches (`External::Branch`), its
+    /// `↗ <branch>`; absent otherwise and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_branch: Option<String>,
     /// Where an outside step's work goes (`NodeView::outside`): its pull
     /// request's base or the default branch its branch is judged against,
-    /// where its line ends; absent until read and from a core before it.
+    /// the end of its line; absent until read and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_base: Option<String>,
     /// An outside step's pull request state as GitHub last answered;
@@ -922,13 +922,13 @@ mod tests {
         assert!(!sent.to_string().contains("private"));
     }
 
-    /// PRD mission-destination D-38, D-52, B59, B60: what the desktop's
-    /// branch line reads reaches the phone, so its line ends where the
-    /// desktop's does: the branch a mission's results go to, the branch a
-    /// step's current pull request merges into, how
-    /// many more it holds, and an outside step's pull request or branch with
-    /// where it goes and how its pull request stands; a core before
-    /// them sends none, and the phone gets no key for them.
+    /// PRD mission-destination D-14, D-37, D-38, D-52, B17, B59: what the
+    /// desktop's branch line reads reaches the phone, so its line ends where
+    /// the desktop's does: the branch a mission's results go to, the branch
+    /// a step's current pull request merges into, how many more it holds,
+    /// and an outside step's pull request or branch with where it goes and
+    /// how its pull request stands; a core before them sends none, and the
+    /// phone gets no key for them.
     #[test]
     fn what_the_branch_line_reads_reaches_the_phone() {
         let prs = json!([
@@ -973,7 +973,7 @@ mod tests {
             (&new["nodes"][0]["pr_more"], new["nodes"][1].get("pr_more")),
             (&json!(1), None)
         );
-        // An outside step's line names its pull request or branch and ends where it goes (D-52): its pull
+        // An outside step's pull request or branch starts its line, and where it goes ends it (D-14): its pull
         // request's base with its state, or the default branch its branch is judged against with no state.
         let outside = |at: usize| {
             [

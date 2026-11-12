@@ -195,7 +195,7 @@ export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel
   const shownPlan = planned ? plannedRun(node.worker, plan) : null;
   const run = runLabel(runWords(launch, shownPlan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
   if (!run) return null;
-  // The card's title row names the model alone (PRD mission-destination D-46): the launched one, the CLI's default when the launch named none, else the plan's.
+  // The card's worker row names the model alone (PRD mission-destination D-51): the launched one, the CLI's default when the launch named none, else the plan's.
   const model = run.from === "launch" ? (launch?.launch_model ?? t("conductor.defaultModel")) : (shownPlan?.model ?? null);
   return { run, agent: run.from === "launch" ? launched!.agent : (node.worker?.agent ?? null), model };
 }
