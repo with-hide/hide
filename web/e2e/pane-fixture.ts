@@ -138,7 +138,7 @@ export type FixtureLabel = {
    * `question`, else done. A turn start's answer carries none: the provider shim
    * leaves `end` out when the request's schema asks for none. */
   end?: "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
-  work?: { missed:{kind:"problem"|"follow_up"|"ask";text:string;/** The open ask this line repeats, by its id; none when left out. */same_as?:string|null;/** Only the operator can take the step; false when left out. */operator_only?:boolean}[]; resolved:{id:string;issue_number:number|null;/** What settled it without an answer; empty when left out. */reason?:string}[]; artifacts:string[] };
+  work?: { missed:{kind:"problem"|"follow_up"|"ask";text:string;/** The open ask this line repeats, by its id; none when left out. */same_as?:string|null;/** The answer's sentence a new ask is asked in; its text when left out, which the marker carries. */quote?:string;/** An ask's kind of step; decision when left out. */ask_type?:"decision"|"human_only"|null;/** Whom an ask waits on; the operator when left out. */addressed_to?:"operator"|"parent"|null}[]; resolved:{id:string;issue_number:number|null;/** What settled it without an answer; empty when left out. */reason?:string}[]; artifacts:string[] };
   at?: number;
   /** Native cwd witness, when repository provenance is part of the journey. */
   cwd?: string;
@@ -180,6 +180,12 @@ export function linkFixtureTranscripts(fixture: FixtureRoot, home: string): void
  * before the session is declared, because the core reads a session when its
  * reference or state changes, not when its file grows.
  */
+/** What a provider answers for a missed line the fixture leaves unsaid. */
+function askDefaults(line: { kind: string; text: string; same_as?: string | null }) {
+  const ask = line.kind === "ask";
+  return { quote: ask && !line.same_as ? line.text : "", ask_type: ask ? "decision" : null, addressed_to: ask ? "operator" : null };
+}
+
 /** The text a transcript carries for the fixture provider to answer with. */
 export function labelMarker(label: FixtureLabel): string {
   const answer = {
@@ -190,8 +196,9 @@ export function labelMarker(label: FixtureLabel): string {
     // One line: the reply asked for when there is one, else the progress.
     line: label.reply ?? label.progress ?? "",
     end: label.end ?? (label.question ? "question" : "done"),
-    // The schema asks every line for `same_as` and `operator_only` and every resolution for `reason`, as a provider answers them.
-    work: label.work ? { ...label.work, missed: label.work.missed.map((line) => ({ same_as: null, operator_only: false, ...line })), resolved: label.work.resolved.map((done) => ({ reason: "", ...done })) } : {missed:[],resolved:[],artifacts:[]},
+    // The schema asks every line for `same_as`, `quote`, `ask_type` and `addressed_to` and every resolution for `reason`, as a provider answers them.
+    // A new ask quotes its own text: the marker is the turn's answer, so the core finds the quote in it.
+    work: label.work ? { ...label.work, missed: label.work.missed.map((line) => ({ same_as: null, ...askDefaults(line), ...line })), resolved: label.work.resolved.map((done) => ({ reason: "", ...done })) } : {missed:[],resolved:[],artifacts:[]},
   };
   const delay = label.delayMs ? `HIDE_E2E_DELAY_MS ${label.delayMs}\n` : "";
   return `${delay}HIDE_E2E_LABEL ${JSON.stringify(answer)}`;
