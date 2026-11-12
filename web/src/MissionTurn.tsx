@@ -100,7 +100,7 @@ function AttentionCard({ mission, node, attention, actions, onSelect }: { missio
   const what = attention.reason === "human_gate" && node.gate ? node.gate.look : attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes);
   const why = raisedWhy(mission, attention);
   return (
-    <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-mission-hold/10 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>
+    <div className="tone-hold flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold/30 bg-mission-hold/8 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>
       <div className="flex min-w-0 items-center gap-sm">
         <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full bg-mission-hold" />
         <span className="min-w-0 flex-1 truncate text-body font-semibold" title={node.title}>{node.title}</span>

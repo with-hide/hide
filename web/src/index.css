@@ -313,3 +313,17 @@ html[data-view-drag="row-resize"] * {
 [data-project-list] {
   scroll-padding-top: var(--size-sidebar-section-header);
 }
+
+/* A container tinted with a status colour: the secondary and outline buttons
+   inside it take a fill of that colour instead of grey, and lose their
+   stroke, so the container's own edge is the only line (DESIGN_GUIDE.md,
+   Tinted containers). */
+@utility tone-hold { --tone: var(--mission-hold); @apply tone-fill; }
+@utility tone-warning { --tone: var(--warning); @apply tone-fill; }
+@utility tone-success { --tone: var(--success); @apply tone-fill; }
+@utility tone-destructive { --tone: var(--destructive); @apply tone-fill; }
+@utility tone-fill {
+  --secondary: color-mix(in srgb, var(--tone) calc(var(--opacity-selected-fill) * 100%), transparent);
+  --accent: color-mix(in srgb, var(--tone) calc(var(--opacity-emphasis-fill) * 100%), transparent);
+  & :is([data-variant="secondary"], [data-variant="outline"]):not(.border-dashed) { border-color: transparent; }
+}

@@ -490,8 +490,8 @@
   --slate-96-5: #f1f4f6;
   --slate-97: #f3f5f8;
   --slate-98-5: #f8fafd;
-  --amber-52: #905c00;
   --amber-83: #ffb756;
+  --orange-57: #bf5200;
   --red-56: #d4212d;
   --red-69: #ff5c58;
   --green-53: #008143;
@@ -548,7 +548,7 @@
   --device-remote: var(--accent-choice-violet);
   --mention-session: var(--file-blue);
   --mention-project: var(--file-green);
-  --warning: var(--amber-52);
+  --warning: var(--orange-57);
   --success: var(--green-53);
   --agent-working: var(--blue-55);
   --status-foreground: var(--gray-100);

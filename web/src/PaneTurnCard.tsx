@@ -326,7 +326,7 @@ function AnswerItem({ answer, pill, read, onReadWhole, opened = false }: { answe
         {pill ?? <span>{t("paneTurn.answer")}</span>}
         <Clock at={answer.at_unix_ms} />
       </p>
-      <div className="mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-tl-xs bg-success/10 px-sm py-xs">
+      <div className="tone-success mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-tl-xs bg-success/10 px-sm py-xs">
         {answer.line ? <p className="whitespace-normal font-semibold text-foreground [overflow-wrap:anywhere]" data-turn-card-answer-line="true">{answer.line}</p> : null}
         {answer.head && !(open && phase === "ready") ? (
           <p className={cn("line-clamp-2 whitespace-pre-line [overflow-wrap:anywhere]", answer.line ? "text-muted-foreground" : "text-foreground")} data-turn-card-answer-head="true">{answer.head}</p>
@@ -444,7 +444,7 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, onAsk, answerOp
               time={(at) => <Clock at={at} />}
               frame={(list, count) => (
                 <RailItem dot="past-asks" data-turn-card-asks={count}>
-                  <div className="flex min-w-0 flex-col rounded-md border border-warning/60 bg-warning/10 px-sm pt-xs">
+                  <div className="tone-warning flex min-w-0 flex-col rounded-md border border-warning/30 bg-warning/8 px-sm pt-xs">
                     <h3 className="flex items-center gap-xs text-micro font-semibold text-warning">
                       <OpenAsksMark count={count} />
                       <span>{t("record.waiting")}</span>
