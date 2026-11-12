@@ -1159,6 +1159,7 @@ fn turn_replay_and_status_undo_survive_restart() {
             text: "모바일 줄바꿈이 남음".into(),
             same_as: None,
             operator_only: None,
+            to_parent: false,
         }],
         ..Default::default()
     };
@@ -1285,6 +1286,7 @@ fn an_off_or_failed_turn_remains_raw_after_restart_and_a_late_answer() {
                 text: "과거 보고를 뒤늦게 등록하면 안 됨".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -1312,6 +1314,7 @@ fn the_durable_issue_intent_keeps_the_original_attempt_and_closes_without_an_out
                 text: "모바일 검증이 남음".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -1407,6 +1410,7 @@ fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolvin
                 text: "회귀 검증 이슈 등록".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -1613,6 +1617,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
                         text: "정리할 일".into(),
                         same_as: None,
                         operator_only: None,
+                        to_parent: false,
                     }],
                     ..Default::default()
                 },
@@ -1729,6 +1734,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
                 text: "parent follow-up".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -1766,6 +1772,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
                 text: "invalid follow-up".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -1930,6 +1937,7 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
                 text: "문서 갱신".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -2614,12 +2622,14 @@ fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_
                     text: "Q4 범위를 정해 주세요".into(),
                     same_as: None,
                     operator_only: None,
+                    to_parent: false,
                 },
                 NewMissedWork {
                     kind: MissedKind::Problem,
                     text: "e2e가 로컬에서 깨짐".into(),
                     same_as: None,
                     operator_only: None,
+                    to_parent: false,
                 },
             ],
             ..Default::default()
@@ -2694,6 +2704,7 @@ fn a_project_past_the_session_limit_is_summarized_by_its_newest_sessions() {
                 text: "Q4 범위를 정해 주세요".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -2794,6 +2805,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
         text: text.into(),
         same_as: None,
         operator_only: None,
+        to_parent: false,
     };
     let asks = |store: &LinkStore| {
         store
@@ -2903,6 +2915,7 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
             text: "PRD로 넘어갈까요?".into(),
             same_as: None,
             operator_only: None,
+            to_parent: false,
         }],
         ..Default::default()
     };
@@ -2943,6 +2956,7 @@ fn three_asks() -> TurnJudgment {
         text: text.into(),
         same_as: None,
         operator_only,
+        to_parent: false,
     };
     TurnJudgment {
         missed: vec![
@@ -3091,6 +3105,62 @@ fn a_settled_question_is_folded_with_its_reason_and_one_press_opens_it_for_good(
     );
 }
 
+/// A question the judgment says the parent agent can answer is kept
+/// folded, out of the operator's questions, and asked again it stays that
+/// one folded line; one only the operator can take the step of stays open
+/// whoever it is addressed to, and one press opens a folded one for good
+/// (docs/status-model.md, A question still waiting).
+#[test]
+fn a_question_for_the_parent_waits_folded_and_one_press_opens_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "모바일 출시 맡아줘");
+    chapter(&mut store);
+    let for_parent = |text: &str, operator_only: bool| NewMissedWork {
+        kind: MissedKind::Ask,
+        text: text.into(),
+        same_as: None,
+        operator_only: Some(operator_only),
+        to_parent: true,
+    };
+    let judgment = || TurnJudgment {
+        missed: vec![
+            for_parent("127번 슬라이드 칩을 하나로 줄일지", false),
+            for_parent("운영자가 캡처를 확인해야 머지 가능", true),
+        ],
+        ..Default::default()
+    };
+    store
+        .apply_ledger_update(&turn_end(1, None, judgment()))
+        .unwrap();
+    store
+        .apply_ledger_update(&turn_end(2, None, judgment()))
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(
+        open_ask_texts(&store),
+        ["운영자가 캡처를 확인해야 머지 가능"]
+    );
+    assert_eq!(
+        record
+            .folded_asks
+            .iter()
+            .map(|ask| (ask.text.as_str(), ask.reason.as_deref()))
+            .collect::<Vec<_>>(),
+        [("127번 슬라이드 칩을 하나로 줄일지", None)]
+    );
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id: record.folded_asks[0].id.clone(),
+            status: MissedStatus::Open,
+        })
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert!(record.folded_asks.is_empty());
+    assert_eq!(record.asks.len(), 2);
+}
+
 /// The turn-end update of a turn at `offset`, woken by a letter
 /// (`asks_answered` none) or by an answer.
 fn turn_end(
@@ -3121,6 +3191,7 @@ fn asks(lines: &[(&str, Option<&str>)]) -> TurnJudgment {
                 text: (*text).into(),
                 same_as: same_as.map(str::to_owned),
                 operator_only: None,
+                to_parent: false,
             })
             .collect(),
         ..Default::default()
@@ -3235,6 +3306,7 @@ fn a_label_cannot_resolve_an_ask_in_a_turn_no_answer_came_in() {
                 text: "Q4 범위를 정해 주세요".into(),
                 same_as: None,
                 operator_only: None,
+                to_parent: false,
             }],
             ..Default::default()
         },
@@ -3370,6 +3442,7 @@ fn stopped(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, asks: 
                         text: (*text).into(),
                         same_as: None,
                         operator_only: None,
+                        to_parent: false,
                     })
                     .collect(),
                 ..Default::default()

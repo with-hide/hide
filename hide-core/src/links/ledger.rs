@@ -516,6 +516,12 @@ pub struct NewMissedWork {
     /// say it, since a turn a letter woke words the same question again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub same_as: Option<String>,
+    /// A question the parent agent, the Conductor or a reviewer can answer,
+    /// not the operator: it is kept folded, out of the operator's open
+    /// questions, and one press opens it. Never one only the operator can
+    /// take the step of.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub to_parent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
