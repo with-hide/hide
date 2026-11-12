@@ -313,8 +313,8 @@ function TableGroup({ group, entries, connected, projectLabel, actions }: { grou
  * the rest of the row opens it. A device that does not answer dims the row
  * and holds its actions.
  */
-/** A row's action keeps the state pill's height and type, so it never outgrows the line it sits in. */
-const TABLE_ACTION = "h-auto rounded-full border-0 px-sm text-caption font-semibold leading-normal";
+/** A row's action keeps the line's height so it never outgrows the line it sits in, and keeps a button's square corners and outline so it never reads as the row's state pill. */
+const TABLE_ACTION = "-my-px h-auto rounded-xs px-xs text-caption leading-normal";
 
 function TableRow({ entry, connected, project, actions }: { entry: MissionEntry; connected: boolean; project: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
