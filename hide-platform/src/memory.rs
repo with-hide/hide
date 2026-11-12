@@ -32,12 +32,12 @@ pub enum Pressure {
 ///   of them (`full avg10`), warning when some task did (`some avg10`).
 ///   A machine that is not short reads 0.00 on both; 10% is where waiting
 ///   on memory starts to be felt, and a ten-second average fits a reader
-///   that asks once a minute and holds no trigger open.
+///   that asks every 15 seconds and holds no trigger open.
 /// - Windows: the system's own low and high memory resource notifications:
 ///   low is critical, high is normal, and between the two is warning. The
 ///   system sets low at about 32 MB available per 4 GB (64 MB at most) and
-///   high at three times that, so Windows says warning much later than
-///   macOS does.
+///   high at three times that, so Windows says warning only under about
+///   200 MB available, much later than macOS does.
 ///
 /// A system without the signal (a Linux kernel built or booted without
 /// pressure stall information, another system) answers an error, never

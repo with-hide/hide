@@ -346,7 +346,7 @@ fn a_native_dormant_journey_refuses_a_changed_route_before_close_wake_or_start()
 fn a_retired_cursor_sleep_record_is_preserved_but_cannot_wake() {
     use crate::agent_sleep::DormantPhase;
     let mut runtime = close_pane_runtime("pi");
-    assert!(runtime.begin_dormant_sleep(SLEEPER, None, 1));
+    assert!(runtime.admit_dormant_sleep(SLEEPER, None, 1).unwrap());
     let (id, native_id) = {
         let (id, record) = runtime
             .snapshot
@@ -1197,7 +1197,7 @@ fn a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows
 fn a_sleep_keeps_its_checkouts_owner_for_the_wake() {
     use crate::agent_sleep::{DormantOwner, DormantPhase};
     let mut runtime = close_pane_runtime("pi");
-    assert!(runtime.begin_dormant_sleep(SLEEPER, None, 1));
+    assert!(runtime.admit_dormant_sleep(SLEEPER, None, 1).unwrap());
     let id = {
         let (id, record) = runtime
             .snapshot
@@ -2419,7 +2419,7 @@ impl SleepingChild {
         runtime.observe_delivery_laid(&node, &awake(), Some("scope"), None);
 
         // The sleep saves the registration it closes the pane under.
-        assert!(runtime.begin_dormant_sleep(SLEEPER, None, 1));
+        assert!(runtime.admit_dormant_sleep(SLEEPER, None, 1).unwrap());
         assert!(runtime.snapshot.status.last_error.is_none());
         let (id, saved) = {
             let (id, record) = runtime

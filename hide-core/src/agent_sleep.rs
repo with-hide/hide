@@ -682,11 +682,12 @@ impl AgentSleepStore {
             .collect()
     }
 
-    /// The one pane memory pressure puts to sleep this minute, with when its
-    /// agent went idle: the agent the hours rule would sleep but for the
-    /// hours that has rested longest, at least [`PRESSURE_MIN_IDLE_MS`], and
-    /// is not `taken` already. Sleep set to Never is the caller's to check.
-    pub fn pressure_pick(
+    /// The panes memory pressure may put to sleep this minute, longest idle
+    /// first, with when each agent went idle: the agents the hours rule would
+    /// sleep but for the hours, idle at least [`PRESSURE_MIN_IDLE_MS`] and not
+    /// `taken` already. One of them sleeps, the first whose end starts. Sleep
+    /// set to Never is the caller's to check.
+    pub fn pressure_candidates(
         &self,
         agents: &[SidebarAgentSnapshot],
         machine: SleepMachine,
@@ -694,16 +695,18 @@ impl AgentSleepStore {
         backoff_until: &HashMap<String, u64>,
         taken: &[String],
         now_unix_ms: u64,
-    ) -> Option<(String, u64)> {
-        self.sleepable(agents, machine, on_screen, backoff_until, now_unix_ms)
+    ) -> Vec<(String, u64)> {
+        let mut candidates = self
+            .sleepable(agents, machine, on_screen, backoff_until, now_unix_ms)
             .filter(|(agent, _)| !taken.contains(&agent.pane_id))
             .filter(|(_, idle_since)| {
                 idle_since.saturating_add(PRESSURE_MIN_IDLE_MS) <= now_unix_ms
             })
-            .min_by(|(a, a_since), (b, b_since)| {
-                a_since.cmp(b_since).then_with(|| a.pane_id.cmp(&b.pane_id))
-            })
             .map(|(agent, idle_since)| (agent.pane_id.clone(), idle_since))
+            .collect::<Vec<_>>();
+        candidates
+            .sort_by(|(a, a_since), (b, b_since)| a_since.cmp(b_since).then_with(|| a.cmp(b)));
+        candidates
     }
 
     /// The agents an automatic sleep may end, with when each went idle:

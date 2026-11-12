@@ -1175,8 +1175,8 @@ pub enum Call {
     /// The machine's TCP listeners and where each was started
     /// (`ports::ListeningPorts`).
     ListeningPorts,
-    /// The machine's memory pressure now (`memory::MemoryPressure`), or an
-    /// error where the machine cannot say.
+    /// The machine's memory pressure now and where the node read it
+    /// (`memory::PressureAnswer`), or an error where the machine cannot say.
     MemoryPressure,
     /// Bytes free to an unprivileged writer on the volume holding `path`;
     /// `None` when the volume cannot say.

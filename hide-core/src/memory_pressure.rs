@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hide_node_link::memory::MemoryPressure;
+use hide_node_link::memory::{MemoryPressure, PressureAnswer};
 use hide_node_link::protocol::Call;
 
 use crate::agent_sleep::DECISION_INTERVAL_MS;
@@ -23,26 +23,32 @@ const READ_INTERVAL: Duration = Duration::from_secs(15);
 /// The node reads one kernel value or one small file; a machine too pressed
 /// or too far to answer in this is unread for the minute.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// An answer older than this, from a reader that stalled, is no answer.
-const FRESH_FOR_MS: u64 = 2 * DECISION_INTERVAL_MS;
+/// An answer older than this, from a reader that stalled, is no answer: four
+/// reads' time, so a stalled reader sleeps one agent at most.
+const FRESH_FOR_MS: u64 = DECISION_INTERVAL_MS;
 
 /// One machine's last answer, and when it came.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PressureReading {
-    pub(crate) level: Result<MemoryPressure, String>,
+    pub(crate) answer: Result<PressureAnswer, String>,
     pub(crate) read_at_unix_ms: u64,
 }
 
 impl PressureReading {
-    /// The level the minute decision sleeps an agent for: a fresh answer of
+    /// The answer the minute decision sleeps an agent for: a fresh one of
     /// warning or critical. A failed, stale or normal reading sleeps nothing.
-    pub(crate) fn pressing(&self, now_unix_ms: u64) -> Option<MemoryPressure> {
+    pub(crate) fn pressing(&self, now_unix_ms: u64) -> Option<PressureAnswer> {
         if now_unix_ms.saturating_sub(self.read_at_unix_ms) > FRESH_FOR_MS {
             return None;
         }
-        match self.level {
-            Ok(level @ (MemoryPressure::Warning | MemoryPressure::Critical)) => Some(level),
-            Ok(MemoryPressure::Normal) | Err(_) => None,
+        match self.answer {
+            Ok(
+                answer @ PressureAnswer {
+                    level: MemoryPressure::Warning | MemoryPressure::Critical,
+                    ..
+                },
+            ) => Some(answer),
+            Ok(_) | Err(_) => None,
         }
     }
 }
@@ -74,10 +80,10 @@ impl PressureReader {
 /// worker may call it; a node that cannot answer, one too old to know the
 /// call included, is a failed read.
 pub(crate) fn read_now(node: &dyn NodeLink) -> PressureReading {
-    let level = call_as::<MemoryPressure>(node, Call::MemoryPressure, READ_TIMEOUT)
+    let answer = call_as::<PressureAnswer>(node, Call::MemoryPressure, READ_TIMEOUT)
         .map_err(|error| error.to_string());
     PressureReading {
-        level,
+        answer,
         read_at_unix_ms: crate::runtime::unix_milliseconds(),
     }
 }
@@ -85,12 +91,20 @@ pub(crate) fn read_now(node: &dyn NodeLink) -> PressureReading {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hide_node_link::memory::PressureSource;
 
     fn reading(level: Result<MemoryPressure, String>) -> PressureReading {
         PressureReading {
-            level,
+            answer: level.map(|level| PressureAnswer {
+                level,
+                source: PressureSource::System,
+            }),
             read_at_unix_ms: 1_000_000,
         }
+    }
+
+    fn level(reading: &PressureReading, now: u64) -> Option<MemoryPressure> {
+        reading.pressing(now).map(|answer| answer.level)
     }
 
     /// Warning and critical press while fresh; normal, an error and an
@@ -99,16 +113,16 @@ mod tests {
     fn only_a_fresh_warning_or_critical_answer_presses() {
         let now = 1_000_000 + DECISION_INTERVAL_MS;
         assert_eq!(
-            reading(Ok(MemoryPressure::Warning)).pressing(now),
+            level(&reading(Ok(MemoryPressure::Warning)), now),
             Some(MemoryPressure::Warning)
         );
         assert_eq!(
-            reading(Ok(MemoryPressure::Critical)).pressing(now),
+            level(&reading(Ok(MemoryPressure::Critical)), now),
             Some(MemoryPressure::Critical)
         );
-        assert_eq!(reading(Ok(MemoryPressure::Normal)).pressing(now), None);
-        assert_eq!(reading(Err("no psi".into())).pressing(now), None);
-        let stale = 1_000_000 + 3 * DECISION_INTERVAL_MS;
-        assert_eq!(reading(Ok(MemoryPressure::Critical)).pressing(stale), None);
+        assert_eq!(level(&reading(Ok(MemoryPressure::Normal)), now), None);
+        assert_eq!(level(&reading(Err("no psi".into())), now), None);
+        let stale = now + 1;
+        assert_eq!(level(&reading(Ok(MemoryPressure::Critical)), stale), None);
     }
 }

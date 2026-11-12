@@ -7,7 +7,7 @@
 use super::*;
 use crate::agent_sleep::{SleepCause, SleepPhase};
 use crate::memory_pressure::PressureReading;
-use hide_node_link::memory::MemoryPressure;
+use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
 
 const CHECKOUT: &str = "/private/tmp/hide-pressure-sleep";
 const TABS: [&str; 5] = [
@@ -95,7 +95,10 @@ fn pressure(runtime: &mut Runtime, level: Result<MemoryPressure, String>, now: u
     runtime.ingest_memory_pressure(
         None,
         PressureReading {
-            level,
+            answer: level.map(|level| PressureAnswer {
+                level,
+                source: PressureSource::System,
+            }),
             read_at_unix_ms: now,
         },
     );
@@ -174,6 +177,86 @@ fn under_pressure_the_longest_idle_sleepable_agent_sleeps_one_a_minute() {
     pressure(&mut runtime, Ok(MemoryPressure::Critical), last);
     runtime.tick_agent_sleep(last);
     assert_eq!(sleeping(&runtime), [OLDEST, OLDER, FRESH]);
+}
+
+/// OLDEST as a Pi, a kind whose sleep closes its pane: `proven` says whether
+/// its labels have proven its session, without which the close refuses to
+/// start.
+fn oldest_as_pi(runtime: &mut Runtime, proven: bool) {
+    let oldest = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id == OLDEST)
+        .unwrap();
+    oldest.agent_kind = "pi".into();
+    oldest.row_facts = None;
+    if proven {
+        let facts = oldest.row_facts.get_or_insert_with(Default::default);
+        facts.native_session_id = oldest.session_id.clone();
+        facts.native_reference = Some(crate::sidebar::SessionAgentSessionPayload {
+            kind: "path".into(),
+            value: "/fixture/native.jsonl".into(),
+        });
+    }
+}
+
+/// A candidate whose end does not start leaves the minute's sleep to the
+/// next oldest, the same minute, and tells nothing on the screen; picked
+/// again each minute, it would hold the rule for its whole machine.
+#[test]
+fn a_candidate_whose_end_does_not_start_leaves_the_minutes_sleep_to_the_next_oldest() {
+    let now = unix_milliseconds();
+    let mut runtime = idle_runtime(now);
+    oldest_as_pi(&mut runtime, false);
+
+    pressure(&mut runtime, Ok(MemoryPressure::Warning), now);
+    runtime.tick_agent_sleep(now);
+    assert_eq!(
+        sleeping(&runtime),
+        [OLDER],
+        "the next oldest, the same minute"
+    );
+    assert!(runtime.snapshot.ui_state.agent_sleep.dormant.is_empty());
+    assert!(
+        runtime.snapshot().status.last_error.is_none(),
+        "a refused pressure pick reaches no screen"
+    );
+
+    // Once the fresh agent has rested half an hour, it is the one, though
+    // the refused one is still idle longest.
+    let later = now + 20 * MINUTE;
+    pressure(&mut runtime, Ok(MemoryPressure::Warning), later);
+    runtime.tick_agent_sleep(later);
+    assert_eq!(sleeping(&runtime), [OLDER, FRESH]);
+}
+
+/// A Pi pressure puts to sleep closes its pane, and its saved close and its
+/// sleeping-session row keep that memory was the cause.
+#[test]
+fn a_close_pane_agent_slept_by_pressure_keeps_the_cause_on_its_record_and_row() {
+    use crate::agent_sleep::DormantPhase;
+    let now = unix_milliseconds();
+    let mut runtime = idle_runtime(now);
+    oldest_as_pi(&mut runtime, true);
+
+    pressure(&mut runtime, Ok(MemoryPressure::Warning), now);
+    runtime.tick_agent_sleep(now);
+    assert!(sleeping(&runtime).is_empty(), "the one sleep of the minute");
+    let dormant = &mut runtime.snapshot.ui_state.agent_sleep.dormant;
+    assert_eq!(dormant.len(), 1, "{dormant:?}");
+    let record = dormant.values_mut().next().unwrap();
+    assert_eq!(record.old_pane_id, OLDEST);
+    assert_eq!(record.cause, Some(SleepCause::MemoryPressure));
+
+    // Its pane closed: it is listed as a sleeping session.
+    record.closed = true;
+    record.phase = DormantPhase::Sleeping;
+    runtime.close_operations.clear();
+    runtime.refresh_dormant_rows();
+    let rows = serde_json::to_value(&runtime.snapshot().navigator.sleeping_sessions).unwrap();
+    assert_eq!(rows[0]["cause"], "memory_pressure", "{rows}");
 }
 
 /// Normal pressure, a failed read, an answer from a reader that stalled and

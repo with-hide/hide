@@ -1,7 +1,7 @@
 //! The machine's memory pressure, as the node answers it
 //! (`Call::MemoryPressure`), for the core's agent sleep.
 
-use hide_node_link::memory::MemoryPressure;
+use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
 
 use crate::error::{ErrorCode, HostError, HostResult};
 
@@ -12,12 +12,19 @@ use crate::error::{ErrorCode, HostError, HostResult};
 /// The registry entry is `hided::env::HIDE_TEST_MEMORY_PRESSURE_FILE`.
 pub const TEST_PRESSURE_FILE: &str = "HIDE_TEST_MEMORY_PRESSURE_FILE";
 
-/// The level now: the test file's when one is named, else the system's.
-pub fn pressure() -> HostResult<MemoryPressure> {
+/// The level now, and where it was read: the test file's when one is named,
+/// else the system's.
+pub fn pressure() -> HostResult<PressureAnswer> {
     match std::env::var_os(TEST_PRESSURE_FILE) {
-        Some(path) => from_file(std::path::Path::new(&path)),
+        Some(path) => from_file(std::path::Path::new(&path)).map(|level| PressureAnswer {
+            level,
+            source: PressureSource::TestFile,
+        }),
         None => hide_platform::memory::pressure()
-            .map(MemoryPressure::from)
+            .map(|level| PressureAnswer {
+                level: MemoryPressure::from(level),
+                source: PressureSource::System,
+            })
             .map_err(|error| {
                 let code = if error.kind() == std::io::ErrorKind::Unsupported {
                     ErrorCode::Unsupported

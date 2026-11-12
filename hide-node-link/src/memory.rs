@@ -4,8 +4,35 @@
 
 use serde::{Deserialize, Serialize};
 
-/// [`crate::protocol::Call::MemoryPressure`]'s answer. A machine that cannot
-/// say answers the call with an error, never `Normal`.
+/// [`crate::protocol::Call::MemoryPressure`]'s answer: the level, and where
+/// the node read it. A machine that cannot say answers the call with an
+/// error, never `Normal`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PressureAnswer {
+    pub level: MemoryPressure,
+    pub source: PressureSource,
+}
+
+/// Where a node read its level: from its operating system, or from the file
+/// a test-only variable names, so a run record says which it acted on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PressureSource {
+    System,
+    TestFile,
+}
+
+impl PressureSource {
+    /// The word the wire carries, for a diagnostic.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::TestFile => "test_file",
+        }
+    }
+}
+
+/// How pressed a machine's memory is, as its operating system judges it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryPressure {
@@ -44,7 +71,7 @@ impl From<hide_platform::memory::Pressure> for MemoryPressure {
 
 #[cfg(test)]
 mod tests {
-    use super::MemoryPressure;
+    use super::{MemoryPressure, PressureAnswer, PressureSource};
 
     #[test]
     fn each_level_crosses_the_wire_as_its_word() {
@@ -62,5 +89,20 @@ mod tests {
             );
         }
         assert_eq!(MemoryPressure::from_code("low"), None);
+        for source in [PressureSource::System, PressureSource::TestFile] {
+            let answer = PressureAnswer {
+                level: MemoryPressure::Warning,
+                source,
+            };
+            let wire = serde_json::to_value(answer).unwrap();
+            assert_eq!(
+                wire,
+                serde_json::json!({"level": "warning", "source": source.code()})
+            );
+            assert_eq!(
+                serde_json::from_value::<PressureAnswer>(wire).unwrap(),
+                answer
+            );
+        }
     }
 }
