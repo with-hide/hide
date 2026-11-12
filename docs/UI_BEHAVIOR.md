@@ -2727,9 +2727,19 @@ While either switch is on, the group shows what macOS allows with `Open System S
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
 Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
-On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, and at least one attached desktop window has Needs You notifications enabled (`app_closed`).
+On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, at least one attached desktop window has Needs You notifications enabled (`app_closed`), and no later admitted phone action has taken over.
+The most recently used device wins: a written reply or key from any phone (including a connected device's pane), an answer, approval or wake admitted for dispatch, or a successful start permits subsequent new phone notifications.
+A new authenticated, well-formed answer, approval or wake counts as phone use even when the core refuses its meaning, such as an old mission question key, a stale Done or wake, or a refused merge; this does not make that action succeed.
+Reading or opening the app, authentication or format refusals and duplicate request IDs do not count.
+Computer input reported after a pause of at least five seconds, or a return to in use, rests phone pushes again; continuous typing adds no reports to the existing one-second poll.
+Within one second the computer wins; when typing continuously while also using the phone, the phone stays in charge until the next pause and resumed input.
+This memory is lost on daemon restart and does not change desktop notifications or the switch's wording.
 Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
-A rested notice still waiting for the operator is sent once when resting ends; an answered or withdrawn notice is discarded.
+A root with no eligible pending notice sends no phone notification for a wait that begins while phone pushes rest, even when resting ends before its settle window closes.
+It remains in the phone app's list and badge count; only a new wait or declaration after resting ends can notify, after the existing settle window.
+A candidate first observed while delivery is allowed uses the routing state at the end of that window, including a device change during it.
+A root that no longer waits sends nothing, and turning the pause switch off does not replay discarded notices.
+Within an existing SETTLE window the lead accepts one notice for a root that still waits even if its original A resolved and only rested B remains, and wording may use the current representative subject instead of A (the same class as hide-private#873).
 Off always permits pushes (`always`), subject to the phone’s own receiving choice and viewing suppression.
 A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 
