@@ -196,7 +196,13 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
             <Button ref={writeButton} size="sm" variant="outline" disabled={closed} onClick={() => setWriting(true)} data-mission-write="true"><PencilIcon aria-hidden="true" />{t("mission.banner.write")}</Button>
           )}
           {/* A decision without choices, an old one included, is answered by writing only. */}
-          {options.length ? <Button size="sm" variant="secondary" className="ml-auto" disabled={closed || picked == null} onClick={() => picked != null && choose(picked)} data-mission-answer-send="true">{t("mission.banner.answer")}</Button> : null}
+          {/* A marked choice is not sent: the button turns primary and one line says so, until the press sends it and the choices give way to the sent line (PRD mission-human-gate B19). */}
+          {options.length ? (
+            <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-xs">
+              {picked != null && !closed ? <span className="text-caption text-muted-foreground" data-mission-answer-hint="true">{t("mission.banner.marked")}</span> : null}
+              <Button size="sm" variant={picked != null && !closed ? "default" : "secondary"} disabled={closed || picked == null} onClick={() => picked != null && choose(picked)} data-mission-answer-send="true">{t("mission.banner.answer")}</Button>
+            </span>
+          ) : null}
           </div>
         </div>
       )}
