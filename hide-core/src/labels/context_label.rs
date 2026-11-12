@@ -504,8 +504,11 @@ impl JudgedWork {
 /// left out and every run of white space one space, so a sentence the
 /// judgment copied without the answer's `**` or line break still matches.
 fn quote_form(text: &str) -> String {
+    /// Markdown emphasis and code marks and the quotation marks a model
+    /// may add or leave out around a copied sentence.
+    const MARKS: &str = "*_`\"'\u{201C}\u{201D}\u{2018}\u{2019}";
     text.chars()
-        .filter(|c| !matches!(c, '*' | '_' | '`' | '"' | '\'' | '“' | '”' | '‘' | '’'))
+        .filter(|c| !MARKS.contains(*c))
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
