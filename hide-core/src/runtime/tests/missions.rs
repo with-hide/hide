@@ -11828,8 +11828,42 @@ fn a_gate_with_no_conductor_is_raised_to_the_operator_until_one_comes_back() {
     assert!(view.attention.is_none_or(|attention| !attention.item));
 }
 
-/// `criteria_plan` with a gate on both nodes, `fix`'s and `docs`'s as given
-/// (`null` takes it away).
+/// A running mission whose deploy node `ship`, with its start gate, waits on
+/// the change node `fix`, with a worker and a reviewer registered.
+fn deploy_after_fix(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Ship the site"}),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"]},
+            {"key": "ship", "title": "Deploy", "kind": "general", "preset": "deploy",
+             "depends_on": ["fix"], "criteria": ["the site serves the fix"]},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+}
+
+/// The Conductor binding a worker to `deploy_after_fix`'s `ship`, or the
+/// reason it is refused.
+fn bind_deploy(runtime: &mut Runtime) -> Result<(), String> {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "ship", "patch": {"agent_id": "agent-2", "status": "working"}}),
+    )
+    .map(|_| ())
+    .map_err(|refused| crate::coordination::split_refusal(&refused).0.to_owned())
+}
+
 /// PRD node-presets D-06, D-09, B3: a deploy node's start gate waits ahead
 /// while the node it depends on works and asks the operator once it is
 /// done, through the gate's decision card, with the node waiting on that
@@ -11845,34 +11879,8 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
     use crate::runtime::mission_gates::GateState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Ship the site"}),
-    )
-    .unwrap();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "plan", "plan": {"nodes": [
-            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
-             "criteria": ["the parser keeps v1 files"]},
-            {"key": "ship", "title": "Deploy", "kind": "general", "preset": "deploy",
-             "depends_on": ["fix"], "criteria": ["the site serves the fix"]},
-        ]}}),
-    )
-    .unwrap();
-    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-    with_worker_and_reviewer(&mut runtime);
-    let bind = |runtime: &mut Runtime| {
-        command(
-            runtime,
-            "sender",
-            json!({"op": "node", "node": "ship", "patch": {"agent_id": "agent-2", "status": "working"}}),
-        )
-        .map(|_| ())
-        .map_err(|refused| crate::coordination::split_refusal(&refused).0.to_owned())
-    };
+    deploy_after_fix(&mut runtime);
+    let bind = bind_deploy;
     let gate = |runtime: &Runtime| {
         let view = node_view(runtime, "ship");
         let gate = view.gate.unwrap();
@@ -11994,6 +12002,67 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
     );
     assert_eq!(bind(&mut runtime), Ok(()));
     assert_eq!(asked_gate(&runtime), None);
+}
+
+/// PRD node-presets B3 with mission-human-gate D-12, D-21: once a start
+/// gate is open the Conductor relays the operator's OK from its pane as the
+/// card takes it: the pass keeps their words as given in the pane, the
+/// gate's question goes, and the node can start; before the node it depends
+/// on is done the same relay is refused and passes nothing, and relaying it
+/// again after the pass changes nothing.
+#[test]
+fn an_open_start_gate_takes_the_operators_ok_relayed_from_the_pane() {
+    use crate::mission_criteria::GateVia;
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    deploy_after_fix(&mut runtime);
+    let relay = json!({"op": "gate", "node": "ship", "pass": true, "said": "배포해도 돼"});
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(&mut runtime, "sender", relay.clone()).unwrap_err()
+        )
+        .0,
+        "mission_gate_not_open"
+    );
+    assert_eq!(
+        node_view(&runtime, "ship").gate.unwrap().state,
+        GateState::Ahead
+    );
+
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status = NodeStatus::Done;
+    runtime.missions.book_edit += 1;
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime).and_then(|(_, node)| node).as_deref(),
+        Some("ship")
+    );
+    assert_eq!(
+        bind_deploy(&mut runtime),
+        Err("mission_gate_before_start".into())
+    );
+
+    let (shown, changed) = command(&mut runtime, "sender", relay.clone()).unwrap();
+    assert!(changed);
+    assert_eq!(shown["mission"]["nodes"][1]["gate"]["via"], "pane");
+    let gate = node_view(&runtime, "ship").gate.unwrap();
+    assert_eq!(
+        (gate.state, gate.via, gate.said.as_deref()),
+        (GateState::Passed, Some(GateVia::Pane), Some("배포해도 돼"))
+    );
+    assert_eq!(asked_gate(&runtime), None);
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .is_none()
+    );
+    assert_eq!(bind_deploy(&mut runtime), Ok(()));
+    assert!(!command(&mut runtime, "sender", relay).unwrap().1);
 }
 
 /// PRD node-presets D-06 (review F1): a dropped node behind a start gate

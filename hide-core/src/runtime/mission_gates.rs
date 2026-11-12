@@ -220,7 +220,7 @@ impl Runtime {
     /// works again and its gate is raised anew once its lines are met;
     /// `Past`, the operator's `끝으로` on a raise, passes it as `Pass` does
     /// whether or not it waits yet, and so does the Conductor relaying the
-    /// operator's `Pass` from its pane before the gate asks. The gate's
+    /// operator's `Pass` from its pane before an end gate asks. The gate's
     /// decision and its raise go with any of them, and the Conductor is
     /// told. Any other answer to a gate not waiting on the operator, or an
     /// answer with no words, is refused with its reason and passes nothing.
@@ -263,9 +263,12 @@ impl Runtime {
         // asks: they looked at the screens shown while the node still works,
         // and its other lines still hold the node until they are met. A fix
         // before that is the Conductor's letter to the worker, not a defect.
+        // Once open, a gate of either kind takes the relayed answer as it
+        // takes the card's (PRD node-presets B3); a start gate takes none
+        // before, since its node has nothing to show yet.
         let answerable = match answer {
             GateAnswer::Past => true,
-            GateAnswer::Pass if via == GateVia::Pane => end_gate_unpassed(mission, node),
+            GateAnswer::Pass if via == GateVia::Pane && end_gate_unpassed(mission, node) => true,
             GateAnswer::Pass | GateAnswer::Fix => self.gate_open(mission, node),
         };
         if !answerable {
