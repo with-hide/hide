@@ -1,7 +1,6 @@
 import type { HTMLAttributes } from "react";
 import type { LineParts } from "../agentRow";
 import { cn } from "../lib/utils";
-import { OpenAsksMark } from "./open-asks";
 
 /**
  * A row's second line in its parts: the leading word and the background tail
@@ -23,7 +22,6 @@ export function RowLineText({ parts, className, ...rest }: { parts: LineParts } 
           {piece.text}
         </span>
       ))}
-      {parts.asks ? <OpenAsksMark count={parts.asks} className="ml-xs self-center" /> : null}
     </span>
   );
 }
