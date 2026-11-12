@@ -2734,10 +2734,11 @@ Computer input reported after a pause of at least five seconds, or a return to i
 Within one second the computer wins; when typing continuously while also using the phone, the phone stays in charge until the next pause and resumed input.
 This memory is lost on daemon restart and does not change desktop notifications or the switch's wording.
 Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
-A wait that begins while phone pushes rest sends no phone notification, even when resting ends before its settle window closes.
+A root with no eligible pending notice sends no phone notification for a wait that begins while phone pushes rest, even when resting ends before its settle window closes.
 It remains in the phone app's list and badge count; only a new wait or declaration after resting ends can notify, after the existing settle window.
 A candidate first observed while delivery is allowed uses the routing state at the end of that window, including a device change during it.
-An answered or withdrawn wait sends nothing, and turning the pause switch off does not replay discarded notices.
+A root that no longer waits sends nothing, and turning the pause switch off does not replay discarded notices.
+Within an existing SETTLE window the lead accepts one notice for a root that still waits even if its original A resolved and only rested B remains, and wording may use the current representative subject instead of A (the same class as hide-private#873).
 Off always permits pushes (`always`), subject to the phone’s own receiving choice and viewing suppression.
 A saved old `off` becomes `app_closed`; whether a phone receives notifications belongs to that phone’s Settings.
 

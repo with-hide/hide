@@ -908,7 +908,7 @@ fn an_accepted_phone_action_only_sends_new_waits_to_all_phones_until_computer_in
 }
 
 #[test]
-fn a_rested_declaration_preserves_an_eligible_settle_without_replaying_its_replacement() {
+fn an_eligible_root_survives_rest_and_uses_the_current_wait_at_settle() {
     with_runtime(async {
         let declared = |turns: &[&str]| {
             projection::project(
@@ -944,32 +944,38 @@ fn a_rested_declaration_preserves_an_eligible_settle_without_replaying_its_repla
                         .pass(&roots(0, &[], &[]), t + Duration::from_millis(300), true)
                         .await;
                 }
-                fixture
-                    .pass(&declared(&turns), t + Duration::from_millis(400), true)
-                    .await;
                 desktop.phone_input(t + Duration::from_millis(1300));
-                fixture
-                    .pass(&declared(&turns), t + push::SETTLE, false)
-                    .await;
-                if cancel_a {
+                let settled_at = if disappears {
+                    fixture
+                        .pass(&roots(0, &[], &[]), t + push::SETTLE, false)
+                        .await;
                     assert!(
                         fixture.take().is_empty(),
-                        "cancelled A cannot send B in its place"
+                        "no payload while the root is absent"
                     );
+                    t + push::SETTLE + Duration::from_secs(1)
                 } else {
-                    let (_, _, body) = fixture.received.try_recv().expect("eligible A survives B");
-                    if !check_c {
-                        let payload: Value = serde_json::from_slice(
-                            &fixture.phone_key.take().unwrap().decrypt(&body),
-                        )
-                        .unwrap();
-                        assert_eq!(payload["subject"]["id"], "A");
-                    }
-                    assert!(fixture.take().is_empty(), "one A and no B");
+                    t + push::SETTLE
+                };
+                fixture.pass(&declared(&turns), settled_at, true).await;
+                let (_, _, body) = fixture
+                    .received
+                    .try_recv()
+                    .expect("eligible root survives rest");
+                if !check_c {
+                    let payload: Value =
+                        serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body))
+                            .unwrap();
+                    // The lead accepts B replacing resolved A inside this
+                    // root's original three-second SETTLE window.
+                    assert_eq!(payload["subject"]["id"], if cancel_a { "B" } else { "A" });
                 }
+                assert!(fixture.take().is_empty(), "one notice per pending root");
                 let current = declared(&["B", "C"]);
-                fixture.pass(&current, t + push::SETTLE, true).await;
-                fixture.pass(&current, t + push::SETTLE * 2, false).await;
+                fixture.pass(&current, settled_at, true).await;
+                fixture
+                    .pass(&current, settled_at + push::SETTLE, false)
+                    .await;
                 let (_, _, body) = fixture.received.try_recv().expect("new eligible C sends");
                 if check_c {
                     let payload: Value =
@@ -977,9 +983,50 @@ fn a_rested_declaration_preserves_an_eligible_settle_without_replaying_its_repla
                             .unwrap();
                     assert_eq!(payload["subject"]["id"], "C");
                 }
-                assert!(fixture.take().is_empty(), "B never sends");
+                assert!(fixture.take().is_empty(), "a new C sends once");
             }
         }
+    });
+}
+
+#[test]
+fn a_native_wait_still_notifies_when_a_rested_declaration_becomes_its_representative() {
+    with_runtime(async {
+        let native = |with_b: bool| {
+            projection::project(
+                &json!({"navigator":{"agents":[{
+            "pane_id":"root-0", "identity_label":"Task", "agent_kind":"claude",
+            "group":"needs_you", "mark":"going", "demand":"none", "status_code":"mission_decision", "unread":true,
+            "ask_subject":{"cause":"mission_decision","line":"A","views":0},
+            "human_turn":with_b.then(|| json!({"id":"B","own":false})),
+            "raised":if with_b { json!([{"subject":{"cause":"human_turn","id":"B","kind":"auth","place":"login","device":"mini"}}]) } else { json!([]) }
+        }],"workspaces":[],"devices":[{"id":"node","label":null}]}}),
+                "node",
+            )
+        };
+        let mut fixture = RestFixture::new(1).await;
+        let t = std::time::Instant::now();
+        let desktop = Arc::clone(&fixture.mobile.config.desktop);
+        desktop.phone_input(t);
+        fixture.pass(&roots(1, &[0], &[]), t, true).await;
+        fixture.pass(&native(false), t, true).await;
+        desktop.activity_at(1, true, t + Duration::from_millis(100));
+        fixture
+            .pass(&native(true), t + Duration::from_millis(200), true)
+            .await;
+        desktop.phone_input(t + Duration::from_millis(1300));
+        fixture.pass(&native(true), t + push::SETTLE, false).await;
+        let (_, _, body) = fixture
+            .received
+            .try_recv()
+            .expect("native A keeps the root eligible");
+        let payload: Value =
+            serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body)).unwrap();
+        assert_eq!(
+            payload["subject"]["id"], "B",
+            "current representative is an accepted settle boundary"
+        );
+        assert!(fixture.take().is_empty(), "one notice for the root");
     });
 }
 

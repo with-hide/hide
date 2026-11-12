@@ -3669,9 +3669,11 @@ Two deliberate boundaries apply: inputs within one second favor the computer, an
 The same Electron idle-time API and poll run on macOS, Windows and Linux; the existing unknown-idle Linux limit still applies.
 Connection admission bounds the per-connection activity and notification demand sets; a web tab contributes neither.
 Computer rest discards new phone notice candidates while continuing to observe the shared transition ledger and to close notices whose roots stop waiting.
-The follower excludes the new resting waits in its existing ledger without consuming an older eligible candidate on the same root.
-The ledger retains the original root cause alongside its observation boundary, so cancelling that cause cannot replace it with a discarded declaration; its existing disappearance grace preserves both facts.
-A wait that began during computer use stays silent even if the operator leaves before `SETTLE`; it remains in the phone's list and badge count.
+A new wait observed while resting creates no pending notice and leaves an existing pending notice on that root alone; the root remains standing for notification closes.
+At SETTLE the follower sends one notice if that root still waits on the operator and phone delivery is then allowed, otherwise it discards the candidate.
+It does not compare the original cause with the current cause.
+The lead accepts two boundaries inside this short window: if eligible A resolves and only rested B remains, B may receive the root's one notice; its wording may use the current representative subject instead of A (the same class as hide-private#873).
+A root with no eligible pending notice stays silent when its wait begins during computer use, even if the operator leaves before `SETTLE`; it remains in the phone's list and badge count.
 When resting ends, only a new wait or declaration starts the existing `SETTLE` window; no backlog is rebuilt, and switching to `always` does not replay discarded candidates.
 A candidate first observed while phone delivery is allowed waits out `SETTLE` and uses the device routing state at send time; changing devices during that window neither sends early nor schedules a replay.
 Delivery still checks the routing state immediately before transport, so a queued job or relay reconnect that finds phone pushes resting discards that attempt too.
