@@ -244,21 +244,19 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
       </div>
       {slot > 0 ? (
         <>
-          <div className="shrink-0" style={{ width: slot + sizes.divider }} aria-hidden="true" data-lane-slot="true" />
+          {/* The divider draws the lane's own surface up to the agents' hairline, so no strip of another fill stands between them, while the lane's content (a page's native view included) starts after it and never covers it. */}
+          <LaneDivider kind="lane" label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
+          <div className="shrink-0" style={{ width: slot }} aria-hidden="true" data-lane-slot="true" />
         </>
       ) : null}
       {frame.mode !== "closed" ? (
         <div
           className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", placed, raised)}
-          style={frame.mode === "expanded" ? undefined : { width: frame.width + (frame.mode === "docked" && slot > 0 ? sizes.divider : 0) }}
+          style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}
         >
           {/* A lane over the agents is sized from its own left edge; nothing beside it moves (B6). */}
-          {/* Docked, the lane's surface runs under its divider to the agents' hairline, so no strip of another fill stands between them. */}
-          {frame.mode === "docked" && slot > 0 ? (
-            <LaneDivider kind="lane" inset label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
-          ) : null}
           {frame.mode === "overlay" ? (
             <LaneDivider kind="lane" edge label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
