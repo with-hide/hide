@@ -503,7 +503,7 @@ function List({ groups, selected, connected, actions }: { groups: { group: Missi
     >
       {groups.map(({ group, entries }) => (
         <section key={group} className="flex min-w-0 flex-col pt-sm" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group}>
-          <GroupHead group={group} count={entries.length} className="px-xs pb-xxs" />
+          <GroupHead group={group} count={entries.length} className="px-sm pb-xxs" />
           {(group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries).map((entry) => (
             <ListRow key={entry.mission.id} entry={entry} selected={entry.mission.id === selected} connected={connected} actions={actions} />
           ))}
@@ -521,7 +521,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
     <RowButton
       aria-label={t("missionScreen.open", { title: mission.title })}
       aria-current={selected ? "true" : undefined}
-      className={cn("flex-col items-stretch gap-xxs", selected && "bg-selected hover:bg-selected", stale && "opacity-(--opacity-dimmed)")}
+      className={cn("flex-col items-stretch gap-xxs px-sm py-sm", selected && "bg-selected hover:bg-selected", stale && "opacity-(--opacity-dimmed)")}
       onClick={() => actions.showMissionOnScreen(mission.id)}
       data-mission-list-row={mission.id}
       data-selected={selected ? "true" : undefined}

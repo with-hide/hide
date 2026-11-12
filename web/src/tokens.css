@@ -296,7 +296,7 @@
   --size-disk-sheet: 1160px;
   --size-editor-inset: 12px;
   --size-hint-horizontal-padding: 4px;
-  --size-pr-icon: 14px;
+  --size-pr-icon: 12px;
   --size-lineage-elbow-y: 13px;
   --size-compact-agent-row-vpad: 5px;
   --size-hide-badge: 11px;
@@ -481,6 +481,7 @@
   --slate-84: #c7cbd0;
   --slate-86: #cdd1d6;
   --slate-89: #d7dbe0;
+  --slate-91: #dfe1e4;
   --slate-92-5: #e4e6e9;
   --slate-93: #e6e8ea;
   --slate-94-5: #ebedef;
@@ -744,7 +745,7 @@
   --muted-foreground: var(--slate-52);
   --subtle-foreground: var(--slate-38);
   --accent: var(--slate-92-5);
-  --border: var(--slate-89);
+  --border: var(--slate-91);
   --input: var(--slate-86);
   --sidebar: var(--slate-97);
   --status-seen: var(--slate-48);
@@ -772,7 +773,7 @@
   --muted-foreground: var(--slate-68);
   --subtle-foreground: var(--slate-84);
   --accent: var(--slate-36);
-  --border: var(--slate-38);
+  --border: var(--slate-34);
   --input: var(--slate-41);
   --sidebar: var(--slate-23);
   --status-seen: var(--slate-71);

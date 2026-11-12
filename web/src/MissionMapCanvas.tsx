@@ -176,7 +176,7 @@ export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide:
           </div>
         </div>
       </div>
-      <div ref={controls} role="group" aria-label={t("mission.zoom")} className="absolute bottom-sm right-sm flex items-center gap-xxs rounded-md border border-border bg-popover p-xxs shadow-overlay" data-mission-zoom={percent}>
+      <div ref={controls} role="group" aria-label={t("mission.zoom")} className="absolute bottom-sm right-sm flex items-center gap-xxs rounded-md border border-border/70 bg-raised p-xxs shadow-raised" data-mission-zoom={percent}>
         <ToggleGroup
           type="single"
           value={flow}

@@ -135,7 +135,7 @@
 .og-exchange > span { display: inline-flex; align-items: center; gap: var(--size-hairline); }
 .og-exchange svg { width: var(--text-micro); height: var(--text-micro); color: var(--muted-foreground); }
 
-.og-zoom { position: absolute; right: var(--spacing-lg); bottom: var(--spacing-xl); z-index: 5; display: flex; padding: var(--spacing-xs); background: var(--card); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); }
+.og-zoom { position: absolute; right: var(--spacing-lg); bottom: var(--spacing-xl); z-index: 5; display: flex; padding: var(--spacing-xs); background: var(--raised); border: var(--size-hairline) solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: var(--radius-sm); box-shadow: var(--elevation-raised); }
 .overview-graph .react-flow__attribution { background: var(--background); color: var(--muted-foreground); font-size: var(--text-micro); }
 .og-list { height: 100%; overflow-y: auto; padding: var(--spacing-sm) var(--spacing-lg); }
 .og-list > button { display: flex; align-items: center; gap: var(--spacing-sm); width: 100%; padding: var(--spacing-md) var(--spacing-sm); border: 0; border-bottom: var(--size-hairline) solid var(--border); background: transparent; text-align: left; font-size: var(--text-body); color: var(--muted-foreground); cursor: pointer; }
@@ -163,9 +163,10 @@
 @media (hover: none) { .og-project-list .og-eye { opacity: 1; } }
 .og-navigator h3, .og-details h3, .og-waiting-alone h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
 .og-waiting h3 span { color: var(--warning); font-variant-numeric: tabular-nums; }
+.og-waiting h3 { margin-bottom: var(--spacing-sm); }
 /* The asks waiting on the operator share one quiet container, each set apart by a line, rather than a ring of their own; a button inside takes its fill and line from the same warning tint. */
-.og-ask-list { --og-ask-line: color-mix(in srgb, var(--warning) 14%, var(--border)); --og-ask-fill: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); overflow: hidden; border: var(--size-hairline) solid var(--og-ask-line); border-radius: var(--radius-md); background: var(--og-ask-fill); }
-.og-ask { --border: var(--og-ask-line); --secondary: color-mix(in srgb, var(--warning) calc(var(--opacity-selected-fill) * 100%), transparent); --accent: color-mix(in srgb, var(--warning) calc(var(--opacity-emphasis-fill) * 100%), transparent); display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); padding: var(--spacing-sm) var(--spacing-md); }
+.og-ask-list { --og-ask-line: color-mix(in srgb, var(--warning) 10%, color-mix(in srgb, var(--border) 70%, transparent)); --og-ask-fill: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); overflow: hidden; border: var(--size-hairline) solid var(--og-ask-line); border-radius: var(--radius-md); background: var(--og-ask-fill); }
+.og-ask { --border: transparent; --secondary: color-mix(in srgb, var(--warning) calc(var(--opacity-selected-fill) * 100%), transparent); --accent: color-mix(in srgb, var(--warning) calc(var(--opacity-emphasis-fill) * 100%), transparent); display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); padding: var(--spacing-sm) var(--spacing-md); }
 .og-ask + .og-ask { border-top: var(--size-hairline) solid var(--og-ask-line); }
 .og-ask p { margin: 0; overflow-wrap: anywhere; }
 .og-ask small { color: var(--warning); font-size: var(--text-caption); }
