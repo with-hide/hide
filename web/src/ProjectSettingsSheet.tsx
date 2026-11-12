@@ -135,7 +135,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
             <p className="flex items-start gap-xs text-body font-medium" data-project-settings-name="true">{workspace?.is_git ? <FolderGit2Icon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : <FolderIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />}<span className="line-clamp-2 min-w-0 break-words" title={workspace?.label ?? target.label}>{workspace?.label ?? target.label}</span></p>
             <p className="line-clamp-2 break-all font-mono text-caption text-muted-foreground" title={target.root}>{target.root}</p>
           </div>
-          <TabsList aria-label={t("projectSettings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch justify-start gap-xxs rounded-none bg-transparent p-none">
+          <TabsList variant="nav" aria-label={t("projectSettings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch justify-start gap-xxs rounded-none bg-transparent p-none">
             {PAGES.map(({ id, icon: Icon }) => <TabsTrigger key={id} value={id} className="min-h-(--size-control) w-full shrink-0 justify-start gap-sm whitespace-normal rounded-xs px-sm py-xs text-body data-[state=active]:bg-accent data-[state=active]:shadow-none"><Icon aria-hidden="true" className="size-(--size-icon) shrink-0" />{t(`projectSettings.${id}`)}</TabsTrigger>)}
           </TabsList>
           <p className="shrink-0 break-words px-sm pt-sm text-caption text-muted-foreground">{t("projectSettings.scope")}</p>

@@ -3,8 +3,7 @@
 .overview-graph:has(> [data-graph-welcome]) { display: flex; flex-direction: column; min-height: 100%; }
 .og-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg); }
 .og-toolbar h2 { margin: 0 0 var(--spacing-sm); font-size: var(--text-headline); font-weight: 600; }
-.og-toolbar-actions, .og-toolbar-actions > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
-.og-toolbar-actions > div { padding: var(--spacing-xxs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); }
+.og-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
 .og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xxs); }
 .og-state-counts { gap: var(--spacing-sm); color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-state-counts b { font-weight: 500; font-variant-numeric: tabular-nums; }

@@ -12,6 +12,7 @@ import { KindIcon } from "./components/kind-mark";
 import { MissionAskChoices, MissionAskLine, useMissionAsks, useMissionPlace } from "./components/sidebar-mission-row";
 import type { MissionAsk } from "./missions";
 import { Button } from "./components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Kbd } from "./components/ui/kbd";
 import { EmptyWelcome } from "./components/empty-welcome";
 import { commandLabel } from "./shortcutLabels";
@@ -429,7 +430,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     ) : <>
       <div className="og-toolbar">
         <div><h2>{t("overviewGraph.title")}</h2></div>
-        <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
+        <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<ToggleGroup type="single" value={mode} onValueChange={(value) => { if (value === "graph" || value === "list") setMode(value); }} aria-label={t("overviewGraph.title")}><ToggleGroupItem value="graph">{t("overviewGraph.graph")}</ToggleGroupItem><ToggleGroupItem value="list">{t("overviewGraph.list")}</ToggleGroupItem></ToggleGroup></div>
       </div>
       <div className="og-filters">
         <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>

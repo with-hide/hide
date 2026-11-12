@@ -12,7 +12,7 @@ const toggleVariants = cva(
   {
     variants: {
       variant: {
-        segmented: "rounded-xs data-[state=on]:bg-secondary data-[state=on]:text-foreground",
+        segmented: "rounded-xs data-[state=on]:bg-raised data-[state=on]:text-foreground data-[state=on]:shadow-raised",
         pill: "rounded-full border border-border hover:border-muted-foreground data-[state=on]:border-foreground data-[state=on]:bg-foreground data-[state=on]:text-background",
       },
       size: {
@@ -29,7 +29,7 @@ function ToggleGroup({ className, variant = "segmented", ...props }: ComponentPr
   return (
     <ToggleGroupPrimitive.Root
       data-slot="toggle-group"
-      className={cn("flex w-fit items-center", variant === "pill" ? "flex-wrap gap-xs" : "gap-xxs rounded-sm bg-card p-xxs", className)}
+      className={cn("flex w-fit items-center", variant === "pill" ? "flex-wrap gap-xs" : "gap-xxs rounded-sm bg-foreground/6 p-xxs", className)}
       {...props}
     />
   );
