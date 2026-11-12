@@ -938,7 +938,7 @@ pub(super) const OMP: SceneDeclaration = SceneDeclaration {
         unknown(
             "18.7.0",
             NOT_READ,
-            "The harness cannot start the agent in an empty ~/.omp/agent folder, where omp holds a start's prompt through its setup, so the screen was never reached.",
+            "The harness cannot start the agent in an empty account folder, where omp holds a start's prompt through its setup, so the screen was never reached.",
             NEEDS_EMPTY_ACCOUNT,
         ),
     ),
