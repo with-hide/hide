@@ -579,6 +579,7 @@ pub const COMMANDS: &[Spec] = &[
             "repository_unavailable",
             "spawn_repo_required",
             "spawn_project_loading",
+            "spawn_folder_unreadable",
             "agent_not_installed",
             "agent_hook_off",
             "agent_not_set_up",

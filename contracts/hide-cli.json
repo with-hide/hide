@@ -4593,6 +4593,7 @@
                 "repository_unavailable",
                 "spawn_repo_required",
                 "spawn_project_loading",
+                "spawn_folder_unreadable",
                 "agent_not_installed",
                 "agent_hook_off",
                 "agent_not_set_up",
@@ -6679,7 +6680,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:36a1238270cd6f41a6f3cb79102b99aee459743089f116861391e0393e8e9c31",
+    "digest": "sha256:98b88da63c341a4eee8985ed1aa35494f642872b26f0f3709eff9d1e377bd26b",
     "envelopes": {
         "agent": {
             "answer": "value",

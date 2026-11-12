@@ -3805,27 +3805,50 @@ impl Runtime {
         }
     }
 
-    /// What the project row holding the checkout at `path` on `device` says
-    /// that checkout is (with-hide/hide#2478, #2479); none when no row holds
-    /// it. A row reads as not Git until its machine has read the folder, so
-    /// a plain folder counts only once that read found it and found no Git
-    /// repository at or above it.
+    /// What the checkout at `path` on `device`, held by one of the machine's
+    /// project rows, is (with-hide/hide#2478, #2479); none when no row holds
+    /// it. A row that is not Git says only that no repository was listed for
+    /// it, so a plain folder counts only on its machine's own answer: this
+    /// machine's path read (`Call::PathFacts`), or a device's helper, said
+    /// the folder is a Project of kind Folder. A path that answer found gone,
+    /// or whose Project it could not read (a `.git` link to a missing
+    /// repository, say), is unreadable, and one it has not answered for yet
+    /// is unread.
     pub(super) fn checkout_kind(&self, device: &str, path: &str) -> Option<CheckoutKind> {
-        self.catalog_workspaces()
+        let workspace = self
+            .catalog_workspaces()
             .filter(|workspace| workspace.device_id == device)
-            .find_map(|workspace| {
-                let checkout = workspace
+            .find(|workspace| {
+                workspace
                     .checkouts
                     .iter()
-                    .find(|checkout| checkout.path == path)?;
-                Some(if workspace.is_git {
-                    CheckoutKind::Git
-                } else if checkout.exists && !checkout.unconfirmed {
-                    CheckoutKind::Folder
-                } else {
-                    CheckoutKind::Unread
-                })
-            })
+                    .any(|checkout| checkout.path == path)
+            })?;
+        if workspace.is_git {
+            return Some(CheckoutKind::Git);
+        }
+        let of = |project: &hide_project::ProjectFacts| match project.kind {
+            hide_project::ProjectKind::Git => CheckoutKind::Git,
+            hide_project::ProjectKind::Folder => CheckoutKind::Folder,
+        };
+        Some(if device == self.node.as_str() {
+            match self.catalog_paths.project(path) {
+                Some(project) => of(project),
+                None if self.catalog_paths.knows(path) => CheckoutKind::Unreadable,
+                None => CheckoutKind::Unread,
+            }
+        } else {
+            use crate::device_catalog::Fact;
+            match self
+                .device_facts
+                .get(device)
+                .and_then(|facts| facts.facts.get(path))
+            {
+                Some(Fact::Known(project)) => of(project),
+                Some(Fact::Refused(_)) => CheckoutKind::Unreadable,
+                None => CheckoutKind::Unread,
+            }
+        })
     }
 
     /// Asks the pull requests of `root` on `device` again once its last
@@ -5592,6 +5615,9 @@ pub(super) enum CheckoutKind {
     Folder,
     /// Not read by its machine yet, so either.
     Unread,
+    /// Read, and found gone or with a Project its machine could not read:
+    /// neither, until the folder changes.
+    Unreadable,
 }
 
 /// Why a row the engine shows without a registration is being registered.

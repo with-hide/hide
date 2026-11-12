@@ -826,6 +826,35 @@ pub(super) fn workspace(
     }
 }
 
+/// The core's own node's answer for `path` (`Call::PathFacts`), as the sync
+/// coordinator hands it to the catalog: a Project of `kind`, or, with none,
+/// a folder whose Project it could not read.
+pub(super) fn path_read(
+    path: &str,
+    kind: Option<hide_project::ProjectKind>,
+) -> Arc<crate::workspace::PathIndex> {
+    let mut facts = hide_node_link::catalog::PathFacts::default();
+    facts.paths.insert(
+        path.to_owned(),
+        hide_node_link::catalog::PathFact {
+            comparison: path.to_owned(),
+            exists: true,
+            project: kind.map(|kind| hide_project::ProjectFacts {
+                root: path.into(),
+                checkout_root: path.into(),
+                kind,
+                branch: None,
+                linked_worktree: false,
+            }),
+            project_unread: kind
+                .is_none()
+                .then(|| "project_git_link_invalid".to_owned()),
+            repository: None,
+        },
+    );
+    Arc::new(crate::workspace::PathIndex::new(facts))
+}
+
 /// One engine workspace whose tabs each hold one pane inside
 /// `checkout_path`. `tab_order` is the order the engine reports its tabs in and
 /// `layout_order` is the order the layouts arrive in, so a test can hand

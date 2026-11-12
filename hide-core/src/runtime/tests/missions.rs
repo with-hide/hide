@@ -2076,10 +2076,6 @@ fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() 
 fn a_mission_asked_for_before_the_projects_are_read_says_so_rather_than_unknown() {
     let fixture = conducting();
     let mut guard = fixture.runtime.lock().unwrap();
-    // A Git repository whose worktrees are not read yet: its row says Git
-    // (the fixture's row alone reads as a plain folder, a mission project
-    // of its own since with-hide/hide#2478).
-    guard.snapshot.navigator.workspaces[0].is_git = true;
     guard.worktree_catalog.projects.clear();
     guard.snapshot.git_worktrees_loading = true;
     let create = json!({"op": "create", "title": "Early"});
@@ -2094,12 +2090,38 @@ fn a_mission_asked_for_before_the_projects_are_read_says_so_rather_than_unknown(
     );
 }
 
+/// A project row that is not Git is a plain folder only on its machine's
+/// own answer: a checkout whose Project its node could not read (a `.git`
+/// link to a missing repository) or has not answered for yet is refused as
+/// before, never made a plain-folder mission (review of #2494).
+#[test]
+fn a_checkout_its_machine_could_not_read_makes_no_plain_folder_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.worktree_catalog.projects.clear();
+    runtime.snapshot.git_worktrees_loading = false;
+    let create = json!({"op": "create", "title": "Broken"});
+    for read in [None, Some(path_read(PROJECT, None))] {
+        runtime.catalog_paths = read.unwrap_or_default();
+        assert_eq!(
+            command(&mut runtime, "sender", create.clone()).unwrap_err(),
+            "mission_project_unknown"
+        );
+    }
+    runtime.snapshot.git_worktrees_loading = true;
+    assert_eq!(
+        command(&mut runtime, "sender", create).unwrap_err(),
+        "mission_projects_loading"
+    );
+    assert!(runtime.missions.book.get("mission-1").is_none());
+}
+
 /// with-hide/hide#2478: a registered project that is a plain folder, not a
 /// Git repository, is a mission's project: a mission of general nodes,
 /// every preset, is created, planned, started, recorded and closed there,
 /// finished by its lines, its checkers and a gate with no branch, pull
 /// request or commit; a code or waiting node, or a destination, is refused
-/// as needing Git, and the mission is listed and taken as this project's.
+/// as needing Git, and the mission is listed as this project's.
 #[test]
 fn a_plain_folder_project_runs_a_mission_of_general_nodes_and_refuses_code_nodes() {
     let fixture = conducting();
@@ -2107,6 +2129,7 @@ fn a_plain_folder_project_runs_a_mission_of_general_nodes_and_refuses_code_nodes
     // The fixture's project row is a folder its machine read and found
     // outside every Git repository, so no worktree catalog holds it.
     runtime.worktree_catalog.projects.clear();
+    runtime.catalog_paths = path_read(PROJECT, Some(hide_project::ProjectKind::Folder));
     let (created, _) = command(
         &mut runtime,
         "sender",

@@ -1350,15 +1350,18 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Check that the device is connected in Settings > Devices and its helper is allowed, then run the same command again"
         }
         "repository_unavailable" => {
-            "Pass --repo as the path of a Git repository on that device, with --branch, then run the command again; for a project there that is a plain folder, not a Git repository, pass its path as --repo and leave out --branch"
+            "Pass --repo as the path of a Git repository on that device, with --branch, then run the command again; a plain folder, not a Git repository, takes no --branch once it is added as a project on that device"
         }
         // A spawn with no branch works in a plain folder itself
         // (with-hide/hide#2479).
         "spawn_repo_required" => {
-            "This is a Git project, or no project Hide knows: pass --repo <the repository's path> and --branch <a branch>, and the agent works in its own worktree on that branch. Only a registered project that is a plain folder, not a Git repository, starts an agent without --branch, in the folder itself"
+            "This is a Git project, or a folder no project of that machine holds: for a Git repository pass --repo <its path> and --branch <a branch>, and the agent works in its own worktree on that branch; a plain folder, not a Git repository, is added as a project first, and then an agent starts in it without --branch"
         }
         "spawn_project_loading" => {
             "Hide is still reading that project's folder; run the same command again in a few seconds"
+        }
+        "spawn_folder_unreadable" => {
+            "Hide could not read that project's folder: it is gone, or the Git repository it points at cannot be read. Check the folder; for a Git repository pass --repo and --branch, and for a plain folder that moved, add it as a project again"
         }
         "agent_not_installed" => {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
@@ -5469,6 +5472,9 @@ mod tests {
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",
+            "spawn_repo_required",
+            "spawn_project_loading",
+            "spawn_folder_unreadable",
             "agent_not_installed",
             "intent_conflict",
             "agent_not_started",
