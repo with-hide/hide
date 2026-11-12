@@ -589,7 +589,8 @@ A sole pane dropped on its own area's New tab button keeps its tab; in another a
 A successful move focuses the destination and removes an empty source tab, including a named tab, collapsing an empty non-root area without opening a replacement shell.
 The operation keeps the running terminal, conversation and responsibility relationships; a manually placed delegated pane stays where it was put.
 Related tabs cannot start another geometry operation while the move is pending, while other tabs and terminal input remain available.
-A definitive failure offers Retry locally; an uncertain result offers a status check and exposes the confirmed live placement before another move can be tried.
+A definitive failure offers Retry locally.
+A move whose answer does not arrive is settled by Hide itself and never by a status check the operator presses: it ends as done where the pane is at its destination, and as a failure with Retry anywhere else or when the pane's position cannot be read, so the bar shows only "Moving pane…" and then, when it failed, why.
 
 An agent pane's head carries no task chip, no checklist popover and no chord for one (PRD session-record-goal-flow D-01, B1); the PR, letter and branch marks in the same place stay, and the session record holds the whole record.
 A turn the agent's provider refused for a usage limit or an API error ends as the label's `한도`, and the second row and the turn card draw it as `막힘` with its line as the cause (B9); only the session record tells the two apart.

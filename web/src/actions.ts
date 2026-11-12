@@ -2794,8 +2794,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     cancelPaneMovePreview(requestId: string) {
       dispatch({ schema_version: 2, kind: "pane_move_preview_cancel", payload: { request_id: requestId } });
     },
-    checkPaneMove(requestId: string) {
-      dispatch({ schema_version: 2, kind: "pane_move_check", payload: { request_id: requestId } });
+    /** Asks the core to settle a move whose answer this page did not get; `request` is the move this page sent, so a move the core never received is settled too. */
+    checkPaneMove(requestId: string, request?: import("./paneMove").PaneMoveIntent) {
+      dispatch({ schema_version: 2, kind: "pane_move_check", payload: request ? { request_id: requestId, request } : { request_id: requestId } });
     },
     runAgentCommand,
 

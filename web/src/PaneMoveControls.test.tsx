@@ -86,24 +86,36 @@ describe("pane move gesture", () => {
     await act(async () => useShellStore.setState({ rest: { pane_layouts: [{ workspace_id: "w1", tab_id: "t1", focused_pane_id: "p1", zoomed: true, root: { type: "pane", pane_id: "p1" } }] } }));
     await pointer("pointerup", 390, 100); expect(moves()).toHaveLength(0);
   });
-  it("keeps an uncertain result reserved and checks status without dispatching another move", async () => {
+  it("settles a move nobody answered by asking the core, with the request it sent, and never shows a position bar", async () => {
     await act(async () => element('[data-menu-move]').click());
     const request = moves()[0]!.payload as { request_id: string };
     await act(async () => { vi.advanceTimersByTime(15_000); });
-    expect(container.textContent).toContain("Check position before moving again");
+    expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: request.request_id, request } }]);
+    expect(container.textContent).not.toContain("Check position");
+    expect([...container.querySelectorAll("button")].some(button => button.textContent === "Check status")).toBe(false);
+    // The tabs stay reserved while the core settles it, and no second move is sent.
     await act(async () => element('[data-menu-move]').click());
     expect(moves()).toHaveLength(1);
-    const check = [...container.querySelectorAll("button")].find(button => button.textContent === "Check status")!;
-    await act(async () => check.click());
-    expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: request.request_id } }]);
+    // Still unanswered: it asks again, since a check changes nothing it asks for twice.
+    await act(async () => { vi.advanceTimersByTime(15_000); });
+    expect(events.filter(event => event.kind === "pane_move_check")).toHaveLength(2);
   });
-  it("restores a published unknown reservation and check action after mounting without local request state", async () => {
+  it("stops asking once the core has published an answer for the move", async () => {
+    await act(async () => element('[data-menu-move]').click());
+    const request = moves()[0]!.payload as { request_id: string };
+    const done: AsyncOperation = { id: request.request_id, kind: "pane.move", target_id: "p1", scope_id: "t1", phase: "completed", stage: "move", message: null, retryable: false };
+    await act(async () => useShellStore.setState({ rest: { status: { async_operations: [done] } } }));
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    expect(events.filter(event => event.kind === "pane_move_check")).toHaveLength(0);
+    expect(container.querySelector("[data-pane-move-status]")).toBeNull();
+  });
+  it("settles a published unknown reservation by itself after mounting without local request state", async () => {
     const unknown: AsyncOperation = { id: "retained-move", kind: "pane.move", target_id: "p1", scope_id: "t1", related_scope_ids: ["t1", "t2"], phase: "unknown", stage: "move", message: null, retryable: false };
     await act(async () => useShellStore.setState({ rest: { status: { async_operations: [unknown] } } }));
     expect(element('[data-busy]').textContent).toBe("true:false");
-    const check = [...container.querySelectorAll("button")].find(button => button.textContent === "Check status")!;
-    await act(async () => check.click());
     expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: unknown.id } }]);
+    expect(container.textContent).not.toContain("Check position");
+    expect([...container.querySelectorAll("button")].some(button => button.textContent === "Check status")).toBe(false);
     expect(moves()).toHaveLength(0);
   });
   it("cancels on connection loss and suppresses a later release click", async () => {
