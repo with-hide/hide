@@ -1317,8 +1317,9 @@ fn current(
             .map_err(|_| "delivery_unavailable".to_owned())
             .and_then(|guard| {
                 // A mission worker's spawn waits on its device out of the
-                // lock after its admission: a hold set on its node meanwhile
-                // stops it here, where its place is reserved.
+                // lock after its admission: a hold or a start gate set on
+                // its node meanwhile stops it here, where its place is
+                // reserved.
                 if let crate::coordination::Mutation::Reserve {
                     command:
                         crate::coordination::Command::Spawn {
@@ -1328,9 +1329,9 @@ fn current(
                         },
                     ..
                 } = &**mutation
-                    && guard.mission_intent_held(&admission.mission, intent)
+                    && let Some(refused) = guard.mission_intent_refusal(&admission.mission, intent)
                 {
-                    return Err("mission_node_held".into());
+                    return Err(refused);
                 }
                 if actor.code_owned() {
                     // Only the core's code-owned callers

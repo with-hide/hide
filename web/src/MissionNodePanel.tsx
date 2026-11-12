@@ -31,6 +31,7 @@ import {
   lineOutrun,
   mainCommit,
   missionOpen,
+  nodeKindWord,
   nodeLook,
   nodeQuestion,
   nodeSteps,
@@ -99,7 +100,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   // The worker's life beside its model (B4): asleep or ended, as `hide agent show` says it.
   const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.worker.asleep" : "mission.worker.ended") : null;
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
-  const kind = KIND_SHORT[node.kind];
+  const kind = node.kind === "general" && node.preset === "verify" ? "mission.panel.kindVerify" : node.kind === "general" ? nodeKindWord(node) : KIND_SHORT[node.kind];
   const parts: ReactNode[] = [
     ...(kind ? [<span key="kind" className="shrink-0 font-semibold text-subtle-foreground" data-panel-kind={node.kind}>{t(kind)}</span>] : []),
     ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}<RunText run={worker.run} /></span>] : []),
@@ -138,10 +139,8 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
 }
 
 /** A node's kind as the head's first fact; a change, the usual kind, says nothing. */
-const KIND_SHORT: Record<MissionNode["kind"], MessageKey | null> = {
+const KIND_SHORT: Record<Exclude<MissionNode["kind"], "general">, MessageKey | null> = {
   change: null,
-  research: "mission.kind.research",
-  verify: "mission.panel.kindVerify",
   external: "mission.kind.external",
 };
 
@@ -273,7 +272,7 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
   const options = question ? (mission.question?.options ?? []) : [];
   const checks = ended || question || look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
   // Beside a question, finished work or an ended node only the Conductor's own line is left to say; a done research node's line is its conclusion, which the result shows.
-  const own = node.line && !node.plan && !(node.kind === "research" && look === "done") ? { text: node.line, attention: false } : null;
+  const own = node.line && !node.plan && !(node.kind === "general" && node.preset === "research" && look === "done") ? { text: node.line, attention: false } : null;
   const line = ended || question || look === "done" || node.plan ? own : cardLine(mission, node, null, t);
   if (!question && !line && checks.length === 0) return null;
   // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
@@ -394,8 +393,8 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   const left = landingLeft(node);
   if (commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={commit} data-panel-commit={commit}>{t("mission.result.main", { commit: shortCommit(commit) })}</span>]);
   else if (left) rows.push(["main", <span key="left" className="font-semibold text-mission-hold" data-panel-landing={left}>{t(left === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span>]);
-  if (node.kind === "research" && node.status === "done" && node.line) rows.push([t("mission.result.conclusion"), <span key="c" className="break-words" data-panel-conclusion="true">{node.line}</span>]);
-  if (node.kind === "verify" && node.verdict) {
+  if (node.kind === "general" && node.preset === "research" && node.status === "done" && node.line) rows.push([t("mission.result.conclusion"), <span key="c" className="break-words" data-panel-conclusion="true">{node.line}</span>]);
+  if (node.kind === "general" && node.verdict) {
     rows.push([
       t("mission.result.verify"),
       <span key="v" className={cn("font-mono font-semibold", node.verdict === "fail" && "text-mission-failed")} data-panel-verdict={node.verdict}>

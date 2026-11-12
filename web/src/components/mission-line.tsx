@@ -63,7 +63,7 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
   const path = (
     // Where the branch and the destination do not both fit, a grid of auto columns grows them from zero alike, each frozen
     // at its whole width, so a name shorter than half the row stays whole and two long ones share it.
-    <span aria-hidden="true" className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", line.pr && !end ? "inline-grid h-lh align-top" : "grid", line.pr && end && "col-span-2 justify-self-start")} data-line-path="true">
+    <span aria-hidden="true" className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", line.pr && !end ? "inline-grid h-lh align-top" : "grid", line.pr && end && "col-span-2 justify-self-start", !line.pr && "flex-1")} data-line-path="true">
       {from ? (
         <span className="flex min-w-0 items-center gap-xxs" data-line-from="true">
           {plan ? <span className="min-w-0 truncate" data-line-plan={line.plan}>{plan}</span> : null}
@@ -84,7 +84,7 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
   if (whole) {
     return (
       <span className={cn("flex min-w-0 flex-wrap items-center gap-x-xxs text-caption text-muted-foreground", className)} {...data}>
-        <span aria-hidden="true" className="flex items-center gap-xxs" data-line-head="true">
+        <span className="flex items-center gap-xxs" data-line-head="true">
           {icon}
           {number}
         </span>
@@ -101,7 +101,8 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
   }
   // A numbered line with marks: the number and the marks on the first row, the number never giving way, and the path on
   // the second. Without marks it runs inline, so the path wraps whole under the number to a row of the card's whole
-  // width. A line without a number is one flex row that never wraps, the marks at its end.
+  // width. A line without a number is one flex row that never wraps: its path takes what the marks leave, so they keep
+  // their width at the row's right end and only a warning's words give way.
   if (line.pr && end) {
     return (
       <span className={cn("grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-xs text-caption text-muted-foreground", className)} {...data}>

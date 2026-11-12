@@ -352,6 +352,9 @@ struct AnalysisMeta {
     /// (D-09).
     operator_turn: bool,
     context_chars: usize,
+    /// At a turn's end, the turn's own answer, which each new question's
+    /// quoted sentence must be in; empty at its start.
+    answer: String,
 }
 
 struct AnalysisOutcome {
@@ -2613,6 +2616,7 @@ impl LabelWorker {
                 event.kind == LabelEventKind::Human && operator(event) && goal_command(&event.text)
             });
         if phase == AnalysisPhase::TurnEnd {
+            context.insert_str(0, context_label::session_role(ledger.parent_name.is_some()));
             context.push_str(&super::analysis::work_context(&ledger));
             let summary = events
                 .iter()
@@ -2674,6 +2678,11 @@ impl LabelWorker {
             goal_evidence_refresh: evidence_refresh,
             operator_turn,
             context_chars: context.chars().count(),
+            answer: if phase == AnalysisPhase::TurnEnd {
+                super::analysis::turn_answer(events)
+            } else {
+                String::new()
+            },
         };
         self.analysis_in_flight = Some(pane_id.to_owned());
         let sender = self.sender.clone();
@@ -2746,6 +2755,26 @@ impl LabelWorker {
                     .is_some_and(|pane| pane.status == "working"));
         match result {
             Ok((provider, analysis)) => {
+                // The questions are checked against the turn's own answer
+                // before anything keeps them; what the checks dropped or
+                // folded is counted, never named.
+                let judgment = analysis.work.clone().map(|work| {
+                    let (judgment, checks) = work.checked(&outcome.answer);
+                    if checks.listed > 0 {
+                        crate::diagnostic!(json!({
+                            "component": "labels",
+                            "kind": "analysis.asks_checked",
+                            "target": self.target,
+                            "pane_id": pane_id,
+                            "turn": format!("{:016x}", outcome.turn),
+                            "listed": checks.listed,
+                            "unquoted": checks.unquoted,
+                            "to_parent": checks.to_parent,
+                            "over_limit": checks.over_limit,
+                        }));
+                    }
+                    judgment
+                });
                 let record = self.records.get_mut(pane_id).expect("checked above");
                 record.provider_waiting = false;
                 let previous_goal = record.goal.clone();
@@ -2867,7 +2896,7 @@ impl LabelWorker {
                     }
                     if outcome.phase == AnalysisPhase::TurnEnd
                         && let Some(offset) = outcome.offset
-                        && let Some(judgment) = analysis.work.clone()
+                        && let Some(judgment) = judgment.clone()
                         && let Err(code) = client.ledger(LedgerUpdate::TurnEnd {
                             session,
                             offset,
@@ -2899,7 +2928,7 @@ impl LabelWorker {
                 // suggestion record of the session, weighed low (PRD
                 // hide-ai-suggestions D-30), and so is each improvement.
                 if outcome.phase == AnalysisPhase::TurnEnd
-                    && let Some(judgment) = analysis.work.as_ref()
+                    && let Some(judgment) = judgment.as_ref()
                     && let Some(pane) = self.panes.get(pane_id)
                 {
                     // Each point where the turn lost time is a record of

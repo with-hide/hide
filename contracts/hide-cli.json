@@ -4215,6 +4215,7 @@
                 "agent_pane_required",
                 "caller_identity_conflict",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4255,6 +4256,7 @@
                 "human_place_too_long",
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4279,6 +4281,7 @@
             "refusals": [
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4608,6 +4611,8 @@
                 "invalid_brief",
                 "brief_not_submitted",
                 "mission_brief_missing",
+                "mission_node_held",
+                "mission_gate_before_start",
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
@@ -5159,7 +5164,8 @@
                 "composer_unconfirmed",
                 "force_target_asleep",
                 "intent_conflict",
-                "no_parent"
+                "no_parent",
+                "participant_registering"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5588,6 +5594,8 @@
                 "mission_external_invalid",
                 "mission_destination_invalid",
                 "mission_operator_merge_invalid",
+                "mission_preset_invalid",
+                "mission_gate_node_started",
                 "mission_machine_node_refused",
                 "mission_profile_unknown",
                 "mission_candidate_refused"
@@ -5898,6 +5906,7 @@
             "refusals": [
                 "mission_node_held",
                 "mission_node_started",
+                "mission_gate_before_start",
                 "mission_node_unknown",
                 "mission_not_conductor",
                 "mission_ambiguous",
@@ -5995,6 +6004,10 @@
                 "mission_node_unknown",
                 "mission_criterion_unknown",
                 "mission_criterion_not_yours",
+                "participant_session_changed",
+                "participant_registering",
+                "participant_unavailable",
+                "ledger_unavailable",
                 "mission_ambiguous",
                 "mission_commit_required",
                 "mission_rerun_spent",
@@ -6667,7 +6680,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:f2126ca5cc4c604df701b25a7cd2ad3cdec2925e23cee1f9470b3a94c32df500",
+    "digest": "sha256:d771a99207c24bde61cc31d6a671e37f39b1bbf6f50976b075f10d7ed8188314",
     "envelopes": {
         "agent": {
             "answer": "value",

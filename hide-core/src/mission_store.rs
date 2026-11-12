@@ -693,7 +693,7 @@ mod tests {
         };
         for n in 1..=50u64 {
             let nodes = vec![
-                node("research", NodeKind::Research, &[]),
+                node("research", NodeKind::General, &[]),
                 node("fix", NodeKind::Change, &["research"]),
                 node("docs", NodeKind::Change, &["fix"]),
             ];

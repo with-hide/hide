@@ -1325,6 +1325,11 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         // plan's sleeping child, is refused as the plan words it (PRD
         // hide-plan-delegate B5, B6).
         code if code.starts_with("plan_") => hide_core::plans::next_action(code),
+        // A spawn under a mission node that may not start yet is refused as
+        // the mission words it (PRD node-presets D-06).
+        code @ ("mission_node_held" | "mission_gate_before_start") => {
+            hide_core::missions::next_action(code)
+        }
         "agent_pane_required" => {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
@@ -1418,6 +1423,11 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "no_parent" => {
             "You have no parent: no agent answers for you, so your work is the operator's to read; send to a named agent from hide agent list instead"
+        }
+        // The spawn that started the caller has not bound it yet and is
+        // still within its answer time (`coordination::registering`).
+        "participant_registering" => {
+            "Hide is still registering you from the spawn that started you, which takes a few seconds; run the same command again shortly with the same intent"
         }
         "mission_cap_reached" => {
             "The mission's workers are at its cap; wait for one to finish and end it with hide agent end <id>, then run the same command again with the same intent"
@@ -5410,6 +5420,17 @@ mod tests {
         );
     }
 
+    /// A spawn under a mission node held or behind its start gate says what
+    /// the mission owes, not to retry the same spawn (PRD node-presets D-06).
+    #[test]
+    fn a_spawn_under_a_node_that_may_not_start_says_what_the_mission_owes() {
+        for code in ["mission_node_held", "mission_gate_before_start"] {
+            let next = delivery_next_action(&format!("{code}\u{1f}ship"));
+            assert_eq!(next, hide_core::missions::next_action(code));
+            assert!(!next.contains("retry the same intent"), "{next}");
+        }
+    }
+
     /// A refusal that lists the devices the caller could have named answers
     /// with that list; one without a list keeps the static advice.
     #[test]
@@ -5457,6 +5478,7 @@ mod tests {
             "target_ambiguous",
             "target_unavailable",
             "no_parent",
+            "participant_registering",
             "codex_capability_unknown",
             "agent_hook_off",
             "agent_not_set_up",

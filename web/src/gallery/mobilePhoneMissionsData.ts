@@ -55,7 +55,7 @@ function release(views: boolean): PhoneMission {
       step("holder", "holder 버전 폴더 정리", "working", { pr: 2091, pr_state: "pending", merge: { by: "operator", why: "holder 경로는 직접 확인", state: "ahead", prs: [2091] }, worker_agent: "codex", stage: 2, agent: { device_id: "local", pane_id: "gallery-holder" } }),
       step("rehearsal", "마이그레이션 리허설", "working", { depends_on: ["holder"], pr: 2093, pr_state: "pending", base_pr: 2091, worker_agent: "claude", stage: 1, agent: { device_id: "local", pane_id: "gallery-rehearsal" } }),
       step("sign", "Windows 서명 단계", "working", { depends_on: ["bump"], worker_agent: "claude", stage: 0 }),
-      step("verify", "릴리스 빌드 확인", "planned", { kind: "verify", delivery: null, depends_on: ["rehearsal", "sign"], worker_agent: null, agent_runtime: null }),
+      step("verify", "릴리스 빌드 확인", "planned", { kind: "general", preset: "verify", delivery: null, depends_on: ["rehearsal", "sign"], worker_agent: null, agent_runtime: null }),
     ],
   });
 }

@@ -257,7 +257,7 @@ const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker" | "kind" | "
 function node(model: MissionModel, part: PartSpec): MissionNode {
   const at = model.stage === 2 ? "waiting" : phase(part, model.stage);
   const base: MissionNode = {
-    ...NODE, key: part.key, title: say(`node.${part.key}`), kind: part.kind, depends_on: part.deps, delivery: part.kind === "change" ? "pr" : null,
+    ...NODE, key: part.key, title: say(`node.${part.key}`), kind: part.kind === "change" ? "change" : "general", preset: part.kind === "change" ? null : part.kind, depends_on: part.deps, delivery: part.kind === "change" ? "pr" : null,
     status: at === "waiting" ? "planned" : at === "working" ? "working" : "done",
     worker: { agent: part.agent, model: part.model, effort: part.effort },
   };

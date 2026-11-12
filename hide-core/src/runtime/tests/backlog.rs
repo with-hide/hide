@@ -1207,6 +1207,7 @@ pub(super) fn seed_missed_turn(
                     text: missed.into(),
                     same_as: None,
                     operator_only: None,
+                    to_parent: false,
                 }],
                 ..Default::default()
             },

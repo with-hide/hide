@@ -199,6 +199,13 @@ pub struct PhoneNode {
     pub key: String,
     pub title: String,
     pub kind: String,
+    /// A general step's preset and icon key, as the map reads them (PRD
+    /// node-presets D-11); absent on any other step, and from a core before
+    /// them. An older bundle ignores both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub depends_on: Vec<String>,
     pub status: String,
     pub blocked: Option<String>,
@@ -276,6 +283,11 @@ pub struct PhoneMerge {
 pub struct PhoneGate {
     pub state: String,
     pub look: String,
+    /// `start` for a gate that asks before the step starts (PRD
+    /// node-presets D-06); absent for one that asks at its end, and from a
+    /// core before start gates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
     #[serde(default)]
     pub ask: Option<u64>,
     #[serde(default)]
@@ -396,6 +408,10 @@ struct NodeIn {
     title: String,
     kind: String,
     #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
     depends_on: Vec<String>,
     status: String,
     #[serde(default)]
@@ -430,6 +446,19 @@ struct NodeIn {
     gate: Option<PhoneGate>,
     #[serde(default)]
     merge: Option<PhoneMerge>,
+}
+
+/// A step's kind as the phone frame carries it (PRD node-presets D-11): a
+/// general step of the `research` or `verify` preset keeps that preset's name,
+/// the kind a bundle from before general steps names and draws it by; a newer
+/// bundle reads it back as the general step it is (`missionsOnWire`). A
+/// general step of another preset or none is `general`, which an older
+/// bundle draws as a step it has no word for.
+fn phone_kind(kind: String, preset: Option<&str>) -> String {
+    match (kind.as_str(), preset) {
+        ("general", Some(old @ ("research" | "verify"))) => old.to_owned(),
+        _ => kind,
+    }
 }
 
 #[derive(Deserialize)]
@@ -622,7 +651,9 @@ fn phone_mission(
             PhoneNode {
                 key: source.key,
                 title: cut(&source.title),
-                kind: source.kind,
+                kind: phone_kind(source.kind, source.preset.as_deref()),
+                preset: source.preset,
+                icon: source.icon,
                 depends_on: source.depends_on,
                 status: source.status,
                 blocked: source.blocked,
@@ -649,6 +680,7 @@ fn phone_mission(
                 gate: source.gate.map(|gate| PhoneGate {
                     look: cut(&gate.look),
                     said: gate.said.as_deref().map(cut),
+                    when: gate.when.filter(|when| when != "end"),
                     ..gate
                 }),
                 merge: source.merge.map(|merge| PhoneMerge {
@@ -1025,6 +1057,75 @@ mod tests {
         );
         assert!(sent[1].get("gate").is_none());
         assert!(!sent.to_string().contains("private"));
+    }
+
+    /// PRD node-presets D-06, D-11, B9, B10: a general step's preset and
+    /// icon and a start gate's `when` reach the phone; a code step, and an
+    /// end gate, add no key, and a research or verify step keeps its old
+    /// kind, so an older bundle reads the frame as before.
+    #[test]
+    fn a_general_steps_preset_and_start_gate_reach_the_phone() {
+        let gate = |when: &str| json!({"state": "ahead", "look": "배포해도 될지", "when": when});
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node(
+                        "ship",
+                        json!({"kind": "general", "preset": "deploy", "icon": "rocket", "gate": gate("start")}),
+                    ),
+                    node(
+                        "look",
+                        json!({"kind": "general", "icon": "file-text", "gate": gate("end")}),
+                    ),
+                    node("fix", json!({})),
+                    node(
+                        "cause",
+                        json!({"kind": "general", "preset": "research", "icon": "search"}),
+                    ),
+                    node(
+                        "check",
+                        json!({"kind": "general", "preset": "verify", "icon": "shield-check"}),
+                    ),
+                ],
+            )],
+            json!({}),
+        );
+        let sent = serde_json::to_value(&projected(&rest).items[0].nodes).unwrap();
+        assert_eq!(
+            (
+                &sent[0]["kind"],
+                &sent[0]["preset"],
+                &sent[0]["icon"],
+                &sent[0]["gate"]["when"]
+            ),
+            (
+                &json!("general"),
+                &json!("deploy"),
+                &json!("rocket"),
+                &json!("start")
+            )
+        );
+        assert_eq!(sent[1].get("preset"), None);
+        assert_eq!(sent[1]["icon"], "file-text");
+        assert_eq!(sent[1]["gate"].get("when"), None, "{}", sent[1]);
+        assert_eq!((sent[2].get("preset"), sent[2].get("icon")), (None, None));
+        assert_eq!(
+            (
+                &sent[3]["kind"],
+                &sent[3]["preset"],
+                &sent[4]["kind"],
+                &sent[4]["preset"]
+            ),
+            (
+                &json!("research"),
+                &json!("research"),
+                &json!("verify"),
+                &json!("verify")
+            )
+        );
     }
 
     #[test]

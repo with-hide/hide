@@ -16,7 +16,7 @@ import { PR_LOOK } from "./prMark";
 import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionOutside, MissionVerdict, PrState } from "./snapshot";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
-export type LineNode = Pick<MissionNodeBrief, "kind" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
+export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
   /** How the pull request it is stacked on stands, as the mission's own nodes know it; absent or null when no node holds it. */
@@ -127,10 +127,12 @@ export type ResultLine = { kind: "research" | "verify"; working: boolean } & (
 );
 
 export function resultLine(node: LineNode): ResultLine | null {
-  if (node.kind !== "research" && node.kind !== "verify") return null;
-  const base = { kind: node.kind, working: node.status === "working" };
+  // A general node of the research or verify preset; another general node's line is the next node's (PRD node-presets).
+  const kind = node.kind === "general" ? node.preset : null;
+  if (kind !== "research" && kind !== "verify") return null;
+  const base = { kind, working: node.status === "working" };
   if (node.status === "done") {
-    if (node.kind === "verify" && node.verdict) return { ...base, shows: "verdict", verdict: node.verdict, checks: node.checks ?? null };
+    if (kind === "verify" && node.verdict) return { ...base, shows: "verdict", verdict: node.verdict, checks: node.checks ?? null };
     if (node.line) return { ...base, shows: "conclusion", line: node.line };
   }
   return { ...base, shows: "kind" };

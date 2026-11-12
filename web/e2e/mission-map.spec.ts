@@ -334,6 +334,8 @@ test("at the largest Interface text a working change's branch line stays inside 
       const book = JSON.parse(fs.readFileSync(file, "utf8"));
       const node = book.missions[0].nodes.find((one: { key: string }) => one.key === "marked");
       const now = Date.now();
+      // A line without a number with 내 차례: the mark stays whole at the line's right end and the path gives way.
+      Object.assign(book.missions[0].nodes.find((one: { key: string }) => one.key === "draft"), { attention: { reason: "conductor_failed", key: 1, since_unix_ms: now } });
       Object.assign(node, {
         worked_at_unix_ms: now - 7_200_000,
         pushed_at_unix_ms: now - 7_200_000,
@@ -365,6 +367,7 @@ test("at the largest Interface text a working change's branch line stays inside 
     // end with its whole name on hover. A line that fits keeps one row, its number a step further from the branch than the
     // icon from the number; a line without a number stays on one row however long, a direct one's `PR 없이` after its destination.
     // A numbered line with marks keeps `#n +N` whole and the marks on its first row, inside the card, and the path on the second.
+    // A line without a number with 내 차례 keeps the mark whole at its right end, its two names sharing what the mark leaves.
     const lines = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       Object.fromEntries(
         cards.filter((card) => card.querySelector("[data-node-line='branch']")).map((card) => {
@@ -373,7 +376,7 @@ test("at the largest Interface text a working change's branch line stays inside 
           const part = (selector: string) => card.querySelector<HTMLElement>(`[data-node-line='branch'] ${selector}`);
           const box = (selector: string) => part(selector)?.getBoundingClientRect() ?? null;
           const cut = (element: HTMLElement) => element.scrollWidth > element.clientWidth;
-          const [icon, number, head, branch, to, name, direct, end] = [box("[data-line-icon]")!, box("[data-line-pr]"), box("[data-line-head]")!, box("[data-line-branch]")!, box("[data-line-to]")!, part("[data-line-to] [title]")!, box("[data-line-direct]"), card.querySelector("[data-node-foot] [data-node-foot-end]")?.getBoundingClientRect() ?? null];
+          const [icon, number, head, path, branch, to, name, direct, end] = [box("[data-line-icon]")!, box("[data-line-pr]"), box("[data-line-head]")!, box("[data-line-path]")!, box("[data-line-branch]")!, box("[data-line-to]")!, part("[data-line-to] [title]")!, box("[data-line-direct]"), card.querySelector("[data-node-foot] [data-node-foot-end]")?.getBoundingClientRect() ?? null];
           const at = (x: number) => Math.abs(x - foot.left) < 1;
           const wrapped = branch.top >= head.bottom - 1;
           return [
@@ -384,9 +387,9 @@ test("at the largest Interface text a working change's branch line stays inside 
               edge: at(card.querySelector("[data-node-head]")!.getBoundingClientRect().left) && at(head.left) && (!wrapped || at(branch.left)),
               oneRow: [to, direct ?? to].every((one) => Math.abs(branch.top + branch.height / 2 - (one.top + one.height / 2)) < 1),
               direct: part("[data-line-to] [data-line-direct]")?.textContent ?? null,
-              marks: end ? { firstRow: Math.abs(end.top + end.height / 2 - (head.top + head.height / 2)) < 1, inside: end.right <= foot.right + 0.5 && end.left >= head.right, number: part("[data-line-pr]")?.textContent ?? null, warning: card.querySelector("[data-node-foot] [data-node-warning]") !== null, turn: card.querySelector("[data-node-foot] [data-node-attention-tag]")?.textContent ?? null } : null,
+              marks: end ? { firstRow: Math.abs(end.top + end.height / 2 - (head.top + head.height / 2)) < 1, inside: end.right <= foot.right + 0.5 && end.left >= head.right, edge: Math.abs(end.right - foot.right) < 1, whole: [...card.querySelectorAll<HTMLElement>("[data-node-foot] [data-node-attention-tag] > *")].every((word) => { const at = word.getBoundingClientRect(); return word.scrollWidth <= word.clientWidth && at.left >= end.left - 0.5 && at.right <= end.right + 0.5; }), number: part("[data-line-pr]")?.textContent ?? null, warning: card.querySelector("[data-node-foot] [data-node-warning]") !== null, turn: card.querySelector("[data-node-foot] [data-node-attention-tag]")?.textContent ?? null } : null,
               wider: wrapped || !number ? null : branch.left - number.right > number.left - icon.right + 0.5,
-              half: branch.width >= foot.width * 0.4 && to.width >= foot.width * 0.4,
+              half: branch.width >= path.width * 0.4 && to.width >= path.width * 0.4,
               numberCut: part("[data-line-pr]") ? cut(part("[data-line-pr]")!) : null,
               branch: part("[data-line-branch]")!.title,
               branchCut: cut(part("[data-line-branch]")!),
@@ -401,8 +404,8 @@ test("at the largest Interface text a working change's branch line stays inside 
       api: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-db-state-columns-and-index", branchCut: true, to: LONG_DESTINATION, toCut: true },
       screen: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-screen-that-reads-the-api", branchCut: true, to: "PR 3114", toCut: false },
       short: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: true, half: false, numberCut: false, branch: "fix/typo", branchCut: false, to: "PR 3114", toCut: false },
-      draft: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: null, branch: "feat/refund-notice-mail-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
-      marked: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, number: "#3116 +1", warning: true, turn: "Needs you" }, wider: null, half: true, numberCut: false, branch: "feat/refund-retry-queue-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      draft: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, edge: true, whole: true, number: null, warning: false, turn: "Needs you" }, wider: null, half: true, numberCut: null, branch: "feat/refund-notice-mail-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      marked: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, edge: true, whole: true, number: "#3116 +1", warning: true, turn: "Needs you" }, wider: null, half: true, numberCut: false, branch: "feat/refund-retry-queue-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
       hotfix: { inside: true, wrapped: false, edge: true, oneRow: true, direct: "· No PR", marks: null, wider: null, half: true, numberCut: null, branch: "fix/refund-rounding-in-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
     });
     // The taller cards still stand apart on the map.

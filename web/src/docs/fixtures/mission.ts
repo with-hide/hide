@@ -23,10 +23,10 @@ const reviewer: MissionWorker = { agent: "codex", model: "Astra", effort: "mediu
 
 export function missionFixture(): { mission: Mission; rest: SnapshotRest } {
   const nodes: MissionNode[] = [
-    node("callers", "Find every caller of the old endpoint", { kind: "research", delivery: null, worker: opus, status: "done", started_at_unix_ms: minutesAgo(50), finished_at_unix_ms: minutesAgo(35), line: "14 callers in 6 files" }),
+    node("callers", "Find every caller of the old endpoint", { kind: "general", preset: "research", delivery: null, worker: opus, status: "done", started_at_unix_ms: minutesAgo(50), finished_at_unix_ms: minutesAgo(35), line: "14 callers in 6 files" }),
     node("api", "Add the v2 endpoint", { depends_on: ["callers"], worker: opus, status: "working", started_at_unix_ms: minutesAgo(30), pr: 412, pr_state: "pending", branch: "feat/orders-v2", stage: 1, pane_id: "docs-worker" }),
     node("move", "Move the callers to v2", { depends_on: ["api"], worker: opus }),
-    node("check", "Check the whole change", { kind: "verify", delivery: null, depends_on: ["move"], worker: reviewer }),
+    node("check", "Check the whole change", { kind: "general", preset: "verify", delivery: null, depends_on: ["move"], worker: reviewer }),
   ];
   const mission: Mission = withCoreWaits({
     id: MISSION_ID, title: "Move the orders API to v2", workspace_id: "hide", project: "/projects/orders-app", checkout_path: "/projects/orders-app", device_id: "local",

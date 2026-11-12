@@ -391,6 +391,7 @@ pub const COMMANDS: &[Spec] = &[
             "agent_pane_required",
             "caller_identity_conflict",
             "participant_unavailable",
+            "participant_registering",
             "participant_ended",
             "participant_session_changed",
             "ambiguous_participant",
@@ -429,6 +430,7 @@ pub const COMMANDS: &[Spec] = &[
             "human_place_too_long",
             "agent_pane_required",
             "participant_unavailable",
+            "participant_registering",
             "participant_ended",
             "participant_session_changed",
             "ambiguous_participant",
@@ -447,6 +449,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &[
             "agent_pane_required",
             "participant_unavailable",
+            "participant_registering",
             "participant_ended",
             "participant_session_changed",
             "ambiguous_participant",
@@ -590,6 +593,8 @@ pub const COMMANDS: &[Spec] = &[
             "invalid_brief",
             "brief_not_submitted",
             "mission_brief_missing",
+            "mission_node_held",
+            "mission_gate_before_start",
             "mission_machine_node_refused",
             "mission_machine_unavailable",
             "mission_projects_loading",
@@ -895,7 +900,10 @@ pub const COMMANDS: &[Spec] = &[
     },
     // --force types the letter into the recipient's input now, even while
     // it works, and is refused, with nothing recorded or typed, while
-    // someone's text shows there (PRD engine-bundle-1 D-14).
+    // someone's text shows there (PRD engine-bundle-1 D-14). The target
+    // `parent` is refused `no_parent` for a sender no agent answers for, and
+    // `participant_registering` for the seconds the spawn that started the
+    // sender takes to register it.
     Spec {
         words: &["request", "send"],
         arguments: TARGET,
@@ -916,6 +924,7 @@ pub const COMMANDS: &[Spec] = &[
             "force_target_asleep",
             "intent_conflict",
             "no_parent",
+            "participant_registering",
         ],
     },
     spec(
@@ -1059,6 +1068,8 @@ pub const COMMANDS: &[Spec] = &[
             "mission_external_invalid",
             "mission_destination_invalid",
             "mission_operator_merge_invalid",
+            "mission_preset_invalid",
+            "mission_gate_node_started",
             "mission_machine_node_refused",
             "mission_profile_unknown",
             "mission_candidate_refused",
@@ -1123,6 +1134,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &[
             "mission_node_held",
             "mission_node_started",
+            "mission_gate_before_start",
             "mission_node_unknown",
             "mission_not_conductor",
             "mission_ambiguous",
@@ -1184,6 +1196,10 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_unknown",
             "mission_criterion_unknown",
             "mission_criterion_not_yours",
+            "participant_session_changed",
+            "participant_registering",
+            "participant_unavailable",
+            "ledger_unavailable",
             "mission_ambiguous",
             "mission_commit_required",
             "mission_rerun_spent",

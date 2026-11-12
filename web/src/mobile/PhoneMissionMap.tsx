@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, nodeLook, openAttention } from "../missions";
+import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, nodeKindWord, nodeLook, openAttention } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { phoneLineNode, workerOf } from "./missionModel";
@@ -101,6 +101,8 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
         node={node} look={look} word={word} yours={mergeDue || turn}
         aria-label={[
           node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, detail,
+          // A general step whose line does not say its preset says it here, as the phone's card always has (PRD node-presets B9).
+          node.kind === "general" && !result ? t(nodeKindWord(node)) : null,
           // The lines are drawn for the eye, so their words and states are said here (B28).
           branch ? `${t("mission.foot.where")}: ${branchLineWords(branch, t)}` : null,
           result ? resultLineWords(result, t) : null,

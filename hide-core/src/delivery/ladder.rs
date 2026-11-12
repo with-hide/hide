@@ -70,12 +70,41 @@ impl NotReady {
 /// Waits until the engine reports the agent `name` in `pane` ready for input,
 /// the moment an input that did not ride the start is typed after the
 /// agent's screen is drawn; `wait` bounds it.
-#[allow(clippy::disallowed_methods)] // a production wait on the engine's readiness, bounded by the deadline
 pub(crate) fn ready(
     engine: &dyn Engine,
     pane: &str,
     name: &str,
     wait: Duration,
+) -> Result<(), NotReady> {
+    seen(engine, pane, name, wait, |agent| {
+        agent.readiness.accepts_input()
+    })
+}
+
+/// Waits until the agent `name` in `pane` is seen to have taken the prompt
+/// its start carried (`AgentApi::LaunchPrompt`): ready for input, or working.
+/// The engine reads a start as launching until the agent's screen rests
+/// (`launch_pending`), so an agent busy with its launched prompt is not ready
+/// for as long as that turn runs, though it took the prompt; `wait` bounds it.
+pub(crate) fn took_launch(
+    engine: &dyn Engine,
+    pane: &str,
+    name: &str,
+    wait: Duration,
+) -> Result<(), NotReady> {
+    seen(engine, pane, name, wait, |agent| {
+        agent.readiness.accepts_input() || agent.status == "working"
+    })
+}
+
+/// Reads the agent `name` in `pane` until `taken` holds for it, within `wait`.
+#[allow(clippy::disallowed_methods)] // a production wait on the engine's readiness, bounded by the deadline
+fn seen(
+    engine: &dyn Engine,
+    pane: &str,
+    name: &str,
+    wait: Duration,
+    taken: impl Fn(&crate::engine::DeliveryAgent) -> bool,
 ) -> Result<(), NotReady> {
     let deadline = Instant::now() + wait;
     loop {
@@ -88,7 +117,7 @@ pub(crate) fn ready(
             }
             Err(error) => return Err(NotReady::Unread(error.to_string())),
         };
-        if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
+        if agent.pane_id == pane && agent.name == name && taken(&agent) {
             return Ok(());
         }
         if Instant::now() >= deadline {

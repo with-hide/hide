@@ -572,8 +572,8 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     node("docs", "done", { delivery: "direct", landing: { state: "landed", proof: { by: "in_main", commit: "abc" } } }),
     node("sdk", "working", { kind: "external", delivery: null, worker_agent: null, external_pr: 77, external_base: "main", external_state: "mergeable" }),
     node("lib", "working", { kind: "external", delivery: null, worker_agent: null, external_branch: "feat/lib", external_base: "feat/login" }),
-    node("look", "done", { kind: "research", delivery: null, worker_agent: "codex" }),
-    node("check", "working", { kind: "verify", delivery: null }),
+    node("look", "done", { kind: "general", preset: "research", delivery: null, worker_agent: "codex" }),
+    node("check", "working", { kind: "general", preset: "verify", delivery: null }),
     node("tidy", "planned", { delivery: "direct" }),
   ] })]);
   try {
@@ -617,7 +617,7 @@ it("names no branch or destination it was not sent, and tags no mission whose st
       node("ext", "working", { kind: "external", delivery: null }),
       node("top", "working", { pr: 40, pr_state: "pending", base_pr: 39 }),
     ] }),
-    mission("m-look", { destination: "feat/login", nodes: [node("look", "working", { kind: "research", delivery: null }), node("check", "planned", { kind: "verify", delivery: null })] }),
+    mission("m-look", { destination: "feat/login", nodes: [node("look", "working", { kind: "general", preset: "research", delivery: null }), node("check", "planned", { kind: "general", preset: "verify", delivery: null })] }),
   ]);
   try {
     await click('[data-phone-tab="missions"]');
@@ -639,4 +639,25 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     expect(container.querySelector('[data-node-line="branch"]')).toBeNull();
     expect(cardOf(container, "look")).toMatchObject({ line: "result", mark: "research" });
   } finally { await unmount(); }
+});
+
+it("reads a step a Hide sends by its old kind as the general step of that preset, and draws a general step by its preset", async () => {
+  // PRD node-presets D-11, B9: a Hide from before general steps, and the frame of a newer one, name a research or verify step by
+  // that old kind; this bundle reads it as a general step with that preset, and draws a working one with its preset's word.
+  const old = { ...node("cause", "working", { delivery: null }), kind: "research" } as unknown as PhoneMissionNode;
+  const checked = { ...node("together", "working", { delivery: null }), kind: "verify" } as unknown as PhoneMissionNode;
+  const ship = node("ship", "working", { kind: "general", preset: "deploy", icon: "rocket", delivery: null });
+  const { container, click, store, unmount } = await connect([mission("m-run", { nodes: [old, checked, ship] })]);
+  try {
+    const read = store.usePhone.getState().missions![0]!.nodes.map((step) => [step.key, step.kind, step.preset ?? null]);
+    expect(read).toEqual([["cause", "general", "research"], ["together", "general", "verify"], ["ship", "general", "deploy"]]);
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-run"]');
+    const label = (key: string) => container.querySelector(`[data-dependency-node="${key}"] [aria-label]`)?.getAttribute("aria-label");
+    expect(label("cause")).toContain("Research");
+    expect(label("together")).toContain("Verify");
+    expect(label("ship")).toContain("Deploy");
+  } finally {
+    await unmount();
+  }
 });
