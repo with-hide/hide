@@ -193,7 +193,7 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
   const nodes = [
     node("spec", { status: "done" }),
     node("api", { status: "working", pr: PR, stage: 2, depends_on: ["spec"] }),
-    node("probe", { kind: "research", delivery: null, status: "working", depends_on: ["spec"] }),
+    node("probe", { kind: "general", preset: "research", delivery: null, status: "working", depends_on: ["spec"] }),
     node("ui", { depends_on: ["api"] }),
     node("later"),
   ];
@@ -227,9 +227,9 @@ it("shows a finished mission's time, the report's first two lines and at most th
   const nodes = [
     node("one", { status: "done", pr: PR, pr_state: "merged" }),
     node("two", { status: "done", delivery: "direct", branch: "fix/tab" }),
-    node("three", { status: "done", kind: "research", delivery: null, line: "the cell resets first" }),
-    node("four", { status: "done", kind: "verify", delivery: null, line: "6 of 6 pass" }),
-    node("five", { status: "done", kind: "research", delivery: null }),
+    node("three", { status: "done", kind: "general", preset: "research", delivery: null, line: "the cell resets first" }),
+    node("four", { status: "done", kind: "general", preset: "verify", delivery: null, line: "6 of 6 pass" }),
+    node("five", { status: "done", kind: "general", preset: "research", delivery: null }),
   ];
   const done = await mount([mission({ status: "done", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3 * hour, report: "# All merged\n\n- [ ] One step left for later\n\n**Third** line." })]);
   try {

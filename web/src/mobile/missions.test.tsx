@@ -535,3 +535,24 @@ it("names only open PRs in the phone merge turn, newest first with the additiona
     }
   } finally { await unmount(); }
 });
+
+it("reads a step a Hide sends by its old kind as the general step of that preset, and draws a general step by its preset", async () => {
+  // PRD node-presets D-11, B9: a Hide from before general steps, and the frame of a newer one, name a research or verify step by
+  // that old kind; this bundle reads it as a general step with that preset, and draws a working one with its preset's word.
+  const old = { ...node("cause", "working", { delivery: null }), kind: "research" } as unknown as PhoneMissionNode;
+  const checked = { ...node("together", "working", { delivery: null }), kind: "verify" } as unknown as PhoneMissionNode;
+  const ship = node("ship", "working", { kind: "general", preset: "deploy", icon: "rocket", delivery: null });
+  const { container, click, store, unmount } = await connect([mission("m-run", { nodes: [old, checked, ship] })]);
+  try {
+    const read = store.usePhone.getState().missions![0]!.nodes.map((step) => [step.key, step.kind, step.preset ?? null]);
+    expect(read).toEqual([["cause", "general", "research"], ["together", "general", "verify"], ["ship", "general", "deploy"]]);
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-run"]');
+    const label = (key: string) => container.querySelector(`[data-dependency-node="${key}"] [aria-label]`)?.getAttribute("aria-label");
+    expect(label("cause")).toContain("Research");
+    expect(label("together")).toContain("Verify");
+    expect(label("ship")).toContain("Deploy");
+  } finally {
+    await unmount();
+  }
+});
