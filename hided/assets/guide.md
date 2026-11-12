@@ -24,7 +24,7 @@ hide request reply <id> --intent <key> --body <text>
 hide inbox
 ```
 
-- A target is an agent's name or registration id from `hide agent list`, a pane id on your own machine, or `parent` for the agent that answers for you (refused `no_parent` when none does); use a new `--intent` for each new letter, including the same text to another agent, and the same one only to retry that exact letter; a reused intent with another recipient, kind or body (for a reply, another letter replied to or another body) is refused `intent_conflict`.
+- A target is an agent's name or registration id from `hide agent list`, a pane id on your own machine, or `parent` for the agent that answers for you (refused `no_parent` when none does, and `participant_registering` for the few seconds the spawn that started you takes to register you: send the same letter again shortly); use a new `--intent` for each new letter, including the same text to another agent, and the same one only to retry that exact letter; a reused intent with another recipient, kind or body (for a reply, another letter replied to or another body) is refused `intent_conflict`.
 - The body's first line is its one-line summary, which the operator sees when Hide wakes the recipient, so begin with what happened or what you need.
 - `request` asks and waits for a reply; `block` says you cannot go on without one; `progress` is an interim report, such as a plan, and ends nothing; `report` says the work is finished and ends your parent's watch on you.
 - Send `progress` at a plan, a change of direction, or before a long wait, not at every step: the recipient reads only your newest three in full.

@@ -112,7 +112,7 @@ pub(crate) fn declare(
     turn: Option<&(HumanKind, String)>,
     now: u64,
 ) -> Result<Value, String> {
-    let record = here(ledger, caller)?.clone();
+    let record = here(ledger, caller, now)?.clone();
     let standing = ledger.human_turns.get(&record.id).cloned();
     let (outcome, declaration) = match (turn, standing) {
         (None, Some(_)) => {

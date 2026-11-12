@@ -4215,6 +4215,7 @@
                 "agent_pane_required",
                 "caller_identity_conflict",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4255,6 +4256,7 @@
                 "human_place_too_long",
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4279,6 +4281,7 @@
             "refusals": [
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -5159,7 +5162,8 @@
                 "composer_unconfirmed",
                 "force_target_asleep",
                 "intent_conflict",
-                "no_parent"
+                "no_parent",
+                "participant_registering"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6667,7 +6671,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:f2126ca5cc4c604df701b25a7cd2ad3cdec2925e23cee1f9470b3a94c32df500",
+    "digest": "sha256:6f83d736a6b3743548310c0a3eb7c3c95a7af4e40e1ebe81032a26fa32005c29",
     "envelopes": {
         "agent": {
             "answer": "value",
