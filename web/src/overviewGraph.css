@@ -4,7 +4,8 @@
 .og-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg); }
 .og-toolbar h2 { margin: 0 0 var(--spacing-sm); font-size: var(--text-headline); font-weight: 600; }
 .og-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
-.og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xxs); }
+.og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
+.og-state-counts > span { --size-agent-mark: 0.85em; }
 .og-state-counts { gap: var(--spacing-sm); color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-state-counts b { font-weight: 500; font-variant-numeric: tabular-nums; }
 .og-state-counts [data-state="turn"] { color: var(--warning); }
@@ -151,10 +152,10 @@
 .og-project-list { margin-top: var(--spacing-sm); }
 .og-project-list > div { display: flex; align-items: center; gap: var(--spacing-xs); border-bottom: var(--size-hairline) solid var(--border); }
 .og-project-list > div[data-hidden="true"] > button:first-child { opacity: var(--opacity-dimmed); }
-.og-project-list > div > button:first-child { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: var(--spacing-xs) var(--spacing-sm); border: 0; padding: var(--spacing-sm); background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
+.og-project-list > div > button:first-child { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs) var(--spacing-sm); border: 0; padding: var(--spacing-sm); background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
 .og-project-list > div > button:first-child:disabled { cursor: default; }
 .og-project-list strong { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
-.og-count { flex-shrink: 0; margin-left: auto; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.og-count { flex-shrink: 0; min-width: 2ch; margin-left: auto; text-align: right; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 /* The row's eye shows on pointer or keyboard focus, and always on a hidden row (PRD overview-graph-remembered D-02). */
 .og-project-list .og-eye { flex-shrink: 0; opacity: 0; }
 .og-project-list > div:hover .og-eye, .og-project-list > div:focus-within .og-eye, .og-project-list > div[data-hidden="true"] .og-eye { opacity: 1; }
@@ -166,6 +167,10 @@
 /* The asks waiting on the operator share one quiet container, each set apart by a line, rather than a ring of their own; a button inside takes its fill and line from the same warning tint. */
 .og-ask-list { --og-ask-line: color-mix(in srgb, var(--warning) 10%, color-mix(in srgb, var(--border) 70%, transparent)); --og-ask-fill: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); overflow: hidden; border: var(--size-hairline) solid var(--og-ask-line); border-radius: var(--radius-md); background: var(--og-ask-fill); }
 .og-ask { --border: transparent; --secondary: color-mix(in srgb, var(--warning) calc(var(--opacity-selected-fill) * 100%), transparent); --accent: color-mix(in srgb, var(--warning) calc(var(--opacity-emphasis-fill) * 100%), transparent); display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); padding: var(--spacing-sm) var(--spacing-md); }
+/* Only the mark stands at the card's left edge; the line and its actions under it start where the title does. */
+.og-ask { --og-ask-mark: var(--size-agent-badge-compact); }
+.og-ask-who > :first-child { width: var(--og-ask-mark); height: var(--og-ask-mark); flex-shrink: 0; }
+.og-ask > :not(.og-ask-who) { margin-left: calc(var(--og-ask-mark) + var(--spacing-xs)); }
 .og-ask + .og-ask { border-top: var(--size-hairline) solid var(--og-ask-line); }
 .og-ask p { margin: 0; overflow-wrap: anywhere; }
 .og-ask small { color: var(--warning); font-size: var(--text-caption); }

@@ -63,15 +63,15 @@ export function OverviewBacklog({ projects, actions }: { projects: readonly Boar
     <div className="min-w-0 rounded-lg border border-border">
     <div className="flex min-w-0 flex-col gap-md rounded-t-lg border-b border-border bg-muted/30 px-lg py-lg" data-backlog-toolbar="true">
       <div className="flex flex-wrap items-center gap-sm">
-      <div className="flex flex-wrap items-center gap-xxs" role="group" aria-label={t("backlogView.status")}>
+      <div className="-ml-sm flex flex-wrap items-center gap-xxs" role="group" aria-label={t("backlogView.status")}>
         {(["open", "started", "all"] as const).map((status) => <Button key={status} size="sm" variant="ghost" className={cn(filters.status === status && "bg-foreground/6 text-foreground hover:bg-foreground/6")} aria-pressed={filters.status === status} data-backlog-status={status} onClick={() => setFilters({ ...filters, status })}>{t(`backlogView.${status}`)} <span className="font-mono text-micro text-muted-foreground">{counts[status]}</span></Button>)}
       </div>
       <div className="ml-auto flex items-center gap-xxs rounded-sm bg-foreground/6 p-xxs" role="group" aria-label={t("backlogView.source")}>
-        {(["all", "github", "local"] as const).map((source) => <Button key={source} size="sm" variant="ghost" className={cn("rounded-xs", filters.source === source && "bg-raised text-foreground shadow-raised hover:bg-raised")} aria-pressed={filters.source === source} data-backlog-source={source} onClick={() => setFilters({ ...filters, source })}>{t(source === "all" ? "backlogView.allSources" : source === "local" ? "backlogView.memo" : "backlog.sourceGithub")}</Button>)}
+        {(["all", "github", "local"] as const).map((source) => <Button key={source} size="sm" variant="ghost" className={cn("rounded-xs", filters.source === source && "segment-on")} aria-pressed={filters.source === source} data-backlog-source={source} onClick={() => setFilters({ ...filters, source })}>{t(source === "all" ? "backlogView.allSources" : source === "local" ? "backlogView.memo" : "backlog.sourceGithub")}</Button>)}
       </div>
       </div>
       <div className="flex min-w-0 items-center gap-sm">
-      <div className="flex min-w-0 flex-1 items-center gap-xs"><SearchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /><Input value={query} onChange={(event) => useUiStore.getState().setOverview({ backlogQuery: event.target.value })} placeholder={t("backlogView.search")} aria-label={t("backlogView.search")} className="min-w-0" data-backlog-query="true" /></div>
+      <div className="relative flex min-w-0 flex-1 items-center"><SearchIcon aria-hidden="true" className="pointer-events-none absolute left-sm size-(--size-icon-sm) text-muted-foreground" /><Input value={query} onChange={(event) => useUiStore.getState().setOverview({ backlogQuery: event.target.value })} placeholder={t("backlogView.search")} aria-label={t("backlogView.search")} className="min-w-0 pl-[calc(var(--spacing-sm)+var(--size-icon-sm)+var(--spacing-xs))]" data-backlog-query="true" /></div>
       <Popover>
         <PopoverTrigger asChild><Button size="sm" variant="ghost" data-backlog-filters="true"><ListFilterIcon />{t("backlogView.filters")}{labels.length || filters.author || filters.assignee || filters.status === "closed" ? <span aria-hidden="true">·</span> : null}</Button></PopoverTrigger>
         <PopoverContent align="start" className="flex max-h-(--radix-popover-content-available-height) flex-col gap-md overflow-y-auto">

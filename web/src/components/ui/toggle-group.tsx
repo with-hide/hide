@@ -12,7 +12,7 @@ const toggleVariants = cva(
   {
     variants: {
       variant: {
-        segmented: "rounded-xs data-[state=on]:bg-raised data-[state=on]:text-foreground data-[state=on]:shadow-raised",
+        segmented: "rounded-xs data-[state=on]:segment-on",
         pill: "rounded-full border border-border hover:border-muted-foreground data-[state=on]:border-foreground data-[state=on]:bg-foreground data-[state=on]:text-background",
       },
       size: {

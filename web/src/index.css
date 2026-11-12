@@ -327,3 +327,21 @@ html[data-view-drag="row-resize"] * {
   --accent: color-mix(in srgb, var(--tone) calc(var(--opacity-emphasis-fill) * 100%), transparent);
   & :is([data-variant="secondary"], [data-variant="outline"]):not(.border-dashed) { border-color: transparent; }
 }
+
+/* The chosen item of a segmented control: lifted white in Light; in Dark a shadow reads as a stroke and the raised gray sits too close to the track, so it is a stronger foreground tint with no shadow. */
+@utility segment-on {
+  &, &:hover {
+    background-color: var(--raised);
+    color: var(--foreground);
+    box-shadow: var(--shadow-raised);
+  }
+  .dark &, .dark &:hover {
+    background-color: color-mix(in srgb, var(--foreground) calc(var(--opacity-emphasis-fill) * 100%), transparent);
+    box-shadow: none;
+  }
+}
+
+/* A status mark beside a count: sized to the count's letters rather than to a row's title, so the mark does not outweigh its number. */
+@utility mark-with-count {
+  --size-agent-mark: 0.85em;
+}

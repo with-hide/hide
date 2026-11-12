@@ -93,9 +93,9 @@ export function OverviewHistory({ projects, deviceId, actions }: { projects: Boa
     <div className="shrink-0 space-y-md px-xl pt-xl pb-md">
       <h1 className="text-title font-semibold">{t("overviewHistory.title")}</h1>
       <div className="flex min-w-0 flex-wrap items-center gap-sm">
-        <div className="flex min-w-0 flex-1 basis-1/2 items-center gap-sm">
-          <SearchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-          <Input type="search" maxLength={200} value={state.query} placeholder={t("overviewHistory.search")} aria-label={t("overviewHistory.search")} onChange={(event) => criteria({ query: event.target.value })} data-history-query="true" />
+        <div className="relative flex min-w-0 flex-1 basis-1/2 items-center">
+          <SearchIcon aria-hidden="true" className="pointer-events-none absolute left-sm size-(--size-icon-sm) text-muted-foreground" />
+          <Input type="search" maxLength={200} value={state.query} placeholder={t("overviewHistory.search")} aria-label={t("overviewHistory.search")} onChange={(event) => criteria({ query: event.target.value })} className="pl-[calc(var(--spacing-sm)+var(--size-icon-sm)+var(--spacing-xs))]" data-history-query="true" />
         </div>
         <select className={SELECT} aria-label={t("overviewHistory.scope")} value={state.extra ? "extra" : "requests"} onChange={(event) => criteria({ extra: event.target.value === "extra" })} data-history-scope="true">
           <option value="requests">{t("overviewHistory.requests")}</option><option value="extra">{t("overviewHistory.extra")}</option>

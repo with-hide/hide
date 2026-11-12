@@ -747,9 +747,12 @@ function FoldRow({
       <span className="min-w-0 flex-1 truncate">
         {label} {count}
       </span>
-      {badge}
-      <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
-        <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
+      {/* The badge keeps a project row's gap to the fold slot, so its right edge lines up with the project badges around it. */}
+      <span className="flex shrink-0 items-center gap-xs">
+        {badge}
+        <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
+          <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
+        </span>
       </span>
     </RowButton>
   );
