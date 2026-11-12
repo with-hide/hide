@@ -16,8 +16,10 @@ use hide_node_link::protocol::Call;
 use crate::agent_sleep::DECISION_INTERVAL_MS;
 use crate::node_access::{NodeLink, call_as};
 
-/// Read at the decision's own pace.
-const READ_INTERVAL: Duration = Duration::from_millis(DECISION_INTERVAL_MS);
+/// Read four times for each decision, so the minute acts on a level at most
+/// this old: once pressure ends, the next decision sees it. The read is one
+/// kernel value or one small file on the machine.
+const READ_INTERVAL: Duration = Duration::from_secs(15);
 /// The node reads one kernel value or one small file; a machine too pressed
 /// or too far to answer in this is unread for the minute.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,7 +47,7 @@ impl PressureReading {
     }
 }
 
-/// Reads one machine's pressure on a worker, once a minute.
+/// Reads one machine's pressure on a worker, every [`READ_INTERVAL`].
 pub(crate) struct PressureReader {
     inner: crate::reader::BackgroundRead<(), PressureReading>,
 }
