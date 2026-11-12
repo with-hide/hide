@@ -91,9 +91,9 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
       <OpeningStatus actions={actions} />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
         <Tabs className="-mb-[calc(var(--spacing-xs)+var(--size-hairline))] min-w-0 self-end overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
-          <TabsList aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none bg-transparent p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
+          <TabsList variant="underline" aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
             {MAIN_VIEWS.map((choice) => (
-              <TabsTrigger key={choice} value={choice} data-main-tab={choice} className="h-auto rounded-none border-b-2 border-transparent px-xs py-sm data-[state=active]:border-primary data-[state=active]:bg-transparent">
+              <TabsTrigger key={choice} value={choice} data-main-tab={choice} className="px-xs py-sm">
                 {t(TAB_LABEL[choice])}
                 {counts[choice]}
               </TabsTrigger>
