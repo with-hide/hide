@@ -251,7 +251,7 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       cards.flatMap((card) => {
         const right = card.getBoundingClientRect().right + 1;
-        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-node-line], [data-node-line] > *")];
+        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-node-line], [data-node-line] > *, [data-line-branch], [data-line-to]")];
         const out = card.scrollWidth > card.clientWidth + 1 || parts.some((part) => part.getBoundingClientRect().right > right);
         return out ? [card.getAttribute("data-mission-node")] : [];
       }),

@@ -4,8 +4,7 @@
 // `branchLine` and `resultLine` (`web/src/missionLine.ts`). The pull
 // request's icon and colour are the PR list's (`PR_LOOK`); the branch
 // truncates first, so the number and the destination stay whole. The card's
-// accessible name says these words; the line itself is for the eye. Only
-// the branch shrinks, so the number and the destination stay whole.
+// accessible name says these words; the line itself is for the eye.
 
 import { ChevronRightIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -38,21 +37,24 @@ export function BranchLineView({ line, className }: { line: BranchLine; classNam
       <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />
       {line.plan ? <span className="shrink-0" data-line-plan={line.plan}>{t(line.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect")}</span> : null}
       {line.pr ? <span className="shrink-0 text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span> : null}
-      {line.branch ? (
-        <span className="min-w-0 truncate" title={line.branch.name} data-line-branch={line.branch.name}>
-          {line.branch.outside ? "↗ " : ""}
-          {line.branch.name}
-        </span>
-      ) : null}
-      {line.to ? (
-        // The destination never gives way to the branch; only one too long for the line beside the icon and number is cut.
-        <span className={cn("flex max-w-[calc(100%-var(--spacing-xxxl)-var(--spacing-lg))] shrink-0 items-center gap-xxs", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
-          <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
-          {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
-          <span className="min-w-0 truncate" title={lineToLabel(line.to)}>{lineToLabel(line.to)}</span>
-        </span>
-      ) : null}
-      {line.direct ? <span className="shrink-0" data-line-direct="true">· {t("mission.foot.planDirect")}</span> : null}
+      {/* The only part that gives way: the room left after the icon and number, the branch shrinking first. */}
+      <span className="flex min-w-0 items-center gap-xxs">
+        {line.branch ? (
+          <span className="min-w-0 truncate" title={line.branch.name} data-line-branch={line.branch.name}>
+            {line.branch.outside ? "↗ " : ""}
+            {line.branch.name}
+          </span>
+        ) : null}
+        {line.to ? (
+          // The destination never gives way to the branch; only one longer than the whole room is cut.
+          <span className={cn("flex shrink-0 items-center gap-xxs", line.branch ? "max-w-[calc(100%-var(--spacing-xxs))]" : "max-w-full", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
+            <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
+            {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
+            <span className="min-w-0 truncate" title={lineToLabel(line.to)}>{lineToLabel(line.to)}</span>
+          </span>
+        ) : null}
+      </span>
+      {line.direct ? <span className="shrink-0" data-line-direct="true">{line.branch || line.to ? "· " : ""}{t("mission.foot.planDirect")}</span> : null}
     </span>
   );
 }
