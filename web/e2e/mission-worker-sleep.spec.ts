@@ -146,8 +146,8 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     await page.locator('[data-settings-tab="agents"]').click();
     const choice = page.locator("[data-agent-sleep-after]");
     await choice.click();
-    await page.locator('[data-agent-sleep-option="72"]').click();
-    await expect(choice).toHaveAttribute("data-agent-sleep-after", "72", { timeout: 10_000 });
+    await page.locator('[data-agent-sleep-option="24"]').click();
+    await expect(choice).toHaveAttribute("data-agent-sleep-after", "24", { timeout: 10_000 });
     await page.keyboard.press("Escape");
     await ok(conductor, ["mission", "create", "--title", "워커 재우기 확인"]);
     await ok(conductor, ["mission", "plan", "--json", JSON.stringify({ scope: "pr", nodes: [{ key: "fix", title: "리뷰 수정", kind: "change", delivery: "pr", criteria: ["지적이 고쳐졌다"] }] })]);
