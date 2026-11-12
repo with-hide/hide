@@ -1,9 +1,11 @@
 //! A SessionStart capability probe, the hook request `hide workspace info
 //! --hook` sends, asked by the hook itself. The hook never reads bearer bytes
-//! or trusts a pane ID on its own, and it needs no pane id at all: the daemon
-//! binds a caller in a pane to that pane and any other local caller to the
-//! registered checkout holding its cwd, so the guidance names the checkout
-//! the daemon answered with.
+//! or trusts a pane ID on its own: it asks only a session that runs in a Hide
+//! pane (its environment names one), and the daemon proves that name before
+//! it answers, so the guidance names the checkout of the pane it answered
+//! for. A session started outside Hide, in another terminal app on a
+//! checkout Hide knows, is given no guidance: its commands would open views
+//! in a window its operator is not looking at.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -14,6 +16,13 @@ use serde_json::Value;
 const CLI_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn live_context() -> Option<String> {
+    live_context_for(hide_agent_hooks::pane::from_env().is_some())
+}
+
+fn live_context_for(in_hide_pane: bool) -> Option<String> {
+    if !in_hide_pane {
+        return None;
+    }
     let program = cli_program()?;
     let (answer, _) = hide_agent_hooks::delivery::ask_answer(
         hide_agent_hooks::hook_request::HookCommand::WorkspaceInfo {},
@@ -124,6 +133,11 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_session_outside_a_hide_pane_is_not_asked() {
+        assert!(live_context_for(false).is_none());
+    }
 
     #[test]
     fn guidance_names_the_checkout_the_daemon_bound_the_caller_to() {

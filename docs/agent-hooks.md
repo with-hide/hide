@@ -84,8 +84,9 @@ A card whose promotion merged into the repository keeps its index line but point
 The instruction explains supervised delegation (`hide agent spawn --parent here …`, with an automatic watch) and independent operator handoff (`hide agent spawn …`, without parent or automatic watch); both preserve focus and record origin.
 It also says that `--machine <device id>`, used from the machine that runs Hide, starts the agent on a connected device (an agent on a device is refused with `machine_not_permitted`), where the id is the `device_id` `hide workspace info` shows and the `machine` `hide agent list` shows for agents there, and that `--repo` and `--path` are then that device's paths.
 The same envelope adds Workspace commands only after `hide workspace info --hook` confirms a renderer-connected Workspace for the caller and report its actual capabilities.
-The probe does not need a pane id: the daemon binds a caller inside a pane to that pane, and any other local caller, such as a tool shell or hook inside Codex's shared app-server daemon or a plain terminal, to the registered checkout holding its cwd (`docs/ARCHITECTURE.md`, the Workspace CLI).
-The guidance names that checkout path, so a session can read which Workspace its commands reach.
+The probe is asked only by a session in a Hide pane, one whose environment names `HIDE_PANE_ID`; the daemon proves that name before it answers.
+A session started outside Hide, in another terminal app on a checkout Hide knows, gets no Workspace guidance, because commands it ran would open views in a window its operator is not looking at.
+The guidance names the checkout path of the pane, so a session can read which Workspace its commands reach.
 The helper asks the daemon of its route itself, by the hook request `hide workspace info --hook` sends (`WorkspaceInfo`); on a device it asks that device's node, which forwards it with its fresh caller proof to this Mac's core (PRD device-parity B15).
 The hook starts nothing and installs nothing; when the daemon does not answer within its two-second bound the session starts without Workspace guidance and the next one tries again (B26).
 A session on any linked device receives its Project Memory index and prompt context from the core's one store through the same pane-scoped return route as letters.
