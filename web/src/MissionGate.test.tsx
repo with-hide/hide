@@ -70,10 +70,13 @@ it("lists where the operator will look over a plan that waits for approval, each
   try {
     const list = map.q("[data-mission-gates]")!;
     expect(list.getAttribute("aria-label")).toBe("Where you look 2");
-    // A dropped node's place is left out.
-    expect([...list.querySelectorAll("[data-mission-gate-row]")].map((row) => [row.getAttribute("data-mission-gate-row"), row.querySelector("[data-mission-gate-node]")!.textContent, row.querySelector(".font-semibold")!.textContent, row.querySelector("[data-mission-gate-when]")!.textContent])).toEqual([
-      ["cause", "Node cause", "the cause written down", "Once all other finish lines pass"],
-      ["screen", "Node screen", "two screen drafts", "Once all other finish lines pass"],
+    // When is the same for every place, so the head says it once.
+    expect([...list.querySelectorAll("[data-mission-gate-when]")].map((when) => when.textContent)).toEqual(["once each step passes its other finish lines"]);
+    expect(list.querySelector("[data-mission-gate-row] [data-mission-gate-when]")).toBeNull();
+    // A dropped node's place is left out; each place reads what to look at first, then its node whole.
+    expect([...list.querySelectorAll("[data-mission-gate-row]")].map((row) => [row.getAttribute("data-mission-gate-row"), row.textContent])).toEqual([
+      ["cause", "the cause written downNode cause"],
+      ["screen", "two screen draftsNode screen"],
     ]);
     // Every gated card shows its strip without a hover, and none of them is the operator's turn.
     expect(map.q('[data-mission-node="screen"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("ahead");
