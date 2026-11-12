@@ -19,6 +19,8 @@ import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, M
 export type LineNode = Pick<MissionNodeBrief, "kind" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
+  /** How the pull request it is stacked on stands, as the mission's own nodes know it; absent or null when no node holds it. */
+  base_state?: PrState | null;
   /** The worker's branch; absent where the frame carries none. */
   branch?: string | null;
   external?: MissionExternal | null;
@@ -34,10 +36,11 @@ export type LineNode = Pick<MissionNodeBrief, "kind" | "status" | "pr" | "pr_sta
   checks?: { passed: number; total: number } | null;
 };
 
-/** The desktop's node as the line reads it: the base and count from its pull request list, the current one last. */
-export function lineNode(node: MissionNode): LineNode {
+/** The desktop's node as the line reads it: the base and count from its pull request list, the current one last, and the state of the pull request it is stacked on from whichever of the mission's nodes holds it. */
+export function lineNode(node: MissionNode, nodes: readonly Pick<MissionNode, "prs">[] = []): LineNode {
   const current = node.prs.at(-1);
-  return { ...node, pr_base: current?.base ?? null, pr_more: Math.max(node.prs.length - 1, 0) };
+  const base = node.base_pr == null ? null : nodes.flatMap((one) => one.prs).find((pr) => pr.number === node.base_pr);
+  return { ...node, pr_base: current?.base ?? null, pr_more: Math.max(node.prs.length - 1, 0), base_state: base?.state ?? null };
 }
 
 /** Whether a node's result goes into a branch, so it ends in a branch line (D-51): a change or an outside node. */
@@ -53,8 +56,8 @@ export function changesCode(node: Pick<MissionNodeBrief, "kind">): boolean {
  */
 export type LineMark = PrState | "pull" | "branch" | "plan_pr" | "plan_direct";
 
-/** Where the result lands: a branch (bold when it is not the mission's destination) or the pull request it is stacked on (always bold). */
-export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { kind: "stack"; pr: number };
+/** Where the result lands: a branch (bold when it is not the mission's destination) or the pull request it is stacked on, drawn as that pull request's mark by its state (grey when unknown) and a grey number (D-57). */
+export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { kind: "stack"; pr: number; state: PrState | null };
 
 export type BranchLine = {
   mark: LineMark;
@@ -85,7 +88,7 @@ export function branchLine(node: LineNode, destination: string | null): BranchLi
 function ownLine(node: LineNode, destination: string | null): BranchLine {
   const byPr = node.delivery !== "direct" || node.pr != null;
   const person = node.merge?.by === "operator" ? node.merge.state : null;
-  const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
+  const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr, state: node.base_state ?? null } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
   // A node only planned says how it will go; one replanned after it opened a pull request keeps the pull request it has.
   if (node.status === "planned" && node.pr == null) {
     return { mark: byPr ? "plan_pr" : "plan_direct", pr: null, branch: null, plan: byPr ? "pr" : "direct", direct: false, to, person };
@@ -133,9 +136,14 @@ export function resultLine(node: LineNode): ResultLine | null {
   return { ...base, shows: "kind" };
 }
 
-/** The branch line's destination as drawn: the branch, or `#n` for a stack. */
+/** The branch line's destination as drawn: the branch, or a stack's number beside its pull request's mark (D-57). */
 export function lineToLabel(to: LineTo): string {
-  return to.kind === "stack" ? `#${to.pr}` : to.name;
+  return to.kind === "stack" ? String(to.pr) : to.name;
+}
+
+/** The destination in words, for the card's name and the hover: the branch, or `PR n` for a stack (D-57). */
+export function lineToWords(to: LineTo, t: TFunction<"translation">): string {
+  return to.kind === "stack" ? t("mission.foot.stackPr", { number: String(to.pr) }) : to.name;
 }
 
 /** The pull request's words as the line draws them: `#n`, `↗#n`, `+N`. */
@@ -150,7 +158,7 @@ export function linePrLabel(pr: NonNullable<BranchLine["pr"]>): string {
  */
 export function branchLineWords(line: BranchLine, t: TFunction<"translation">): string {
   const head = line.plan ? [t(line.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect")] : [line.pr ? linePrLabel(line.pr) : null, line.branch ? `${line.branch.outside ? "↗ " : ""}${line.branch.name}` : null];
-  const path = [...head, line.to ? `→ ${lineToLabel(line.to)}` : null].filter(Boolean).join(" ");
+  const path = [...head, line.to ? `→ ${lineToWords(line.to, t)}` : null].filter(Boolean).join(" ");
   const state = line.mark in PR_LOOK ? t(PR_LOOK[line.mark as PrState].word) : null;
   const person = line.person ? [t("mission.merge.mine"), line.person === "due" ? t("mission.merge.turn") : line.person === "merged" ? t("mission.merge.merged") : null] : [];
   return [path, line.direct ? t("mission.foot.planDirect") : null, state, ...person].filter(Boolean).join(" · ");

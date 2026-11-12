@@ -351,13 +351,35 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // How the node's work goes is one bar of cells under its title, from the worker's plan once it exists, else the Conductor's steps; its count is in the card's name, never a second number on the card.
   const work = nodeSteps(node);
   // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
-  const branch = useMemo(() => branchLine(lineNode(node), mission.destination ?? null), [node, mission.destination]);
+  const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
   const result = branch ? null : resultLine(lineNode(node));
   const titleText = (
     <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
       {node.title}
     </span>
   );
+  // The foot's right-end marks, one group: a warning, then the operator's turn or who a raised reason waits on. Short of
+  // room the warning's words give way, down to its icon, then a long wait's words; the tag's own word never does, and the
+  // group clips rather than cover the line's number. The card's name says each mark in full.
+  const marks = warning || gate?.state === "open" || attention ? (
+    <span className="flex min-w-0 items-center justify-end gap-x-xs overflow-hidden" data-node-foot-end="true">
+      {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
+      {gate?.state === "open" && !attention ? (
+        <span className="flex items-center gap-x-xxs font-semibold text-mission-hold" data-node-gate-tag="open">
+          <span className="shrink-0">{t("agents.mark.turn")}</span>
+          {long ? <span className="min-w-0 shrink-[10] truncate font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+        </span>
+      ) : null}
+      {attention ? (
+        <Hint label={attention.why}>
+          <span className={cn("flex items-center gap-x-xxs", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
+            <span className="shrink-0">{yours ? t("agents.mark.turn") : attention.who}</span>
+            {long ? <span className="min-w-0 shrink-[10] truncate font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+          </span>
+        </Hint>
+      ) : null}
+    </span>
+  ) : null;
   const card = (
     <MissionGraphCard
       node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect}
@@ -435,32 +457,22 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54). `⚠`, 내 차례 and `!` float at the right end of its first row, so a branch line that wraps under its number gives its second row the card's whole width (D-56); the foot holds the float. */}
-      <span className="flow-root min-w-0 border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
-        {warning || gate?.state === "open" || attention ? (
-          <span className="float-right ml-xs flex h-lh items-center gap-x-xs" data-node-foot-end="true">
-            {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
-            {gate?.state === "open" && !attention ? (
-              <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">
-                {t("agents.mark.turn")}
-                {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
-              </span>
-            ) : null}
-            {attention ? (
-              <Hint label={attention.why}>
-                <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
-                  {yours ? t("agents.mark.turn") : attention.who}
-                  {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
-                </span>
-              </Hint>
-            ) : null}
-          </span>
-        ) : null}
-        {branch ? <BranchLineView line={branch} /> : result ? <ResultLineView line={result} /> : null}
+      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54). `⚠`, 내 차례 and `!` stand at the right end of its first row and take only the width the line leaves there, their words cut before the line's number or icon ever is (D-56). */}
+      <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center gap-x-xs")} data-node-foot="true">
+        {branch ? <BranchLineView line={branch} end={marks} /> : (
+          <>
+            {result ? <ResultLineView line={result} className="flex-1" /> : null}
+            {marks}
+          </>
+        )}
       </span>
     </MissionGraphCard>
   );
-  const hovered = <MissionNodeHover mission={mission} node={node} facts={{ worker: run ? { agent: worker?.agent ?? null, words: run.text, device } : null, now: work?.now && node.status === "working" ? work.now : null, branch }}>{card}</MissionNodeHover>;
+  const hovered = (
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+      {card}
+    </MissionNodeHover>
+  );
   // The card and its satellites are one box to the layout, the card centred in it, so edges meet the card's middle.
   // An empty column as wide as the satellites' keeps the card in the middle of the box.
   if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{hovered}</div>;
@@ -483,9 +495,9 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
 function NodeWarning({ words, kinds }: { words: { short: string; full: string[] }; kinds: string }) {
   return (
     <Hint label={words.full.join("\n")}>
-      <span aria-hidden="true" className="flex shrink-0 items-center gap-xxs font-semibold text-warning" data-node-warning={kinds}>
-        <TriangleAlertIcon className="size-(--size-icon-sm)" />
-        {words.short}
+      <span aria-hidden="true" className="flex min-w-(--size-icon-sm) shrink-[100] items-center gap-xxs overflow-hidden font-semibold text-warning" data-node-warning={kinds}>
+        <TriangleAlertIcon className="size-(--size-icon-sm) shrink-0" />
+        <span className="min-w-0 truncate">{words.short}</span>
       </span>
     </Hint>
   );
