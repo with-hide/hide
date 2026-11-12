@@ -482,6 +482,7 @@
   --slate-86: #cdd1d6;
   --slate-89: #d7dbe0;
   --slate-91: #dfe1e4;
+  --slate-91-5: #e1e3e5;
   --slate-92-5: #e4e6e9;
   --slate-93: #e6e8ea;
   --slate-94-5: #ebedef;
@@ -530,8 +531,8 @@
   --accent-foreground: var(--foreground);
   --destructive: var(--red-56);
   --destructive-foreground: var(--gray-100);
-  --border: var(--gray-89);
-  --input: var(--gray-85);
+  --border: var(--gray-91);
+  --input: var(--gray-89);
   --ring: var(--primary);
   --sidebar: var(--gray-98);
   --sidebar-foreground: var(--foreground);
@@ -642,8 +643,8 @@
   --accent-foreground: var(--foreground);
   --destructive: var(--red-69);
   --destructive-foreground: var(--gray-17);
-  --border: var(--gray-35);
-  --input: var(--gray-38);
+  --border: var(--gray-33);
+  --input: var(--gray-35);
   --ring: var(--primary);
   --sidebar: var(--gray-20);
   --sidebar-foreground: var(--foreground);
@@ -745,8 +746,8 @@
   --muted-foreground: var(--slate-52);
   --subtle-foreground: var(--slate-38);
   --accent: var(--slate-92-5);
-  --border: var(--slate-91);
-  --input: var(--slate-86);
+  --border: var(--slate-91-5);
+  --input: var(--slate-89);
   --sidebar: var(--slate-97);
   --status-seen: var(--slate-48);
   --pr-closed: var(--slate-52);
@@ -774,7 +775,7 @@
   --subtle-foreground: var(--slate-84);
   --accent: var(--slate-36);
   --border: var(--slate-34);
-  --input: var(--slate-41);
+  --input: var(--slate-38);
   --sidebar: var(--slate-23);
   --status-seen: var(--slate-71);
   --pr-closed: var(--slate-68);
