@@ -12,7 +12,7 @@
 // not send is left out, never named (B60).
 
 import type { TFunction } from "i18next";
-import { nodeKindWord } from "./missions";
+import type { MessageKey } from "./i18n/catalogs";
 import { PR_LOOK } from "./prMark";
 import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, PrState } from "./snapshot";
 
@@ -36,6 +36,28 @@ export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr
   verdict?: MissionVerdict | null;
   checks?: { passed: number; total: number } | null;
 };
+
+const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
+  change: "mission.kind.change",
+  general: "mission.kind.general",
+  external: "mission.kind.external",
+};
+
+/** A general node's name by its preset (PRD node-presets D-02); the core's preset table names the same words, which `missionKindWords.test.ts` checks. */
+const PRESET_WORD: Record<MissionNodePreset, MessageKey> = {
+  research: "mission.kind.research",
+  verify: "mission.kind.verify",
+  deploy: "mission.kind.deploy",
+};
+
+export function kindWord(kind: MissionNode["kind"]): MessageKey {
+  return KIND_WORD[kind];
+}
+
+/** A node's kind as it is named: a general node by its preset, and by `일반` with none or with a preset this bundle does not know, which a later core may send (D-11). */
+export function nodeKindWord(node: Pick<MissionNode, "kind" | "preset">): MessageKey {
+  return node.kind === "general" && node.preset ? (PRESET_WORD[node.preset] ?? KIND_WORD.general) : KIND_WORD[node.kind];
+}
 
 /** The desktop's node as the line reads it: the base and count from its pull request list, the current one last, and the state of the pull request it is stacked on from whichever of the mission's nodes holds it. */
 export function lineNode(node: MissionNode, nodes: readonly Pick<MissionNode, "prs">[] = []): LineNode {
@@ -119,24 +141,26 @@ function branchTo(branch: string | null, destination: string | null): LineTo | n
 /**
  * A general node's line (PRD node-presets D-08, B1, B2, B5): its preset's
  * icon, and its preset's name until it is done; done, the result line itself,
- * or the verdict with its checks when one was recorded, whatever the preset.
- * The icon's tone follows the card (v4): grey while planned, blue while
- * worked, green done, red on a failed verdict.
+ * or the verdict with its checks when one was recorded, whatever the preset,
+ * which keeps the line beside it for the panel. The icon's tone follows the
+ * card (v4): grey while planned, blue while worked, green done, red on a
+ * failed verdict. The card, its hover, the node panel, the Conductor pane's
+ * results and the phone all read this one value.
  */
 export type ResultTone = "planned" | "working" | "done" | "failed";
 export type ResultLine = { preset: MissionNodePreset | null; tone: ResultTone } & (
   | { shows: "kind" }
-  | { shows: "conclusion"; line: string }
-  | { shows: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
+  | { shows: "line"; line: string }
+  | { shows: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null; line: string | null }
 );
 
 export function resultLine(node: LineNode): ResultLine | null {
   if (node.kind !== "general") return null;
   const preset = node.preset ?? null;
   const done = node.status === "done";
-  if (done && node.verdict) return { preset, tone: node.verdict === "fail" ? "failed" : "done", shows: "verdict", verdict: node.verdict, checks: node.checks ?? null };
+  if (done && node.verdict) return { preset, tone: node.verdict === "fail" ? "failed" : "done", shows: "verdict", verdict: node.verdict, checks: node.checks ?? null, line: node.line ?? null };
   const tone: ResultTone = done ? "done" : node.status === "working" ? "working" : "planned";
-  if (done && node.line) return { preset, tone, shows: "conclusion", line: node.line };
+  if (done && node.line) return { preset, tone, shows: "line", line: node.line };
   return { preset, tone, shows: "kind" };
 }
 
@@ -173,7 +197,7 @@ export function resultLineWords(line: ResultLine, t: TFunction<"translation">): 
   switch (line.shows) {
     case "kind":
       return t(nodeKindWord({ kind: "general", preset: line.preset }));
-    case "conclusion":
+    case "line":
       return line.line;
     case "verdict":
       return `${t(line.verdict === "pass" ? "mission.foot.pass" : "mission.foot.fail")}${line.checks ? ` ${line.checks.passed}/${line.checks.total}` : ""}`;

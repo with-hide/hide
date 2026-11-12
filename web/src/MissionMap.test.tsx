@@ -652,6 +652,8 @@ it("ends every general node in its preset's icon and name until it is done, then
     general("judged", "research", { status: "done", line: "why", verdict: "pass", checks: { passed: 3, total: 3 } }),
     general("gated", "deploy", { status: "working", gate: { state: "passed", look: "Fine to ship", when: "start", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: "card", said: "ok" } }),
     general("checked", "verify", { status: "working", gate: { state: "passed", look: "Screens before and after", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: "card", said: "ok" } }),
+    // A preset a later core sends and this bundle does not know reads as a general node (D-11).
+    general("later-core", "canary" as never, { status: "planned" }),
   ];
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
@@ -660,19 +662,22 @@ it("ends every general node in its preset's icon and name until it is done, then
       return one ? [one.querySelector<SVGElement>("[data-line-icon]")?.dataset.lineIcon, one.dataset.lineTone, one.dataset.lineShows, one.textContent] : null;
     };
     expect(nodes.map((one) => result(one.key))).toEqual([
-      ["research", "done", "conclusion", "the cause is the reopen order"],
+      ["research", "done", "line", "the cause is the reopen order"],
       ["research", "working", "kind", "Research"],
       ["verify", "done", "verdict", "Passed 7/7"],
       ["verify", "failed", "verdict", "Failed 5/7"],
       ["verify", "planned", "kind", "Verify"],
-      ["deploy", "done", "conclusion", "1.2.8 out, downloads checked"],
+      ["deploy", "done", "line", "1.2.8 out, downloads checked"],
       ["general", "working", "kind", "General"],
       ["research", "done", "verdict", "Passed 3/3"],
       ["deploy", "working", "kind", "Deploy"],
       ["verify", "working", "kind", "Verify"],
+      ["general", "planned", "kind", "General"],
     ]);
     // Only a failed verdict turns the done mark red (PRD node-presets D-08).
     expect(["fail", "pass", "cause"].map((key) => card(map, key).querySelector("[data-node-mark-failed]") !== null)).toEqual([true, false, false]);
+    await act(async () => card(map, "fail").focus());
+    expect(document.querySelector('[data-node-hover="fail"] [data-node-mark-failed]')).not.toBeNull();
     // A start gate once passed leaves the card to the panel; a gate at the end stays grey with its check (D-09).
     expect(["gated", "checked"].map((key) => card(map, key).querySelector<HTMLElement>("[data-node-gate]")?.dataset.nodeGate ?? null)).toEqual([null, "passed"]);
     // The icon's colour follows where the node stands, the verdict's words theirs: grey planned, blue worked, green done, red failed.

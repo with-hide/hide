@@ -86,12 +86,12 @@ it("gives every general node its preset's line: the name until done, then the re
   expect(resultLine({ ...research, status: "planned" })).toEqual({ preset: "research", tone: "planned", shows: "kind" });
   expect(resultLine({ ...deploy, line: "signing the package" })).toEqual({ preset: "deploy", tone: "working", shows: "kind" });
   // Done green with the result line itself, whatever the preset, none included (B1, B5).
-  expect(resultLine({ ...research, status: "done", line: "the reopen order" })).toEqual({ preset: "research", tone: "done", shows: "conclusion", line: "the reopen order" });
-  expect(resultLine({ ...deploy, status: "done", line: "1.2.8 out" })).toEqual({ preset: "deploy", tone: "done", shows: "conclusion", line: "1.2.8 out" });
-  expect(resultLine({ ...none, status: "done", line: "three pages reworded" })).toEqual({ preset: null, tone: "done", shows: "conclusion", line: "three pages reworded" });
+  expect(resultLine({ ...research, status: "done", line: "the reopen order" })).toEqual({ preset: "research", tone: "done", shows: "line", line: "the reopen order" });
+  expect(resultLine({ ...deploy, status: "done", line: "1.2.8 out" })).toEqual({ preset: "deploy", tone: "done", shows: "line", line: "1.2.8 out" });
+  expect(resultLine({ ...none, status: "done", line: "three pages reworded" })).toEqual({ preset: null, tone: "done", shows: "line", line: "three pages reworded" });
   // A verdict wins over the line on any preset, red when it failed (B2).
-  expect(resultLine({ ...verify, status: "done", line: "two failed", verdict: "fail", checks: { passed: 5, total: 7 } })).toEqual({ preset: "verify", tone: "failed", shows: "verdict", verdict: "fail", checks: { passed: 5, total: 7 } });
-  expect(resultLine({ ...research, status: "done", line: "why", verdict: "pass", checks: null })).toEqual({ preset: "research", tone: "done", shows: "verdict", verdict: "pass", checks: null });
+  expect(resultLine({ ...verify, status: "done", line: "two failed", verdict: "fail", checks: { passed: 5, total: 7 } })).toEqual({ preset: "verify", tone: "failed", shows: "verdict", verdict: "fail", checks: { passed: 5, total: 7 }, line: "two failed" });
+  expect(resultLine({ ...research, status: "done", line: "why", verdict: "pass", checks: null })).toEqual({ preset: "research", tone: "done", shows: "verdict", verdict: "pass", checks: null, line: "why" });
   // A finished node with nothing kept says its preset, as before it finished.
   expect(resultLine({ ...none, status: "done" })).toEqual({ preset: null, tone: "done", shows: "kind" });
   const words = t();

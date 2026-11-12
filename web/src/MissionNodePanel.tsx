@@ -31,7 +31,6 @@ import {
   lineOutrun,
   mainCommit,
   missionOpen,
-  nodeKindWord,
   nodeLook,
   nodeQuestion,
   nodeSteps,
@@ -48,7 +47,8 @@ import { planCells, planCount } from "./plans";
 import { formatBytes } from "./i18n/format";
 import { sessionOfAgent } from "./sessionWork";
 import type { MessageKey } from "./i18n/catalogs";
-import { PRESET_ICON } from "./components/mission-line";
+import { presetIcon } from "./components/mission-line";
+import { lineNode, nodeKindWord, resultLine } from "./missionLine";
 import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -103,7 +103,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
   // A general node's preset by its icon and name, a waiting node by its hourglass, as its card draws them (PRD node-presets D-08, D-13); a change, the usual kind, says nothing.
   const kind = node.kind === "change" ? null : nodeKindWord(node);
-  const KindIcon = node.kind === "external" ? HourglassIcon : PRESET_ICON[node.preset ?? "general"];
+  const KindIcon = node.kind === "external" ? HourglassIcon : presetIcon(node.preset);
   const parts: ReactNode[] = [
     ...(kind ? [<span key="kind" className="flex shrink-0 items-center gap-xxs font-semibold text-subtle-foreground" data-panel-kind={node.kind} data-panel-preset={node.kind === "general" ? (node.preset ?? "general") : undefined}><KindIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />{t(kind)}</span>] : []),
     ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}<RunText run={worker.run} /></span>] : []),
@@ -269,8 +269,8 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
   const question = ended ? null : nodeQuestion(mission, node);
   const options = question ? (mission.question?.options ?? []) : [];
   const checks = ended || question || look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
-  // Beside a question, finished work or an ended node only the Conductor's own line is left to say; a done research node's line is its conclusion, which the result shows.
-  const own = node.line && !node.plan && !(node.kind === "general" && node.preset === "research" && look === "done") ? { text: node.line, attention: false } : null;
+  // Beside a question, finished work or an ended node only the Conductor's own line is left to say; a done general node's line is its result, which the result part shows.
+  const own = node.line && !node.plan && !(node.kind === "general" && look === "done") ? { text: node.line, attention: false } : null;
   const line = ended || question || look === "done" || node.plan ? own : cardLine(mission, node, null, t);
   if (!question && !line && checks.length === 0) return null;
   // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
@@ -366,7 +366,7 @@ function PlanPart({ plan, planned, folded, actions }: { plan: PlanView; planned:
 /**
  * What the node made (B31): its earlier pull requests with their states and
  * the base its current one stacks on, the CI line, its commit on main, a
- * research conclusion or a verify node's verdict; its current pull request
+ * general node's result line and verdict; its current pull request
  * and its branch are the head's. Nothing the record does not hold.
  */
 function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
@@ -391,13 +391,20 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   const left = landingLeft(node);
   if (commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={commit} data-panel-commit={commit}>{t("mission.result.main", { commit: shortCommit(commit) })}</span>]);
   else if (left) rows.push(["main", <span key="left" className="font-semibold text-mission-hold" data-panel-landing={left}>{t(left === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span>]);
-  if (node.kind === "general" && node.preset === "research" && node.status === "done" && node.line) rows.push([t("mission.result.conclusion"), <span key="c" className="break-words" data-panel-conclusion="true">{node.line}</span>]);
-  if (node.kind === "general" && node.verdict) {
+  // A done general node's result as its card's result line reads it, whatever its preset or plan: its verdict, then its line (PRD node-presets D-08).
+  const result = node.kind === "general" ? resultLine(lineNode(node)) : null;
+  if (result && result.shows !== "kind") {
+    const line = result.line;
     rows.push([
       t("mission.result.verify"),
-      <span key="v" className={cn("font-mono font-semibold", node.verdict === "fail" && "text-mission-failed")} data-panel-verdict={node.verdict}>
-        {t(node.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
-        {node.checks ? ` ${node.checks.passed}/${node.checks.total}` : ""}
+      <span key="result" className="flex min-w-0 flex-wrap items-baseline gap-x-xs" data-panel-result={result.shows}>
+        {result.shows === "verdict" ? (
+          <span className={cn("shrink-0 font-mono font-semibold", result.verdict === "fail" && "text-mission-failed")} data-panel-verdict={result.verdict}>
+            {t(result.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
+            {result.checks ? ` ${result.checks.passed}/${result.checks.total}` : ""}
+          </span>
+        ) : null}
+        {line ? <span className="min-w-0 break-words" data-panel-result-line="true">{line}</span> : null}
       </span>,
     ]);
   }

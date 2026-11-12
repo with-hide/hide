@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { missionsCatalogs } from "./i18n/resources/missions";
-import { nodeKindWord } from "./missions";
+import { nodeKindWord } from "./missionLine";
 
 const source = (file: string) => fs.readFileSync(path.resolve(__dirname, "../..", file), "utf8");
 

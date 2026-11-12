@@ -1,4 +1,4 @@
-import { ChevronRightIcon, GitBranchIcon } from "lucide-react";
+import { GitBranchIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useMemo, type ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
@@ -36,8 +36,8 @@ export function MissionDevice({ name, className }: { name: string | null; classN
 /**
  * What a node left, by its kind, as the Conductor pane's popover lists it
  * (PRD mission-plan-visibility B11): `⑂ #n` in its pull request's state
- * colour, a direct change's branch or its commit on main, `결론 ▸` for
- * research, or a general node's verdict or line.
+ * colour, a direct change's branch or its commit on main, or a general
+ * node's verdict or result line.
  */
 export function ResultTail({ result, stale, full = false }: { result: NodeResult; stale: boolean; full?: boolean }) {
   const { t } = useInterfaceTranslation();
@@ -58,15 +58,6 @@ export function ResultTail({ result, stale, full = false }: { result: NodeResult
         <span className="flex min-w-0 items-center gap-xxs text-caption text-subtle-foreground" data-node-branch={result.branch}>
           <GitBranchIcon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
           <span className="truncate font-mono" title={result.branch}>{result.branch}</span>
-        </span>
-      );
-    case "conclusion":
-      return full ? (
-        <span className="min-w-0 break-words text-caption" data-node-conclusion="full">{t("mission.result.conclusion")}: {result.line}</span>
-      ) : (
-        <span className="flex shrink-0 items-center text-caption text-foreground" title={result.line} data-node-conclusion="folded">
-          {t("mission.result.conclusion")}
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </span>
       );
     case "line":

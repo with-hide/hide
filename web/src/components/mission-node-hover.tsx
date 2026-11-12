@@ -34,6 +34,8 @@ export type NodeHoverFacts = {
   look: NodeLook;
   word: string;
   still: boolean;
+  /** A done general node that ended on a failed verdict: the mark is red, as on the card (PRD node-presets D-08). */
+  failed: boolean;
   doing: string | null;
   /** `n째` while it runs, `n 걸림` once it ended; none for a planned node. */
   took: string | null;
@@ -93,7 +95,7 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
   return (
     <div className="flex min-w-0 flex-col gap-sm text-caption">
       <span className="flex min-w-0 items-center gap-xs">
-        <MissionNodeMark look={facts.look} label={facts.word} still={facts.still} hint={false} />
+        <MissionNodeMark look={facts.look} label={facts.word} still={facts.still} failed={facts.failed} hint={false} />
         <span className="min-w-0 break-words text-body font-semibold text-foreground" data-node-hover-title="true">{node.title}</span>
       </span>
       <OperatorBand gate={facts.gate} mergeDue={facts.mergeDue} />

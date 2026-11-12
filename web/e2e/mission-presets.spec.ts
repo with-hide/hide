@@ -2,11 +2,11 @@
 // paired phone (PRD node-presets B1-B3, B5, B10, B12): the preset table, the start gate and the old kind names live in
 // the core, and the card only reads them off the snapshot and the phone's frame, so this crosses that command/socket
 // boundary as the operator meets it. The card's own drawing of each state is MissionMap.test.tsx's.
-import { devices, expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FakeTailscale } from "./fake-tailscale";
-import { chord } from "./chords";
+import { pairDirectPhone } from "./phone-direct-pair";
 import { enterWorkspace, screenshot } from "./wire";
 import { withControl } from "./daemon-actions";
 import type { HideAnswer } from "./agent-pane";
@@ -22,34 +22,6 @@ async function mission(hide: Hide, args: string[]): Promise<Answer> {
   const answer = await run(hide, args);
   expect(answer.ok, `${args.join(" ")}: ${answer.line}`).toBe(true);
   return answer;
-}
-
-/** The direct connection's existing fake-Tailscale boundary, never the operator's service. */
-async function pair(browser: Browser, daemon: Daemon): Promise<{ context: BrowserContext; phone: Page }> {
-  const settings = await browser.newPage();
-  const context = await browser.newContext({ ...devices["iPhone 13"], locale: "en-US", colorScheme: "dark" });
-  try {
-    await settings.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(settings.locator("[data-sidebar-overview]")).toBeVisible();
-    await settings.keyboard.press(chord("settings"));
-    await settings.locator('[data-settings-tab="mobile"]').click();
-    const tab = settings.locator('[data-mobile-tab="true"]');
-    await tab.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
-    await tab.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
-    await settings.locator('[data-mobile-switch="true"]').click();
-    await settings.locator('[data-mobile-show-code="true"]').click();
-    const qr = settings.locator("[data-mobile-qr]");
-    await expect(qr).toBeVisible();
-    const address = (await qr.getAttribute("data-mobile-qr"))!;
-    const phone = await context.newPage();
-    await phone.goto(`${daemon.origin}/m/${new URL(address).hash}`);
-    await phone.locator('[data-phone-pair="true"]').tap();
-    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
-    return { context, phone };
-  } catch (error) {
-    await context.close();
-    throw error;
-  } finally { await settings.close(); }
 }
 
 const PLAN = {
@@ -113,7 +85,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     // A finished node shows its result line itself; a verdict shows on any preset, a failed one red with a red mark (B1, B2).
     await mission(conductor, ["record", "cause", "c1", "--pass", "--evidence", "로그 비교"]);
     await mission(conductor, ["node", "cause", "--status", "done", "--line", "재시도 때 잠금이 먼저 풀림"]);
-    await expect(foot("cause")).toHaveAttribute("data-line-shows", "conclusion");
+    await expect(foot("cause")).toHaveAttribute("data-line-shows", "line");
     await expect(foot("cause")).toHaveText("재시도 때 잠금이 먼저 풀림");
     await mission(conductor, ["record", "check", "c1", "--pass", "--evidence", "일곱 항목"]);
     await mission(conductor, ["node", "check", "--status", "done", "--verdict", "fail", "--checks", "5/7"]);
@@ -128,7 +100,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     await screenshot(page, "mission-presets-asking-desktop");
 
     // The phone reads the same presets and gate from its frame, never a result line or a verdict (B10).
-    const paired = await pair(browser, daemon);
+    const paired = await pairDirectPhone(browser, daemon);
     phoneContext = paired.context;
     const phone = paired.phone;
     await phone.locator('[data-phone-tab="missions"]').tap();

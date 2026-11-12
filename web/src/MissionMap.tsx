@@ -356,6 +356,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
   const result = branch ? null : resultLine(lineNode(node));
   const waits = node.kind === "external";
+  const failed = failedVerdict(node);
   const titleText = (
     <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
       {node.title}
@@ -385,7 +386,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   ) : null;
   const card = (
     <MissionGraphCard
-      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failedVerdict(node)}
+      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failed}
       still={doing != null && doing.state !== "working"}
       title={titleText}
       accessory={hide ? <HideMark words={hide} /> : null}
@@ -475,7 +476,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     </MissionGraphCard>
   );
   const hovered = (
-    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", failed, doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
       {card}
     </MissionNodeHover>
   );

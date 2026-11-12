@@ -143,21 +143,30 @@ function StackMark({ state }: { state: PrState | null }) {
   return <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-to-mark={state ?? "unknown"} />;
 }
 
-/** A general node's preset as its icon (PRD node-presets D-08): research a magnifier, verify a shield with a check, deploy a rocket, none a document; the core's preset table names the same icons. */
-export const PRESET_ICON: Record<MissionNodePreset | "general", LucideIcon> = { research: SearchIcon, verify: ShieldCheckIcon, deploy: RocketIcon, general: FileTextIcon };
+/** A general node's preset as its icon (PRD node-presets D-08): research a magnifier, verify a shield with a check, deploy a rocket, none a document. */
+const PRESET_ICON: Record<MissionNodePreset | "general", LucideIcon> = { research: SearchIcon, verify: ShieldCheckIcon, deploy: RocketIcon, general: FileTextIcon };
+
+/** The icon a general node's preset draws; none, or a preset this bundle does not know that a later core sends, draws the document (D-11). */
+function presetKey(preset: MissionNodePreset | null | undefined): MissionNodePreset | "general" {
+  return preset && PRESET_ICON[preset] ? preset : "general";
+}
+
+export function presetIcon(preset: MissionNodePreset | null | undefined): LucideIcon {
+  return PRESET_ICON[presetKey(preset)];
+}
 
 /** The icon's colour by where the node stands (v4): grey planned, blue worked, green done, red on a failed verdict. */
 const RESULT_TONE: Record<ResultTone, string> = { planned: "text-muted-foreground", working: "text-mission-working", done: "text-mission-done", failed: "text-mission-failed" };
 
 export function ResultLineView({ line, whole = false, className }: { line: ResultLine; whole?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const Icon = PRESET_ICON[line.preset ?? "general"];
+  const Icon = presetIcon(line.preset);
   const verdict = line.shows === "verdict" ? (line.verdict === "pass" ? "font-semibold text-mission-done" : "font-semibold text-mission-failed") : null;
   const words = resultLineWords(line, t);
   return (
-    <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xxs text-caption", line.shows === "conclusion" ? "text-subtle-foreground" : "text-muted-foreground", className)} data-node-line="result" data-line-kind={line.preset ?? "general"} data-line-tone={line.tone} data-line-shows={line.shows} data-line-verdict={line.shows === "verdict" ? line.verdict : undefined}>
-      <Icon className={cn("size-(--size-icon-sm) shrink-0", RESULT_TONE[line.tone])} data-line-icon={line.preset ?? "general"} />
-      <span className={cn(whole ? "min-w-0 break-words" : "min-w-0 truncate", verdict)} title={!whole && line.shows === "conclusion" ? line.line : undefined}>{words}</span>
+    <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xxs text-caption", line.shows === "line" ? "text-subtle-foreground" : "text-muted-foreground", className)} data-node-line="result" data-line-kind={line.preset ?? "general"} data-line-tone={line.tone} data-line-shows={line.shows} data-line-verdict={line.shows === "verdict" ? line.verdict : undefined}>
+      <Icon className={cn("size-(--size-icon-sm) shrink-0", RESULT_TONE[line.tone])} data-line-icon={presetKey(line.preset)} />
+      <span className={cn(whole ? "min-w-0 break-words" : "min-w-0 truncate", verdict)} title={!whole && line.shows === "line" ? line.line : undefined}>{words}</span>
       {line.shows !== "kind" ? <ChevronRightIcon className="size-(--size-icon-sm) shrink-0 text-muted-foreground opacity-(--opacity-dimmed)" /> : null}
     </span>
   );
