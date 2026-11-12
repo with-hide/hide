@@ -493,7 +493,8 @@ it("shows the desktop graph with finished and parallel nodes, dependencies and i
     expect(map.querySelector("[data-mission-report]")?.textContent).toContain("Report");
     expect(map.querySelector('[data-mission-node="a"]')?.getAttribute("data-node-look")).toBe("done");
     expect(map.querySelector('[data-mission-node="b"]')?.textContent).toContain("#7");
-    expect(map.querySelector('[data-mission-node="d"]')?.textContent).toContain("Not started");
+    // A planned step says how it will go, a faint `PR` with no time (PRD mission-destination D-55, B59).
+    expect(map.querySelector('[data-mission-node="d"] [data-line-plan]')?.getAttribute("data-line-plan")).toBe("pr");
   } finally { await unmount(); }
 });
 
@@ -514,7 +515,9 @@ it("keeps empty, completed and long missions readable without a rail fold", asyn
   } finally { await unmount(); }
 });
 
-// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn.
+// F1: a settled most-recent PR must not replace an earlier open PR in the phone's merge turn. The list row names the open ones; the
+// card's band says it is the operator's to merge and its line names the step's newest pull request, as the desktop's does (PRD
+// mission-destination D-52, D-53).
 it("names only open PRs in the phone merge turn, newest first with the additional count", async () => {
   const db = (prs: number[]) => node("db", "done", { pr: 37, pr_state: "merged", merge: { by: "operator", state: "due", why: "DB review", prs }, landing: { state: "left", action: "merge" } });
   const items = [[31, 33], [31]].map((prs, index) => mission(`merge-${index}`, { nodes: [db(prs)], landing_order: ["db"] }));
@@ -523,16 +526,118 @@ it("names only open PRs in the phone merge turn, newest first with the additiona
     await click('[data-phone-tab="missions"]');
     expect(container.querySelector('[data-phone-mission="merge-0"] [data-phone-mission-line]')?.textContent).toBe("Merge order #33 +1");
     expect(container.querySelector('[data-phone-mission="merge-1"] [data-phone-mission-line]')?.textContent).toBe("Merge order #31");
-    for (const [index, pr] of [[0, "#33"], [1, "#31"]] as const) {
+    for (const index of [0, 1]) {
       await click(`[data-phone-mission="merge-${index}"]`);
-      const card = container.querySelector('[data-mission-node="db"]')!;
-      expect(card.textContent).toContain(pr);
-      expect(card.textContent).not.toContain("#37");
-      expect(card.textContent?.includes("+1")).toBe(index === 0);
-      expect(card.textContent).toContain("Yours to merge");
-      expect(card.textContent).toContain("Needs you");
+      expect(cardOf(container, "db")).toMatchObject({ band: "Yours to merge", person: "due", yours: true, tag: null });
       await click('[data-phone-back="missions"]');
     }
+  } finally { await unmount(); }
+});
+
+/** A step's card as the operator reads it: the band under its title, its worker, and its bottom line with the turn at its end. */
+const cardOf = (container: HTMLElement, key: string) => {
+  const card = container.querySelector(`[data-mission-node="${key}"]`)!;
+  const foot = card.querySelector("[data-node-foot]");
+  const line = foot?.querySelector("[data-node-line]");
+  return {
+    band: (card.querySelector("[data-node-band]") ?? card.querySelector("[data-node-merge-turn], [data-node-gate]"))?.textContent ?? null,
+    worker: card.querySelector("[data-node-run]")?.textContent ?? null,
+    line: line?.getAttribute("data-node-line") ?? null,
+    mark: line?.getAttribute("data-line-mark") ?? line?.getAttribute("data-line-kind") ?? null,
+    // What the line says, in its order; the destination's arrow and person are marks.
+    text: line?.textContent ?? null,
+    to: foot?.querySelector("[data-line-to]")?.textContent ?? null,
+    // The mark of the pull request a stacked step goes into, as the PR list draws it by its state.
+    toMark: foot?.querySelector("[data-line-to-mark]")?.getAttribute("data-line-to-mark") ?? null,
+    bold: foot?.querySelector("[data-line-elsewhere]") != null,
+    person: line?.getAttribute("data-line-person") ?? null,
+    yours: card.querySelector("[data-node-turn]") != null,
+    tag: foot?.querySelector("[data-node-gate-tag]")?.textContent ?? null,
+    hairline: foot?.classList.contains("border-t") ?? false,
+    name: card.getAttribute("aria-label") ?? "",
+  };
+};
+
+// PRD mission-destination D-51-D-55, B54-B59: the phone's card draws the desktop's rows from what the Mac sends it: the band under the
+// title, the worker's mark and name, and under a hairline the branch line without the branch name, lit as the PR list lights the pull
+// request, with the operator's merge as a person before the destination; research and verify end in their kind. The head names
+// where results go.
+it("draws the desktop's v4 rows from the Mac's fields, without the branch name the frame does not carry", async () => {
+  const merge = (state: "ahead" | "due", pr: number) => ({ merge: { by: "operator" as const, why: "DB review", state, prs: [pr] } });
+  const { container, click, unmount } = await connect([mission("m-dest", { destination: "feat/login", nodes: [
+    node("ui", "working", { pr: 31, pr_state: "mergeable", pr_base: "feat/login", pr_more: 1, merge: { by: "conductor", state: "ahead", prs: [30, 31] } }),
+    node("db", "working", { pr: 33, pr_state: "pending", pr_base: "feat/login", ...merge("ahead", 33) }),
+    node("api", "done", { pr: 34, pr_state: "mergeable", pr_base: "feat/login", ...merge("due", 34), landing: { state: "left", action: "merge" } }),
+    node("stack", "working", { pr: 35, pr_state: "failed", base_pr: 31, pr_base: "feat/ui" }),
+    node("docs", "done", { delivery: "direct", landing: { state: "landed", proof: { by: "in_main", commit: "abc" } } }),
+    node("sdk", "working", { kind: "external", delivery: null, worker_agent: null, external_pr: 77, external_base: "main", external_state: "mergeable" }),
+    node("lib", "working", { kind: "external", delivery: null, worker_agent: null, external_branch: "feat/lib", external_base: "feat/login" }),
+    node("look", "done", { kind: "general", preset: "research", delivery: null, worker_agent: "codex" }),
+    node("check", "working", { kind: "general", preset: "verify", delivery: null }),
+    node("tidy", "planned", { delivery: "direct" }),
+  ] })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-dest"]');
+    expect(container.querySelector("[data-mission-destination]")?.textContent).toBe("→feat/login");
+    // A ready pull request the Conductor merges: the PR list's green mark, the newest number and the others' count, to the destination.
+    expect(cardOf(container, "ui")).toMatchObject({ band: null, worker: "Claude Code", line: "branch", mark: "mergeable", text: "#31 +1→feat/login", bold: false, person: null, yours: false, hairline: true });
+    expect(cardOf(container, "ui").name).toContain("Where it goes: #31 +1 → feat/login · Mergeable");
+    // The plan gives the operator this merge: a person before the destination ahead, no band and no turn yet.
+    expect(cardOf(container, "db")).toMatchObject({ band: null, mark: "pending", person: "ahead", yours: false });
+    // Once the core says it is theirs: the band under the title and the person yellow; the band and line say it, so no `내 차례` word.
+    expect(cardOf(container, "api")).toMatchObject({ band: "Yours to merge", mark: "mergeable", person: "due", yours: true, tag: null });
+    expect(cardOf(container, "api").name).toContain("Where it goes: #34 → feat/login · Mergeable · You merge it · Yours to merge");
+    expect(container.querySelector('[data-mission-node="api"] [data-phone-node-reason]')).toBeNull();
+    // Stacked on another pull request it ends in that pull request's mark, lit by the state of the step that holds it, and a grey
+    // number, so its own number stays the lead (D-57); a direct change is in once landed, with `No PR` at its end.
+    expect(cardOf(container, "stack")).toMatchObject({ mark: "failed", to: "→31", toMark: "mergeable", bold: false });
+    expect(cardOf(container, "stack").name).toContain("Where it goes: #35 → PR 31");
+    expect(cardOf(container, "docs")).toMatchObject({ mark: "merged", text: "→feat/login· No PR" });
+    // An outside pull request ends bold in its own base; an outside branch names the branch it watches, which the frame carries.
+    expect(cardOf(container, "sdk")).toMatchObject({ worker: null, mark: "mergeable", text: "↗#77→main", bold: true });
+    expect(cardOf(container, "lib")).toMatchObject({ mark: "branch", text: "↗ feat/lib→feat/login", bold: false });
+    // Research and verify end in their kind: the conclusion and verdict are not in the phone's frame.
+    expect(cardOf(container, "look")).toMatchObject({ worker: "Codex", line: "result", mark: "research", text: "Research" });
+    expect(cardOf(container, "check")).toMatchObject({ line: "result", mark: "verify", text: "Verify" });
+    // A planned step says how it will go: `No PR` to the destination, faint, and the card no time or steps.
+    expect(cardOf(container, "tidy")).toMatchObject({ mark: "plan_direct", text: "No PR→feat/login" });
+    expect(container.querySelector("[data-node-steps], [data-node-took], [data-node-model]")).toBeNull();
+  } finally { await unmount(); }
+});
+
+// B17, B60: a Mac before destinations sends none of the new fields, so the card draws the same rows with no branch, base or destination
+// it was not sent, the line stopping before `→`; the head names nothing, nor for a mission whose steps land nowhere.
+it("names no branch or destination it was not sent, and tags no mission whose steps land nowhere", async () => {
+  const { container, click, unmount } = await connect([
+    mission("m-old", { nodes: [
+      node("db", "done", { pr: 33, pr_state: "mergeable", merge: { by: "operator", state: "due", why: "DB review", prs: [33] }, landing: { state: "left", action: "merge" } }),
+      node("docs", "working", { delivery: "direct" }),
+      node("sdk", "working", { kind: "external", delivery: null, pr: 77 }),
+      node("ext", "working", { kind: "external", delivery: null }),
+      node("top", "working", { pr: 40, pr_state: "pending", base_pr: 39 }),
+    ] }),
+    mission("m-look", { destination: "feat/login", nodes: [node("look", "working", { kind: "general", preset: "research", delivery: null }), node("check", "planned", { kind: "general", preset: "verify", delivery: null })] }),
+  ]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-old"]');
+    expect(container.querySelector("[data-mission-destination]")).toBeNull();
+    // Its merge is still the operator's: the band says so and the line names its pull request, with nowhere to go.
+    expect(cardOf(container, "db")).toMatchObject({ band: "Yours to merge", text: "#33", to: null, yours: true });
+    expect(cardOf(container, "docs")).toMatchObject({ mark: "branch", text: "No PR", to: null });
+    // An outside step whose watch was not sent still names the pull request the frame carries.
+    expect(cardOf(container, "sdk")).toMatchObject({ text: "↗#77", to: null });
+    // One sent with nothing it watches has no line at all, rather than a mark that names nothing.
+    expect(cardOf(container, "ext")).toMatchObject({ line: null, hairline: false });
+    // A pull request it is stacked on that no step holds is drawn grey: the frame says nothing of its state.
+    expect(cardOf(container, "top")).toMatchObject({ text: "#40→39", toMark: "unknown" });
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-look"]');
+    expect(container.querySelector("[data-phone-mission-map]")).not.toBeNull();
+    expect(container.querySelector("[data-mission-destination]")).toBeNull();
+    expect(container.querySelector('[data-node-line="branch"]')).toBeNull();
+    expect(cardOf(container, "look")).toMatchObject({ line: "result", mark: "research" });
   } finally { await unmount(); }
 });
 

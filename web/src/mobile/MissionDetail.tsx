@@ -4,6 +4,7 @@ import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIc
 import { useState } from "react";
 import { Elapsed, useElapsed } from "../components/elapsed";
 import { GatePlanList } from "../components/mission-gate";
+import { MissionDestinationTag } from "../components/mission-options";
 import { ProgressCells } from "../components/mission-tone";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
@@ -14,6 +15,7 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
+import { landsInDestination } from "../missionOptions";
 import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, missionCells, missionOpen, skipWords } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { PhoneMissionMap } from "./PhoneMissionMap";
@@ -64,7 +66,13 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
             </Button>
           ) : null}
         </div>
-        {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="head" className="mt-sm w-full" /> : null}
+        {/* The cells, then where the results go as the desktop's head names it, only while a step lands there and the Mac sent the branch (PRD mission-destination D-18, D-38, B17). */}
+        {mission.nodes.length > 0 ? (
+          <div className="mt-sm flex min-w-0 items-center gap-sm">
+            <ProgressCells tones={missionCells(mission)} size="head" />
+            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch /> : null}
+          </div>
+        ) : null}
       </header>
       {dim ? (
         <div role="status" className="flex items-center gap-sm px-lg py-sm text-body text-subtle-foreground" data-phone-unreachable="true">

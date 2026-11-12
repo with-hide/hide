@@ -59,11 +59,6 @@ pub struct PhoneMission {
     /// destinations, where the phone names no branch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
-    /// How far the mission goes (`MissionView::scope`): `pr` leaves every
-    /// merge to the operator, so the phone never makes a node the plan
-    /// gave them the operator's turn (D-35, D-45); absent from a core before it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
     /// The device's name for a mission away from the paired Mac; `None` on the Mac.
     pub device_label: Option<String>,
     pub status: String,
@@ -367,8 +362,6 @@ struct MissionIn {
     device_id: String,
     #[serde(default)]
     destination: Option<String>,
-    #[serde(default)]
-    scope: Option<String>,
     status: String,
     #[serde(default)]
     decision: Option<String>,
@@ -702,7 +695,6 @@ fn phone_mission(
         title: cut(&mission.title),
         device_id: mission.device_id,
         destination: mission.destination,
-        scope: mission.scope,
         device_label,
         status: mission.status,
         decision: mission.decision,
@@ -962,15 +954,15 @@ mod tests {
         assert!(!sent.to_string().contains("private"));
     }
 
-    /// PRD mission-destination D-14, D-35, D-37, D-38, B17: what the
-    /// desktop's branch line and merge band read reach the phone, so its line
-    /// ends where the desktop's does: the branch a mission's results go to,
-    /// its scope, the branch a step's current pull request merges into, how
-    /// many more it holds, and an outside step's pull request or branch with
-    /// where it goes and how its pull request stands; a core before
-    /// them sends none, and the phone gets no key for them.
+    /// PRD mission-destination D-14, D-37, D-38, D-52, B17, B59: what the
+    /// desktop's branch line reads reaches the phone, so its line ends where
+    /// the desktop's does: the branch a mission's results go to, the branch
+    /// a step's current pull request merges into, how many more it holds,
+    /// and an outside step's pull request or branch with where it goes and
+    /// how its pull request stands; a core before them sends none, and the
+    /// phone gets no key for them.
     #[test]
-    fn what_the_station_line_reads_reaches_the_phone() {
+    fn what_the_branch_line_reads_reaches_the_phone() {
         let prs = json!([
             {"number": 30, "state": "closed", "url": "https://github.com/private/never-send/30", "base": "main"},
             {"number": 31, "state": "pending", "url": "https://github.com/private/never-send/31", "base": "release/1.2"},
@@ -1004,7 +996,6 @@ mod tests {
         let sent = serde_json::to_value(&missions).unwrap();
         let (new, old) = (&sent["items"][0], &sent["items"][1]);
         assert_eq!(new["destination"], json!("feat/login"));
-        assert_eq!(new["scope"], json!("merge"));
         assert_eq!(
             (&new["nodes"][0]["pr_base"], new["nodes"][1].get("pr_base")),
             (&json!("release/1.2"), None)

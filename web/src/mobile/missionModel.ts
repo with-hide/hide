@@ -8,6 +8,7 @@
 import { useMemo } from "react";
 import { missionEntry, turnCount, type MissionEntry } from "../missionList";
 import { missionCounts, missionOpen, type WorkerEscalation } from "../missions";
+import type { LineNode } from "../missionLine";
 import type { AgentKey, PhoneMission, PhoneMissionNode, PhonePr } from "./protocol";
 import { usePhone } from "./store";
 
@@ -36,6 +37,27 @@ export function openCount(entries: readonly MissionEntry<PhoneMission>[]): numbe
 /** The escalation hided read from a step's worker row and sent with the node. */
 export function workerOf(node: PhoneMissionNode): WorkerEscalation | null {
   return node.escalation;
+}
+
+/**
+ * A step as the card's bottom line reads it (`branchLine`, `resultLine`, PRD
+ * mission-destination D-52, B59): the flat fields the Mac sends the phone put
+ * back in the desktop node's shape, so both screens run one computation. The
+ * frame carries no branch, conclusion or verdict, so the line names none. A
+ * field a Mac before destinations does not send stays absent and the line
+ * names nothing for it (B60); an outside step from such a Mac still names the
+ * pull request it watches, the one the frame carries as its own. The pull
+ * request a stacked step goes into takes its state from the step whose current
+ * pull request it is; the frame carries no older ones, so another stays grey
+ * (D-57).
+ */
+export function phoneLineNode(node: PhoneMissionNode, nodes: readonly Pick<PhoneMissionNode, "pr" | "pr_state">[] = []): LineNode {
+  const external = node.external_pr != null ? { pr: node.external_pr }
+    : node.external_branch != null ? { branch: node.external_branch }
+      : node.kind === "external" && node.pr != null ? { pr: node.pr } : null;
+  const outside = node.external_base != null || node.external_state != null ? { base: node.external_base, state: node.external_state } : null;
+  const base = node.base_pr == null ? null : nodes.find((one) => one.pr === node.base_pr);
+  return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0, base_state: base?.pr_state ?? null };
 }
 
 /** The progress words and counts of the head: `n / m` of the steps in the plan. */

@@ -19,14 +19,14 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, coreLog, openProject, sendKeys, withControl } from "./daemon-actions";
+import { checkoutAt, closePane, coreLog, openProject, sendKeys, withControl } from "./daemon-actions";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, labelMarker } from "./pane-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
-import { screenshot, THIS_MACHINE } from "./wire";
+import { enterWorkspace, screenshot, THIS_MACHINE } from "./wire";
 import { chord } from "./chords";
 import { quietFor } from "./wait";
 
@@ -894,6 +894,98 @@ test("the phone's start sheet starts an agent in a checkout, lists no Home, and 
     await expect(detail).toBeVisible({ timeout: 45_000 });
     await expect(detail).not.toHaveAttribute("data-phone-detail", new RegExp(`\\|${pane}$`));
     await expect(sheet).toHaveCount(0);
+  } finally {
+    for (const context of contexts) await context.close();
+    daemon?.stop();
+    fixture.stop();
+    tailscale.remove();
+  }
+});
+
+/** A plan whose steps end in each kind of bottom line: a change by pull request whose merge the plan gives the operator, an outside pull request and branch, and research. */
+const LINE_PLAN = {
+  scope: "merge",
+  nodes: [
+    { key: "schema", title: "결제 DB · 환불 상태 열", kind: "change", delivery: "pr", operator_merge: "DB 변경은 직접 확인", criteria: ["마이그레이션이 돈다"] },
+    { key: "outside", title: "바깥 PR", kind: "external", external: { pr: 34 } },
+    { key: "lib", title: "바깥 브랜치", kind: "external", external: { branch: "feat/lib" } },
+    { key: "cause", title: "원인 조사", kind: "research", criteria: ["원인을 한 줄로 적는다"] },
+  ],
+};
+
+// PRD mission-destination D-51-D-54, B55-B57, B59: the core's own frame, through a phone paired with it, ends each step that
+// changes code in the desktop's branch line without the branch name, to the branch the mission's results go to (the
+// checkout's `main`), with the newest pull request and its count, lit by GitHub's answer as the PR list lights it, and the
+// plan's merge a person before the destination; research ends in its kind, the head names the branch, and nothing spills
+// past a card at the phone's width. A unit test cannot see that the core's frame carries what the card reads.
+test("the phone's mission page ends each step in the desktop's line to the mission's destination from the core's frame", async ({ browser, page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await startFixture({ family: true });
+  const tailscale = new FakeTailscale();
+  tailscale.install();
+  tailscale.ready();
+  let daemon: Daemon | null = null;
+  const contexts: BrowserContext[] = [];
+  try {
+    const repo = path.join(fixture.root, "fixture");
+    fs.mkdirSync(repo, { recursive: true });
+    initGithubRepository(repo);
+    const gh = fakeGh(fixture.root);
+    daemon = await startHided(fixture, "mobile-mission-lines", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin, PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
+    const live = daemon;
+    const checkout = fs.realpathSync(repo);
+    const origin = path.join(fixture.root, "origin.git");
+    git(fixture.root, ["init", "--bare", origin]);
+    git(checkout, ["remote", "add", "origin", origin]);
+    git(checkout, ["push", "-u", "origin", "main"]);
+    // origin/HEAD names the default branch the catalog reads, which an outside branch goes to.
+    git(checkout, ["remote", "set-head", "origin", "main"]);
+    // The core reads the project's catalog for a client that shows it.
+    await page.goto(`${live.origin}/#token=${live.token}`);
+    await enterWorkspace(page, "fixture");
+    const conductor = fixture.runAs(fixture.panes[0]);
+    await withControl(live, (control) => control.until((rest) => rest.git_worktrees_loading === false || undefined, "the project catalog read"));
+    for (const args of [["create", "--title", "결제 테이블 정리"], ["plan", "--json", JSON.stringify(LINE_PLAN)], ["start"], ["node", "schema", "--status", "working", "--pr", "32"], ["node", "schema", "--pr", "31"]]) {
+      const ran = await conductor(["mission", ...args]);
+      expect(JSON.parse(ran.out.trim().split("\n").at(-1) ?? "null")?.ok, `${args[0]}: ${ran.out}`).toBe(true);
+    }
+    await withControl(live, async (control) => {
+      const at = await control.until((rest) => checkoutAt(rest, checkout), "the fixture checkout");
+      control.send("github_request", { workspace_id: at.workspace, refresh: true });
+    });
+
+    await openMobileSettings(page, live);
+    await page.locator('[data-mobile-switch="true"]').click();
+    const phoneContextA = await phoneContext(browser);
+    contexts.push(phoneContextA);
+    const phone = await phoneContextA.newPage();
+    await phone.goto(await shownPairingUrl(page, live));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone's pairing reaches connected
+    await phone.locator('[data-phone-tab="missions"]').tap();
+    await phone.locator("[data-phone-mission]").first().tap();
+
+    await expect(phone.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
+    const card = (key: string) => phone.locator(`[data-mission-node="${key}"]`);
+    // Pull request #31, ready as GitHub answered, after #32: the PR list's mergeable mark, the newest number and the other's count, to `main`, the operator's merge ahead.
+    const line = (key: string) => card(key).locator("[data-node-line]");
+    await expect(line("schema")).toHaveAttribute("data-line-mark", "mergeable", { timeout: 30_000 }); // wait-ok: GitHub's answer for #31 reaches the phone's frame
+    await expect(line("schema")).toHaveText("#31 +1→main");
+    await expect(line("schema")).toHaveAttribute("data-line-person", "ahead");
+    await expect(card("schema").locator("[data-node-merge-turn]")).toHaveCount(0);
+    await expect(card("schema")).toHaveAttribute("aria-label", /Where it goes: #31 \+1 → main · Mergeable · You merge it/);
+    // An outside pull request and branch name what they watch and end where it goes; research ends in its kind.
+    await expect(line("outside")).toHaveText("↗#34→main", { timeout: 30_000 }); // wait-ok: the outside pull request's base reaches the phone's frame
+    await expect(line("lib")).toHaveText("↗ feat/lib→main");
+    await expect(line("cause")).toHaveAttribute("data-node-line", "result");
+    await expect(line("cause")).toHaveText("Research");
+    const spills = await phone.locator("[data-mission-node]").evaluateAll((cards) => cards.flatMap((one) => {
+      const right = one.getBoundingClientRect().right + 1;
+      const out = one.scrollWidth > one.clientWidth + 1 || [...one.querySelectorAll("[data-node-foot] *")].some((part) => part.getBoundingClientRect().right > right);
+      return out ? [one.getAttribute("data-mission-node")] : [];
+    }));
+    expect(spills).toEqual([]);
+    await screenshot(phone, "mobile-phone-mission-lines");
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();

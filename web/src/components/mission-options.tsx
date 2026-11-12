@@ -12,17 +12,25 @@ import { cn } from "../lib/utils";
 import type { MissionOption } from "../missionOptions";
 import { Hint, Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui/tooltip";
 
-/** The branch the mission's results go to, cut with `…` when long and whole on hover (B30). */
-export function MissionDestinationTag({ branch, className }: { branch: string; className?: string }) {
+/**
+ * The branch the mission's results go to, cut with `…` when long and whole on
+ * hover (B30). On the phone (`touch`), which has no hover and no popover
+ * (D-38), the tag names itself to a screen reader instead of hinting.
+ */
+export function MissionDestinationTag({ branch, touch = false, className }: { branch: string; touch?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
-  return (
-    <Hint label={t("mission.head.destination", { branch })}>
-      <span className={cn("flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs border border-mission-land/40 px-xs font-mono text-caption text-mission-land", className)} data-mission-destination={branch}>
-        <span aria-hidden="true" className="shrink-0">→</span>
-        <span className="min-w-0 truncate">{branch}</span>
-      </span>
-    </Hint>
+  const label = t("mission.head.destination", { branch });
+  const tag = (
+    <span
+      className={cn("flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs border border-mission-land/40 px-xs font-mono text-caption text-mission-land", className)}
+      data-mission-destination={branch}
+      {...(touch ? { role: "note", "aria-label": label } : {})}
+    >
+      <span aria-hidden="true" className="shrink-0">→</span>
+      <span className="min-w-0 truncate">{branch}</span>
+    </span>
   );
+  return touch ? tag : <Hint label={label}>{tag}</Hint>;
 }
 
 /** The options as one line of words, joined by `·`; the words of a changed value bright with its dot. */

@@ -117,7 +117,7 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
     await click('[data-phone-mission="m-run"]');
     expect(container.querySelector("[data-mission-gates]")).toBeNull();
     expect(container.querySelector('[data-mission-node="b"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("open");
-    expect(container.querySelector('[data-mission-node="b"] [data-node-gate-long]')?.textContent).toBe("· Waiting long");
+    expect(container.querySelector('[data-mission-node="b"] [data-node-gate-long]')?.textContent).toBe(" · Waiting long");
     expect(container.querySelector('[data-mission-node="c"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("ahead");
     expect(container.querySelector('[data-mission-node="c"] [data-node-gate-long]')).toBeNull();
     expect(container.querySelector('[data-mission-node="a"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("passed");

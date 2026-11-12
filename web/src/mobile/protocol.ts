@@ -151,8 +151,6 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   device_id: string;
   /** The branch the mission's results go to, as the Mac's map names it; absent when the Mac cannot read one, and from a Mac before destinations, so the phone names no branch. */
   destination?: string;
-  /** How far the mission goes: `pr` leaves every merge to the operator, so no node draws the `👤` strip; absent from a Mac before it. */
-  scope?: "pr" | "merge";
   /** The device a mission away from the paired Mac runs on; null on the Mac. */
   device_label: string | null;
   answer: MissionAnswer | null;
