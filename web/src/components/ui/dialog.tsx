@@ -87,8 +87,14 @@ function DialogBody({ className, ...props }: ComponentProps<"div">) {
   return <div data-slot="dialog-body" className={cn("min-h-0 flex-1 overflow-auto px-lg py-md", className)} {...props} />;
 }
 
+/**
+ * A quiet button (ghost) that opens or closes a row keeps its padding inside the row: its word, not its
+ * invisible box, lines up with the text above, so it stands on the same left (or right) edge as the body.
+ */
+const QUIET_EDGE = "[&>[data-variant=ghost][data-size=default]:first-child]:-ml-md [&>[data-variant=ghost][data-size=sm]:first-child]:-ml-sm [&>[data-variant=ghost][data-size=default]:last-child]:-mr-md [&>[data-variant=ghost][data-size=sm]:last-child]:-mr-sm";
+
 function DialogFooter({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="dialog-footer" className={cn("flex flex-wrap items-center justify-end gap-sm px-lg pb-lg", className)} {...props} />;
+  return <div data-slot="dialog-footer" className={cn("flex flex-wrap items-center justify-end gap-sm px-lg pb-lg", QUIET_EDGE, className)} {...props} />;
 }
 
 function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) {

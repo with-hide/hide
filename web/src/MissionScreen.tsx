@@ -263,7 +263,7 @@ function Table({ groups, empty, filtered, connected, projectLabel, actions }: {
       onScroll={(event) => useUiStore.getState().setMissions({ scroll: event.currentTarget.scrollTop })}
       data-mission-screen-state="table"
     >
-      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border bg-background py-xs text-caption text-muted-foreground")} aria-hidden="true">
+      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border bg-background px-xs py-xs text-caption text-muted-foreground")} aria-hidden="true">
         <span>{t("missionScreen.col.mission")}</span>
         <span className="hidden missions-split:block">{t("missionScreen.col.project")}</span>
         <span>{t("missionScreen.col.steps")}</span>
@@ -300,7 +300,7 @@ function TableGroup({ group, entries, connected, projectLabel, actions }: { grou
   const rows = group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries;
   return (
     <section className="flex min-w-0 flex-col pt-md" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
-      <GroupHead group={group} count={entries.length} className="pb-xxs" />
+      <GroupHead group={group} count={entries.length} className="px-xs pb-xxs" />
       {rows.map((entry) => <TableRow key={entry.mission.id} entry={entry} connected={connected} project={projectLabel(entry.mission.workspace_id)} actions={actions} />)}
     </section>
   );
@@ -319,9 +319,9 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
   const closed = group === "closed";
   const stale = mission.stale || !connected;
   return (
-    <div className={cn("relative min-w-0 rounded-xs py-xs", TABLE_COLUMNS, stale && "opacity-(--opacity-dimmed)")} data-mission-row={mission.id} data-mission-row-group={group} data-mission-row-stale={stale || undefined}>
+    <div className={cn("relative min-w-0 rounded-xs px-xs py-xs", TABLE_COLUMNS, stale && "opacity-(--opacity-dimmed)")} data-mission-row={mission.id} data-mission-row-group={group} data-mission-row-stale={stale || undefined}>
       <RowOverlayButton aria-label={t("missionScreen.open", { title: mission.title })} onClick={() => actions.showMissionOnScreen(mission.id)} />
-      <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs pl-xs">
+      <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs">
         <span className="flex min-w-0 items-center gap-xs">
           <MissionNumber mission={mission} className="text-caption" />
           {closed ? <ClosedMark mission={mission} /> : <Pill mission={mission} turn={turn[0] ?? null} />}
@@ -330,7 +330,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
         {closed ? null : (
           <span className="flex min-w-0 items-center gap-xs">
             <RowLine mission={mission} turn={turn[0] ?? null} />
-            {turn[0]?.kind === "takeover" ? <span className={cn("ml-auto shrink-0", stale ? "pointer-events-none" : "pointer-events-auto")}><MissionTakeOver mission={mission} actions={actions} disabled={stale} /></span> : null}
+            {turn[0]?.kind === "takeover" ? <span className={cn("shrink-0", stale ? "pointer-events-none" : "pointer-events-auto")}><MissionTakeOver mission={mission} actions={actions} disabled={stale} /></span> : null}
           </span>
         )}
       </span>
