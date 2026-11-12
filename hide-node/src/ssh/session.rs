@@ -354,7 +354,7 @@ pub(super) fn sign_in(
                 return Err(EstablishError::Helper(ENDED.to_owned()));
             }
             let stderr: Vec<String> = pipe.stderr.iter().cloned().collect();
-            let mut failure = openssh::classify(&openssh::Ending {
+            let failure = openssh::classify(&openssh::Ending {
                 stderr: &stderr,
                 refusal: pipe
                     .desk
@@ -374,15 +374,11 @@ pub(super) fn sign_in(
                     openssh::Asking::Nobody
                 },
                 browser_waited: pipe.browser_expired,
+                stopped: match &stop {
+                    Stop::Quiet => openssh::Stopped::Quiet,
+                    Stop::Ended(reason) => openssh::Stopped::Ended(reason),
+                },
             });
-            if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
-                failure.detail = match stop {
-                    Stop::Quiet => {
-                        format!("ssh did not sign in within {} s", SIGN_IN_TIMEOUT.as_secs())
-                    }
-                    Stop::Ended(reason) => reason,
-                };
-            }
             crate::diagnostic!(json!({
                 "component": "remote_host",
                 "kind": "host.ssh_failed",
@@ -439,6 +435,11 @@ impl SessionError {
                 SshProblem::NameNotFound
                     | SshProblem::Unreachable
                     | SshProblem::ProxyFailed
+                    | SshProblem::SilentEnd
+                    | SshProblem::SilentTimeout
+                    | SshProblem::ConfigUnreadable
+                    | SshProblem::CheckFailed
+                    | SshProblem::Busy
                     | SshProblem::Unclassified
             ),
             Self::Lost(_) => true,

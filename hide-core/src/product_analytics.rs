@@ -347,6 +347,11 @@ fn device_failure_name(failure: DeviceFailure) -> &'static str {
             SshProblem::SshMissing => "ssh_missing",
             SshProblem::OpenSshOld => "ssh_openssh_old",
             SshProblem::HideUpdated => "ssh_hide_updated",
+            SshProblem::SilentEnd => "ssh_silent_end",
+            SshProblem::SilentTimeout => "ssh_silent_timeout",
+            SshProblem::ConfigUnreadable => "ssh_config_unreadable",
+            SshProblem::CheckFailed => "ssh_check_failed",
+            SshProblem::Busy => "ssh_busy",
             SshProblem::Unclassified => "ssh_unclassified",
         },
         DeviceFailure::MachineStopped => "machine_stopped",
@@ -421,5 +426,29 @@ mod tests {
                 ("platform", "unknown"),
             ]
         );
+    }
+
+    /// The endings ssh explained with no line Hide knows are counted apart,
+    /// so `ssh_unclassified` holds only a line Hide does not know.
+    #[test]
+    fn an_unexplained_ssh_ending_names_how_it_ended() {
+        use hide_node_link::device::SshProblem;
+        for (problem, name) in [
+            (SshProblem::SilentEnd, "ssh_silent_end"),
+            (SshProblem::SilentTimeout, "ssh_silent_timeout"),
+            (SshProblem::ConfigUnreadable, "ssh_config_unreadable"),
+            (SshProblem::CheckFailed, "ssh_check_failed"),
+            (SshProblem::Busy, "ssh_busy"),
+            (SshProblem::Unclassified, "ssh_unclassified"),
+        ] {
+            let event = Event::DeviceConnected {
+                outcome: DeviceOutcome::Failed(DeviceFailure::Ssh(problem)),
+                platform: DevicePlatform::Unknown,
+            };
+            assert!(
+                event.properties().contains(&("failure", name)),
+                "{problem:?}"
+            );
+        }
     }
 }

@@ -299,7 +299,7 @@ impl SshProgram {
             .lines()
             .find_map(Version::read)
             .ok_or_else(|| SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!(
                     "ssh -V did not name an OpenSSH release: {}",
                     last_line(said.lines())
@@ -326,12 +326,12 @@ impl SshProgram {
         let finished = self.query(&mut command, "ssh -G", until, cancel)?;
         if !finished.succeeded() {
             return Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::ConfigUnreadable,
                 detail: last_line(finished.stderr.lines()),
             });
         }
         Resolved::read(&finished.stdout).ok_or_else(|| SshFailure {
-            problem: SshProblem::Unclassified,
+            problem: SshProblem::ConfigUnreadable,
             detail: format!("ssh -G did not say where {alias} signs in"),
         })
     }
@@ -373,7 +373,7 @@ impl SshProgram {
                 Ok(finished)
             }
             Ok(_) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!("{what} answered more than Hide reads"),
             }),
             Err(RunFailure::Start(error)) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -381,18 +381,18 @@ impl SshProgram {
             }
             // The attempt's one clock ran out, not a clock of this question's.
             Err(RunFailure::TimedOut) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!(
                     "{what} did not answer within the {} s ssh has to connect",
                     super::session::SIGN_IN_TIMEOUT.as_secs()
                 ),
             }),
             Err(RunFailure::Stopped) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!("{what} was stopped: the attempt was cancelled"),
             }),
             Err(error) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!("{what} could not run: {error:?}"),
             }),
         }
@@ -499,6 +499,19 @@ pub struct Ending<'a> {
     pub asking: Asking,
     /// A browser check was shown and not finished.
     pub browser_waited: bool,
+    /// How the attempt stopped, which names an ending ssh printed nothing
+    /// about.
+    pub stopped: Stopped<'a>,
+}
+
+/// How an attempt that ended before the device answered stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stopped<'a> {
+    /// ssh still ran, and the device had not answered, when the time ssh
+    /// has to connect ran out.
+    Quiet,
+    /// The connection ended, for the reason Hide saw.
+    Ended(&'a str),
 }
 
 /// Who could have heard a question an attempt met.
@@ -612,6 +625,18 @@ pub fn classify(ending: &Ending<'_>) -> SshFailure {
         if has(unreachable) {
             return failure(SshProblem::Unreachable, &last());
         }
+    }
+    if ending.stderr.iter().all(|line| line.trim().is_empty()) {
+        return match ending.stopped {
+            Stopped::Quiet => failure(
+                SshProblem::SilentTimeout,
+                &format!(
+                    "ssh did not sign in within {} s",
+                    super::session::SIGN_IN_TIMEOUT.as_secs()
+                ),
+            ),
+            Stopped::Ended(reason) => failure(SshProblem::SilentEnd, reason),
+        };
     }
     failure(SshProblem::Unclassified, &last())
 }
@@ -835,6 +860,8 @@ mod tests {
         );
     }
 
+    const OUTPUT_CLOSED: &str = "the helper's output closed";
+
     fn ending(stderr: &[&str]) -> SshFailure {
         let lines: Vec<String> = stderr.iter().map(|line| (*line).to_owned()).collect();
         classify(&Ending {
@@ -843,6 +870,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: false,
+            stopped: Stopped::Ended(OUTPUT_CLOSED),
         })
     }
 
@@ -897,6 +925,34 @@ mod tests {
         );
     }
 
+    /// An ending ssh printed nothing about is named by how it stopped, so
+    /// a connection that ended at once and one that never answered are
+    /// counted apart from a line Hide does not know.
+    #[test]
+    fn an_ending_ssh_printed_nothing_about_is_named_by_how_it_stopped() {
+        fn silent(stderr: &[String], stopped: Stopped<'_>) -> SshFailure {
+            classify(&Ending {
+                stderr,
+                refusal: None,
+                proxied: false,
+                asking: Asking::Desk,
+                browser_waited: false,
+                stopped,
+            })
+        }
+        let ended = silent(&[], Stopped::Ended(OUTPUT_CLOSED));
+        assert_eq!(ended.problem, SshProblem::SilentEnd);
+        assert_eq!(ended.detail, OUTPUT_CLOSED);
+        let blank = silent(&["  ".to_owned()], Stopped::Ended(OUTPUT_CLOSED));
+        assert_eq!(blank.problem, SshProblem::SilentEnd);
+        let quiet = silent(&[], Stopped::Quiet);
+        assert_eq!(quiet.problem, SshProblem::SilentTimeout);
+        assert_eq!(quiet.detail, "ssh did not sign in within 90 s");
+        let said = silent(&["something new went wrong".to_owned()], Stopped::Quiet);
+        assert_eq!(said.problem, SshProblem::Unclassified);
+        assert_eq!(said.detail, "something new went wrong");
+    }
+
     #[test]
     fn a_proxy_that_ended_is_the_proxys_failure_only_for_a_proxied_alias() {
         let lines = vec![
@@ -909,6 +965,7 @@ mod tests {
             proxied: true,
             asking: Asking::Desk,
             browser_waited: false,
+            stopped: Stopped::Ended(OUTPUT_CLOSED),
         });
         assert_eq!(proxied.problem, SshProblem::ProxyFailed);
         let direct = classify(&Ending {
@@ -917,6 +974,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: false,
+            stopped: Stopped::Ended(OUTPUT_CLOSED),
         });
         assert_eq!(direct.problem, SshProblem::Unreachable);
     }
@@ -931,6 +989,7 @@ mod tests {
                 proxied: false,
                 asking: Asking::Desk,
                 browser_waited: false,
+                stopped: Stopped::Ended(OUTPUT_CLOSED),
             });
             assert_eq!(failure.problem, SshProblem::SignInNeeded, "{refusal:?}");
         }
@@ -940,6 +999,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: true,
+            stopped: Stopped::Ended(OUTPUT_CLOSED),
         });
         assert_eq!(browser.problem, SshProblem::BrowserTimeout);
         let old = classify(&Ending {
@@ -948,6 +1008,7 @@ mod tests {
             proxied: false,
             asking: Asking::OldSsh,
             browser_waited: false,
+            stopped: Stopped::Ended(OUTPUT_CLOSED),
         });
         assert_eq!(old.problem, SshProblem::OpenSshOld);
     }
@@ -991,7 +1052,7 @@ mod tests {
         );
         cancel.cancel();
         let failure = asked.join().unwrap().unwrap_err();
-        assert_eq!(failure.problem, SshProblem::Unclassified);
+        assert_eq!(failure.problem, SshProblem::CheckFailed);
         assert!(failure.detail.contains("cancelled"), "{}", failure.detail);
     }
 
@@ -1008,6 +1069,7 @@ mod tests {
                 proxied: false,
                 asking: Asking::Nobody,
                 browser_waited: false,
+                stopped: Stopped::Ended(OUTPUT_CLOSED),
             })
             .problem
         };
