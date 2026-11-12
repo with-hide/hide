@@ -70,7 +70,7 @@ impl Machine {
         }
     }
 
-    fn session_start(&self) -> serde_json::Value {
+    fn session_start(&self, pane: Option<&str>) -> serde_json::Value {
         let mut command = Command::new(&self.hook);
         command
             .args([
@@ -97,6 +97,9 @@ impl Machine {
                 command.env_remove(key);
             }
         }
+        if let Some(pane) = pane {
+            command.env("HIDE_PANE_ID", pane);
+        }
         self.daemon.route(&mut command);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut input = child.take_stdin().unwrap();
@@ -118,7 +121,7 @@ fn session_start_asks_memory_and_the_workspace_probe_at_once() {
     let machine = Machine::new();
     // Nothing the hook could start as `hide` is there to start.
     assert!(!machine.hook.with_file_name("hide").exists());
-    let answer = machine.session_start();
+    let answer = machine.session_start(Some("w1:p1"));
     let context = answer["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap_or_default();
@@ -148,6 +151,23 @@ fn session_start_asks_memory_and_the_workspace_probe_at_once() {
         [
             "workspace info --hook",
             "workspace memory --event SessionStart --runtime claude --session fixture-session",
+            // A pane's session also reports that it started.
+            "workspace status --hook",
         ]
     );
+}
+
+#[test]
+fn a_session_outside_a_hide_pane_is_not_probed_and_gets_no_guidance() {
+    let machine = Machine::new();
+    // Memory's stand-in waits for the probe; nothing will ask it here.
+    std::fs::write(machine.calls.with_file_name("workspace-asked"), "").unwrap();
+    let answer = machine.session_start(None);
+    let context = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(!context.contains("Workspace control"), "{answer}");
+    assert!(!context.contains("/srv/fixture-checkout"), "{answer}");
+    let calls = std::fs::read_to_string(&machine.calls).unwrap();
+    assert!(!calls.contains("workspace info"), "{calls}");
 }
