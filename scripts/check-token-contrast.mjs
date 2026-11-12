@@ -41,7 +41,7 @@ export function contrast(a, b) {
 }
 
 /** The hex a token draws in one color theme and mode, following aliases. */
-function resolve(tokens, name, palette, mode) {
+export function resolve(tokens, name, palette, mode) {
   const token = tokens[name];
   if (!token) throw new Error(`No token named ${name}`);
   if (token.type === 'alias') return resolve(tokens, token.value, palette, mode);
