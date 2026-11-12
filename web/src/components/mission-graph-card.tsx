@@ -20,7 +20,7 @@ const LOOK_CARD: Record<NodeLook, string> = {
 const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20";
 
 /** The same card frame, state, title and touch target on the desktop and phone; its rows stand one spacing token apart, carry no gaps of their own and all start at the card's left edge (PRD mission-destination D-51). */
-export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, title, accessory, children, ...props }: {
+export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, failed, title, accessory, children, ...props }: {
   node: Pick<MissionNode, "key" | "title" | "kind" | "status" | "blocked">;
   look: NodeLook;
   word: string;
@@ -28,6 +28,8 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
   selected?: boolean;
   dimmed?: boolean;
   still?: boolean;
+  /** A done node that ended on a failed verdict: its mark is red (PRD node-presets D-08). */
+  failed?: boolean;
   title?: ReactNode;
   accessory?: ReactNode;
   children?: ReactNode;
@@ -47,7 +49,7 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
     >
       {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
       <span className="flex min-w-0 items-center gap-xs" data-node-head="true">
-        <MissionNodeMark look={look} label={word} still={still} />
+        <MissionNodeMark look={look} label={word} still={still} failed={failed} />
         {title ?? <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")}>{node.title}</span>}
         {accessory}
       </span>

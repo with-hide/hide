@@ -32,7 +32,8 @@ Come back to me only for decisions.
 
 ## What you will see
 
-- Each node is a card: its kind (`Change`, `Research`, `Verify together`, `External`), its state (`Waiting`, `In progress`, `Done`, `Dropped`) and its pull request.
+- Each node is a card: its state (`Waiting`, `In progress`, `Done`, `Dropped`) and, on its bottom line, its pull request for a code node, its preset (`Research`, `Verify`, `Deploy`, `General`) and then its result for a general node, or the outside pull request a `Watching` node waits on.
+- A `Deploy` node asks you before it starts: its card turns yellow with what to look at once the work before it is done, and its worker starts after you say go.
 - A node that waits on you has a thick border and `Your turn`.
 - At the end the Conductor writes a report. The mission closes as `Finished`, or sits in `Waiting to merge` while a pull request is not in main yet. It moves to `Finished` once each is merged.
 - A cancelled mission does not reopen.

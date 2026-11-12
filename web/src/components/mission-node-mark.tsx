@@ -14,15 +14,25 @@ import { Hint } from "./ui/tooltip";
 // or is gone (`still`, hide-private issue 680) keeps the ring and stops it.
 
 /** `hint` false draws the mark alone, where its word stands beside it already (the card's hover, D-58). */
-export function MissionNodeMark({ look, label, still = false, hint = true, className }: { look: NodeLook; label: string; still?: boolean; hint?: boolean; className?: string }) {
+/** `failed` draws a done node that ended on a failed verdict red with a cross (PRD node-presets D-08). */
+export function MissionNodeMark({ look, label, still = false, failed = false, hint = true, className }: { look: NodeLook; label: string; still?: boolean; failed?: boolean; hint?: boolean; className?: string }) {
   const mark = (
-    <span role="img" aria-label={label} data-node-mark={look} data-node-mark-still={still || undefined} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
+    <span role="img" aria-label={label} data-node-mark={look} data-node-mark-still={still || undefined} data-node-mark-failed={(failed && look === "done") || undefined} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
       <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && !still && "motion-safe:animate-spin")} aria-hidden="true">
-        <Shape look={look} />
+        {failed && look === "done" ? <Failed /> : <Shape look={look} />}
       </svg>
     </span>
   );
   return hint ? <Hint label={label}>{mark}</Hint> : mark;
+}
+
+function Failed() {
+  return (
+    <>
+      <circle cx="6" cy="6" r="6" className="fill-mission-failed" />
+      <path d="M4 4l4 4M8 4l-4 4" fill="none" strokeWidth="1.5" strokeLinecap="round" className="stroke-status-foreground" />
+    </>
+  );
 }
 
 function Shape({ look }: { look: NodeLook }) {

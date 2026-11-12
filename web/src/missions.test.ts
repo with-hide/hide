@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { kindWord } from "./missionLine";
 import { missionEntry } from "./missionList";
 import { missionEntries } from "./mobile/missionModel";
 import type { PhoneMission } from "./mobile/protocol";
@@ -89,7 +90,7 @@ describe("the numbers and words", () => {
 
   it("reads a node's kind while it waits on an earlier node, since the edge says what it waits for, and its line once it has one", () => {
     const nodes = [node("cause", { title: "Find the cause", kind: "general", preset: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
-    expect(nodeLine(nodes[1]!, t)).toBe("Change");
+    expect(nodeLine(nodes[1]!, t)).toBe("Code");
     expect(nodeLine({ ...nodes[1]!, line: "CI failed" }, t)).toBe("CI failed");
     expect(nodeLine(node("n", { blocked: "upstream_dropped" }), t)).toMatch(/^Waiting · earlier node/);
   });
@@ -253,11 +254,14 @@ describe("what a running mission's pane says (PRD mission-plan-visibility B9, B1
 });
 
 describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
-  it("is its pull request, a direct change's branch, a research conclusion or a verify line, and nothing the record does not hold", () => {
+  it("is its pull request, a direct change's branch, or a done general node's verdict or line as its card reads it, and nothing the record does not hold", () => {
     expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, state: "merged" });
     expect(nodeResult(node("b", { delivery: "direct", branch: "fix/x" }))).toEqual({ kind: "branch", branch: "fix/x" });
-    expect(nodeResult(node("c", { kind: "general", preset: "research", status: "done", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
-    expect(nodeResult(node("d", { kind: "general", preset: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
+    expect(nodeResult(node("c", { kind: "general", preset: "research", status: "done", line: "cache first" }))).toEqual({ kind: "line", line: "cache first" });
+    expect(nodeResult(node("d", { kind: "general", preset: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "line", line: "6 of 6" });
+    // A verdict on any preset, once done; a deploy node's line is its result too (PRD node-presets B1, B2).
+    expect(nodeResult(node("p", { kind: "general", preset: "deploy", status: "done", line: "1.2.8 out", verdict: "fail", checks: { passed: 5, total: 7 } }))).toEqual({ kind: "verdict", verdict: "fail", checks: { passed: 5, total: 7 } });
+    expect(nodeResult(node("q", { kind: "general", preset: "deploy", status: "done", line: "1.2.8 out" }))).toEqual({ kind: "line", line: "1.2.8 out" });
     // A running node's line is its progress, not what it left.
     expect([nodeResult(node("r", { kind: "general", preset: "research", status: "working", line: "reading logs" })), nodeResult(node("v", { kind: "general", preset: "verify", status: "working", line: "3 of 6 so far" }))]).toEqual([null, null]);
     expect([nodeResult(node("e")), nodeResult(node("f", { kind: "general", preset: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);

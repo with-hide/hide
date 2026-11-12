@@ -156,6 +156,23 @@ it("draws a passed gate grey with a check, and its panel card says where the ans
   } finally { await map.unmount(); }
 });
 
+it("leaves a passed start gate off the card and keeps it in the panel, where a done deploy node with a plan shows its result (PRD node-presets B3, D-08)", async () => {
+  const plan = {
+    pane_id: "", session: { device_id: "mac", agent: "codex", session_id: "ship-session" },
+    steps: [{ key: "s0", title: "Sign the package", depends_on: [], status: "done" as const, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null }],
+    review: "approved" as const, ask: null, progress: { current: null, next: null, done: 1, total: 1, finished: true }, created_at_unix_ms: 1, updated_at_unix_ms: 2,
+  };
+  const ship = node("ship", { kind: "general", preset: "deploy", delivery: null, status: "done", line: "1.2.8 out, downloads checked", plan, gate: gate("passed", "Fine to ship", { when: "start", via: "card", said: "ok" }) });
+  const map = await mountMap(mission({ nodes: [ship] }));
+  try {
+    expect(map.q('[data-mission-node="ship"] [data-node-gate]')).toBeNull();
+    await map.pick("ship");
+    expect([map.q('[data-panel-gate="passed"]')?.textContent?.includes("Fine to ship"), map.q("[data-panel-gate-when]")?.textContent]).toEqual([true, "Looked at"]);
+    expect(map.q('[data-panel-part="result"]')?.textContent).toContain("1.2.8 out, downloads checked");
+    expect(map.q('[data-panel-part="now"]')?.textContent ?? "").not.toContain("1.2.8 out");
+  } finally { await map.unmount(); }
+});
+
 it("ends a mission's list row with a grey eye and the number of gates still ahead, and none when none is (B18)", async () => {
   stub();
   const ahead = mission({ id: "mission-1", nodes: [node("a", { gate: gate("ahead", "x") }), node("b", { gate: gate("ahead", "y") }), node("c", { status: "done", gate: gate("passed", "z") })] });

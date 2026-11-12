@@ -6,6 +6,8 @@
 import type { PhoneMission, PhoneMissionNode } from "../mobile/protocol";
 
 export const RELEASE_MISSION = "mission-release";
+/** The mission of general steps of each preset and a waiting step (PRD node-presets B10, B12). */
+export const PRESETS_MISSION = "mission-presets";
 /** The branch the release mission's results go to (PRD mission-destination D-52, B59): its steps' branch lines end there and its head names it. */
 const RELEASE_BRANCH = "release/1.2";
 
@@ -60,9 +62,29 @@ function release(views: boolean): PhoneMission {
   });
 }
 
+/** General steps of each preset at work, done and planned, a deploy step's start gate ahead and asking, and a waiting step (PRD node-presets B10, B12): the phone draws each preset's icon and name, never a result line or a verdict (mission-57 B59). */
+function presets(): PhoneMission {
+  const gate = (state: "ahead" | "open") => ({ state, look: "배포해도 될지", when: "start" as const, ask: state === "open" ? 4 : null, since_unix_ms: state === "open" ? Date.now() - 2 * MINUTE : null, long_wait_at_unix_ms: null, via: null, said: null });
+  const general = (key: string, title: string, status: PhoneMissionNode["status"], preset: PhoneMissionNode["preset"], over: Partial<PhoneMissionNode> = {}) =>
+    step(key, title, status, { kind: "general", preset, delivery: null, worker_agent: status === "planned" ? null : "claude", agent_runtime: status === "planned" ? null : status === "done" ? "ended" : "running", ...over });
+  return mission(PRESETS_MISSION, "1.2.8 출시", {
+    destination: "main",
+    nodes: [
+      general("cause", "재시도 잠금 원인 찾기", "done", "research"),
+      general("survey", "열린 PR 정리 기준", "working", "research"),
+      general("check", "합친 변경 검증", "done", "verify", { depends_on: ["cause"], worker_agent: "codex" }),
+      general("copy", "사이트 문구 정리", "working", null),
+      general("ship", "1.2.8 배포", "planned", "deploy", { depends_on: ["check"], gate: gate("open") }),
+      general("store", "앱 스토어 제출", "planned", "deploy", { depends_on: ["survey"], gate: gate("ahead") }),
+      step("login", "로그인 수정 기다림", "working", { kind: "external", delivery: null, pr: null, worker_agent: null, agent_runtime: null, external_pr: 1232, external_base: "main", external_state: "pending" }),
+    ],
+  });
+}
+
 /** The five places the missions tab draws: one asking, one at work, one on another Mac, one waiting to merge, and finished ones past the three shown. */
-export function phoneMissions({ views = false }: { views?: boolean } = {}): PhoneMission[] {
+export function phoneMissions({ views = false, withPresets = false }: { views?: boolean; withPresets?: boolean } = {}): PhoneMission[] {
   return [
+    ...(withPresets ? [presets()] : []),
     release(views),
     mission("mission-ui", "모바일 UI 개선", {
       created_at_unix_ms: Date.now() - 50 * MINUTE,

@@ -14,7 +14,8 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodePreset, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import { lineNode, nodeKindWord, resultLine } from "./missionLine";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -64,18 +65,6 @@ export function stackWaiting(mission: Mission): number {
   return mission.stack_waiting;
 }
 
-const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
-  change: "mission.kind.change",
-  general: "mission.kind.general",
-  external: "mission.kind.external",
-};
-
-/** A general node's name by its preset (PRD node-presets D-02), the core's one table naming the preset. */
-const PRESET_WORD: Record<MissionNodePreset, MessageKey> = {
-  research: "mission.kind.research",
-  verify: "mission.kind.verify",
-  deploy: "mission.kind.deploy",
-};
 
 /** A node's own criteria in the Conductor's words, one after another; null when it names none. */
 export function ownCriteria(node: MissionNode): string | null {
@@ -83,14 +72,6 @@ export function ownCriteria(node: MissionNode): string | null {
   return own.length > 0 ? own.join(" · ") : null;
 }
 
-export function kindWord(kind: MissionNode["kind"]): MessageKey {
-  return KIND_WORD[kind];
-}
-
-/** A node's kind as it is named: a general node by its preset, and by `일반` with none. */
-export function nodeKindWord(node: Pick<MissionNode, "kind" | "preset">): MessageKey {
-  return node.kind === "general" && node.preset ? PRESET_WORD[node.preset] : kindWord(node.kind);
-}
 
 /**
  * A node's line (B15, B51, B53): why it waits on a dropped node, else what
@@ -411,30 +392,27 @@ export function missionWorkLine(mission: Mission, t: TFunction<"translation">): 
 const PR_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.pr", "mission.stage.review", "mission.stage.merge"];
 const DIRECT_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.check", "mission.stage.review", "mission.stage.main"];
 
-/** Where a node's work is, named (B10): a change node's step of four, else its kind's one word. */
+/** Where a node's work is, named (B10): a change node's step of four, else its kind's one word, a general node's being its preset's name (PRD node-presets D-10). */
 export function stageWord(node: Pick<MissionNode, "kind" | "preset" | "delivery" | "stage">): MessageKey {
-  if (node.kind === "general" && node.preset === "research") return "mission.stage.research";
-  if (node.kind === "general" && node.preset === "verify") return "mission.stage.verify";
-  if (node.kind === "general") return nodeKindWord(node);
+  if (node.kind !== "change") return nodeKindWord(node);
   const stages = node.delivery === "direct" ? DIRECT_STAGES : PR_STAGES;
   return stages[Math.min(Math.max(node.stage ?? 1, 1), STAGE_STEPS) - 1]!;
 }
 
 /**
  * What a node left behind, by its kind (B22, D-14): its pull request, a
- * direct change's commit on main or else its branch, a research node's
- * conclusion, a verify node's recorded verdict or else its line. A research
- * or verify node's line is a result only once the node is done; while it
- * runs the line is its progress. Null when the record holds none, so
+ * direct change's commit on main or else its branch, and for a general node
+ * what its card's result line shows once it is done, its verdict, whatever
+ * its preset, or else its line (PRD node-presets D-04, D-08); while it runs
+ * the line is its progress. Null when the record holds none, so
  * nothing is drawn for it.
  */
 export type NodeResult =
   | { kind: "pr"; number: number; state: MissionNode["pr_state"] }
   | { kind: "commit"; commit: string }
   | { kind: "branch"; branch: string }
-  | { kind: "conclusion"; line: string }
   | { kind: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
-  | { kind: "verify"; line: string };
+  | { kind: "line"; line: string };
 
 export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
@@ -442,10 +420,10 @@ export function nodeResult(node: MissionNode): NodeResult | null {
     const commit = mainCommit(node);
     return commit ? { kind: "commit", commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
   }
-  if (node.kind === "general" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
-  if (!node.line) return null;
-  if (node.kind === "general" && node.preset === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
-  return node.status === "done" ? { kind: "verify", line: node.line } : null;
+  // A general node's result is its card's result line, the one computation the card, the panel and the phone read.
+  const result = resultLine(lineNode(node));
+  if (result?.shows === "verdict") return { kind: "verdict", verdict: result.verdict, checks: result.checks };
+  return result?.shows === "line" ? { kind: "line", line: result.line } : null;
 }
 
 /**
@@ -462,10 +440,10 @@ export function shortCommit(commit: string): string {
   return commit.slice(0, 7);
 }
 
-/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, and a verify node with its verdict, in order. */
+/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, in order. */
 export function missionResults(mission: Mission): { node: MissionNode; result: NodeResult }[] {
   return orderedNodes(mission).flatMap((node) => {
-    const result = node.status === "done" || (node.kind === "general" && node.verdict) ? nodeResult(node) : null;
+    const result = node.status === "done" ? nodeResult(node) : null;
     return result ? [{ node, result }] : [];
   });
 }
@@ -929,6 +907,16 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
 export function gatesAhead<N extends { status: MissionNode["status"]; gate?: MissionGate | null }>(mission: { status: Mission["status"]; nodes: readonly N[] }): N[] {
   if (!missionOpen(mission)) return [];
   return mission.nodes.filter((node) => node.gate?.state === "ahead" && node.status !== "dropped");
+}
+
+/** The gate a card draws (PRD node-presets D-09): a start gate once passed has done its work before the node began, so only the panel keeps it; any other gate as it stands. */
+export function cardGate<G extends Pick<MissionGate, "state" | "when">>(gate: G | null | undefined): G | null {
+  return gate && !(gate.state === "passed" && gate.when === "start") ? gate : null;
+}
+
+/** Whether a general node ended on a failed verdict (PRD node-presets D-08), which its card's mark says in red. */
+export function failedVerdict(node: Pick<MissionNode, "kind" | "status" | "verdict">): boolean {
+  return node.kind === "general" && node.status === "done" && node.verdict === "fail";
 }
 
 /** Whether a reached gate has waited long (`오래 기다림`, D-22, B22): the core gives the moment, the screen compares it with its own clock. */

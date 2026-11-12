@@ -1484,6 +1484,8 @@ export type MissionCriterion = {
   via?: MissionGateVia;
   /** On a gate: the key of the decision that asks it now. */
   asked?: number;
+  /** On a gate: when it asks, before its node starts or once its other lines are met (PRD node-presets D-06); absent for `end` and from a core before start gates. */
+  when?: MissionGateWhen;
 };
 
 /** Where the operator's answer to a gate came from (`mission_gate_via`). */

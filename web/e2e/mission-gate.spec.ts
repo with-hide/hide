@@ -2,11 +2,11 @@
 // B1, B2, B5, B6, B9, B13, B23): real pane commands, the core's gate arrival
 // and its phone projection must agree. Component tests cannot observe that
 // command/socket boundary or an answer reaching the same core from the phone.
-import { devices, expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FakeTailscale } from "./fake-tailscale";
-import { chord } from "./chords";
+import { pairDirectPhone } from "./phone-direct-pair";
 import { enterWorkspace, screenshot } from "./wire";
 import { withControl } from "./daemon-actions";
 import type { HideAnswer } from "./agent-pane";
@@ -17,34 +17,6 @@ async function mission(hide: Hide, args: string[]) {
   const answer = JSON.parse(out.trim().split("\n").at(-1)!);
   expect(answer.ok, out).toBe(true);
   return answer;
-}
-
-/** The direct connection's existing fake-Tailscale boundary, never the operator's service. */
-async function pair(browser: Browser, daemon: Daemon): Promise<{ context: BrowserContext; phone: Page }> {
-  const settings = await browser.newPage();
-  const context = await browser.newContext({ ...devices["iPhone 13"], locale: "en-US", colorScheme: "dark" });
-  try {
-    await settings.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(settings.locator("[data-sidebar-overview]")).toBeVisible();
-    await settings.keyboard.press(chord("settings"));
-    await settings.locator('[data-settings-tab="mobile"]').click();
-    const tab = settings.locator('[data-mobile-tab="true"]');
-    await tab.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
-    await tab.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
-    await settings.locator('[data-mobile-switch="true"]').click();
-    await settings.locator('[data-mobile-show-code="true"]').click();
-    const qr = settings.locator("[data-mobile-qr]");
-    await expect(qr).toBeVisible();
-    const address = (await qr.getAttribute("data-mobile-qr"))!;
-    const phone = await context.newPage();
-    await phone.goto(`${daemon.origin}/m/${new URL(address).hash}`);
-    await phone.locator('[data-phone-pair="true"]').tap();
-    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
-    return { context, phone };
-  } catch (error) {
-    await context.close();
-    throw error;
-  } finally { await settings.close(); }
 }
 
 // The two registered stand-ins, daemon and paired browser each need to finish
@@ -79,7 +51,7 @@ test("a planned review stays quiet until arrival and the phone's answer passes t
     await expect(map.locator('[data-node-gate="ahead"]')).toHaveText("계획과 결과 화면");
     await expect(map.locator("[data-node-gate-tag]")).toHaveCount(0);
     await screenshot(page, "mission-gate-plan-desktop");
-    const paired = await pair(browser, daemon);
+    const paired = await pairDirectPhone(browser, daemon);
     phoneContext = paired.context;
     const phone = paired.phone;
     await phone.locator('[data-phone-tab="missions"]').tap();

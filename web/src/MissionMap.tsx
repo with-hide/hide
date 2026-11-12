@@ -8,7 +8,7 @@ import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
 import { GatePlanList, OperatorBand } from "./components/mission-gate";
 import { DeviceChip } from "./components/device-chip";
-import { BranchLineView, ResultLineView } from "./components/mission-line";
+import { BranchLineView, ResultLineView, WaitingMark } from "./components/mission-line";
 import { MissionNodeHover } from "./components/mission-node-hover";
 import { MissionDestinationTag, MissionOptionsLine } from "./components/mission-options";
 import { PullList, ResultTiles } from "./components/mission-results";
@@ -39,7 +39,9 @@ import { humanTurnText } from "./humanTurn";
 import { useWorkerEscalation } from "./missionWorkers";
 import {
   attentionWords,
+  cardGate,
   defectEdges,
+  failedVerdict,
   gatesAhead,
   gateWaitedLong,
   openAttention,
@@ -320,8 +322,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
-  // A place the plan has the operator look (PRD mission-human-gate D-06): ahead it is a tinted strip, reached it is the operator's turn, looked at it is grey with a check.
-  const gate = node.gate ?? null;
+  // A place the plan has the operator look (PRD mission-human-gate D-06): ahead it is a tinted strip, reached it is the operator's turn, looked at it is grey with a check; a start gate once passed is the panel's alone (PRD node-presets D-09).
+  const gate = cardGate(node.gate);
   // A merge the core says is the operator's now is the band's too (PRD mission-destination D-53); one ahead or done is the person on the branch line.
   const mergeDue = node.merge?.state === "due";
   const minute = useMinuteClock();
@@ -353,6 +355,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
   const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
   const result = branch ? null : resultLine(lineNode(node));
+  const waits = node.kind === "external";
+  const failed = failedVerdict(node);
   const titleText = (
     <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
       {node.title}
@@ -382,7 +386,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   ) : null;
   const card = (
     <MissionGraphCard
-      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect}
+      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failed}
       still={doing != null && doing.state !== "working"}
       title={titleText}
       accessory={hide ? <HideMark words={hide} /> : null}
@@ -410,13 +414,14 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
       {/* What the operator does on this node, right under its title (D-51): the gate's strip and a merge that is theirs now, read without a hover. */}
       <OperatorBand gate={gate} mergeDue={mergeDue} />
-      {/* Its worker: the agent's mark, the model, how long, and the device when away; effort and profile are the hover's (D-51). */}
-      {worker?.agent || worker?.model || took || device ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from ?? "none"}>
+      {/* Its worker: the agent's mark, the model, how long, and the device when away; effort and profile are the hover's (D-51). A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13). */}
+      {waits || worker?.agent || worker?.model || took || device ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={waits ? "waiting" : (run?.from ?? "none")}>
+          {waits ? <WaitingMark /> : null}
           {worker?.agent ? <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={worker.agent} profile={run?.profile} /></span> : null}
           {worker?.model ? <span className="min-w-0 truncate text-subtle-foreground" data-node-model={run?.from}>{worker.model}</span> : null}
           {run?.mark ? <span className="shrink-0" data-run-planned="true">{run.mark}</span> : null}
-          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={times?.running ? "running" : "total"}>{worker?.model || worker?.agent ? "· " : ""}{took}</span> : null}
+          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={times?.running ? "running" : "total"}>{worker?.model || worker?.agent || waits ? "· " : ""}{took}</span> : null}
           {device ? <DeviceChip label={device} variant="remote" className="ml-auto max-w-[calc(var(--size-mission-node)/3)]" /> : null}
         </span>
       ) : null}
@@ -457,19 +462,21 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54). `⚠`, 내 차례 and `!` stand at the right end of its first row and take only the width the line leaves there, their words cut before the line's number or icon ever is (D-56). */}
-      <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center gap-x-xs")} data-node-foot="true">
-        {branch ? <BranchLineView line={branch} end={marks} /> : (
-          <>
-            {result ? <ResultLineView line={result} className="flex-1" /> : null}
-            {marks}
-          </>
-        )}
-      </span>
+      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): the branch line for a change or a waiting node, the result line for a general node (D-52, D-54; PRD node-presets D-08). `⚠`, 내 차례 and `!` stand at the right end of its first row and take only the width the line leaves there, their words cut before the line's number or icon ever is (D-56). With neither line, the marks alone stand at the right end; with nothing at all, there is no foot. */}
+      {branch || result || marks ? (
+        <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
+          {branch ? <BranchLineView line={branch} end={marks} /> : (
+            <>
+              {result ? <ResultLineView line={result} className="flex-1" /> : null}
+              {marks}
+            </>
+          )}
+        </span>
+      ) : null}
     </MissionGraphCard>
   );
   const hovered = (
-    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", failed, doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
       {card}
     </MissionNodeHover>
   );
