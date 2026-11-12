@@ -14458,6 +14458,154 @@ fn a_mission_records_the_branch_its_checkout_is_on_as_its_destination() {
     }
 }
 
+/// B17 and the parent's letter-35602: a mission that records no
+/// destination, as one written before destinations, is drawn with the
+/// branch the core judges it against, its project's default branch, on the
+/// map and the phone alike, here another branch than `main`; its record and
+/// `hide mission show` keep saying it records none, and while that branch is
+/// unread neither screen names one.
+#[test]
+fn a_mission_that_records_no_destination_is_drawn_with_the_default_branch_it_is_judged_against() {
+    use crate::agent_state::phone::{PhoneMissions, project};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    assert_eq!(runtime.missions.book.missions[0].destination, None);
+    let drawn = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        let rest = json!({
+            "navigator": {"agents": []},
+            "missions": serde_json::to_value(&runtime.snapshot.missions).unwrap(),
+        });
+        let phone = PhoneMissions::project(
+            &rest,
+            crate::node::TEST_NODE,
+            &project(&rest, crate::node::TEST_NODE),
+        );
+        let on_phone = phone.find("mission-1").expect("the mission is listed");
+        (
+            runtime.snapshot.missions.items[0].destination.clone(),
+            on_phone.destination.clone(),
+        )
+    };
+    assert_eq!(drawn(&mut runtime), (None, None));
+    // The project's settings name `develop` its default branch.
+    checkout_on(&mut runtime, None, Some("develop"));
+    assert_eq!(
+        drawn(&mut runtime),
+        (Some("develop".to_owned()), Some("develop".to_owned()))
+    );
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "show", "mission": "mission-1"}),
+    )
+    .unwrap();
+    assert_eq!(shown["mission"].get("destination"), None);
+    let record = serde_json::to_value(&runtime.missions.book.missions[0]).unwrap();
+    assert_eq!(record.get("destination"), None);
+    // One that records a destination is drawn with it, whatever the default.
+    runtime.missions.book.missions[0].destination = Some("release/1.2".into());
+    runtime.missions.book_edit += 1;
+    assert_eq!(
+        drawn(&mut runtime),
+        (
+            Some("release/1.2".to_owned()),
+            Some("release/1.2".to_owned())
+        )
+    );
+}
+
+/// PRD mission-destination D-14, B26: an outside node's view says where its
+/// work goes, the end of its branch line: an outside pull request's base and state
+/// as GitHub answers them, open, merged or closed, and an outside branch the
+/// project's default branch it is judged against, which moves the published
+/// map with the catalog however the mission's own destination stands. Neither
+/// is named before it is read, and no other node carries it.
+#[test]
+fn an_outside_nodes_view_says_where_its_work_goes() {
+    use crate::model::PrState;
+    use crate::runtime::missions::OutsideView;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", outside_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    runtime.missions.book.missions[0].destination = Some("release/target".into());
+    runtime.missions.book_edit += 1;
+    let published = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        ["parser", "lib", "fix"].map(|key| {
+            runtime.snapshot.missions.items[0]
+                .nodes
+                .iter()
+                .find(|node| node.key == key)
+                .unwrap()
+                .outside
+                .clone()
+        })
+    };
+    let unread = OutsideView {
+        base: None,
+        state: None,
+    };
+    assert_eq!(
+        published(&mut runtime),
+        [Some(unread.clone()), Some(unread.clone()), None]
+    );
+    // The catalog names `develop` the project's default branch: the outside branch goes there, not to the mission's
+    // destination, with nothing else moving.
+    checkout_on(&mut runtime, Some("main"), Some("develop"));
+    let develop = Some(OutsideView {
+        base: Some("develop".into()),
+        state: None,
+    });
+    assert_eq!(
+        published(&mut runtime),
+        [Some(unread), develop.clone(), None]
+    );
+    for (badge, checks, state) in [
+        (
+            PullRequestBadge::Open,
+            PullRequestChecks::Pending,
+            PrState::Pending,
+        ),
+        (
+            PullRequestBadge::Merged,
+            PullRequestChecks::Passing,
+            PrState::Merged,
+        ),
+        (
+            PullRequestBadge::Closed,
+            PullRequestChecks::Passing,
+            PrState::Closed,
+        ),
+    ] {
+        let mut outside = pull(1232, "a1", badge, None);
+        outside.base_branch = "release/1.2".into();
+        outside.checks = checks;
+        runtime.github = github(vec![outside], false);
+        runtime.missions.github_edit += 1;
+        assert_eq!(
+            published(&mut runtime),
+            [
+                Some(OutsideView {
+                    base: Some("release/1.2".into()),
+                    state: Some(state),
+                }),
+                develop.clone(),
+                None
+            ],
+            "{state:?}"
+        );
+    }
+}
+
 /// B5: a worker of the mission starts its worktree from the destination,
 /// which its admission carries off the lock; a mission that records none
 /// names none, so its worktree starts as it always did.

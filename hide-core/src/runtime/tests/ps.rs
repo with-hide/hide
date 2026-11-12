@@ -313,6 +313,7 @@ fn mission(
             brief_bytes: None,
             criteria_skipped: 0,
             external: None,
+            outside: None,
             unread: false,
             reopened: 0,
             started_at_unix_ms: None,

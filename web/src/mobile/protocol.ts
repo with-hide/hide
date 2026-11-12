@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -108,6 +108,18 @@ export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
 export type PhoneMissionNode = MissionNodeBrief & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
+  /** The branch its current pull request merges into, as GitHub last answered; absent until it answered and from a Mac before it. */
+  pr_base?: string;
+  /** How many pull requests it holds besides its current one, the `+N` beside its pull request's number; absent at zero and from a Mac before it. */
+  pr_more?: number;
+  /** The pull request an outside step watches; absent for one that watches a branch and from a Mac before it. */
+  external_pr?: number;
+  /** The branch an outside step watches, which its line names; absent otherwise and from a Mac before it. */
+  external_branch?: string;
+  /** Where an outside step's work goes, its pull request's base or the default branch its branch is judged against; absent until read and from a Mac before it. */
+  external_base?: string;
+  /** An outside step's pull request state as GitHub last answered; absent for a branch, until read and from a Mac before it. */
+  external_state?: PrState;
   stage: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
@@ -137,6 +149,10 @@ export type PhoneDecisionView = { device_id: string; display_id: string; view: s
 export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   title: string;
   device_id: string;
+  /** The branch the mission's results go to, as the Mac's map names it; absent when the Mac cannot read one, and from a Mac before destinations, so the phone names no branch. */
+  destination?: string;
+  /** How far the mission goes: `pr` leaves every merge to the operator, so no node draws the `👤` strip; absent from a Mac before it. */
+  scope?: "pr" | "merge";
   /** The device a mission away from the paired Mac runs on; null on the Mac. */
   device_label: string | null;
   answer: MissionAnswer | null;

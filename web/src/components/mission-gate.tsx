@@ -2,7 +2,7 @@
 // plan lists draw it (PRD mission-human-gate D-06, D-08, B1, B2, B13), so the
 // desktop and the phone show one shape and one wording.
 
-import { CheckIcon, EyeIcon } from "lucide-react";
+import { CheckIcon, EyeIcon, UserRoundIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import type { MissionGate } from "../snapshot";
@@ -18,13 +18,51 @@ export function GateStrip({ gate, className }: { gate: Pick<MissionGate, "state"
     <span
       className={cn(
         "flex min-w-0 items-start gap-xs rounded-xs px-xs py-xxs text-caption",
-        gate.state === "open" ? "bg-mission-hold/20 font-semibold text-foreground" : gate.state === "ahead" ? "bg-mission-hold/10 text-foreground" : "text-muted-foreground",
+        stripTone(gate.state),
         className,
       )}
       data-node-gate={gate.state}
     >
       {gate.state === "passed" ? <CheckIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0" /> : <EyeIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0 text-mission-hold" />}
       <span className="line-clamp-2 min-w-0 break-words">{gate.look}</span>
+    </span>
+  );
+}
+
+/** A strip's tint by where its human step stands: faint ahead, filled once it is the operator's turn, grey with a check after. */
+function stripTone(state: "ahead" | "open" | "passed"): string {
+  return state === "open" ? "bg-mission-hold/20 font-semibold text-foreground" : state === "ahead" ? "bg-mission-hold/10 text-foreground" : "text-muted-foreground";
+}
+
+/**
+ * A merge the core says is the operator's now (PRD mission-destination D-53,
+ * B56), in the gate strip's shape and its turn's tint: `머지할 차례`. The
+ * number and branch are the card's branch line; a merge ahead or done is the
+ * person on that line, never a strip.
+ */
+export function MergeTurnStrip({ className }: { className?: string }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <span className={cn("flex min-w-0 items-start gap-xs rounded-xs px-xs py-xxs text-caption", stripTone("open"), className)} data-node-merge-turn="true">
+      <UserRoundIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0 text-mission-hold" />
+      <span className="min-w-0 truncate">{t("mission.merge.turn")}</span>
+    </span>
+  );
+}
+
+/**
+ * The operator's band right under a card's title (D-51, D-53): the gate's
+ * strip as it always was, the merge's turn in the same shape, or both on
+ * one line joined by `·`, each part in its own state's tint.
+ */
+export function OperatorBand({ gate, mergeDue, className }: { gate: Pick<MissionGate, "state" | "look"> | null; mergeDue: boolean; className?: string }) {
+  if (gate && !mergeDue) return <GateStrip gate={gate} className={className} />;
+  if (!gate) return mergeDue ? <MergeTurnStrip className={className} /> : null;
+  return (
+    <span className={cn("flex min-w-0 items-start gap-xxs", className)} data-node-band="true">
+      <GateStrip gate={gate} className="min-w-0 flex-1" />
+      <span aria-hidden="true" className="py-xxs text-caption text-muted-foreground">·</span>
+      <MergeTurnStrip className="shrink-0" />
     </span>
   );
 }

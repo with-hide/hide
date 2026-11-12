@@ -105,7 +105,7 @@ export function useNodeTimes(mission: Mission, node: MissionNode, events: Missio
   const language = requireInterfaceLanguage(i18n.language);
   const times = events ? nodeTimes(node, events, end) : null;
   if (!times || (times.running && mission.stale)) return null;
-  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null };
+  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null, running: times.running };
 }
 
 const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed", running: "text-mission-working", waiting: "text-muted-foreground" } as const;
@@ -185,16 +185,19 @@ function runLabel(run: ReturnType<typeof runWords>, t: TFunction<"translation">)
  * its profile and its model by the name that item's list shows (PRD
  * agent-profiles-phase2 B12).
  */
-export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel; agent: string | null } | null {
+export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel; agent: string | null; model: string | null } | null {
   const { t } = useInterfaceTranslation();
   const launched = node.launched ?? null;
   const ran = useItemNames(node.machine ?? mission.device_id, launched?.agent, launched?.profile ?? null);
   const plan = useItemNames(mission.device_id, node.worker?.agent, node.worker?.profile ? { id: node.worker.profile } : null);
   const planned = node.status !== "done" && node.status !== "dropped";
   const launch = launched ? { launch_model: launched.model ? ran.model(launched.model) : null, launch_effort: launched.effort ?? null, profile: ran.profile } : null;
-  const run = runLabel(runWords(launch, planned ? plannedRun(node.worker, plan) : null, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
+  const shownPlan = planned ? plannedRun(node.worker, plan) : null;
+  const run = runLabel(runWords(launch, shownPlan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
   if (!run) return null;
-  return { run, agent: run.from === "launch" ? launched!.agent : (node.worker?.agent ?? null) };
+  // The card's worker row names the model alone (PRD mission-destination D-51): the launched one, the CLI's default when the launch named none, else the plan's.
+  const model = run.from === "launch" ? (launch?.launch_model ?? t("conductor.defaultModel")) : (shownPlan?.model ?? null);
+  return { run, agent: run.from === "launch" ? launched!.agent : (node.worker?.agent ?? null), model };
 }
 
 /** A run's words, which truncate, before its planned mark, which never does, so a planned model never reads as launched. */

@@ -168,7 +168,7 @@ function plan(state: string, now: number): MissionNode[] {
       ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ...(stack ? [] : [line("d1", "defect", "open", { text: "다시 열면 첫 셀만 비어 있다", found_by: "check-1487" })]), ci(stack ? "pass" : "open")),
     }),
     node("check-1487", `${no(1487)} 실제 앱 확인`, { kind: "general", preset: "verify", delivery: null, depends_on: ["fix-1487"], worker: sonnet, ...(stack ? done(16, 6) : {}), line: stack ? "5개 항목 통과" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "all", checkers: [checker(sonnet, stack ? "pass" : "open")] })) }),
-    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } : null }),
+    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: decision ? "closed" : stack ? "merged" : "pending" }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } : null }),
     decision
       ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "working", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
       : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), agent_id: "agent-screen", launched: { agent_id: "agent-screen", agent: "codex", model: "Sol", effort: null }, pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
@@ -335,17 +335,78 @@ function gated(one: MissionNode, state: MissionGateState, look: string, extra: P
 
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
+/**
+ * Each pull-request change's merge as the core sends it
+ * (`mission_landing::node_merge`): the operator's when the scope stops at
+ * the pull request or the plan gave it to them (`why`), due once such a
+ * node is done with its pull request ready in an open mission.
+ */
+function withMerges(mission: Mission, why: Readonly<Record<string, string>> = {}): Mission {
+  const open = mission.status === "running" || mission.status === "merge_wait";
+  for (const one of mission.nodes) {
+    if (one.kind !== "change" || one.delivery !== "pr") continue;
+    const reason = why[one.key];
+    const merged = one.pr_state === "merged";
+    const due = reason != null && one.pr_state === "mergeable" && one.status === "done" && open;
+    one.merge = { by: mission.scope === "pr" || reason != null ? "operator" : "conductor", state: merged ? "merged" : due ? "due" : "ahead", prs: one.prs.filter((pr) => pr.state !== "merged" && pr.state !== "closed").map((pr) => pr.number), ...(reason != null ? { why: reason } : {}) };
+  }
+  return mission;
+}
+
+/**
+ * The destination states (PRD mission-destination B45): `dest-merge` the
+ * Conductor merging into `main`, one pull request based on a release
+ * branch; `dest-operator` three nodes the plan gave the operator, ahead, due
+ * and merged; `dest-direct` a direct change working beside one landed,
+ * and an outside branch going to the project's default branch `develop`;
+ * `dest-none` a mission with no code node, so no destination tag.
+ */
+function destinationFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } | null {
+  if (shown === "dest-merge" || shown === "dest-operator") {
+    const fixture = missionFixture("running", now);
+    fixture.mission.scope = "merge";
+    if (shown === "dest-merge") {
+      const release = fixture.mission.nodes.find((node) => node.key === "fix-1490")!;
+      release.prs = release.prs.map((pr) => ({ ...pr, base: "release/1.2" }));
+      withMerges(fixture.mission);
+    } else {
+      const api = fixture.mission.nodes.find((node) => node.key === "api")!;
+      api.pr_state = "merged";
+      withMerges(fixture.mission, { "fix-1490": "DB 변경은 직접 확인", "fix-1481": "배포 설정이라 직접 머지", api: "스키마 변경" });
+    }
+    return fixture;
+  }
+  if (shown === "dest-direct" || shown === "dest-none") {
+    const fixture = missionFixture("no-pr", now);
+    fixture.mission.status = "running";
+    fixture.mission.closed_at_unix_ms = null;
+    fixture.mission.report = null;
+    if (shown === "dest-direct") {
+      const bump = fixture.mission.nodes.find((node) => node.key === "bump")!;
+      Object.assign(bump, { status: "working", finished_at_unix_ms: null, stage: 1, commit: null, landing: null });
+      fixture.mission.nodes.push(node("vendor", "바깥: SDK 브랜치 반영", { kind: "external", delivery: null, external: { branch: "vendor/sdk-update" }, outside: { base: "develop" }, status: "working", started_at_unix_ms: now - 30 * MINUTE }));
+    } else {
+      fixture.mission.nodes = fixture.mission.nodes.filter((node) => node.kind !== "change").map((node) => ({ ...node, depends_on: node.depends_on.filter((key) => key === "rules") }));
+    }
+    return fixture;
+  }
+  return null;
+}
+
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+  const destination = destinationFixture(shown, now);
+  if (destination) return destination;
   // A still-open PR remains the merge target after the most recently held PR merged.
   if (shown === "operator-merge" || shown === "pr-ready") {
     const fixture = missionFixture("running", now);
+    fixture.mission.scope = shown === "operator-merge" ? "merge" : "pr";
+    withMerges(fixture.mission);
     const one = fixture.mission.nodes.find((node) => node.key === "api")!;
     one.prs = [{ number: 1503, state: "mergeable", url: null }, { number: 1505, state: "merged", url: null }];
     one.pr = 1505;
     one.pr_state = "merged";
     one.landing = MERGE_LEFT;
     one.merge = { by: "operator", state: shown === "operator-merge" ? "due" : "ahead", prs: [1503], ...(shown === "operator-merge" ? { why: "DB 변경은 직접 확인" } : {}) };
-    fixture.mission.scope = shown === "operator-merge" ? "merge" : "pr";
     fixture.mission.landing_order = [one.key];
     return fixture;
   }
@@ -403,10 +464,10 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       }
     }
   }
-  const mission: Mission = withCoreWaits({
+  const mission: Mission = withMerges(withCoreWaits({
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
-    scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal",
+    scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal", destination: "main",
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
     nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"],
     // The order the core gives what is left: the merge order first, then the plan's (`mission_landing::landing_order`).
@@ -442,7 +503,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     // A device that disconnected leaves its last values, dimmed (B20).
     stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
     conductor_letters: shown === "stalled" ? { count: 11, reason: "draft", since_unix_ms: now - 40 * MINUTE } : null,
-  });
+  }));
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },
     mission_events: { mission: mission.id, events: history(mission, now), dropped: 0 },
@@ -612,17 +673,19 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     frame = requestAnimationFrame(press);
     return () => cancelAnimationFrame(frame);
   }, [pick, fixture]);
-  // `hint=role`: the first checker beside a card takes focus, which opens its hover, the role's name under the agent and its state.
-  const roleHint = params.get("hint") === "role";
+  // `hint=role`: the first checker beside a card takes focus, which opens its hover, the role's name under the agent and its state;
+  // `hint=options` the head's options line, `hint=node:<key>` that node's card, each opening its hover the same way.
+  const hint = params.get("hint");
+  const focused = hint === "role" ? "[data-node-satellite]" : hint === "options" ? "[data-mission-options]" : hint?.startsWith("node:") ? `[data-mission-node="${hint.slice("node:".length)}"]` : null;
   useEffect(() => {
-    if (!roleHint) return;
+    if (!focused) return;
     // The map redraws while it settles and a redrawn mark loses focus, so the focus is kept, not given once.
     const keep = window.setInterval(() => {
-      if (document.activeElement?.hasAttribute("data-node-satellite")) return;
-      document.querySelector<HTMLElement>("[data-node-satellite]")?.focus();
+      if (document.activeElement?.matches(focused)) return;
+      document.querySelector<HTMLElement>(focused)?.focus();
     }, 100);
     return () => window.clearInterval(keep);
-  }, [roleHint, fixture]);
+  }, [focused, fixture]);
   const width = Number(params.get("width") ?? (state === "settings" ? 900 : 1080));
   return (
     <TooltipProvider>
