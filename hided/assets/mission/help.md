@@ -243,7 +243,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.
   Retrying a node uses the same intent, so it never makes a second agent or submits the brief twice; a new attempt with another worker uses a new intent.
 - When a spawn answers anything but an agent (`request_timeout`, `native_identity_unavailable`, `spawn_busy`), run the same command again until it answers the agent's id, and only then record or bind it.
-  An agent whose pane is up but whose spawn never answered its id is not registered: the mission cannot bind it, and its `hide mission record` is refused (`mission_criterion_not_yours`).
+  An agent whose pane is up but whose spawn never answered its id is not registered: the mission cannot bind it, and its `hide mission record` is refused (`participant_unavailable`).
 - Then record it: `hide mission node <key> --status working --agent-id <agent-N>`.
 - A worker runs on the machine the project is on, or, for a `change` node delivered by `pr` and its checkers only, on another connected device (`--machine <device id>`, with `--repo` and `--path` that device's paths) that has a project of the mission's GitHub repository.
   Hide refuses it there with its reason: a node that is not a pull-request change (`mission_machine_node_refused`; a direct change or a general node runs on the project's machine), a device that is not connected (`mission_machine_unavailable`), a device whose projects Hide is still reading (`mission_projects_loading`, retry), or no project of the same GitHub repository there that Hide has read from GitHub (`mission_machine_no_repository`; also while GitHub is still being read for the mission's own project, so wait and retry; when GitHub's read failed, the refusal says what to fix, such as a `gh` too old or signed out on the core's machine, so tell the operator rather than retry).
@@ -349,10 +349,11 @@ Three signs that a worker is stuck are told to you first: a node whose review fa
 A worker is stopped when its program runs, its turn ended and it waits on nothing: no question or approval for the operator, no person's turn, child, background task, checks or reply it waits on, no letter of its own waiting for an answer, and no report to you as its last word; and its node waits on no one either (no pull request waiting on CI, a review or the merge, no raise, no question of yours about it, no delay, hold or gate).
 Its letter says why the turn ended when the agent said: a usage limit, with the agent's own line and its reset time when it gave one, or an API error; otherwise that it ended with no report.
 Send it on with a letter saying what is left, or give the node a fresh worker; on a usage limit, send it on once the limit resets (hold the mission until then with `hide mission delay`) or give the node a fresh worker on another model.
-The map draws the node `멈춤` with its cause and how long ago from the moment it stops, before the letter.
+The map draws the node `멈춤` with its cause and how long ago from the moment Hide sees it stop, before the letter, and the 5 minutes count from then too, not from the worker's last turn.
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, a new push, or the stopped worker at work or waiting again, or its node waiting on someone, takes it off with its letter if not sent yet, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
-While a worker stands stopped, its node's no-push warning goes and none rises, so you get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise a warning that stood 30 minutes becomes does not take that warning off.
+While a worker stands stopped, its node's no-push warning goes and none rises, so you get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise the stopped warning becomes after 30 minutes does not take that warning off.
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
+A failed review's warning stays yours alone: it goes only when a review passes, which a worker fixing the findings does not reach for a whole round, so it is never raised as stalled and never reaches the operator; when each round finds something new, judge the approach or give the node a fresh worker, and ask with `hide mission decide --node` when what is left is the operator's to decide.
 The three thresholds are fixed: two failed reviews in a row, 90 minutes with no push, and 5 minutes stopped.
 
 ### A move that did not come
@@ -362,7 +363,7 @@ Every node not finished is someone's move, and a move that does not come is rais
 | Whose move | Raised to you |
 | --- | --- |
 | Yours: start a node whose dependencies are all done, or, behind a start gate answered with a fix, make the fix and record its line | 20 minutes after it could start |
-| The worker's, after a warning above | 30 minutes after the warning's letter, if it still stands |
+| The worker's, after a no-push or stopped warning above | 30 minutes after the warning's letter, if it still stands |
 | Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push |
 
 A stall is a raise like any other: yours to settle, and part of the safety net when it stands 20 minutes more.
@@ -458,6 +459,9 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   The map shows the summary first and folds the evidence under it, so a long report in another language never stands in the operator's way (`mission_summary_invalid` for a longer or multi-line one).
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
+- A record from a pane whose registration belongs to an earlier agent session than the one running there is refused `participant_session_changed`, and one from a pane with no registration `participant_unavailable`: tell your Conductor rather than retry, since only a new agent bound to the line can record it; `participant_registering` means the spawn that started you has not registered you yet, so run the same record again in a few seconds.
+  A worker's or checker's record that Hide cannot judge because it could not read its agent ledger is refused `ledger_unavailable`: stop and tell the operator; the Conductor's record on a node that never had a worker needs no ledger.
+  Each of these refusals (`mission_criterion_not_yours`, `participant_session_changed`, `participant_registering`, `participant_unavailable`, `ledger_unavailable`) leaves one `mission.record_refused` line in Hide's diagnostic log with your session's digest, the registrations it found for your pane and the agents bound to the line.
 - Recording the same result on the same commit again changes nothing.
 - `hide mission show` and `hide mission show <node>` read your mission without `--mission`, as they do for its Conductor; while you work or check nodes of two open missions, every such command names one with `--mission <id>` (`mission_ambiguous` otherwise).
 - A change node's pull request takes the mission's destination as its base, which `hide mission show <node>` prints as `도착 <branch>`: `gh pr create --base <that branch>`; a pull request stacked on another takes that one's branch.

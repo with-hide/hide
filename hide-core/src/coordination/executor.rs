@@ -197,7 +197,11 @@ impl Shown {
                 })
         };
         let found = if key == super::HERE {
-            registered(super::here(&ledger, actor)?)
+            registered(super::here(
+                &ledger,
+                actor,
+                crate::runtime::unix_milliseconds(),
+            )?)
         } else if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
             registered(record)
         } else if let Some(spawn) = spawn() {
@@ -1799,11 +1803,15 @@ fn spawn(
             .map_err(|_| "spawn_unavailable")?;
             // A launched brief waits on the agent's own start, which can take
             // many seconds cold: the clock its record is owed by starts once
-            // the agent takes input (`BriefLaunched` again), as a typed
+            // the agent is seen taking it (`BriefLaunched` again), as a typed
             // brief's starts at its typing, so a slow start raises no notice.
-            // Unseen within the wait, the clock keeps the start's moment.
+            // An agent working on it has taken it while the engine still
+            // reads its start as launching, so the child is bound right after
+            // that sighting rather than once its first turn ends, and its
+            // letters are not refused for that turn. Unseen within the wait,
+            // the clock keeps the start's moment.
             if let Some(words) = carried {
-                match crate::delivery::ladder::ready(
+                match crate::delivery::ladder::took_launch(
                     engine.as_ref(),
                     pane,
                     name,

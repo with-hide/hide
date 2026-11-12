@@ -1435,6 +1435,11 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "no_parent" => {
             "You have no parent: no agent answers for you, so your work is the operator's to read; send to a named agent from hide agent list instead"
         }
+        // The spawn that started the caller has not bound it yet and is
+        // still within its answer time (`coordination::registering`).
+        "participant_registering" => {
+            "Hide is still registering you from the spawn that started you, which takes a few seconds; run the same command again shortly with the same intent"
+        }
         "mission_cap_reached" => {
             "The mission's workers are at its cap; wait for one to finish and end it with hide agent end <id>, then run the same command again with the same intent"
         }
@@ -5487,6 +5492,7 @@ mod tests {
             "target_ambiguous",
             "target_unavailable",
             "no_parent",
+            "participant_registering",
             "codex_capability_unknown",
             "agent_hook_off",
             "agent_not_set_up",

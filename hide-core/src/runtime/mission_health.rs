@@ -597,28 +597,46 @@ impl Runtime {
     /// the node, its round and the fact the warning stands on, so the same
     /// warning is one letter after a restart too; a warning is never the
     /// operator's. A mission whose device does not answer is left as it is
-    /// (B29). Whether the book changed.
+    /// (B29). Whether the book or the stops it times (`stop_clock`, which
+    /// the map draws from) changed, so the caller announces either.
     pub(crate) fn warn_missions(&mut self, now: u64) -> bool {
         let ledger = self.delivery_state().ok();
         let mut changed = false;
+        let mut clock_moved = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
             if self.mission_stale(mission) {
                 continue;
             }
             let sleeping = self.mission_sleeping(mission, ledger.as_deref());
-            let facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
+            let mut facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
             let operator_waits: Vec<bool> = mission
                 .nodes
                 .iter()
                 .map(|node| self.gate_open(mission, node))
                 .collect();
+            let seen =
+                self.stops_seen(mission, &mut facts.nodes, facts.pulls, &operator_waits, now);
             let acts = warn_acts(mission, facts.pulls, &facts.nodes, &operator_waits, now);
             let untold = mission
                 .nodes
                 .iter()
                 .flat_map(|node| &node.warnings)
                 .any(|warning| warning.told_unix_ms.is_none());
+            let id = mission.id.clone();
+            // A stop first seen or one that ended changes what the map draws.
+            let held = self
+                .missions
+                .stop_clock
+                .keys()
+                .filter(|(of, ..)| *of == id)
+                .count();
+            clock_moved |= held != seen.len()
+                || seen
+                    .iter()
+                    .any(|(key, _)| !self.missions.stop_clock.contains_key(key));
+            self.missions.stop_clock.retain(|(of, ..), _| *of != id);
+            self.missions.stop_clock.extend(seen);
             if acts.is_empty() && !untold {
                 continue;
             }
@@ -678,11 +696,16 @@ impl Runtime {
                 changed = true;
             }
         }
+        // A mission that left the book keeps no stop clock; it draws no map.
+        let book = &self.missions.book.missions;
+        self.missions
+            .stop_clock
+            .retain(|(of, ..), _| book.iter().any(|mission| mission.id == *of));
         if changed {
             self.save_missions();
             self.flush_mission_wakes();
         }
-        changed
+        changed | clock_moved
     }
 
     /// Ends each delay that ran out, gives an end to one a build before
@@ -917,6 +940,39 @@ impl Runtime {
         }
     }
 
+    /// Times each stop of `mission` the warning judgment sees from the first
+    /// judgment that saw it (`MissionRuntime::stop_clock`): a node whose
+    /// worker stands stopped (`mission_health::stopped_worker`) has its
+    /// fact's stop carry the clock's time, or `now` when this judgment is the
+    /// first. The answer is the clock's entries for `mission` now, one per
+    /// node standing stopped.
+    fn stops_seen(
+        &self,
+        mission: &Mission,
+        nodes: &mut [NodeFacts],
+        pulls: Option<&crate::model::GithubProjectSnapshot>,
+        operator_waits: &[bool],
+        now: u64,
+    ) -> Vec<((String, String, String), u64)> {
+        let mut seen = Vec::new();
+        for (at, node) in mission.nodes.iter().enumerate() {
+            let Some(fact) = nodes.get_mut(at) else {
+                continue;
+            };
+            let waits = operator_waits.get(at).copied().unwrap_or(false);
+            if crate::mission_health::stopped_worker(mission, node, fact, pulls, waits).is_none() {
+                continue;
+            }
+            let key = stop_key(mission, node);
+            let since = self.missions.stop_clock.get(&key).copied().unwrap_or(now);
+            if let Some(stop) = fact.stopped.as_mut() {
+                stop.since_unix_ms = since;
+            }
+            seen.push((key, since));
+        }
+        seen
+    }
+
     /// The worker `record`'s row read as stopped with nothing of its own to
     /// wait on (`mission_health::WorkerStopped`, hide-private
     /// docs/missions.md, A stopped worker): the row says so
@@ -957,7 +1013,9 @@ impl Runtime {
     /// sleep, child, background task, reply or checks hold it. Stopped since
     /// its hook's refusal when one ended the turn, since an agent waiting on
     /// its screen for a limit's reset reads working to the engine, else since
-    /// its row last changed.
+    /// its row last changed; the warning and the map count from when a
+    /// warning judgment first saw the stop instead (`stops_seen`), which the
+    /// row's last change can precede by a whole turn.
     pub(super) fn worker_row_stopped(
         &self,
         record: &crate::coordination::AgentRecord,
@@ -2051,4 +2109,14 @@ impl Runtime {
                 })
             })
     }
+}
+
+/// Which stop of `node` the stop clock times: its mission, the node and the
+/// worker it holds, so a fresh worker's stop is a new one.
+pub(super) fn stop_key(mission: &Mission, node: &MissionNode) -> (String, String, String) {
+    (
+        mission.id.clone(),
+        node.key.clone(),
+        node.agent_id.clone().unwrap_or_default(),
+    )
 }

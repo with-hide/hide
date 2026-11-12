@@ -4215,6 +4215,7 @@
                 "agent_pane_required",
                 "caller_identity_conflict",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4255,6 +4256,7 @@
                 "human_place_too_long",
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -4279,6 +4281,7 @@
             "refusals": [
                 "agent_pane_required",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -5168,7 +5171,8 @@
                 "composer_unconfirmed",
                 "force_target_asleep",
                 "intent_conflict",
-                "no_parent"
+                "no_parent",
+                "participant_registering"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6008,6 +6012,10 @@
                 "mission_node_unknown",
                 "mission_criterion_unknown",
                 "mission_criterion_not_yours",
+                "participant_session_changed",
+                "participant_registering",
+                "participant_unavailable",
+                "ledger_unavailable",
                 "mission_ambiguous",
                 "mission_commit_required",
                 "mission_rerun_spent",
@@ -6680,7 +6688,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:98b88da63c341a4eee8985ed1aa35494f642872b26f0f3709eff9d1e377bd26b",
+    "digest": "sha256:a5c9f1ebd58588c990e84766349638efa5bbb783df0a2b899309000e66e52cc8",
     "envelopes": {
         "agent": {
             "answer": "value",

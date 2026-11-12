@@ -449,7 +449,7 @@ fn still_holds(
         // the question goes, with its choices.
         AttentionReason::CloseRefused => mission.nodes.iter().all(|node| node.status.finished()),
         // A stall goes once the move it waited for came, or no move is owed
-        // now: the node started, its warnings went, its pull request no
+        // now: the node started, its stalling warnings went, its pull request no
         // longer waits; a delay, a decision or the node's gate reached
         // takes it off too.
         AttentionReason::NotStarted
@@ -465,7 +465,8 @@ fn still_holds(
         }
         AttentionReason::NotStarted => could_start(mission, node),
         AttentionReason::WarningStood => {
-            node.status == NodeStatus::Working && !node.warnings.is_empty()
+            node.status == NodeStatus::Working
+                && node.warnings.iter().any(|warning| warning.kind.stalls())
         }
         // A push after it was raised is the move it waited for.
         AttentionReason::WaitStood => {
@@ -782,7 +783,8 @@ pub(crate) struct Stall {
 /// The nodes of `mission` standing where a move did not come yet, so a
 /// mission never rests unseen: a node not started though every node it
 /// depends on is done and the cap has a place (`NotStarted`); a warning its
-/// Conductor was told that still stands (`WarningStood`); a pull request
+/// Conductor was told that still stands and that the worker's own move takes
+/// off (`WarningStood`, `WarningKind::stalls`); a pull request
 /// that waits on CI, a review or the merge (`WaitStood`). None while a move
 /// is excused (`stall_excused`), the node already carries a raise, or the
 /// mission does not run. Whether one has stood long enough is the
@@ -816,7 +818,7 @@ pub(crate) fn stalls(
             && node
                 .warnings
                 .iter()
-                .any(|warning| warning.told_unix_ms.is_some())
+                .any(|warning| warning.told_unix_ms.is_some() && warning.kind.stalls())
         {
             out.push(stall(AttentionReason::WarningStood, node.current_pr()));
         } else if let Some(pull) = waiting_pull(node, pulls) {
@@ -1803,6 +1805,41 @@ mod tests {
             [stall(0, AttentionReason::WarningStood, None)]
         );
         assert!(stalls(&m, None, false, &[true]).is_empty());
+    }
+
+    /// A failed review warns the Conductor and stops there: while the worker
+    /// fixes the findings it stands a whole review round, so it is never a
+    /// stall and never reaches the operator's safety net, and a stall an
+    /// earlier build raised on it goes. A warning the worker's own move takes
+    /// off still stalls beside it, and keeps its stall.
+    #[test]
+    fn a_failed_review_is_never_raised_as_a_stall() {
+        let failed = || {
+            let mut m = reviewed();
+            m.nodes[0].criteria[1].fails_in_a_row = 3;
+            m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
+            m
+        };
+        let pulls = listed(Vec::new());
+        let cleared = |m: &Mission| {
+            evaluate(m, &facts(Some(&pulls), vec![NodeFacts::default()]))
+                .contains(&Act::Clear { node: 0 })
+        };
+        assert!(stalls(&failed(), None, false, &[false]).is_empty());
+        let mut raised = failed();
+        raised.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
+        assert!(cleared(&raised));
+
+        let mut stopped = failed();
+        stopped.nodes[0]
+            .warnings
+            .push(warn(WarningKind::Stopped, 5));
+        assert_eq!(
+            stalls(&stopped, None, false, &[false]),
+            [stall(0, AttentionReason::WarningStood, None)]
+        );
+        stopped.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
+        assert!(!cleared(&stopped));
     }
 
     /// A pull request waiting on CI, a review or the merge stands; a stale

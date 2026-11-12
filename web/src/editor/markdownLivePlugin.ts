@@ -11,13 +11,16 @@ import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 import { StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from "@codemirror/view";
+import { createElement, Fragment, useLayoutEffect, type ReactElement, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import type { FileSource } from "../fileBytes";
 import { translate } from "../i18n/client";
 import { useShellStore } from "../store";
-import { hasVisibleHtml, imageTarget, resolveInCheckout, sanitizeHtml, type ImageBase } from "./liveHtml";
+import { hasVisibleHtml, imageTarget, liveLinkAddress, resolveInCheckout, sanitizeHtml, type ImageBase } from "./liveHtml";
 import { LiveImages, readImageFile } from "./liveImages";
 import { markdownLivePlan, MARKDOWN_LIVE_BYTE_LIMIT } from "./markdownLive";
 import { drawMermaid, showMermaidSvg, watchPalette } from "../markdownMermaid";
+import { renderMarkdown } from "../mobile/markdown";
 
 /**
  * What a Live text can reach outside itself: where its relative paths start
@@ -293,6 +296,69 @@ class MermaidWidget extends WidgetType {
   }
 }
 
+/** Each drawn table's React root, unmounted after the editor lets it go, since that can happen while React commits. */
+const tableRoots = new WeakMap<HTMLElement, Root>();
+
+/** Runs `drawn` once React has put the table in the page, so the editor measures the height it takes. */
+function Drawn({ drawn, children }: { drawn: () => void; children: ReactNode }): ReactElement {
+  useLayoutEffect(drawn, [drawn]);
+  return createElement(Fragment, null, children);
+}
+
+/**
+ * A top-level GFM table drawn by the renderer the phone and the pull request
+ * card use (`mobile/markdown.tsx`, its HTML on), read-only. Its links keep
+ * Live's addresses, a relative file among them, and open on modifier-click
+ * like a drawn HTML block's, never navigating the page; any other press puts
+ * the caret at the table's start, which shows its source.
+ */
+class TableWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    private readonly files: LiveFiles,
+  ) {
+    super();
+  }
+  eq(other: TableWidget): boolean {
+    return other.source === this.source;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement("div");
+    root.className = "cm-md-table";
+    const react = createRoot(root);
+    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress }) }));
+    tableRoots.set(root, react);
+    // A picture in a cell changes the table's height when it arrives or gives up.
+    for (const type of ["load", "error"]) root.addEventListener(type, () => view.requestMeasure(), true);
+    const anchorOf = (event: Event) => (event.target instanceof Element ? event.target.closest("a") : null);
+    root.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const anchor = anchorOf(event);
+      if (anchor && (event.metaKey || event.ctrlKey)) {
+        openLink(anchor.getAttribute("href") ?? "", this.files);
+        return;
+      }
+      view.dispatch({ selection: { anchor: view.posAtDOM(root) }, userEvent: "select.pointer" });
+      view.focus();
+    });
+    for (const type of ["click", "auxclick"]) {
+      root.addEventListener(type, (event) => {
+        if (anchorOf(event)) event.preventDefault();
+      });
+    }
+    return root;
+  }
+  destroy(dom: HTMLElement): void {
+    const react = tableRoots.get(dom);
+    tableRoots.delete(dom);
+    if (react) queueMicrotask(() => react.unmount());
+  }
+  ignoreEvent(event: Event): boolean {
+    return event.type === "mousedown";
+  }
+}
+
 /**
  * Whether the operator has moved the caret or edited in this view. A file
  * opens with the caret at 0, which the operator did not put there, so a drawn
@@ -362,6 +428,9 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
         break;
       case "mermaid":
         ranges.push(Decoration.replace({ widget: new MermaidWidget(range.source ?? ""), block: true }).range(range.from, range.to));
+        break;
+      case "table":
+        ranges.push(Decoration.replace({ widget: new TableWidget(range.source ?? "", drawing.files), block: true }).range(range.from, range.to));
         break;
       case "image":
         ranges.push(

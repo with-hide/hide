@@ -30,6 +30,16 @@ const ATTRIBUTES = ["href", "src", "alt", "title", "width", "height", "align", "
 // dropped; a path with no scheme and a `#fragment` stay.
 const LINK_URI = /^(?:(?:https?|mailto):|[^a-z]|[a-z][a-z0-9+.-]*(?:[^a-z0-9+.:-]|$))/i;
 
+/**
+ * The address a link drawn by Live may carry, the same rule the sanitizer
+ * keeps an `href` by: http(s), `mailto:`, a fragment or a relative path, which
+ * a modifier-click then opens (`openLink`); null for any other scheme.
+ */
+export function liveLinkAddress(raw: string): string | null {
+  const href = raw.trim();
+  return LINK_URI.test(href) ? href : null;
+}
+
 let purifier: ReturnType<typeof DOMPurify> | null = null;
 
 function instance() {

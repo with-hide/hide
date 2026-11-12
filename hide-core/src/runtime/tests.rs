@@ -99,6 +99,8 @@ mod key_routing;
 mod labels;
 #[path = "tests/launch_choice.rs"]
 mod launch_choice;
+#[path = "tests/launched_brief.rs"]
+mod launched_brief;
 #[path = "tests/lineage.rs"]
 mod lineage;
 #[path = "tests/links.rs"]

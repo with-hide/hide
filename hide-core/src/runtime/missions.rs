@@ -724,6 +724,16 @@ pub(crate) struct MissionRuntime {
     /// rested before it is raised at once; an entry goes once its stall
     /// stops standing, so it holds at most one per node standing.
     pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
+    /// Since when each node's worker has stood stopped
+    /// (`mission_health::stopped_worker`), by mission, node and worker, as a
+    /// warning judgment first saw it (`Runtime::warn_missions`): the time
+    /// its warning and the map count from. The row's own last change cannot
+    /// say it: when a long turn's end lands it still holds the turn's start,
+    /// and when a Conductor's letter ends the excuse a report gave it holds
+    /// the time before the report, so the five minutes were already spent.
+    /// Memory only: a restart starts every clock again; an entry goes once
+    /// the rule lets go, so it holds at most one per node.
+    pub(super) stop_clock: std::collections::HashMap<(String, String, String), u64>,
     /// Since when this daemon has seen each mission's Conductor present
     /// (`Runtime::note_conductors_seen`), which the safety net counts a
     /// Conductor's 20 minutes from when it came after the raise. Memory only,
@@ -1023,13 +1033,13 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 .and_then(super::mission_gates::start_fix_owed)
                 .filter(|_| wake.reason == Some(crate::missions::AttentionReason::NotStarted));
             let (what, act) = match owed {
-                Some(line) => (
-                    format!("its start gate waits on the fix the operator asked for, line {line}"),
-                    "make the fix and record its line with `hide mission record`, and the start gate asks the operator again; the operator is told in ten minutes",
-                ),
+                Some(line) => fix_owed_words(line),
                 None => attention_words(wake.reason, &pr),
             };
-            news(format!("Node {} needs you to look: {what}", wake.node), act)
+            news(
+                format!("Node {} needs you to look: {what}", wake.node),
+                &act,
+            )
         }
         WakeEvent::Resolved => {
             let how = match wake.action {
@@ -1096,7 +1106,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => (
                     format!("failed its review {} times in a row", node.review_fails()),
-                    "judge whether its worker needs another approach or the node a fresh worker",
+                    "judge whether its worker needs another approach or the node a fresh worker; the operator is not called about this warning, so ask with `hide mission decide --node` when what is left is theirs to decide",
                 ),
                 (Some(WarningKind::NoPush), _, Some(warning)) => (
                     format!("has worked {} minutes with no push", minutes(warning)),
@@ -1115,7 +1125,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     };
                     (
                         format!(
-                            "has a worker whose turn ended {} minutes ago {why}, and it waits on nothing",
+                            "has a worker that has stood stopped {} minutes {why}, and it waits on nothing",
                             minutes(warning)
                         ),
                         match warning.cause {
@@ -1133,58 +1143,92 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     "judge whether its worker needs another approach or the node a fresh worker",
                 ),
             };
+            // Only a warning the worker's own move takes off is raised again
+            // as a stall (`WarningKind::stalls`).
+            let stood = match wake.warning {
+                Some(kind) if kind.stalls() => format!(
+                    "; if the warning still stands in {} minutes it is raised on the node for you to settle",
+                    crate::mission_health::WARNING_THAT_STALLS_MS / 60_000
+                ),
+                _ => String::new(),
+            };
             format!(
-                "Node {} {what} (mission {} \"{}\").\n{read} and {ask}; if the warning still stands in 30 minutes it is raised on the node for you to settle.",
+                "Node {} {what} (mission {} \"{}\").\n{read} and {ask}{stood}.",
                 wake.node, mission.id, mission.title
             )
         }
     }
 }
 
-/// What a raise tells the Conductor, and what it asks of it.
-fn attention_words(
-    reason: Option<crate::missions::AttentionReason>,
-    pr: &str,
-) -> (String, &'static str) {
+/// What a not-started stall tells the Conductor when its node waits on the
+/// fix its start gate asked for (PRD node-presets D-14): the fix it owes,
+/// worded as `attention_words` words a stall.
+fn fix_owed_words(line: &str) -> (String, String) {
+    let minutes = crate::mission_health::SAFETY_NET_AFTER_MS / 60_000;
+    (
+        format!("its start gate waits on the fix the operator asked for, line {line}"),
+        format!(
+            "make the fix and record its line with `hide mission record`, and the start gate asks the operator again; the operator is shown it in {minutes} minutes"
+        ),
+    )
+}
+
+/// What a raise tells the Conductor, and what it asks of it. A stall ends
+/// its ask with when the operator is shown it: one left standing is held in
+/// the mission's safety net (`mission_health::SAFETY_NET_AFTER_MS`).
+fn attention_words(reason: Option<crate::missions::AttentionReason>, pr: &str) -> (String, String) {
     use crate::missions::AttentionReason as Reason;
+    let raise = |what: String, act: &str| (what, act.to_owned());
+    let stall = |what: String, act: &str| {
+        let minutes = crate::mission_health::SAFETY_NET_AFTER_MS / 60_000;
+        (
+            what,
+            format!("{act}; the operator is shown it in {minutes} minutes"),
+        )
+    };
     match reason {
-        Some(Reason::MergedUnproven) => (
+        Some(Reason::MergedUnproven) => raise(
             format!("{pr} is merged but a finish line is missing or failed"),
             "record the lines with `hide mission record`, skip one with its reason, or set the node",
         ),
-        Some(Reason::WorkerEnded) => (
+        Some(Reason::WorkerEnded) => raise(
             "its worker ended with work left".to_owned(),
             "start a worker again, set the node, or drop it",
         ),
-        Some(Reason::PrClosed) => (
+        Some(Reason::PrClosed) => raise(
             format!("{pr} was closed without a merge"),
             "replan the node or the nodes it blocks, or ask the operator",
         ),
-        Some(Reason::UnplannedPr) => (
+        Some(Reason::UnplannedPr) => raise(
             format!("its worker opened {pr}, which no node holds"),
             "attach it with `hide mission node --pr`, or leave it",
         ),
-        Some(Reason::WakeRefused) => (
+        Some(Reason::WakeRefused) => raise(
             format!("Hide could not wake its sleeping worker about {pr}"),
             "wake or start the worker yourself",
         ),
-        Some(Reason::CloseRefused) => (
+        Some(Reason::CloseRefused) => raise(
             "Hide could not close the mission with every node finished".to_owned(),
             "check the node's lines and close the mission",
         ),
-        Some(Reason::HumanGate) => (
+        Some(Reason::HumanGate) => raise(
             "its gate waits on the operator".to_owned(),
             "nothing: the operator answers on the decision card",
         ),
-        Some(Reason::NotStarted) => (
+        Some(Reason::NotStarted) => stall(
             "it could start and was not started".to_owned(),
-            "start its worker; or, to hold it, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`; the operator is told in ten minutes",
+            "start its worker; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`",
         ),
-        Some(Reason::WaitStood) => (
+        Some(Reason::WaitStood) => stall(
             format!("{pr} has waited over an hour on CI, a review or the merge"),
-            "find what it waits on and move it, or merge it; the operator is told in ten minutes",
+            "find what it waits on and move it, or merge it",
         ),
-        Some(Reason::ConductorFailed | Reason::WarningStood) | None => (
+        Some(Reason::WarningStood) => stall(
+            "a warning you were told about its worker still stands, with no move from the worker"
+                .to_owned(),
+            "send its worker on with a letter saying what is left, or give the node a fresh worker; when what is left is the operator's to decide, ask with `hide mission decide --node`",
+        ),
+        Some(Reason::ConductorFailed) | None => raise(
             "the operator is asked to look".to_owned(),
             "nothing unless the operator asks",
         ),
@@ -4087,8 +4131,9 @@ impl Runtime {
     /// zero with none running: each open mission's workers' and checkers'
     /// rows as a node's `work` reads them, their activity
     /// (`worker_activity`) and what they say of a stop
-    /// (`worker_row_stopped`), and the doorbell's holds by the operator's part
-    /// in them, which a Conductor's held letters read. Rows no mission holds
+    /// (`worker_row_stopped`) with when a warning judgment first saw each stop
+    /// (`stop_clock`), and the doorbell's holds by the operator's part in
+    /// them, which a Conductor's held letters read. Rows no mission holds
     /// are not read, so an unrelated agent's turn rebuilds no mission; one
     /// pass over the
     /// missions' registrations and the holds, both bounded by the ledger.
@@ -4121,6 +4166,10 @@ impl Runtime {
         workers.sort_unstable();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         workers.hash(&mut hasher);
+        // A stop the warning judgment first saw is drawn from then.
+        let mut stops: Vec<_> = self.missions.stop_clock.iter().collect();
+        stops.sort_unstable();
+        stops.hash(&mut hasher);
         for (letter, hold) in &self.delivery_holds {
             (letter, crate::delivery::held::held_for(*hold)).hash(&mut hasher);
         }
@@ -4301,11 +4350,23 @@ impl Runtime {
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
+                // The map draws a stop from when a warning judgment first saw
+                // it (`stop_clock`), so not before one did.
                 let fact = crate::mission_health::NodeFacts {
                     worker: Some(crate::mission_health::WorkerLife::Running),
-                    stopped: record.and_then(|record| {
-                        self.worker_stopped(record, ledger, &mission.conductor.actor)
-                    }),
+                    stopped: record
+                        .and_then(|record| {
+                            self.worker_stopped(record, ledger, &mission.conductor.actor)
+                        })
+                        .and_then(|stop| {
+                            let key = super::mission_health::stop_key(mission, node);
+                            self.missions.stop_clock.get(&key).map(|since| {
+                                crate::mission_health::WorkerStopped {
+                                    since_unix_ms: *since,
+                                    ..stop
+                                }
+                            })
+                        }),
                     ..Default::default()
                 };
                 let stopped = crate::mission_health::stopped_worker(
