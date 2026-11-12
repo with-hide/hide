@@ -20,8 +20,8 @@ fn freed_memory_can_be_given_back() {
 #[test]
 fn the_machines_memory_pressure_reads_as_a_level() {
     for _ in 0..3 {
-        let level = hide_platform::memory::pressure()
-            .expect("this system reports its memory pressure");
-        eprintln!("memory pressure: {}", level.code());
+        let level =
+            hide_platform::memory::pressure().expect("this system reports its memory pressure");
+        eprintln!("memory pressure: {level:?}");
     }
 }

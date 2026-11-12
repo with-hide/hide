@@ -1891,6 +1891,7 @@ mod row_tests {
             reason: Some("The conversation file is gone".into()),
             since_unix_ms: 7,
             progress: Some("파서를 나눴어요".into()),
+            cause: None,
         });
         derive_from_axes(&mut agent);
         let rest = json!({"navigator": {"agents": [&agent], "workspaces": []}});
@@ -1929,6 +1930,7 @@ mod row_tests {
             reason: None,
             since_unix_ms: 1,
             progress: None,
+            cause: None,
         });
         agent.progress = Some("파서를 나눴어요".into());
         derive_from_axes(&mut agent);

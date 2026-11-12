@@ -191,6 +191,9 @@ pub struct DormantRecord {
     /// for the built-in default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<crate::launch::LaunchProfile>,
+    /// Why it was put to sleep, when its row says so (`SleepRecord::cause`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<super::SleepCause>,
 }
 
 impl DormantRecord {
@@ -341,6 +344,7 @@ impl DormantRecord {
                 && hide_agent_adapter::adapter(&self.kind)
                     .is_some_and(|adapter| adapter.resume.is_some()),
             checking: false,
+            cause: self.cause,
         }
     }
 }
@@ -480,6 +484,9 @@ pub struct SleepingSessionSnapshot {
     pub group: &'static str,
     pub wake_available: bool,
     pub checking: bool,
+    /// Why Hide put it to sleep, when its hover says so; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<super::SleepCause>,
 }
 
 /// A sleeping record for tests that need one without a runtime.
@@ -526,6 +533,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
         launch: Default::default(),
         owner: None,
         profile: None,
+        cause: None,
     }
 }
 

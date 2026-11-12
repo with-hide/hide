@@ -20,26 +20,6 @@ pub enum Pressure {
     Critical,
 }
 
-impl Pressure {
-    /// The word the node protocol and the diagnostics carry.
-    pub fn code(self) -> &'static str {
-        match self {
-            Pressure::Normal => "normal",
-            Pressure::Warning => "warning",
-            Pressure::Critical => "critical",
-        }
-    }
-
-    pub fn from_code(code: &str) -> Option<Self> {
-        match code {
-            "normal" => Some(Pressure::Normal),
-            "warning" => Some(Pressure::Warning),
-            "critical" => Some(Pressure::Critical),
-            _ => None,
-        }
-    }
-}
-
 /// The machine's memory pressure now, read once with no child process and
 /// no wait. Each system answers in its own terms, and none is Hide's guess
 /// from free memory:
@@ -375,13 +355,5 @@ mod tests {
         for level in [0, 3, 8, -1] {
             assert!(super::pressure::from_level(level).is_err(), "{level}");
         }
-    }
-
-    #[test]
-    fn each_level_names_itself_and_back() {
-        for level in [Pressure::Normal, Pressure::Warning, Pressure::Critical] {
-            assert_eq!(Pressure::from_code(level.code()), Some(level));
-        }
-        assert_eq!(Pressure::from_code("low"), None);
     }
 }

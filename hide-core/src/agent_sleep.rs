@@ -47,6 +47,19 @@ pub const DECISION_INTERVAL_MS: u64 = 60_000;
 /// unless its state changes first (B8).
 pub const SLEEP_RETRY_BACKOFF_MS: u64 = 60 * 60 * 1000;
 
+/// Under memory pressure only an agent idle at least this long is put to
+/// sleep, however short the chosen hours or the machine's memory.
+pub const PRESSURE_MIN_IDLE_MS: u64 = 30 * 60 * 1000;
+
+/// Why an agent was put to sleep, kept only where its row says it
+/// (`contracts/snapshot-wire-enums.json`: `sleep_cause`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SleepCause {
+    /// Its machine reported memory pressure, and it had rested longest there.
+    MemoryPressure,
+}
+
 /// The machine an agent runs on, as sleep sees it. Every machine sleeps by
 /// the same rules (PRD core-host-node-remote-core B13): an in-pane sleep ends
 /// and wakes the agent on its own machine's engine and node, whichever way
@@ -261,6 +274,10 @@ pub struct SleepRecord {
     /// for the built-in default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<crate::launch::LaunchProfile>,
+    /// Why it was put to sleep, when its row says so; none for a sleep the
+    /// hours, a finish, a report or a person asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<SleepCause>,
 }
 
 impl SleepRecord {
@@ -306,6 +323,7 @@ impl SleepRecord {
             pending_wake: None,
             launch: Default::default(),
             profile: None,
+            cause: None,
         })
     }
 
@@ -324,6 +342,7 @@ impl SleepRecord {
                 .flatten(),
             since_unix_ms: self.since_unix_ms,
             progress: self.label_owner.as_ref().and(self.progress.clone()),
+            cause: self.cause,
         })
     }
 
@@ -657,24 +676,62 @@ impl AgentSleepStore {
             return Vec::new();
         };
         let after_ms = u64::from(hours) * 60 * 60 * 1000;
+        self.sleepable(agents, machine, on_screen, backoff_until, now_unix_ms)
+            .filter(|(_, idle_since)| idle_since.saturating_add(after_ms) <= now_unix_ms)
+            .map(|(agent, _)| agent.pane_id.clone())
+            .collect()
+    }
+
+    /// The one pane memory pressure puts to sleep this minute, with when its
+    /// agent went idle: the agent the hours rule would sleep but for the
+    /// hours that has rested longest, at least [`PRESSURE_MIN_IDLE_MS`], and
+    /// is not `taken` already. Sleep set to Never is the caller's to check.
+    pub fn pressure_pick(
+        &self,
+        agents: &[SidebarAgentSnapshot],
+        machine: SleepMachine,
+        on_screen: &HashSet<String>,
+        backoff_until: &HashMap<String, u64>,
+        taken: &[String],
+        now_unix_ms: u64,
+    ) -> Option<(String, u64)> {
+        self.sleepable(agents, machine, on_screen, backoff_until, now_unix_ms)
+            .filter(|(agent, _)| !taken.contains(&agent.pane_id))
+            .filter(|(_, idle_since)| {
+                idle_since.saturating_add(PRESSURE_MIN_IDLE_MS) <= now_unix_ms
+            })
+            .min_by(|(a, a_since), (b, b_since)| {
+                a_since.cmp(b_since).then_with(|| a.pane_id.cmp(&b.pane_id))
+            })
+            .map(|(agent, idle_since)| (agent.pane_id.clone(), idle_since))
+    }
+
+    /// The agents an automatic sleep may end, with when each went idle:
+    /// seen, off screen, resting and of a kind that sleeps here, not asleep
+    /// already and not in a refused end's backoff. The time is each rule's.
+    fn sleepable<'a>(
+        &'a self,
+        agents: &'a [SidebarAgentSnapshot],
+        machine: SleepMachine,
+        on_screen: &'a HashSet<String>,
+        backoff_until: &'a HashMap<String, u64>,
+        now_unix_ms: u64,
+    ) -> impl Iterator<Item = (&'a SidebarAgentSnapshot, u64)> + 'a {
         agents
             .iter()
-            .filter(|agent| sleep_refusal(agent, machine).is_none())
+            .filter(move |agent| sleep_refusal(agent, machine).is_none())
             .filter(|agent| crate::agent_state::is_seen(agent))
-            .filter(|agent| !on_screen.contains(&agent.pane_id))
+            .filter(move |agent| !on_screen.contains(&agent.pane_id))
             .filter(|agent| !self.records.contains_key(&agent.pane_id))
-            .filter(|agent| {
+            .filter(move |agent| {
                 backoff_until
                     .get(&agent.pane_id)
                     .is_none_or(|until| *until <= now_unix_ms)
             })
-            .filter(|agent| {
-                self.stamps.get(&agent.pane_id).is_some_and(|stamps| {
-                    stamps.idle_since(agent).saturating_add(after_ms) <= now_unix_ms
-                })
+            .filter_map(|agent| {
+                let stamps = self.stamps.get(&agent.pane_id)?;
+                Some((agent, stamps.idle_since(agent)))
             })
-            .map(|agent| agent.pane_id.clone())
-            .collect()
     }
 }
 

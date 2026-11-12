@@ -336,7 +336,8 @@ impl Runtime {
                 Verdict::Sleep(_) if budget == 0 => kept.push(mark),
                 Verdict::Sleep(pane) => {
                     budget -= 1;
-                    changed |= self.begin_agent_sleep(&pane, mark.origin.trigger(), now_unix_ms);
+                    changed |=
+                        self.begin_agent_sleep(&pane, mark.origin.trigger(), None, now_unix_ms);
                     if self.asleep_route(&actor).is_some() {
                         mark.ending = Some(pane);
                     }

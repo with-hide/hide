@@ -420,7 +420,11 @@ use crate::error::HostError;
 /// (`panes::HookStatusReport::refused`, Claude Code's `StopFailure`), which a
 /// core on 95 refuses as a field it does not know, so a helper upgrades with
 /// its core.
-pub const PROTOCOL_VERSION: u32 = 96;
+/// 97: a node answers its machine's memory pressure (`MemoryPressure`), which
+/// the core's agent sleep reads for that machine's agents; a helper on 96
+/// does not know the call, so it is refused at Hello and upgraded with its
+/// core.
+pub const PROTOCOL_VERSION: u32 = 97;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1171,6 +1175,9 @@ pub enum Call {
     /// The machine's TCP listeners and where each was started
     /// (`ports::ListeningPorts`).
     ListeningPorts,
+    /// The machine's memory pressure now (`memory::MemoryPressure`), or an
+    /// error where the machine cannot say.
+    MemoryPressure,
     /// Bytes free to an unprivileged writer on the volume holding `path`;
     /// `None` when the volume cannot say.
     VolumeFree {
@@ -1504,6 +1511,7 @@ impl Call {
             | Self::LineInput { .. }
             | Self::DiskUsage { .. }
             | Self::ListeningPorts
+            | Self::MemoryPressure
             | Self::VolumeFree { .. }
             | Self::LabelTranscript { .. }
             | Self::SessionWorkTurn { .. }

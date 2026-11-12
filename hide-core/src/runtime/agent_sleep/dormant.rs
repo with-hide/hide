@@ -49,8 +49,13 @@ pub(in crate::runtime) struct WakeRefusal {
 }
 
 impl Runtime {
-    pub(in crate::runtime) fn begin_dormant_sleep(&mut self, pane_id: &str, now: u64) -> bool {
-        match self.admit_dormant_sleep(pane_id, now) {
+    pub(in crate::runtime) fn begin_dormant_sleep(
+        &mut self,
+        pane_id: &str,
+        cause: Option<crate::agent_sleep::SleepCause>,
+        now: u64,
+    ) -> bool {
+        match self.admit_dormant_sleep(pane_id, cause, now) {
             Ok(admitted) => admitted,
             Err(refusal) => {
                 self.set_error(refusal.code, refusal.message, refusal.retryable);
@@ -64,6 +69,7 @@ impl Runtime {
     pub(in crate::runtime) fn admit_dormant_sleep(
         &mut self,
         pane_id: &str,
+        cause: Option<crate::agent_sleep::SleepCause>,
         now: u64,
     ) -> Result<bool, SleepRefusal> {
         let Some(agent) = self
@@ -176,6 +182,7 @@ impl Runtime {
             launch,
             owner: Some(owner),
             profile,
+            cause,
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
             return Err(SleepRefusal::new(

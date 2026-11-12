@@ -2292,6 +2292,9 @@ pub struct AgentSleepSnapshot {
     pub since_unix_ms: u64,
     /// The agent's last progress sentence, kept from before it slept.
     pub progress: Option<String>,
+    /// Why Hide put it to sleep, when its hover says so; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<crate::agent_sleep::SleepCause>,
 }
 
 /// Whether the pane menu's Sleep agent can run now, and why not (PRD B15).
@@ -9412,6 +9415,15 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "profiles_state", &profiles_states);
         checked.insert("profiles_state");
+
+        let sleep_causes = [crate::agent_sleep::SleepCause::MemoryPressure];
+        for variant in sleep_causes {
+            match variant {
+                crate::agent_sleep::SleepCause::MemoryPressure => {}
+            }
+        }
+        assert_wire(&contract, "sleep_cause", &sleep_causes);
+        checked.insert("sleep_cause");
 
         let installs = [
             ProfileInstall::Default,

@@ -1132,6 +1132,7 @@ mod tests {
             group: "idle",
             wake_available: true,
             checking: false,
+            cause: None,
         }
     }
 
