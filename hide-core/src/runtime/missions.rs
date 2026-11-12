@@ -3239,8 +3239,8 @@ impl Runtime {
 
     /// The candidates a worker or checker of `mission` is held to (B48):
     /// the ones it was created with and Settings › Mission's as they are
-    /// now, so a candidate added applies to a running mission at once and
-    /// one removed or changed only from the next mission, which is created
+    /// now, so a candidate added or changed applies to a running mission at
+    /// once, and one removed only from the next mission, which is created
     /// without it; none for a mission created with none (or from before
     /// candidates), which admits any agent and is not narrowed by
     /// candidates added since. A plan and a spawn both ask it.
@@ -4107,8 +4107,10 @@ impl Runtime {
     }
 
     /// Settings › Mission (D-31, B48): a value checked before it is kept;
-    /// a mission already planned keeps its own. The cleanup switch applies
-    /// to every mission: turned on, the merged worktrees are looked at now.
+    /// a mission already planned keeps its own, though a worker candidate
+    /// added or changed here admits in it at once (`mission_candidates`).
+    /// The cleanup switch applies to every mission: turned on, the merged
+    /// worktrees are looked at now.
     pub(super) fn set_conductor_settings(&mut self, settings: ConductorSettings) -> bool {
         let settings = match settings.edited() {
             Ok(settings) => settings,

@@ -1908,9 +1908,10 @@ impl crate::dag::Node for NodeInput {
 }
 
 /// Settings › Mission (D-31): the values a new plan starts from. A plan
-/// changed in conversation keeps its own values (B3, B48); the cleanup of
-/// merged worktrees and the way every mission's map is drawn apply to every
-/// mission at once.
+/// changed in conversation keeps its own values (B3, B48); a worker
+/// candidate added or changed, the cleanup of merged worktrees and the way
+/// every mission's map is drawn apply to every mission at once
+/// (`Runtime::mission_candidates` for the candidates).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConductorSettings {
@@ -3943,7 +3944,7 @@ pub fn next_action(code: &str) -> &'static str {
             "The node holds 16 defects; ask the operator how to go on with it"
         }
         "mission_candidate_refused" => {
-            "The worker is none of the candidates this mission admits: the ones in Settings > Mission when it was created and the ones there now. Run hide mission settings and plan or start it as one of them: its agent with the candidate's profile (its --profile value, which a plan's worker names as profile; a spawn without --profile takes your own profile), its fixed model or the CLI's default, its fixed effort. To use another agent item, ask the operator to add it in Settings > Mission, which applies to this mission at once. The words after this name the item it would have started, after its node for a plan"
+            "The worker is none of the candidates this mission admits: the ones in Settings > Mission when it was created and the ones there now. Run hide mission settings and plan or start it as one of them: its agent with the candidate's profile, its fixed model or the CLI's default, its fixed effort. A plan's worker names the candidate's --profile value as profile. A node's worker (--intent <mission>:<node>) spawned without --profile starts as its plan names it, the built-in default for none; a checker or any other spawn without --profile takes your own profile when it is your kind of agent, else the project's choice, so start it with --profile set to the candidate's profile value. To use another agent item, ask the operator to add it in Settings > Mission, which applies to this mission at once. The words after this name the item it would have started, after its node for a plan"
         }
         "mission_profile_unknown" => {
             "Name the worker's profile as hide agent catalog lists it for that agent (its profile value), or leave profile out for the agent's built-in default"

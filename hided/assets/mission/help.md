@@ -150,7 +150,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from the destination and its pull request takes the destination as its base.
   Merge from the bottom of a stack up, or as the repository's own rules say.
 - Choose workers from the candidates in Settings › Mission and nowhere else; with no candidates, choose among the agents installed on this machine.
-  A mission admits the candidates it was created with and the ones Settings › Mission holds now: one the operator adds while it runs can be planned and started at once (run `hide mission settings` again to see it), and one removed or changed there still runs in this mission and is gone from the next.
+  A mission admits the candidates it was created with and the ones Settings › Mission holds now: one the operator adds or changes while it runs can be planned and started at once (run `hide mission settings` again to see it), and one removed there, like the old form of a changed one, still runs in this mission and is gone from the next.
   A mission created with no candidates keeps admitting any installed agent.
   Every worker that takes a model names one (`mission_model_missing` otherwise): the candidate's fixed model, your choice from the catalog, or the catalog's `cli_default_model`; an agent that takes no model (`takes_model: false`) keeps `model: null`.
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.

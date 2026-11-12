@@ -27,7 +27,8 @@ import { composingKey } from "../keys";
 // B49), laid out by Settings › Mission: one value, the same edit events and
 // the same refusal words. Every
 // edit sends the field it changes; the core checks the result and keeps it,
-// and a mission already created keeps its own.
+// and a mission already created keeps its own, except that a worker
+// candidate added or changed applies to it at once.
 
 /** Radix items cannot carry an empty value; this stands for the CLI's own default model. */
 const DEFAULT_MODEL = "__cli_default";
