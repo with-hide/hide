@@ -74,6 +74,13 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     expect(empty.q("[data-mission-pill]")?.textContent).toBe("Planning");
     expect(empty.q("[data-mission-turn]")).toBeNull();
   } finally { await empty.unmount(); }
+  // A plan waiting for approval has nothing done: its head counts the steps left in it, with no cells or `n / m`.
+  const planned = await mount({ items: [mission({ status: "planning", started_at_unix_ms: null, nodes: [node("a"), node("b"), node("c", { status: "dropped" })] })] });
+  try {
+    expect(planned.q('[data-mission-stat="steps"]')?.textContent).toBe("Steps 2");
+    expect(planned.q('[data-mission-summary] [data-progress-cells]')).toBeNull();
+    expect(planned.q('[data-mission-stat="done"]')).toBeNull();
+  } finally { await planned.unmount(); }
   const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "working", depends_on: ["a"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }), node("d"), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
   const running = await mount({ items: [mission({ nodes })] });
   try {
