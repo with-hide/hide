@@ -74,6 +74,10 @@ struct Device {
     worktree_gone: bool,
     /// How many more terminal reads fail, as a reply lost on the way.
     lost_reads: usize,
+    /// What the engine says of the started agent each time it is asked
+    /// whether it takes input (`delivery_agent`), in turn, the last one
+    /// standing; with none, [`child_row`], ready.
+    reads: std::collections::VecDeque<Value>,
 }
 
 fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
@@ -106,6 +110,20 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
                 device.panes.push(("w2:p1".into(), None));
                 reply("w2:p1".to_owned())
             }
+            // A child in a tab of its own opens in the caller's checkout,
+            // whose workspace is open already.
+            "open_worktree" => reply(crate::engine::OpenedWorktree {
+                tab_label: "repo".into(),
+                workspace_id: "w2".into(),
+                label: "topic".into(),
+                tab_id: "w2:t1".into(),
+                pane_id: device.caller.clone(),
+                already_open: true,
+            }),
+            "launch_tab" | "create_tab" => {
+                device.panes.push(("w2:p1".into(), None));
+                reply(("w2:t2".to_owned(), "w2:p1".to_owned()))
+            }
             "rename_pane" if device.rename_refused => refused("pane_not_found", "the pane is gone"),
             "rename_pane" => {
                 let pane = params["pane"].as_str().unwrap();
@@ -128,10 +146,14 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
                     terminal_id: Some("terminal-w2:p1".into()),
                 })
             }
-            "delivery_agent" => match device.started {
-                true => reply(fake::delivery_agent(&child_row())),
-                false => refused("agent_not_found", "no such agent"),
-            },
+            "delivery_agent" if !device.started => refused("agent_not_found", "no such agent"),
+            "delivery_agent" => {
+                let row = match device.reads.len() {
+                    0 | 1 => device.reads.front().cloned(),
+                    _ => device.reads.pop_front(),
+                };
+                reply(fake::delivery_agent(&row.unwrap_or_else(child_row)))
+            }
             "report_pane_tokens" => reply(()),
             "close_pane" => {
                 device.panes.retain(|(pane, _)| *pane != params["pane"]);
@@ -142,7 +164,7 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
     })
 }
 
-fn child_row() -> Value {
+pub(super) fn child_row() -> Value {
     json!({"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
         "terminal_id": "terminal-w2:p1", "revision": 1, "focused": false,
         "agent_status": "idle", "agent": "codex", "name": "worker",
@@ -340,26 +362,28 @@ fn spawner() -> Spawner {
     }
 }
 
-/// Where a spawn asks for its child: which machine, branch and folder, and
-/// whether beside its caller.
-struct Ask<'a> {
-    parent: Option<&'a str>,
-    beside: bool,
-    machine: Option<&'a str>,
-    branch: &'a str,
-    path: Option<&'a str>,
+/// Where a spawn asks for its child: which machine, branch and folder,
+/// whether beside its caller, and the brief it starts on.
+pub(super) struct Ask<'a> {
+    pub(super) parent: Option<&'a str>,
+    pub(super) beside: bool,
+    pub(super) machine: Option<&'a str>,
+    pub(super) branch: &'a str,
+    pub(super) path: Option<&'a str>,
+    pub(super) brief: Option<&'a str>,
 }
 
-const BESIDE: Ask<'static> = Ask {
+pub(super) const BESIDE: Ask<'static> = Ask {
     parent: None,
     beside: true,
     machine: None,
     branch: "topic",
     path: None,
+    brief: None,
 };
 
 impl Spawner {
-    fn spawn(&self, intent: &str, ask: Ask<'_>) -> Result<Value, String> {
+    pub(super) fn spawn(&self, intent: &str, ask: Ask<'_>) -> Result<Value, String> {
         let context = self
             .runtime
             .lock()
@@ -397,7 +421,7 @@ impl Spawner {
                 args: Vec::new(),
                 launch: Default::default(),
                 task: None,
-                brief: None,
+                brief: ask.brief.map(str::to_owned),
                 beside: ask.beside,
                 profile: None,
             },
@@ -406,6 +430,12 @@ impl Spawner {
 
     pub(super) fn ledger(&self) -> ledger::Ledger {
         ledger::load(&self.path).unwrap()
+    }
+
+    /// What the engine says of the started agent from now on
+    /// ([`Device::reads`]).
+    pub(super) fn reads(&self, rows: impl IntoIterator<Item = Value>) {
+        self.device.lock().unwrap().reads = rows.into_iter().collect();
     }
 
     pub(super) fn count(&self, method: &str) -> usize {
