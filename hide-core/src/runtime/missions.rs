@@ -707,6 +707,16 @@ pub(crate) struct MissionRuntime {
     /// rested before it is raised at once; an entry goes once its stall
     /// stops standing, so it holds at most one per node standing.
     pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
+    /// Since when each node's worker has stood stopped
+    /// (`mission_health::stopped_worker`), by mission, node and worker, as a
+    /// warning judgment first saw it (`Runtime::warn_missions`): the time
+    /// its warning and the map count from. The row's own last change cannot
+    /// say it: when a long turn's end lands it still holds the turn's start,
+    /// and when a Conductor's letter ends the excuse a report gave it holds
+    /// the time before the report, so the five minutes were already spent.
+    /// Memory only: a restart starts every clock again; an entry goes once
+    /// the rule lets go, so it holds at most one per node.
+    pub(super) stop_clock: std::collections::HashMap<(String, String, String), u64>,
     /// Since when this daemon has seen each mission's Conductor present
     /// (`Runtime::note_conductors_seen`), which the safety net counts a
     /// Conductor's 20 minutes from when it came after the raise. Memory only,
@@ -1086,7 +1096,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     };
                     (
                         format!(
-                            "has a worker whose turn ended {} minutes ago {why}, and it waits on nothing",
+                            "has a worker that has stood stopped {} minutes {why}, and it waits on nothing",
                             minutes(warning)
                         ),
                         match warning.cause {
@@ -4061,8 +4071,9 @@ impl Runtime {
     /// zero with none running: each open mission's workers' and checkers'
     /// rows as a node's `work` reads them, their activity
     /// (`worker_activity`) and what they say of a stop
-    /// (`worker_row_stopped`), and the doorbell's holds by the operator's part
-    /// in them, which a Conductor's held letters read. Rows no mission holds
+    /// (`worker_row_stopped`) with when a warning judgment first saw each stop
+    /// (`stop_clock`), and the doorbell's holds by the operator's part in
+    /// them, which a Conductor's held letters read. Rows no mission holds
     /// are not read, so an unrelated agent's turn rebuilds no mission; one
     /// pass over the
     /// missions' registrations and the holds, both bounded by the ledger.
@@ -4095,6 +4106,10 @@ impl Runtime {
         workers.sort_unstable();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         workers.hash(&mut hasher);
+        // A stop the warning judgment first saw is drawn from then.
+        let mut stops: Vec<_> = self.missions.stop_clock.iter().collect();
+        stops.sort_unstable();
+        stops.hash(&mut hasher);
         for (letter, hold) in &self.delivery_holds {
             (letter, crate::delivery::held::held_for(*hold)).hash(&mut hasher);
         }
@@ -4272,11 +4287,23 @@ impl Runtime {
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
+                // The map draws a stop from when a warning judgment first saw
+                // it (`stop_clock`), so not before one did.
                 let fact = crate::mission_health::NodeFacts {
                     worker: Some(crate::mission_health::WorkerLife::Running),
-                    stopped: record.and_then(|record| {
-                        self.worker_stopped(record, ledger, &mission.conductor.actor)
-                    }),
+                    stopped: record
+                        .and_then(|record| {
+                            self.worker_stopped(record, ledger, &mission.conductor.actor)
+                        })
+                        .and_then(|stop| {
+                            let key = super::mission_health::stop_key(mission, node);
+                            self.missions.stop_clock.get(&key).map(|since| {
+                                crate::mission_health::WorkerStopped {
+                                    since_unix_ms: *since,
+                                    ..stop
+                                }
+                            })
+                        }),
                     ..Default::default()
                 };
                 let stopped = crate::mission_health::stopped_worker(

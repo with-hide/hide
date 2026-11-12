@@ -9210,8 +9210,11 @@ fn stopped_case(
     let mut row = shown_row("recipient", "recipient", "idle");
     row.lineage_session = worker.session.clone();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    // A warning judgment sees the stop as it lands, as the minute decision
+    // after it does.
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    runtime.warn_missions(STOPPED_SINCE);
     if stood_first {
-        runtime.snapshot.navigator.agents = vec![row.clone()];
         runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
         assert_eq!(
             warnings_of(&runtime).0,
@@ -9510,7 +9513,7 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
         let stop_letters = case
             .letters
             .iter()
-            .filter(|letter| letter.contains("has a worker whose turn ended"))
+            .filter(|letter| letter.contains("has a worker that has stood stopped"))
             .count();
         let holds = match expected {
             Some(_) => {
@@ -9542,7 +9545,7 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
                     && case.warnings[0].from_unix_ms == STOPPED_SINCE
                     && case.warnings[0].cause == cause
                     && case.letters.len() == 1
-                    && case.letters[0].contains("ended 5 minutes ago")
+                    && case.letters[0].contains("stood stopped 5 minutes")
                     && case.letters[0].contains(&why)
                     && case.work
                         == Some(NodeWork::Stopped {
@@ -9601,6 +9604,9 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
     row.lineage_session = worker.session.clone();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
     runtime.snapshot.navigator.agents = vec![row.clone()];
+    // The first sight of a stop warns nothing yet but redraws the map.
+    assert!(runtime.warn_missions(STOPPED_SINCE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]));
     assert!(!runtime.warn_missions(STOPPED_SINCE + 4 * MINUTE));
     assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
     assert!(!runtime.warn_missions(STOPPED_SINCE + 40 * MINUTE));
@@ -9615,6 +9621,9 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
     row.activity = "stopped".into();
     row.changed_at_unix_ms = Some(STOPPED_SINCE + 42 * MINUTE);
     runtime.snapshot.navigator.agents = vec![row];
+    assert!(runtime.warn_missions(STOPPED_SINCE + 42 * MINUTE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]));
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 46 * MINUTE));
     assert!(runtime.warn_missions(STOPPED_SINCE + 47 * MINUTE));
     assert_eq!(
         warnings_of(&runtime).0,
@@ -9658,7 +9667,7 @@ fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
     row.activity = "stopped".into();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
     runtime.snapshot.navigator.agents = vec![row.clone()];
-    assert!(runtime.warn_missions(STOPPED_SINCE + MINUTE));
+    assert!(runtime.warn_missions(STOPPED_SINCE));
     assert_eq!(
         warnings_of(&runtime),
         (vec![], vec![]),
@@ -9677,6 +9686,78 @@ fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
     assert_eq!(kinds, [WarningKind::NoPush], "the quiet is judged again");
     assert_eq!(letters.len(), 1);
     assert!(letters[0].contains("warn:no_push"), "{letters:?}");
+}
+
+/// mission-60: a stop is timed from the first judgment that saw it, never
+/// from its row's last change. A long turn's end lands while the row still
+/// holds the turn's start, and a Conductor's request ends the excuse its
+/// worker's report gave while the row holds the time before the report;
+/// both were warned at once, as "ended 62 minutes ago" and "11 minutes ago".
+/// Each is warned five minutes after it was first seen, and the judgment
+/// that first sees it announces it, so the map draws it from then.
+#[test]
+fn a_stop_is_warned_five_minutes_after_a_judgment_first_saw_it() {
+    use crate::missions::WarningKind;
+    use crate::runtime::missions::NodeWork;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
+        Some(STOPPED_SINCE - MINUTE);
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let from = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        mission.nodes[0]
+            .warnings
+            .iter()
+            .map(|warning| (warning.kind, warning.from_unix_ms))
+            .collect::<Vec<_>>()
+    };
+
+    // An hour's turn ends; its row last changed as the turn started.
+    let mut row = shown_row("recipient", "recipient", "idle");
+    row.lineage_session = worker.session.clone();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE - 60 * MINUTE);
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    assert!(
+        runtime.warn_missions(STOPPED_SINCE),
+        "the first sight of the stop redraws the map"
+    );
+    assert_eq!(from(&runtime), [], "no warning as the turn ends");
+    assert!(matches!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::Stopped {
+            since_unix_ms: STOPPED_SINCE,
+            ..
+        })
+    ));
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 4 * MINUTE));
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(from(&runtime), [(WarningKind::Stopped, STOPPED_SINCE)]);
+
+    // It works, reports and rests; the Conductor answers with a request.
+    row.activity = "working".into();
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    assert!(runtime.warn_missions(STOPPED_SINCE + 10 * MINUTE));
+    assert_eq!(from(&runtime), [], "back at work");
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE + 11 * MINUTE);
+    runtime.snapshot.navigator.agents = vec![row];
+    worker_letter(&mut runtime, "report", false, STOPPED_SINCE + 11 * MINUTE);
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 11 * MINUTE));
+    let asked = STOPPED_SINCE + 30 * MINUTE;
+    worker_letter(&mut runtime, "request", true, asked);
+    assert!(runtime.warn_missions(asked), "the request's stop is seen");
+    assert_eq!(from(&runtime), [], "no warning as the request lands");
+    assert!(!runtime.warn_missions(asked + 4 * MINUTE));
+    assert!(runtime.warn_missions(asked + 5 * MINUTE));
+    assert_eq!(from(&runtime), [(WarningKind::Stopped, asked)]);
 }
 
 /// The missions are drawn again when a row they read moves, and only then:
