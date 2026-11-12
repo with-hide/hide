@@ -69,6 +69,8 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
         <span className="truncate text-caption font-semibold text-foreground">{project.label}</span>
         <span className="truncate text-micro text-subtle-foreground" title={where} data-project-where="true">{where}</span>
       </span>
+      {/* The actions sit in the head's top-right corner, centred on the name's line rather than on both lines. */}
+      <span className="flex h-[calc(var(--text-caption)*1.5)] shrink-0 items-center gap-xxs" data-lane-header-actions="true">
       <Hint label={t("projectTool.settings")}>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("projectTool.settings")} data-project-tool-settings={project.id} onClick={(event) => useUiStore.getState().openProjectSettings(settingsTarget(project), event.currentTarget)}>
           <SettingsIcon />
@@ -80,6 +82,7 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
           <XIcon />
         </Button>
       </Hint>
+      </span>
     </div>
   );
 }

@@ -19,7 +19,7 @@ import { useSessionResume } from "./useSessionResume";
  * nor while the mission's device does not answer (`disabled`, PRD
  * mission-screen B9).
  */
-export function MissionTakeOver({ mission, actions, disabled = false }: { mission: Mission; actions: Actions; disabled?: boolean }) {
+export function MissionTakeOver({ mission, actions, disabled = false, className }: { mission: Mission; actions: Actions; disabled?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const node = useShellStore((state) => localDeviceId(state.rest));
   const resumed = useSessionResume();
@@ -52,7 +52,7 @@ export function MissionTakeOver({ mission, actions, disabled = false }: { missio
     startFresh();
   };
   const failed = fresh.resume.failure !== null;
-  return <Button size="sm" variant={failed ? "destructive" : "secondary"} disabled={busy || disabled} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
+  return <Button size="sm" variant={failed ? "destructive" : "secondary"} className={className} disabled={busy || disabled} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
     {t(busy ? "mission.takingOver" : failed ? "mission.takeOverFailed" : "mission.takeOver")}
   </Button>;
 }

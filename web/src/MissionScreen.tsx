@@ -259,11 +259,11 @@ function Table({ groups, empty, filtered, connected, projectLabel, actions }: {
   return (
     <div
       ref={scroller}
-      className="min-h-0 flex-1 overflow-y-auto px-lg pb-lg"
+      className="min-h-0 flex-1 overflow-y-auto pb-lg"
       onScroll={(event) => useUiStore.getState().setMissions({ scroll: event.currentTarget.scrollTop })}
       data-mission-screen-state="table"
     >
-      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border bg-background px-xs py-xs text-caption text-muted-foreground")} aria-hidden="true">
+      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border/60 bg-background px-[calc(var(--spacing-lg)+var(--spacing-xs))] py-xs text-caption text-muted-foreground")} aria-hidden="true">
         <span>{t("missionScreen.col.mission")}</span>
         <span className="hidden missions-split:block">{t("missionScreen.col.project")}</span>
         <span>{t("missionScreen.col.steps")}</span>
@@ -299,8 +299,8 @@ function TableGroup({ group, entries, connected, projectLabel, actions }: { grou
   const all = useUiStore((s) => s.missions.closedAll);
   const rows = group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries;
   return (
-    <section className="flex min-w-0 flex-col pt-md" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
-      <GroupHead group={group} count={entries.length} className="px-xs pb-xxs" />
+    <section className="flex min-w-0 flex-col border-t border-border/60 px-lg pt-md pb-sm first-of-type:border-t-0" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
+      <GroupHead group={group} count={entries.length} className="px-xs pb-xs" />
       {rows.map((entry) => <TableRow key={entry.mission.id} entry={entry} connected={connected} project={projectLabel(entry.mission.workspace_id)} actions={actions} />)}
     </section>
   );
@@ -313,6 +313,9 @@ function TableGroup({ group, entries, connected, projectLabel, actions }: { grou
  * the rest of the row opens it. A device that does not answer dims the row
  * and holds its actions.
  */
+/** A row's action keeps the state pill's height and type, so it never outgrows the line it sits in. */
+const TABLE_ACTION = "h-auto rounded-full border-0 px-sm text-caption font-semibold leading-normal";
+
 function TableRow({ entry, connected, project, actions }: { entry: MissionEntry; connected: boolean; project: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { mission, group, turn } = entry;
@@ -330,7 +333,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
         {closed ? null : (
           <span className="flex min-w-0 items-center gap-xs">
             <RowLine mission={mission} turn={turn[0] ?? null} />
-            {turn[0]?.kind === "takeover" ? <span className={cn("shrink-0", stale ? "pointer-events-none" : "pointer-events-auto")}><MissionTakeOver mission={mission} actions={actions} disabled={stale} /></span> : null}
+            {turn[0]?.kind === "takeover" ? <span className={cn("shrink-0", stale ? "pointer-events-none" : "pointer-events-auto")}><MissionTakeOver mission={mission} actions={actions} disabled={stale} className={TABLE_ACTION} /></span> : null}
           </span>
         )}
       </span>
