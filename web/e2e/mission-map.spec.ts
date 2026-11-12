@@ -292,17 +292,18 @@ test("a narrow window keeps every card's words inside it, a long title ending in
 /** A release branch longer than a card's bottom line has room for at the largest text, which the mission's pull requests go to. */
 const LONG_DESTINATION = "release/2026-11-weekly-hotfix-train-for-the-store-builds";
 
-/** Two working changes, one a pull request into the destination and one stacked on it, each on a branch too long for its card. */
+/** Working changes: one into the destination and one stacked on it, each on a branch too long for its card, and a short one stacked too. */
 const LINES = {
   scope: "pr",
   check: "true",
   nodes: [
     { key: "api", title: "환불 상태 API", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"] },
     { key: "screen", title: "환불 화면", kind: "change", delivery: "pr", criteria: ["화면이 API 값을 보인다"] },
+    { key: "short", title: "오타", kind: "change", delivery: "pr", criteria: ["오타가 없다"] },
   ],
 };
 
-test("at the largest Interface text a working change's branch line cuts its branch first and ends inside its card, its number and a destination that fits whole (PRD mission-destination B55)", async ({ page }) => {
+test("at the largest Interface text a working change's branch line stays inside its card: a long one moves `→ destination` whole to a row under its number, a short one keeps one row, and every row starts at the card's left edge (PRD mission-destination D-51, D-56, B55)", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -319,6 +320,7 @@ test("at the largest Interface text a working change's branch line cuts its bran
     await mission(conductor, ["mission", "start"]);
     await mission(conductor, ["mission", "node", "api", "--status", "working", "--pr", "3114", "--branch", "feat/refund-db-state-columns-and-index"]);
     await mission(conductor, ["mission", "node", "screen", "--status", "working", "--pr", "3115", "--base-pr", "3114", "--branch", "feat/refund-screen-that-reads-the-api"]);
+    await mission(conductor, ["mission", "node", "short", "--status", "working", "--pr", "7", "--base-pr", "3114", "--branch", "fix/typo"]);
     // The largest Interface text (17 px), as Settings sets it.
     await page.keyboard.press(chord("settings"));
     await page.locator('[data-settings-tab="general"]').click();
@@ -332,25 +334,34 @@ test("at the largest Interface text a working change's branch line cuts its bran
     await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", LONG_DESTINATION);
     await expect(map.locator('[data-mission-node="api"] [data-line-pr]')).toHaveText("#3114");
     await expect(map.locator('[data-mission-node="screen"] [data-line-pr]')).toHaveText("#3115");
-    // Each part of the line ends inside the card's padding; the branch gives way first and the number never does. The
-    // destination is whole where it fits (`#3114`), and one longer than the line's room is cut only at its own end.
+    // Each part of the line ends inside the card's padding. A line too long for one row moves `→ destination` to a row of
+    // its own under the number, whole (`#3114`) unless it is longer than that row, when it is cut only at its own end; the
+    // first row's branch gives way and the number never does. Every row, the bottom line too, starts where the title row does.
     const lines = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       Object.fromEntries(
         cards.filter((card) => card.querySelector("[data-node-line='branch']")).map((card) => {
-          const style = getComputedStyle(card);
-          const inner = card.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth) + 0.5;
+          // The bottom line spans the card's content box, so its right edge is the padding's, at whatever zoom the map draws.
+          const inner = card.querySelector("[data-node-foot]")!.getBoundingClientRect().right + 0.5;
           const part = (selector: string) => card.querySelector<HTMLElement>(`[data-node-line='branch'] ${selector}`)!;
           const cut = (element: HTMLElement) => element.scrollWidth > element.clientWidth;
           const name = part("[data-line-to] [title]");
           const parts = [part("[data-line-pr]"), part("[data-line-branch]"), part("[data-line-to]")];
-          return [card.getAttribute("data-mission-node"), { inside: parts.every((one) => one.getBoundingClientRect().right <= inner), branchCut: cut(parts[1]!), numberCut: cut(parts[0]!), to: name.title, toCut: cut(name) }];
+          const [number, to] = [parts[0]!.getBoundingClientRect(), parts[2]!.getBoundingClientRect()];
+          const below = to.top >= number.bottom - 1 ? Math.abs(to.left - number.left) < 1 : false;
+          const edge = Math.abs(card.querySelector("[data-node-foot]")!.getBoundingClientRect().left - card.querySelector("[data-node-head]")!.getBoundingClientRect().left) < 1;
+          return [card.getAttribute("data-mission-node"), { inside: parts.every((one) => one.getBoundingClientRect().right <= inner), below, edge, branchCut: cut(parts[1]!), numberCut: cut(parts[0]!), to: name.title, toCut: cut(name) }];
         }),
       ),
     );
     expect(lines).toEqual({
-      api: { inside: true, branchCut: true, numberCut: false, to: LONG_DESTINATION, toCut: true },
-      screen: { inside: true, branchCut: true, numberCut: false, to: "#3114", toCut: false },
+      api: { inside: true, below: true, edge: true, branchCut: true, numberCut: false, to: LONG_DESTINATION, toCut: true },
+      screen: { inside: true, below: true, edge: true, branchCut: true, numberCut: false, to: "#3114", toCut: false },
+      short: { inside: true, below: false, edge: true, branchCut: false, numberCut: false, to: "#3114", toCut: false },
     });
+    // The taller cards still stand apart on the map.
+    const boxes = await placedBoxes(map, '[data-mission-node="api"]', '[data-mission-node="screen"]', '[data-mission-node="short"]');
+    const apart = (a: (typeof boxes)[number], b: (typeof boxes)[number]) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+    expect([apart(boxes[0]!, boxes[1]!), apart(boxes[0]!, boxes[2]!), apart(boxes[1]!, boxes[2]!)]).toEqual([true, true, true]);
     // The whole destination stays in the card's name, as in its hover.
     await expect(map.locator('[data-mission-node="api"]')).toHaveAttribute("aria-label", new RegExp(`→ ${LONG_DESTINATION}`));
     await screenshot(page, "mission-map-line-largest");
