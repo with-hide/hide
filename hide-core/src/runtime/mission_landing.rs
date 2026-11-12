@@ -50,9 +50,9 @@ pub enum LandingAction {
 }
 
 /// Who merges a node's pull request and where that merge stands (PRD
-/// mission-destination D-10, D-11, D-35, D-45): what the card's `👤`
-/// station and its second-line strip draw, and what the operator's turn
-/// reads. Only for a change delivered by pull request.
+/// mission-destination D-10, D-11, D-35, D-45): the person before the
+/// card's destination and its `머지할 차례` band (D-53), and what the
+/// operator's turn reads. Only for a change delivered by pull request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NodeMerge {
     pub by: MergeBy,

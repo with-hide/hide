@@ -435,27 +435,25 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): the branch line takes the row and its branch truncates first; `⚠` and `!` keep their place at the right end. */}
-      {branch || result || attention || warning || gate?.state === "open" ? (
-        <span className="flex min-w-0 items-center gap-x-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
-          {branch ? <BranchLineView line={branch} className="flex-1" /> : result ? <ResultLineView line={result} className="flex-1" /> : <span className="flex-1" />}
-          {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
-          {gate?.state === "open" && !attention ? (
-            <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">
-              {t("agents.mark.turn")}
+      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54); the line takes the row and its branch truncates first; `⚠` and `!` keep their place at the right end. */}
+      <span className="flex min-w-0 items-center gap-x-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
+        {branch ? <BranchLineView line={branch} className="flex-1" /> : result ? <ResultLineView line={result} className="flex-1" /> : null}
+        {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
+        {gate?.state === "open" && !attention ? (
+          <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">
+            {t("agents.mark.turn")}
+            {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+          </span>
+        ) : null}
+        {attention ? (
+          <Hint label={attention.why}>
+            <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
+              {yours ? t("agents.mark.turn") : attention.who}
               {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
             </span>
-          ) : null}
-          {attention ? (
-            <Hint label={attention.why}>
-              <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
-                {yours ? t("agents.mark.turn") : attention.who}
-                {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
-              </span>
-            </Hint>
-          ) : null}
-        </span>
-      ) : null}
+          </Hint>
+        ) : null}
+      </span>
     </MissionGraphCard>
   );
   const hovered = <MissionNodeHover mission={mission} node={node} facts={{ worker: run ? { agent: worker?.agent ?? null, words: run.text, device } : null, now: work?.now && node.status === "working" ? work.now : null, branch }}>{card}</MissionNodeHover>;

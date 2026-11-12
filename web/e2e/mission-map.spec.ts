@@ -21,6 +21,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace, placedBoxes, screenshot } from "./wire";
+import { git } from "./work-prs-fixture";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -251,7 +252,7 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       cards.flatMap((card) => {
         const right = card.getBoundingClientRect().right + 1;
-        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-node-line], [data-node-line] > *, [data-line-branch], [data-line-to]")];
+        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-node-line], [data-node-line] > *, [data-line-to]")];
         const out = card.scrollWidth > card.clientWidth + 1 || parts.some((part) => part.getBoundingClientRect().right > right);
         return out ? [card.getAttribute("data-mission-node")] : [];
       }),
@@ -259,7 +260,7 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     expect(spills).toEqual([]);
     // The long title is cut, not wrapped or spilled: its whole is on hover and in the card's name.
     const cause = map.locator('[data-mission-node="cause"]');
-    expect(await cause.locator("[data-node-title]").evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
+    await expect.poll(() => cause.locator("[data-node-title]").evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
     expect(await cause.getAttribute("aria-label")).toContain(PLAN.nodes[0]!.title);
     // Research changes no code: it ends in its kind until it is done. Each change says its plan, a pull request to the branch its checkout was on.
     await expect(cause.locator("[data-node-foot] [data-node-line]")).toHaveAttribute("data-node-line", "result");
@@ -282,6 +283,77 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
     await expect(map.locator('[data-mission-options] [data-mission-head-option="merge"]')).toHaveText(/PR까지 · 머지는 전부 내가|Up to PRs · you merge them all/);
     await screenshot(page, "mission-map-narrow");
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+/** A release branch longer than a card's bottom line has room for at the largest text, which the mission's pull requests go to. */
+const LONG_DESTINATION = "release/2026-11-weekly-hotfix-train-for-the-store-builds";
+
+/** Two working changes, one a pull request into the destination and one stacked on it, each on a branch too long for its card. */
+const LINES = {
+  scope: "pr",
+  check: "true",
+  nodes: [
+    { key: "api", title: "환불 상태 API", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"] },
+    { key: "screen", title: "환불 화면", kind: "change", delivery: "pr", criteria: ["화면이 API 값을 보인다"] },
+  ],
+};
+
+test("at the largest Interface text a working change's branch line cuts its branch first and ends inside its card, its number and a destination that fits whole (PRD mission-destination B55)", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    // The checkout is on the long release branch before the daemon makes it a repository, so the mission's destination is that branch.
+    const repo = path.join(fixture.root, "fixture");
+    fs.mkdirSync(repo, { recursive: true });
+    git(repo, ["init", "-q", "-b", LONG_DESTINATION]);
+    const opened = await conductorRepo(page, fixture, "mission-map-line");
+    daemon = opened.daemon;
+    const { conductor } = opened;
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(LINES)]);
+    await mission(conductor, ["mission", "start"]);
+    await mission(conductor, ["mission", "node", "api", "--status", "working", "--pr", "3114", "--branch", "feat/refund-db-state-columns-and-index"]);
+    await mission(conductor, ["mission", "node", "screen", "--status", "working", "--pr", "3115", "--base-pr", "3114", "--branch", "feat/refund-screen-that-reads-the-api"]);
+    // The largest Interface text (17 px), as Settings sets it.
+    await page.keyboard.press(chord("settings"));
+    await page.locator('[data-settings-tab="general"]').click();
+    const fontSize = page.locator('[data-font-size="true"] [role="slider"]');
+    await fontSize.focus();
+    await page.keyboard.press("End");
+    await expect(fontSize).toHaveAttribute("aria-valuenow", "17");
+    await page.keyboard.press("Escape");
+    await page.locator("[data-pane-mission-chip]").click();
+    const map = page.locator('aside[data-detail="mission"]');
+    await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", LONG_DESTINATION);
+    await expect(map.locator('[data-mission-node="api"] [data-line-pr]')).toHaveText("#3114");
+    await expect(map.locator('[data-mission-node="screen"] [data-line-pr]')).toHaveText("#3115");
+    // Each part of the line ends inside the card's padding; the branch gives way first and the number never does. The
+    // destination is whole where it fits (`#3114`), and one longer than the line's room is cut only at its own end.
+    const lines = await map.locator("[data-mission-node]").evaluateAll((cards) =>
+      Object.fromEntries(
+        cards.filter((card) => card.querySelector("[data-node-line='branch']")).map((card) => {
+          const style = getComputedStyle(card);
+          const inner = card.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth) + 0.5;
+          const part = (selector: string) => card.querySelector<HTMLElement>(`[data-node-line='branch'] ${selector}`)!;
+          const cut = (element: HTMLElement) => element.scrollWidth > element.clientWidth;
+          const name = part("[data-line-to] [title]");
+          const parts = [part("[data-line-pr]"), part("[data-line-branch]"), part("[data-line-to]")];
+          return [card.getAttribute("data-mission-node"), { inside: parts.every((one) => one.getBoundingClientRect().right <= inner), branchCut: cut(parts[1]!), numberCut: cut(parts[0]!), to: name.title, toCut: cut(name) }];
+        }),
+      ),
+    );
+    expect(lines).toEqual({
+      api: { inside: true, branchCut: true, numberCut: false, to: LONG_DESTINATION, toCut: true },
+      screen: { inside: true, branchCut: true, numberCut: false, to: "#3114", toCut: false },
+    });
+    // The whole destination stays in the card's name, as in its hover.
+    await expect(map.locator('[data-mission-node="api"]')).toHaveAttribute("aria-label", new RegExp(`→ ${LONG_DESTINATION}`));
+    await screenshot(page, "mission-map-line-largest");
   } finally {
     daemon?.stop();
     fixture.stop();

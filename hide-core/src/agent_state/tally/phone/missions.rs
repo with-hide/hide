@@ -60,8 +60,8 @@ pub struct PhoneMission {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
     /// How far the mission goes (`MissionView::scope`): `pr` leaves every
-    /// merge to the operator, so the phone draws no `👤` strip for a node
-    /// the plan gave them (D-35, D-45); absent from a core before it.
+    /// merge to the operator, so the phone never makes a node the plan
+    /// gave them the operator's turn (D-35, D-45); absent from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     /// The device's name for a mission away from the paired Mac; `None` on the Mac.
@@ -212,27 +212,27 @@ pub struct PhoneNode {
     pub pr_state: Option<String>,
     pub base_pr: Option<u32>,
     /// The branch its current pull request merges into, as GitHub last
-    /// answered (`NodePrView::base`), which ends its station line when it
+    /// answered (`NodePrView::base`), which ends its branch line when it
     /// is not the destination (PRD mission-destination D-14); absent until
     /// GitHub answered and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_base: Option<String>,
     /// How many pull requests the step holds besides its current one, the
-    /// `+N` of its PR station (D-37); left out at zero.
+    /// `+N` after its number (D-37); left out at zero.
     #[serde(skip_serializing_if = "is_zero")]
     pub pr_more: usize,
-    /// The pull request an outside step watches (`External::Pr`), its PR
-    /// station; absent for one that watches a branch, for every other step
+    /// The pull request an outside step watches (`External::Pr`), its
+    /// `↗#n`; absent for one that watches a branch, for every other step
     /// and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_pr: Option<u32>,
-    /// The branch an outside step watches (`External::Branch`), its first
-    /// station; absent otherwise and from a core before it.
+    /// The branch an outside step watches (`External::Branch`), its
+    /// `↗ <branch>`; absent otherwise and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_branch: Option<String>,
     /// Where an outside step's work goes (`NodeView::outside`): its pull
     /// request's base or the default branch its branch is judged against,
-    /// its last station; absent until read and from a core before it.
+    /// the end of its line; absent until read and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_base: Option<String>,
     /// An outside step's pull request state as GitHub last answered;
@@ -931,7 +931,7 @@ mod tests {
     }
 
     /// PRD mission-destination D-14, D-35, D-37, D-38, B17: what the
-    /// desktop's station line and strip read reach the phone, so its line
+    /// desktop's branch line and merge band read reach the phone, so its line
     /// ends where the desktop's does: the branch a mission's results go to,
     /// its scope, the branch a step's current pull request merges into, how
     /// many more it holds, and an outside step's pull request or branch with
@@ -977,12 +977,12 @@ mod tests {
             (&new["nodes"][0]["pr_base"], new["nodes"][1].get("pr_base")),
             (&json!("release/1.2"), None)
         );
-        // The step holds two pull requests: its PR station says the current one `+1`; one with a single one says nothing.
+        // The step holds two pull requests: its line says the current one `+1`; one with a single one says nothing.
         assert_eq!(
             (&new["nodes"][0]["pr_more"], new["nodes"][1].get("pr_more")),
             (&json!(1), None)
         );
-        // An outside step's pull request or branch is its first station, and where it goes its last (D-14): its pull
+        // An outside step's pull request or branch starts its line, and where it goes ends it (D-14): its pull
         // request's base with its state, or the default branch its branch is judged against with no state.
         let outside = |at: usize| {
             [
