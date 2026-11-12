@@ -183,12 +183,12 @@
           {
             "tool": "shell",
             "input": "git push --force-with-lease",
-            "refused": "history_rewrite"
+            "refused": null
           },
           {
             "tool": "shell",
             "input": "git rebase origin/main",
-            "refused": "history_rewrite"
+            "refused": null
           }
         ]
       },
@@ -223,6 +223,16 @@
             "tool": "shell",
             "input": "gh pr view 12",
             "refused": null
+          },
+          {
+            "tool": "shell",
+            "input": "git rebase origin/main",
+            "refused": "history_rewrite"
+          },
+          {
+            "tool": "shell",
+            "input": "git push --force-with-lease",
+            "refused": "history_rewrite"
           }
         ]
       },
@@ -342,7 +352,7 @@
           {
             "tool": "shell",
             "input": "git push -f",
-            "refused": "history_rewrite"
+            "refused": null
           },
           {
             "tool": "write",

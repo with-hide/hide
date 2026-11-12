@@ -620,11 +620,11 @@ The prompt hook adds the record's lines to the session context:
 The lines only tell: no hook refuses a call or ends a turn because a line is open, and the core alone refuses a node's `done` (D-12).
 
 The pre-tool hook reads only the record, after the project guardrails and before the opener guard, and never asks the daemon; a tool call refused here is logged in the hooks' log as `plan.refused` with the rule, the runtime and the pane, never the command.
-It refuses three things and lets everything else run, reading and searching included:
+It refuses three things and lets everything else run, reading and searching included; no reason names another command to run in the refused one's place, because an agent follows such a reason over what the operator asked for:
 
 - a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide task approve` as the way on and `hide task set --json '<plan>' --ask` as the way to send a revised plan without writing a file;
 - `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
-- `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, in any pane with a record (`history_rewrite`).
+- `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, by an agent of a mission node, worker or checker, so the commit a node was checked on stays the one checked (`history_rewrite`); outside a mission a rebase or a force push is the operator's call, and only the [project guardrails](#project-guardrails) judge it.
 
 The shell words are read the way the opener guard reads them (`hide_shell::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.
 OpenCode's plugin and the Pi and omp extension send a file tool to the helper only while a project guardrail is on, so on those agents the write refusal of a plan under review holds only then; their shell calls reach the helper and are refused the same way ([INSTALL.md](INSTALL.md#what-each-system-supports)).
