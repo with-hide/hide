@@ -4500,7 +4500,7 @@
                 },
                 {
                     "name": "--repo",
-                    "required": true,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
@@ -4508,8 +4508,10 @@
                 },
                 {
                     "name": "--branch",
-                    "required": true,
-                    "requires": [],
+                    "required": false,
+                    "requires": [
+                        "--repo"
+                    ],
                     "value": {
                         "type": "text"
                     }
@@ -4517,7 +4519,9 @@
                 {
                     "name": "--path",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--branch"
+                    ],
                     "value": {
                         "type": "text"
                     }
@@ -4587,6 +4591,8 @@
                 "machine_not_permitted",
                 "machine_unavailable",
                 "repository_unavailable",
+                "spawn_repo_required",
+                "spawn_project_loading",
                 "agent_not_installed",
                 "agent_hook_off",
                 "agent_not_set_up",
@@ -5589,6 +5595,7 @@
                 "mission_checkers_invalid",
                 "mission_external_invalid",
                 "mission_destination_invalid",
+                "mission_needs_git",
                 "mission_operator_merge_invalid",
                 "mission_preset_invalid",
                 "mission_gate_node_started",
@@ -6672,7 +6679,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a7b819bda852b9bb4cbc1e50fcc86878f665dafed241ed1d2d6b2481eda1fd45",
+    "digest": "sha256:36a1238270cd6f41a6f3cb79102b99aee459743089f116861391e0393e8e9c31",
     "envelopes": {
         "agent": {
             "answer": "value",

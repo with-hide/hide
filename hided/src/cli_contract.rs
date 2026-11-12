@@ -550,9 +550,17 @@ pub const COMMANDS: &[Spec] = &[
             cleared("--intent", Text, &["--plan-node"]),
             cleared("--plan-node", Key, &["--intent"]),
             required("--kind", Text),
-            required("--repo", Text),
-            required("--branch", Text),
-            optional("--path", Text),
+            // A plain folder's agent works in the folder itself, so both may
+            // be left out; a Git project refuses that (`spawn_repo_required`).
+            optional("--repo", Text),
+            Opt {
+                requires: &["--repo"],
+                ..optional("--branch", Text)
+            },
+            Opt {
+                requires: &["--branch"],
+                ..optional("--path", Text)
+            },
             optional("--profile", Text),
             optional("--model", Text),
             optional("--effort", Text),
@@ -569,6 +577,8 @@ pub const COMMANDS: &[Spec] = &[
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",
+            "spawn_repo_required",
+            "spawn_project_loading",
             "agent_not_installed",
             "agent_hook_off",
             "agent_not_set_up",
@@ -1060,6 +1070,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_checkers_invalid",
             "mission_external_invalid",
             "mission_destination_invalid",
+            "mission_needs_git",
             "mission_operator_merge_invalid",
             "mission_preset_invalid",
             "mission_gate_node_started",

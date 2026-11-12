@@ -3805,6 +3805,29 @@ impl Runtime {
         }
     }
 
+    /// What the project row holding the checkout at `path` on `device` says
+    /// that checkout is (with-hide/hide#2478, #2479); none when no row holds
+    /// it. A row reads as not Git until its machine has read the folder, so
+    /// a plain folder counts only once that read found it and found no Git
+    /// repository at or above it.
+    pub(super) fn checkout_kind(&self, device: &str, path: &str) -> Option<CheckoutKind> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .find_map(|workspace| {
+                let checkout = workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.path == path)?;
+                Some(if workspace.is_git {
+                    CheckoutKind::Git
+                } else if checkout.exists && !checkout.unconfirmed {
+                    CheckoutKind::Folder
+                } else {
+                    CheckoutKind::Unread
+                })
+            })
+    }
+
     /// Asks the pull requests of `root` on `device` again once its last
     /// read is `older_than` old: this machine's through the look rule, a
     /// node's, read with this machine's login, through its next read.
@@ -5555,6 +5578,20 @@ impl Runtime {
         }
         true
     }
+}
+
+/// What a project's checkout is, as `Runtime::checkout_kind` reads its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CheckoutKind {
+    /// A Git repository's checkout: an agent there works in a worktree of
+    /// its own, and a mission there may run code nodes.
+    Git,
+    /// A plain folder its machine read and found outside every Git
+    /// repository: an agent works in the folder itself, and a mission there
+    /// runs general nodes only.
+    Folder,
+    /// Not read by its machine yet, so either.
+    Unread,
 }
 
 /// Why a row the engine shows without a registration is being registered.

@@ -1383,6 +1383,36 @@ impl Runtime {
         self.composer_checks_store = Some(store);
     }
 
+    /// Where a spawn's child works, named before anything is reserved
+    /// (with-hide/hide#2479): with `branch`, a worktree of the repository
+    /// `repo` names, as asked; without one, a plain-folder project itself,
+    /// the one `repo` names on the child's machine or, with no `repo`, the
+    /// caller's own checkout. A Git project keeps both required, since its
+    /// agent works in a worktree of its own.
+    fn spawn_place(
+        &self,
+        caller: &Context,
+        machine: Option<&str>,
+        repo: Option<String>,
+        branch: Option<&str>,
+    ) -> Result<String, String> {
+        if branch.is_some() {
+            return repo.ok_or_else(|| "invalid_spawn".to_owned());
+        }
+        let device = machine.unwrap_or(caller.device_id.as_str());
+        let folder = match repo {
+            Some(repo) => repo,
+            // The caller's checkout is on its own machine.
+            None if device == caller.device_id => caller.checkout_path.clone(),
+            None => return Err("spawn_repo_required".into()),
+        };
+        match self.checkout_kind(device, &folder) {
+            Some(super::projects::CheckoutKind::Folder) => Ok(folder),
+            Some(super::projects::CheckoutKind::Unread) => Err("spawn_project_loading".into()),
+            Some(super::projects::CheckoutKind::Git) | None => Err("spawn_repo_required".into()),
+        }
+    }
+
     pub(crate) fn prepare_delivery(
         &mut self,
         device: &str,
@@ -1471,6 +1501,7 @@ impl Runtime {
                     mission,
                     kind,
                     repo,
+                    branch,
                     launch,
                     profile,
                     intent,
@@ -1482,6 +1513,9 @@ impl Runtime {
                 },
         } = &mut command
         {
+            let place =
+                self.spawn_place(&context, machine.as_deref(), repo.take(), branch.as_deref())?;
+            let repo: &str = repo.insert(place);
             // A plan's child and a mission's worker or checker start no
             // agents, and a step's spawn takes the intent the core makes for
             // its attempt (PRD hide-plan-delegate B1, B7, B8).

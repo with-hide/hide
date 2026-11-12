@@ -683,8 +683,8 @@ impl Runtime {
             let AgentCommand::Spawn {
                 name,
                 kind,
-                repo,
-                branch,
+                repo: Some(repo),
+                branch: Some(branch),
                 path,
                 machine,
                 ..
@@ -1886,8 +1886,8 @@ mod tests {
             name: format!("child-{branch}"),
             intent: format!("intent-{branch}"),
             kind: "codex".into(),
-            repo: "/repo".into(),
-            branch: branch.into(),
+            repo: Some("/repo".into()),
+            branch: Some(branch.into()),
             path: None,
             args: Vec::new(),
             launch: Default::default(),

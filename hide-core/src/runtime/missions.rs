@@ -1883,9 +1883,11 @@ impl Runtime {
             .clone();
         actor.require_native_identity()?;
         let now = super::memory::now_ms();
-        let project = self
-            .catalog_project_of(device, &context.checkout_path)
-            .map(|project| project.root_path.clone());
+        // The caller's project: the Git repository the worktree catalog
+        // holds the checkout in, else a plain folder its machine read
+        // (with-hide/hide#2478), whose project is the folder itself.
+        let place = self.mission_project_of(device, &context.checkout_path);
+        let project = place.as_ref().map(|(project, _)| project.clone());
         match command {
             MissionCommand::Create {
                 title,
@@ -1908,8 +1910,8 @@ impl Runtime {
                         ));
                     }
                 }
-                let project = match project {
-                    Some(project) => project,
+                let (project, plain_folder) = match place {
+                    Some(place) => place,
                     // Before the machine's projects are first read, an unknown checkout says nothing yet.
                     None if self.projects_loading(device) => {
                         return Err("mission_projects_loading".into());
@@ -1930,6 +1932,7 @@ impl Runtime {
                     project,
                     workspace_id: context.workspace_id.clone(),
                     checkout_path: context.checkout_path.clone(),
+                    plain_folder,
                     device_id: device.to_owned(),
                     conductor: self.conductor_of(device, &pane, actor),
                     status: MissionStatus::Planning,
@@ -3020,6 +3023,19 @@ impl Runtime {
             .get(mission)
             .and_then(|mission| mission.intent_node(intent))
             .and_then(MissionNode::start_refusal)
+    }
+
+    /// The project a mission made in `checkout` on `device` belongs to, and
+    /// whether it is a plain folder: the repository root the worktree
+    /// catalog holds the checkout under, else the checkout itself when its
+    /// machine read it as a plain folder (with-hide/hide#2478); none while
+    /// neither is known.
+    fn mission_project_of(&self, device: &str, checkout: &str) -> Option<(String, bool)> {
+        if let Some(project) = self.catalog_project_of(device, checkout) {
+            return Some((project.root_path.clone(), false));
+        }
+        (self.checkout_kind(device, checkout) == Some(super::projects::CheckoutKind::Folder))
+            .then(|| (checkout.to_owned(), true))
     }
 
     /// The branch a mission made in `checkout` of `project` sends its

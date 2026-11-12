@@ -1627,6 +1627,12 @@ pub struct Mission {
     /// The checkout the mission was created in, where a takeover starts.
     #[serde(default)]
     pub checkout_path: String,
+    /// Made in a project that is a plain folder, not a Git repository
+    /// (with-hide/hide#2478): `project` is that folder, and the plan holds
+    /// general nodes only (`mission_needs_git`). A build before it drops the
+    /// field and takes the mission as a Git project's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain_folder: bool,
     pub device_id: String,
     pub conductor: Conductor,
     pub status: MissionStatus,
@@ -2964,6 +2970,10 @@ pub(crate) fn apply_plan(
     {
         return Err("mission_destination_invalid".into());
     }
+    // A plain folder has no branch to send results to (with-hide/hide#2478).
+    if mission.plain_folder && input.destination.is_some() {
+        return Err("mission_needs_git".into());
+    }
     if input.cap.is_some_and(|cap| !(1..=CAP_LIMIT).contains(&cap)) {
         return Err("mission_cap_out_of_range".into());
     }
@@ -2986,6 +2996,12 @@ pub(crate) fn apply_plan(
             return Err("mission_text_invalid".into());
         }
         check_node_kind(node)?;
+        // A code node works on a branch and a waiting node waits on a pull
+        // request or a branch; a plain folder has neither, so its mission
+        // runs general nodes only, in the folder itself (with-hide/hide#2478).
+        if mission.plain_folder && node.kind() != NodeKind::General {
+            return Err(crate::coordination::refusal("mission_needs_git", &node.key));
+        }
         if node.criteria.len() > crate::mission_criteria::OWN_LIMIT {
             return Err(crate::coordination::refusal(
                 "mission_criteria_too_many",
@@ -3916,6 +3932,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_project_unknown" => {
             "Run the command from a pane in a checkout of a registered project"
         }
+        "mission_needs_git" => {
+            "This mission's project is a plain folder, not a Git repository: a code node (change) works on a branch and a waiting node (external) waits on a pull request or a branch, so both need a Git repository, and so does a destination branch. Plan the work as general nodes (kind general, with a preset or none), which run in the folder itself; for code work, make the project a Git repository and create the mission again"
+        }
         "mission_unavailable" => {
             "Stop and tell the operator: Hide could not read its mission record (the reason is in Hide's diagnostic log); it is kept as it is, and Hide reads it again when it restarts"
         }
@@ -4289,6 +4308,7 @@ pub(crate) mod tests {
             project: "/repo".into(),
             workspace_id: "ws-1".into(),
             checkout_path: "/repo".into(),
+            plain_folder: false,
             device_id: "node-a".into(),
             conductor: Conductor {
                 actor: actor("w1:p1"),

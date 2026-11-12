@@ -1350,7 +1350,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Check that the device is connected in Settings > Devices and its helper is allowed, then run the same command again"
         }
         "repository_unavailable" => {
-            "Pass --repo as the repository's path on that device, then run the command again"
+            "Pass --repo as the path of a Git repository on that device, with --branch, then run the command again; for a project there that is a plain folder, not a Git repository, pass its path as --repo and leave out --branch"
+        }
+        // A spawn with no branch works in a plain folder itself
+        // (with-hide/hide#2479).
+        "spawn_repo_required" => {
+            "This is a Git project, or no project Hide knows: pass --repo <the repository's path> and --branch <a branch>, and the agent works in its own worktree on that branch. Only a registered project that is a plain folder, not a Git repository, starts an agent without --branch, in the folder itself"
+        }
+        "spawn_project_loading" => {
+            "Hide is still reading that project's folder; run the same command again in a few seconds"
         }
         "agent_not_installed" => {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
