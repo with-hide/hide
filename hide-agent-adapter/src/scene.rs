@@ -64,6 +64,26 @@ impl Scene {
         Scene::UpdateNotice,
     ];
 
+    /// The heading of the scene's column in the support table.
+    pub const fn column(self) -> &'static str {
+        match self {
+            Scene::Rest => "rest",
+            Scene::RestDraft => "draft",
+            Scene::Working => "working",
+            Scene::Interrupted => "interrupted",
+            Scene::SessionPicker => "session",
+            Scene::ModelPicker => "model",
+            Scene::Popup => "popup",
+            Scene::ToolApproval => "approval",
+            Scene::Question => "question",
+            Scene::PlanApproval => "plan",
+            Scene::TrustDialog => "trust",
+            Scene::HooksReview => "hooks",
+            Scene::FirstRun => "first run",
+            Scene::UpdateNotice => "update",
+        }
+    }
+
     /// The name the contract, the journey's `scene_<name>` cell and the
     /// guides use.
     pub const fn name(self) -> &'static str {
@@ -202,6 +222,20 @@ pub enum EngineRead {
     Starting,
 }
 
+impl EngineRead {
+    /// The letter the support table draws.
+    pub const fn letter(self) -> char {
+        match self {
+            EngineRead::Idle => 'I',
+            EngineRead::Done => 'D',
+            EngineRead::Blocked => 'B',
+            EngineRead::Working => 'W',
+            EngineRead::Unknown => '?',
+            EngineRead::Starting => 'S',
+        }
+    }
+}
+
 /// What held a letter in a scene, as a survey recorded it; a clock is never
 /// one, because a clock only delays the line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -217,19 +251,30 @@ pub enum Guard {
     DraftRecord,
     /// The engine reports the agent launching or not ready.
     NotReady,
+    /// No native session is registered, so a letter is refused before any
+    /// bell.
+    NoSession,
     /// The scene has a prompt and the line was one prompt.
     OnePrompt,
 }
 
-/// Where and when a survey saw a scene, copied into the declaration.
+/// Where and when a survey looked at a scene, whatever it found.
 #[derive(Clone, Copy, Debug)]
-pub struct Seen {
+pub struct Looked {
     /// The CLI version that ran; equal to the pin for a safe scene.
     pub version: &'static str,
     /// `YYYY-MM-DD`.
     pub on: &'static str,
     pub engine: EngineRead,
-    pub held_by: Guard,
+}
+
+/// What a survey saw in a scene it could judge.
+#[derive(Clone, Copy, Debug)]
+pub struct Seen {
+    pub looked: Looked,
+    /// What held the line while the scene was open; `None` when nothing did
+    /// and the line was typed into it.
+    pub held_by: Option<Guard>,
     /// One line: what the line did, or why it was held.
     pub why: &'static str,
     /// A repository anchor that says how it was measured.
@@ -240,15 +285,17 @@ pub struct Seen {
 #[derive(Clone, Copy, Debug)]
 pub enum Finding {
     /// The line was held or was one prompt, through a structural guard,
-    /// three times.
+    /// and nothing was left behind.
     Safe(Seen),
-    /// The line answered the screen or was left in it.
+    /// The line answered the screen, was left in it, or never arrived.
     Unsafe {
         seen: Seen,
         closes_with: &'static str,
     },
-    /// Not surveyed, or the survey could not decide.
+    /// Not surveyed, or the survey could not decide. `looked` is where a
+    /// survey tried, and `None` for a scene no survey has tried.
     Unknown {
+        looked: Option<Looked>,
         why: &'static str,
         closes_with: &'static str,
     },
@@ -266,6 +313,32 @@ impl Finding {
 
     pub const fn is_safe(&self) -> bool {
         matches!(self, Finding::Safe(_))
+    }
+
+    /// Where and when a survey looked, when one did.
+    pub const fn looked(&self) -> Option<&Looked> {
+        match self {
+            Finding::Safe(seen) | Finding::Unsafe { seen, .. } => Some(&seen.looked),
+            Finding::Unknown { looked, .. } => looked.as_ref(),
+        }
+    }
+
+    /// What happened, or why nothing is known.
+    pub const fn why(&self) -> &'static str {
+        match self {
+            Finding::Safe(seen) | Finding::Unsafe { seen, .. } => seen.why,
+            Finding::Unknown { why, .. } => why,
+        }
+    }
+
+    /// What would close the finding, for one that is not safe.
+    pub const fn closes_with(&self) -> Option<&'static str> {
+        match self {
+            Finding::Safe(_) => None,
+            Finding::Unsafe { closes_with, .. } | Finding::Unknown { closes_with, .. } => {
+                Some(closes_with)
+            }
+        }
     }
 }
 
@@ -358,36 +431,131 @@ impl SceneDeclaration {
             Scene::UpdateNotice => &self.update_notice,
         }
     }
+}
 
-    /// Whether a bell is safe on every screen the agent shows: `rest` is
-    /// declared and safe, and every other scene is safe or one the agent does
-    /// not have. An unknown or unsafe scene keeps it off, which is what
-    /// `docs/delivery.md` says an unknown screen means.
-    ///
-    /// Nothing calls this yet: every finding is unknown until a survey closes
-    /// it, so reading the bell from the findings now would switch off the
-    /// bell of every agent that rings today. The table node switches the
-    /// adapter's `bell` over to it once the findings are measured.
-    pub const fn bell_from_findings(&self) -> bool {
-        let mut at = 0;
-        let cells = self.cells();
-        let mut rest_safe = false;
-        while at < cells.len() {
-            let (scene, capability) = cells[at];
-            let clear = match capability {
-                Support::Supported(case) => case.finding.is_safe(),
-                Support::Unsupported(_) => !matches!(scene, Scene::Rest),
-            };
-            if !clear {
-                return false;
-            }
-            if matches!(scene, Scene::Rest) {
-                rest_safe = true;
-            }
-            at += 1;
-        }
-        rest_safe
+/// What `docs/INSTALL.md` carries between its `bell-scenes` markers: every
+/// agent against every scene, the findings that are not safe, where and when
+/// each agent was looked at, what the engine read, and the screens an agent
+/// does not have. It is read from the declarations, so nobody edits it by
+/// hand and the adapter contract compares it byte for byte
+/// (`export_scene_table --markdown` writes it).
+pub fn table_markdown() -> String {
+    let mut out = String::new();
+    let columns: Vec<&str> = Scene::ALL.iter().map(|scene| scene.column()).collect();
+    let divider = |count: usize| format!("|{}\n", " --- |".repeat(count));
+
+    out.push_str(&format!("| Agent | {} | Bell |\n", columns.join(" | ")));
+    out.push_str(&divider(columns.len() + 2));
+    for row in crate::ADAPTERS {
+        let values: Vec<&str> = row
+            .scenes
+            .cells()
+            .iter()
+            .map(|(_, capability)| match capability {
+                Support::Supported(case) => case.finding.word(),
+                Support::Unsupported(_) => "none",
+            })
+            .collect();
+        out.push_str(&format!(
+            "| {} | {} | {} |\n",
+            row.label,
+            values.join(" | "),
+            if row.bell { "on" } else { "off" }
+        ));
     }
+
+    out.push_str("\n#### Hazards and gaps\n\n");
+    out.push_str("| Agent | Screen | Value | What happened, or why it is not known | Version | Date | Closes with |\n");
+    out.push_str(&divider(7));
+    for row in crate::ADAPTERS {
+        for (scene, capability) in row.scenes.cells() {
+            let Support::Supported(case) = capability else {
+                continue;
+            };
+            let Some(closes_with) = case.finding.closes_with() else {
+                continue;
+            };
+            let (version, on) = case
+                .finding
+                .looked()
+                .map_or(("-", "-"), |looked| (looked.version, looked.on));
+            out.push_str(&format!(
+                "| {} | `{}` | {} | {} | {} | {} | {} |\n",
+                row.label,
+                scene.name(),
+                case.finding.word(),
+                cell_text(case.finding.why()),
+                version,
+                on,
+                cell_text(closes_with),
+            ));
+        }
+    }
+
+    out.push_str("\n#### Seen on\n\n");
+    out.push_str("| Agent | Version and date of each finding |\n");
+    out.push_str(&divider(2));
+    for row in crate::ADAPTERS {
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for (_, capability) in row.scenes.cells() {
+            if let Support::Supported(case) = capability
+                && let Some(looked) = case.finding.looked()
+                && !seen.contains(&(looked.version, looked.on))
+            {
+                seen.push((looked.version, looked.on));
+            }
+        }
+        seen.sort_unstable();
+        let text: Vec<String> = seen
+            .iter()
+            .map(|(version, on)| format!("{version} ({on})"))
+            .collect();
+        out.push_str(&format!("| {} | {} |\n", row.label, text.join(", ")));
+    }
+
+    out.push_str("\n#### What the engine read\n\n");
+    out.push_str("`I` idle, `D` done, `B` blocked, `W` working, `S` starting, `?` not read, `-` no such screen.\n\n");
+    out.push_str(&format!("| Agent | {} |\n", columns.join(" | ")));
+    out.push_str(&divider(columns.len() + 1));
+    for row in crate::ADAPTERS {
+        let letters: Vec<String> = row
+            .scenes
+            .cells()
+            .iter()
+            .map(|(_, capability)| match capability {
+                Support::Supported(case) => case
+                    .finding
+                    .looked()
+                    .map_or('?', |looked| looked.engine.letter())
+                    .to_string(),
+                Support::Unsupported(_) => "-".to_owned(),
+            })
+            .collect();
+        out.push_str(&format!("| {} | {} |\n", row.label, letters.join(" | ")));
+    }
+
+    out.push_str("\n#### Screens an agent does not have\n\n");
+    out.push_str("| Agent | Screen | Why | What would change it |\n");
+    out.push_str(&divider(4));
+    for row in crate::ADAPTERS {
+        for (scene, capability) in row.scenes.cells() {
+            if let Support::Unsupported(absence) = capability {
+                out.push_str(&format!(
+                    "| {} | `{}` | {} | {} |\n",
+                    row.label,
+                    scene.name(),
+                    cell_text(absence.reason),
+                    cell_text(absence.would_change),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// A sentence in a table cell: one line, and no pipe to end the cell early.
+fn cell_text(text: &str) -> String {
+    text.replace('|', "\\|").replace('\n', " ")
 }
 
 #[cfg(test)]
@@ -401,46 +569,20 @@ mod tests {
         would_change: "A version that adds it.",
     };
 
-    const SEEN: Seen = Seen {
+    const LOOKED: Looked = Looked {
         version: "1.0.0",
         on: "2026-11-11",
         engine: EngineRead::Blocked,
-        held_by: Guard::EngineBlocked,
+    };
+
+    const SEEN: Seen = Seen {
+        looked: LOOKED,
+        held_by: Some(Guard::EngineBlocked),
         why: "held",
         procedure: "docs/VERIFICATION.md#agent-scenes",
     };
 
-    const SAFE: Capability<SceneCase> = Support::Supported(SceneCase {
-        door: Door::cell("letter"),
-        finding: Finding::Safe(SEEN),
-        release_check: false,
-    });
-
-    const UNKNOWN: Capability<SceneCase> = Support::Supported(SceneCase {
-        door: Door::cell("letter"),
-        finding: Finding::Unknown {
-            why: "not surveyed",
-            closes_with: "a survey",
-        },
-        release_check: false,
-    });
-
-    const ALL_SAFE: SceneDeclaration = SceneDeclaration {
-        rest: SAFE,
-        rest_draft: SAFE,
-        working: SAFE,
-        interrupted: SAFE,
-        session_picker: SAFE,
-        model_picker: SAFE,
-        popup: SAFE,
-        tool_approval: SAFE,
-        question: SAFE,
-        plan_approval: SAFE,
-        trust_dialog: SAFE,
-        hooks_review: SAFE,
-        first_run: SAFE,
-        update_notice: SAFE,
-    };
+    const SAFE: Finding = Finding::Safe(SEEN);
 
     #[test]
     fn scene_names_are_unique_and_match_the_contract_spelling() {
@@ -457,12 +599,64 @@ mod tests {
     }
 
     #[test]
+    fn a_finding_reads_the_same_whichever_kind_it_is() {
+        let unsafe_finding = Finding::Unsafe {
+            seen: SEEN,
+            closes_with: "a composer declaration",
+        };
+        let unknown = Finding::Unknown {
+            looked: Some(LOOKED),
+            why: "not reached",
+            closes_with: "a start door",
+        };
+        let untried = Finding::Unknown {
+            looked: None,
+            why: "not surveyed",
+            closes_with: "a survey",
+        };
+        assert_eq!(
+            [SAFE, unsafe_finding, unknown, untried].map(|finding| finding.word()),
+            ["safe", "unsafe", "unknown", "unknown"]
+        );
+        assert!(SAFE.is_safe() && !unsafe_finding.is_safe());
+        assert!(
+            SAFE.closes_with().is_none(),
+            "a safe finding closes nothing"
+        );
+        assert_eq!(unsafe_finding.closes_with(), Some("a composer declaration"));
+        assert_eq!(unknown.why(), "not reached");
+        assert_eq!(SAFE.looked().unwrap().on, "2026-11-11");
+        assert!(untried.looked().is_none());
+    }
+
+    #[test]
     fn cells_lists_every_scene_once_in_table_order_and_get_agrees() {
-        let declared: Vec<Scene> = ALL_SAFE.cells().iter().map(|(scene, _)| *scene).collect();
+        let case = Support::Supported(SceneCase {
+            door: Door::cell("letter"),
+            finding: SAFE,
+            release_check: false,
+        });
+        let all = SceneDeclaration {
+            rest: case,
+            rest_draft: case,
+            working: case,
+            interrupted: case,
+            session_picker: case,
+            model_picker: case,
+            popup: case,
+            tool_approval: case,
+            question: case,
+            plan_approval: case,
+            trust_dialog: case,
+            hooks_review: case,
+            first_run: case,
+            update_notice: Support::Unsupported(GONE),
+        };
+        let declared: Vec<Scene> = all.cells().iter().map(|(scene, _)| *scene).collect();
         assert_eq!(declared, Scene::ALL);
-        for (scene, field) in ALL_SAFE.cells() {
+        for (scene, field) in all.cells() {
             assert!(
-                std::ptr::eq(ALL_SAFE.get(scene), field),
+                std::ptr::eq(all.get(scene), field),
                 "{}: get and cells name different fields",
                 scene.name()
             );
@@ -470,62 +664,27 @@ mod tests {
     }
 
     #[test]
-    fn the_bell_follows_the_findings_and_only_safe_or_absent_scenes_clear_it() {
-        assert!(ALL_SAFE.bell_from_findings());
-        // A screen the agent does not have does not count.
-        let gone = Support::Unsupported(GONE);
+    fn the_table_has_a_row_and_a_column_for_everything_declared() {
+        let table = table_markdown();
+        let first = table.lines().next().unwrap();
+        for scene in Scene::ALL {
+            assert!(first.contains(scene.column()), "{}", scene.name());
+        }
+        for row in crate::ADAPTERS {
+            assert!(
+                table.contains(&format!("| {} | ", row.label)),
+                "{}: no row",
+                row.id
+            );
+        }
         assert!(
-            SceneDeclaration {
-                hooks_review: gone,
-                trust_dialog: gone,
-                ..ALL_SAFE
-            }
-            .bell_from_findings()
-        );
-        // An unknown scene keeps the bell off, so does an unsafe one.
-        assert!(
-            !SceneDeclaration {
-                popup: UNKNOWN,
-                ..ALL_SAFE
-            }
-            .bell_from_findings()
-        );
-        let unsafe_case = Support::Supported(SceneCase {
-            door: Door::cell("letter"),
-            finding: Finding::Unsafe {
-                seen: SEEN,
-                closes_with: "a composer declaration",
-            },
-            release_check: false,
-        });
-        assert!(
-            !SceneDeclaration {
-                model_picker: unsafe_case,
-                ..ALL_SAFE
-            }
-            .bell_from_findings()
-        );
-        // An agent with no `rest` has nothing a bell could type into.
-        assert!(
-            !SceneDeclaration {
-                rest: Support::Unsupported(GONE),
-                ..ALL_SAFE
-            }
-            .bell_from_findings()
+            !table.contains("\n\n\n"),
+            "one blank line between the tables"
         );
     }
 
     #[test]
-    fn no_agent_rings_by_findings_before_a_survey_has_closed_them() {
-        // Every finding is unknown today, which is why the adapter's `bell`
-        // is still declared by hand: reading it from the findings now would
-        // silence the agents that ring.
-        for row in crate::ADAPTERS {
-            assert!(
-                !row.scenes.bell_from_findings(),
-                "{}: a finding closed before the survey that decides it; switch `bell` to the findings in the same change",
-                row.id
-            );
-        }
+    fn a_sentence_in_a_cell_cannot_end_the_cell_or_the_row() {
+        assert_eq!(cell_text("a | b\nc"), "a \\| b c");
     }
 }

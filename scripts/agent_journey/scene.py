@@ -9,8 +9,8 @@ what Hide did with it. Two kinds of run:
 - `check`, the ordinary run: a scene that carries a release check (what the
   `letter_menu` cell proved) holds a letter for `RELEASE_SECONDS`, closes the
   scene, and passes only when the letter is delivered once and answered. A
-  scene whose finding is `safe` is re-proven by the survey's probe. Any other
-  scene reads `not measured` with the reason.
+  scene reads `not measured` with the reason, a `safe` finding included: it
+  is proven again by a survey, never by the ordinary run.
 - `survey`, the measurement: every scene with a door the journey can open is
   watched for `WATCH_SECONDS`, the cell passes or fails nothing, and the run
   records what it saw (record.json and three screens per repetition) as the
@@ -91,7 +91,7 @@ def plan(case, mode):
         return None, TURN_REASON.format(script=door["script"])
     if door["kind"] == "start":
         return None, START_REASON.format(start=door["start"].get("kind"))
-    if mode == SURVEY or case["finding"] == "safe":
+    if mode == SURVEY:
         return "watch", None
     if case["release_check"]:
         return "release", None
@@ -368,7 +368,7 @@ def watch_once(journey, scene, case, directory, repetition):
 def watch(journey, scene, case, name, mode):
     record = {"scene": scene, "mode": mode, "repetitions": []}
     journey.record[name] = record
-    count = journey.scene_repetitions or (SURVEY_REPETITIONS if mode == SURVEY else 1)
+    count = journey.scene_repetitions or SURVEY_REPETITIONS
     for repetition in range(1, count + 1):
         directory = journey.run / "scenes" / journey.id / scene / str(repetition)
         found = watch_once(journey, scene, case, directory, repetition)
@@ -379,14 +379,8 @@ def watch(journey, scene, case, name, mode):
     reasons = "; ".join(found["why"] or "" for found in record["repetitions"][:1])
     text = (f"survey: candidate {record['candidate']} ({reasons}); the declared finding is {case['finding']}")
     evidence = journey.evidence(name, record)
-    if mode == SURVEY:
-        # A survey records and judges nothing: the declaration PR copies it.
-        cells.settle(journey.table, journey.id, name, cells.NOT_MEASURED, text, evidence)
-    elif record["candidate"] == "safe":
-        journey.settle(name, (cells.PASS, "re-proven safe: " + reasons), evidence)
-    else:
-        journey.settle(name, (cells.FAIL, f"the finding is safe but this run saw {record['candidate']}: {reasons}"),
-                       evidence)
+    # A survey records and judges nothing: the declaration PR copies it.
+    cells.settle(journey.table, journey.id, name, cells.NOT_MEASURED, text, evidence)
 
 
 def measure(journey):

@@ -239,8 +239,10 @@ READERS = (
     # web/src/shortcutsDoc.test.ts checks the guide's chord table.
     ("docs/UI_BEHAVIOR.md", {"checks"}, set()),
     # hide-agent-adapter's contract test checks the usage coverage table in
-    # the guide and the logo manifest the shell bundles.
+    # the guide, the support table of a letter's bell in the install guide
+    # and the logo manifest the shell bundles.
     ("docs/AI_PROVIDERS.md", {"rust"}, {"hide-agent-adapter"}),
+    ("docs/INSTALL.md", {"rust"}, {"hide-agent-adapter"}),
     ("web/src/assets/agents/manifest.json", {"rust"}, {"hide-agent-adapter"}),
     # The contracts a test holds the code to; the code does not read them.
     # hide-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
