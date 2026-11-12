@@ -103,7 +103,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     await expect(ship.locator("[data-node-turn], [data-node-gate-tag]")).toHaveCount(0);
     // The waiting node has no worker: an hourglass and its word where one would be, and its pull request as its line (B12).
     const wait = map.locator('[data-mission-node="wait"]');
-    await expect(wait.locator("[data-node-run] [data-node-waiting]")).toHaveText("Waiting");
+    await expect(wait.locator("[data-node-run] [data-node-waiting]")).toHaveText("Watching");
     await expect(wait.locator("[data-node-foot] [data-line-pr]")).toHaveText("↗#77");
     await screenshot(page, "mission-presets-plan-desktop");
 
@@ -139,7 +139,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
       await expect(phoneFoot(key)).toHaveText(name);
     }
     await expect(phone.locator('[data-mission-node="ship"] [data-node-gate="open"]')).toHaveText("배포해도 될지");
-    await expect(phone.locator('[data-mission-node="wait"] [data-node-waiting]')).toHaveText("Waiting");
+    await expect(phone.locator('[data-mission-node="wait"] [data-node-waiting]')).toHaveText("Watching");
     await screenshot(phone, "mission-presets-asking-phone");
   } finally {
     await phoneContext?.close();

@@ -600,8 +600,8 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     expect(cardOf(container, "docs")).toMatchObject({ mark: "merged", text: "→feat/login· No PR" });
     // An outside pull request ends bold in its own base; an outside branch names the branch it watches, which the frame carries.
     // A waiting step says `⏳ 기다림` where a worker would be (PRD node-presets D-13, B12).
-    expect(cardOf(container, "sdk")).toMatchObject({ worker: "Waiting", mark: "mergeable", text: "↗#77→main", bold: true });
-    expect(cardOf(container, "lib")).toMatchObject({ worker: "Waiting", mark: "branch", text: "↗ feat/lib→feat/login", bold: false });
+    expect(cardOf(container, "sdk")).toMatchObject({ worker: "Watching", mark: "mergeable", text: "↗#77→main", bold: true });
+    expect(cardOf(container, "lib")).toMatchObject({ worker: "Watching", mark: "branch", text: "↗ feat/lib→feat/login", bold: false });
     // A general step ends in its preset's icon and name, done or not: the result line and verdict are not in the phone's frame (PRD node-presets B10).
     expect(cardOf(container, "look")).toMatchObject({ worker: "Codex", line: "result", mark: "research", text: "Research" });
     expect(cardOf(container, "check")).toMatchObject({ line: "result", mark: "verify", text: "Verify" });

@@ -29,7 +29,8 @@ A mission is in one of these states: `Planning`, `Running`, `Waiting to merge`, 
 
 Each node is one piece of the work.
 
-- **Kind:** `Change`, `Research`, `Verify together` or `External` (a pull request outside the mission).
+- **Kind:** `Code` (it changes code and ends in a pull request or a branch), `General` (it changes no code; its preset says what it does: `Research`, `Verify`, `Deploy`, which asks you before it starts, or none) or `Watching` (a pull request or branch outside the mission that Hide watches for you).
+- **Bottom line:** a code or watching node ends in its pull request and the branch it goes to; a general node ends in its preset's icon and name, and once done in its result, or `Passed n/m` or `Failed n/m`.
 - **State:** `Waiting`, `In progress`, `Done` or `Dropped`.
 - **Done when:** the finish lines that must pass, such as a check command, CI, a review, a verification, or your own look.
 - **Worker and checkers:** each shows its agent, and its model and effort when Hide knows them.

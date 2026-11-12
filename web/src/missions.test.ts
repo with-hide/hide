@@ -89,7 +89,7 @@ describe("the numbers and words", () => {
 
   it("reads a node's kind while it waits on an earlier node, since the edge says what it waits for, and its line once it has one", () => {
     const nodes = [node("cause", { title: "Find the cause", kind: "general", preset: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
-    expect(nodeLine(nodes[1]!, t)).toBe("Change");
+    expect(nodeLine(nodes[1]!, t)).toBe("Code");
     expect(nodeLine({ ...nodes[1]!, line: "CI failed" }, t)).toBe("CI failed");
     expect(nodeLine(node("n", { blocked: "upstream_dropped" }), t)).toMatch(/^Waiting · earlier node/);
   });

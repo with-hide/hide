@@ -534,7 +534,7 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // A finished node with no launch kept, or a node with no worker, names no model and no mark.
     expect(["ran-unknown", "asked", "next"].map(worker)).toEqual([null, null, null]);
     // A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13, B12).
-    expect([worker("outside"), card(map, "outside").querySelector("[data-node-run] [data-node-waiting]")?.textContent]).toEqual([["waiting", null, null, null], "Waiting"]);
+    expect([worker("outside"), card(map, "outside").querySelector("[data-node-run] [data-node-waiting]")?.textContent]).toEqual([["waiting", null, null, null], "Watching"]);
     // The last row, under a hairline, is where the result goes: the pull request's mark as the PR list draws it, its number (the newest with +N), the branch when known and the destination (B55).
     // An outside node's pull request or branch carries `↗` and goes to its own base, bold where that is not the destination; a node not started says its plan; no branch or base the core did not send is named (B60).
     const branch = (key: string) => {
@@ -589,7 +589,7 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // Outside is the node's kind: a dotted border in every state; one closed unmerged waits on the Conductor (B12, B19).
     expect(["outside", "closed-out", "merged-out"].map((key) => card(map, key).className.includes("border-dotted"))).toEqual([true, true, true]);
     expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
-    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Waiting · outside the mission · Where it goes: ↗${"#"}1702 → main · Merged`);
+    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Watching · outside the mission · Where it goes: ↗${"#"}1702 → main · Merged`);
   } finally { await map.unmount(); }
 });
 
