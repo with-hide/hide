@@ -578,6 +578,7 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     node("ship", "planned", { kind: "general", preset: "deploy", delivery: null, worker_agent: null, depends_on: ["docs"], gate: { state: "open", look: "Fine to ship", when: "start", ask: 2, since_unix_ms: 1, long_wait_at_unix_ms: null, via: null, said: null } }),
     node("store", "planned", { kind: "general", preset: "deploy", delivery: null, worker_agent: null, depends_on: ["db"], gate: { state: "ahead", look: "Fine to submit", when: "start", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: null, said: null } }),
     node("copy", "done", { kind: "general", preset: null, delivery: null }),
+    node("shipped", "working", { kind: "general", preset: "deploy", delivery: null, gate: { state: "passed", look: "Fine to ship", when: "start", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: "phone", said: null } }),
   ] })]);
   try {
     await click('[data-phone-tab="missions"]');
@@ -610,6 +611,8 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     expect(container.querySelector<HTMLElement>('[data-mission-node="store"] [data-node-gate]')?.dataset.nodeGate).toBe("ahead");
     expect(cardOf(container, "ship")).toMatchObject({ band: "Fine to ship", mark: "deploy", text: "Deploy", yours: true });
     expect([container.querySelector<HTMLElement>('[data-mission-node="ship"] [data-node-gate]')?.dataset.nodeGate, cardOf(container, "ship").tag]).toEqual(["open", "Needs you"]);
+    // Once passed, a start gate leaves the card, its band and where the answer came from alike (D-09).
+    expect([cardOf(container, "shipped").band, container.querySelector('[data-mission-node="shipped"] [data-phone-node-gate-via]')]).toEqual([null, null]);
     // A planned step says how it will go: `No PR` to the destination, faint, and the card no time or steps.
     expect(cardOf(container, "tidy")).toMatchObject({ mark: "plan_direct", text: "No PR→feat/login" });
     expect(container.querySelector("[data-node-steps], [data-node-took], [data-node-model]")).toBeNull();

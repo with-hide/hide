@@ -932,6 +932,16 @@ export function gatesAhead<N extends { status: MissionNode["status"]; gate?: Mis
   return mission.nodes.filter((node) => node.gate?.state === "ahead" && node.status !== "dropped");
 }
 
+/** The gate a card draws (PRD node-presets D-09): a start gate once passed has done its work before the node began, so only the panel keeps it; any other gate as it stands. */
+export function cardGate<G extends Pick<MissionGate, "state" | "when">>(gate: G | null | undefined): G | null {
+  return gate && !(gate.state === "passed" && gate.when === "start") ? gate : null;
+}
+
+/** Whether a general node ended on a failed verdict (PRD node-presets D-08), which its card's mark says in red. */
+export function failedVerdict(node: Pick<MissionNode, "kind" | "status" | "verdict">): boolean {
+  return node.kind === "general" && node.status === "done" && node.verdict === "fail";
+}
+
 /** Whether a reached gate has waited long (`오래 기다림`, D-22, B22): the core gives the moment, the screen compares it with its own clock. */
 export function gateWaitedLong(gate: Pick<MissionGate, "state" | "long_wait_at_unix_ms"> | null | undefined, now: number): boolean {
   return gate?.state === "open" && gate.long_wait_at_unix_ms != null && now >= gate.long_wait_at_unix_ms;

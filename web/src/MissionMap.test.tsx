@@ -650,6 +650,8 @@ it("ends every general node in its preset's icon and name until it is done, then
     general("ship", "deploy", { status: "done", line: "1.2.8 out, downloads checked" }),
     general("copy", null, { status: "working" }),
     general("judged", "research", { status: "done", line: "why", verdict: "pass", checks: { passed: 3, total: 3 } }),
+    general("gated", "deploy", { status: "working", gate: { state: "passed", look: "Fine to ship", when: "start", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: "card", said: "ok" } }),
+    general("checked", "verify", { status: "working", gate: { state: "passed", look: "Screens before and after", ask: null, since_unix_ms: null, long_wait_at_unix_ms: null, via: "card", said: "ok" } }),
   ];
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
@@ -666,7 +668,13 @@ it("ends every general node in its preset's icon and name until it is done, then
       ["deploy", "done", "conclusion", "1.2.8 out, downloads checked"],
       ["general", "working", "kind", "General"],
       ["research", "done", "verdict", "Passed 3/3"],
+      ["deploy", "working", "kind", "Deploy"],
+      ["verify", "working", "kind", "Verify"],
     ]);
+    // Only a failed verdict turns the done mark red (PRD node-presets D-08).
+    expect(["fail", "pass", "cause"].map((key) => card(map, key).querySelector("[data-node-mark-failed]") !== null)).toEqual([true, false, false]);
+    // A start gate once passed leaves the card to the panel; a gate at the end stays grey with its check (D-09).
+    expect(["gated", "checked"].map((key) => card(map, key).querySelector<HTMLElement>("[data-node-gate]")?.dataset.nodeGate ?? null)).toEqual([null, "passed"]);
     // The icon's colour follows where the node stands, the verdict's words theirs: grey planned, blue worked, green done, red failed.
     const icon = (key: string) => card(map, key).querySelector("[data-line-icon]")?.getAttribute("class")?.match(/text-(?:mission-\w+|muted-foreground)/)?.[0];
     expect(["later", "look", "cause", "fail"].map(icon)).toEqual(["text-muted-foreground", "text-mission-working", "text-mission-done", "text-mission-failed"]);

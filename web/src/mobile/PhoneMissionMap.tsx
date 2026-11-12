@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, escalationWhy, gateWaitedLong, holdReason, nodeLook, openAttention } from "../missions";
+import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, openAttention } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { phoneLineNode, workerOf } from "./missionModel";
@@ -70,7 +70,8 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   const look = nodeLook(mission, node);
   const reason = holdReason(mission, node, workerOf);
   const attention = openAttention(mission, node);
-  const gate = node.gate ?? null;
+  // A start gate once passed is the desktop panel's alone, as on the desktop's card (PRD node-presets D-09).
+  const gate = cardGate(node.gate);
   const long = gateWaitedLong(gate, useMinuteClock());
   const agent = usePhone((s) => node.agent && agentOf(s.groups, node.agent) ? node.agent : null);
   // A merge the core says is the operator's now is the band's (D-53); one ahead or done is the person on the branch line.

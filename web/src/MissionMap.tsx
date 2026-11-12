@@ -39,7 +39,9 @@ import { humanTurnText } from "./humanTurn";
 import { useWorkerEscalation } from "./missionWorkers";
 import {
   attentionWords,
+  cardGate,
   defectEdges,
+  failedVerdict,
   gatesAhead,
   gateWaitedLong,
   openAttention,
@@ -320,8 +322,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
-  // A place the plan has the operator look (PRD mission-human-gate D-06): ahead it is a tinted strip, reached it is the operator's turn, looked at it is grey with a check.
-  const gate = node.gate ?? null;
+  // A place the plan has the operator look (PRD mission-human-gate D-06): ahead it is a tinted strip, reached it is the operator's turn, looked at it is grey with a check; a start gate once passed is the panel's alone (PRD node-presets D-09).
+  const gate = cardGate(node.gate);
   // A merge the core says is the operator's now is the band's too (PRD mission-destination D-53); one ahead or done is the person on the branch line.
   const mergeDue = node.merge?.state === "due";
   const minute = useMinuteClock();
@@ -383,7 +385,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   ) : null;
   const card = (
     <MissionGraphCard
-      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect}
+      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failedVerdict(node)}
       still={doing != null && doing.state !== "working"}
       title={titleText}
       accessory={hide ? <HideMark words={hide} /> : null}
