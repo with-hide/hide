@@ -82,14 +82,14 @@
 .og-session-target:hover .og-orb, .og-session[data-selected="true"] .og-orb { background: var(--accent); }
 .og-session-target:focus-visible, .og-list > button:focus-visible, .og-project-list button:focus-visible, .og-ask-who:focus-visible, .og-team-list button:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 /* The orb's ring says the state: working, my turn, a result to read, quiet. */
-.og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border: var(--graph-edge-flow-width) solid var(--border); border-radius: 50%; background: var(--secondary); }
+.og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border: var(--graph-edge-flow-width) solid var(--border); border-radius: 50%; background: var(--raised); box-shadow: var(--elevation-raised); }
 .og-orb .og-provider { width: 60%; height: 60%; }
 /* A profile agent's logo wears its badge in a wrapper (`AgentMark`): the wrapper takes the logo's place and the logo fills it. */
 .og-orb [data-agent-mark-badged] { width: 60%; height: 60%; }
 .og-orb [data-agent-mark-badged] > .og-provider { width: 100%; height: 100%; }
 .og-session[data-mark="going"] .og-orb, .og-session[data-mark="waiting"] .og-orb { border-color: var(--agent-working); }
 .og-session[data-mark="waiting"] .og-orb { border-style: dashed; }
-.og-session[data-mark="turn"] .og-orb, .og-session[data-mark="look"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
+.og-session[data-mark="turn"] .og-orb, .og-session[data-mark="look"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning), var(--elevation-raised); }
 .og-session[data-mark="done"] .og-orb { border-color: var(--success); }
 .og-session[data-mark="unread"] .og-orb { border-color: var(--foreground); }
 .og-session-drag { cursor: grab; }
@@ -163,7 +163,10 @@
 @media (hover: none) { .og-project-list .og-eye { opacity: 1; } }
 .og-navigator h3, .og-details h3, .og-waiting-alone h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
 .og-waiting h3 span { color: var(--warning); font-variant-numeric: tabular-nums; }
-.og-ask { display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); margin-bottom: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); border: var(--size-hairline) solid color-mix(in srgb, var(--warning) 40%, var(--border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); }
+/* The asks waiting on the operator share one quiet container, each set apart by a line, rather than a ring of their own; a button inside takes its fill and line from the same warning tint. */
+.og-ask-list { --og-ask-line: color-mix(in srgb, var(--warning) 14%, var(--border)); --og-ask-fill: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); overflow: hidden; border: var(--size-hairline) solid var(--og-ask-line); border-radius: var(--radius-md); background: var(--og-ask-fill); }
+.og-ask { --border: var(--og-ask-line); --secondary: color-mix(in srgb, var(--warning) calc(var(--opacity-selected-fill) * 100%), transparent); --accent: color-mix(in srgb, var(--warning) calc(var(--opacity-emphasis-fill) * 100%), transparent); display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); padding: var(--spacing-sm) var(--spacing-md); }
+.og-ask + .og-ask { border-top: var(--size-hairline) solid var(--og-ask-line); }
 .og-ask p { margin: 0; overflow-wrap: anywhere; }
 .og-ask small { color: var(--warning); font-size: var(--text-caption); }
 .og-ask-who { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--spacing-xs); border: 0; padding: 0; background: transparent; color: var(--warning); font-size: var(--text-caption); text-align: left; cursor: pointer; }

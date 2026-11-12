@@ -50,6 +50,7 @@
   --shadow-overlay: var(--elevation-overlay);
   --shadow-modal: var(--elevation-modal);
   --color-scrim: var(--scrim);
+  --color-raised: var(--raised);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -462,18 +463,6 @@
   --gray-96-5: #f3f3f5;
   --gray-98: #f8f8fa;
   --gray-100: #ffffff;
-  --teal-20: #0b191b;
-  --teal-38: #364548;
-  --teal-48: #516164;
-  --teal-52: #5c6c6f;
-  --teal-78: #a8bcbf;
-  --teal-84: #bbcfd2;
-  --teal-87: #ccd7d8;
-  --teal-89: #d2dddf;
-  --teal-91-5: #dae5e7;
-  --teal-94: #e3eef0;
-  --teal-96: #edf3f4;
-  --teal-98: #f4fafb;
   --slate-20: #12171b;
   --slate-23: #191d22;
   --slate-26: #20252a;
@@ -485,10 +474,21 @@
   --slate-40: #43484e;
   --slate-41: #464b51;
   --slate-48: #595e64;
+  --slate-52: #646a70;
   --slate-68: #95999d;
   --slate-71: #9ea2a6;
+  --slate-78: #b4b8bc;
   --slate-84: #c7cbd0;
+  --slate-86: #cdd1d6;
+  --slate-89: #d7dbe0;
+  --slate-92-5: #e4e6e9;
+  --slate-93: #e6e8ea;
+  --slate-94-5: #ebedef;
+  --slate-95-5: #eef0f3;
   --slate-96: #f0f2f4;
+  --slate-96-5: #f1f4f6;
+  --slate-97: #f3f5f8;
+  --slate-98-5: #f8fafd;
   --amber-52: #905c00;
   --amber-83: #ffb756;
   --red-56: #d4212d;
@@ -513,10 +513,11 @@
   --dialog: var(--gray-100);
   --dialog-raised: var(--gray-93-5);
   --dialog-hover: var(--gray-89);
-  --elevation-raised: 0 1px 2px 0 rgb(16 17 18 / 0.08);
+  --elevation-raised: 0 1px 2px 0 rgb(16 17 18 / 0.05), 0 2px 8px -2px rgb(16 17 18 / 0.08);
   --elevation-overlay: 0 0 0 1px rgb(16 17 18 / 0.06), 0 8px 24px -4px rgb(16 17 18 / 0.16);
   --elevation-modal: 0 0 0 1px rgb(16 17 18 / 0.06), 0 24px 64px -8px rgb(16 17 18 / 0.24);
   --scrim: rgb(16 17 18 / 0.32);
+  --raised: var(--gray-100);
   --primary: var(--accent-choice-lime);
   --primary-foreground: var(--gray-17);
   --secondary: var(--gray-93-5);
@@ -628,6 +629,7 @@
   --elevation-overlay: 0 0 0 1px rgb(255 255 255 / 0.06), 0 8px 24px -4px rgb(0 0 0 / 0.6);
   --elevation-modal: 0 0 0 1px rgb(255 255 255 / 0.08), 0 24px 64px -8px rgb(0 0 0 / 0.7);
   --scrim: rgb(0 0 0 / 0.6);
+  --raised: var(--gray-29);
   --primary: var(--accent-choice-lime);
   --primary-foreground: var(--gray-17);
   --secondary: var(--gray-29);
@@ -729,29 +731,30 @@
 .palette-hide,
 .palette-hide.light,
 .palette-hide .light {
-  --background: var(--teal-98);
-  --foreground: var(--teal-20);
-  --card: var(--teal-94);
+  --background: var(--slate-98-5);
+  --foreground: var(--slate-20);
+  --card: var(--slate-96-5);
   --popover: var(--gray-100);
   --dialog: var(--gray-100);
-  --dialog-raised: var(--teal-91-5);
-  --dialog-hover: var(--teal-87);
-  --secondary: var(--teal-91-5);
-  --muted: var(--teal-94);
-  --muted-foreground: var(--teal-52);
-  --subtle-foreground: var(--teal-38);
-  --accent: var(--teal-89);
-  --border: var(--teal-87);
-  --input: var(--teal-84);
-  --sidebar: var(--teal-96);
-  --status-seen: var(--teal-48);
-  --pr-closed: var(--teal-52);
-  --lineage-rail: var(--teal-78);
-  --terminal-black: #16262a;
-  --terminal-white: #8a9ea2;
-  --terminal-bright-black: #5b6f73;
-  --terminal-bright-white: #b4c4c7;
-  --terminal-selection: #c9dade;
+  --dialog-raised: var(--slate-95-5);
+  --dialog-hover: var(--slate-93);
+  --raised: var(--gray-100);
+  --secondary: var(--slate-94-5);
+  --muted: var(--slate-96-5);
+  --muted-foreground: var(--slate-52);
+  --subtle-foreground: var(--slate-38);
+  --accent: var(--slate-92-5);
+  --border: var(--slate-89);
+  --input: var(--slate-86);
+  --sidebar: var(--slate-97);
+  --status-seen: var(--slate-48);
+  --pr-closed: var(--slate-52);
+  --lineage-rail: var(--slate-78);
+  --terminal-black: #1f2429;
+  --terminal-white: #969a9f;
+  --terminal-bright-black: #666c72;
+  --terminal-bright-white: #bdc1c6;
+  --terminal-selection: #d3d7dc;
 }
 
 .palette-hide.dark,
@@ -763,6 +766,7 @@
   --dialog: var(--slate-29);
   --dialog-raised: var(--slate-34);
   --dialog-hover: var(--slate-40);
+  --raised: var(--slate-32);
   --secondary: var(--slate-32);
   --muted: var(--slate-26);
   --muted-foreground: var(--slate-68);

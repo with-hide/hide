@@ -500,6 +500,7 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
     </section> : null}
     {waiting.length + missions.length > 0 ? <section className="og-waiting" aria-label={t("overviewGraph.waiting")}>
       <h3>{t("overviewGraph.waiting")} <span>{waiting.length + missions.length}</span></h3>
+      <div className="og-ask-list">
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" title={row.agent.profile ? agentWithProfile(t, row.agent) : undefined} aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
@@ -507,6 +508,7 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
         <Button variant="secondary" size="sm" onClick={() => actions.openAgent(askingPane(row, model))}>{t("overviewGraph.answer")}</Button>
         {row.agent.human_turn ? <HumanTurnDone turn={row.agent.human_turn} actions={actions} /> : null}
       </div>)}
+      </div>
     </section> : null}
   </aside>;
 }
@@ -530,7 +532,7 @@ function OverviewMissionAsks({ deviceId, projectId, actions }: { deviceId: strin
   if (missions.length === 0) return null;
   return <section className="og-waiting og-waiting-alone" aria-label={t("overviewGraph.waiting")} data-graph-mission-asks="true">
     <h3>{t("overviewGraph.waiting")} <span>{missions.length}</span></h3>
-    {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
+    <div className="og-ask-list">{missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}</div>
   </section>;
 }
 

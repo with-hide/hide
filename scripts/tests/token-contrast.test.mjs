@@ -63,7 +63,7 @@ test('a secondary grey is checked on the background, the sidebar and a card', ()
   assert.ok(found.every(line => line.includes('light') && line.includes('on --card')), found.join('\n'));
 });
 
-test('a layer that draws the same step as the one under it fails, named with its floor', () => {
+test('a layer that draws the same step as the one under it fails, named with its floor for that mode', () => {
   const step = (value, light) => color(value, light);
   const tokens = {
     '--background': step('#0E0F12', '#FFFFFF'),
@@ -80,8 +80,8 @@ test('a layer that draws the same step as the one under it fails, named with its
   tokens['--accent'] = {type: 'alias', value: '--secondary'};
   assert.deepEqual(layerFailures(tokens), [
     'neutral dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
-    'neutral light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.06:1',
+    'neutral light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
     'hide dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
-    'hide light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.06:1',
+    'hide light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
   ]);
 });

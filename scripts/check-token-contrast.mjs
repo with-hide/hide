@@ -71,15 +71,17 @@ export function failures(tokens) {
 // hover a modal's controls take is its own step). These are luminance steps,
 // not text: the floor is that the eye can see an edge. A popover and a modal
 // share white in Light and are told apart by --elevation-*, not by fill.
+// [layer, the layer under it, Dark minimum, Light minimum]. Light separates its layers with shadows
+// as well as fills (DESIGN_GUIDE.md, Tokens at a glance), so its fills may sit closer together.
 const LAYER_STEPS = [
-  ['--sidebar', '--background', 1.04],
-  ['--card', '--background', 1.08],
-  ['--secondary', '--card', 1.08],
-  ['--accent', '--secondary', 1.06],
-  ['--dialog-hover', '--dialog-raised', 1.06],
-  ['--border', '--background', 1.2],
-  ['--border', '--card', 1.2],
-  ['--border', '--dialog', 1.2],
+  ['--sidebar', '--background', 1.04, 1.03],
+  ['--card', '--background', 1.08, 1.04],
+  ['--secondary', '--card', 1.08, 1.05],
+  ['--accent', '--secondary', 1.06, 1.04],
+  ['--dialog-hover', '--dialog-raised', 1.06, 1.04],
+  ['--border', '--background', 1.2, 1.2],
+  ['--border', '--card', 1.2, 1.15],
+  ['--border', '--dialog', 1.2, 1.2],
 ];
 
 /** Every layer that does not stand apart from the one it sits on, as readable lines. */
@@ -88,7 +90,8 @@ export function layerFailures(tokens) {
   for (const palette of ['neutral', 'hide']) {
     for (const mode of ['dark', 'light']) {
       const at = name => resolve(tokens, name, palette, mode);
-      for (const [layer, under, minimum] of LAYER_STEPS) {
+      for (const [layer, under, dark, light] of LAYER_STEPS) {
+        const minimum = mode === 'dark' ? dark : light;
         const ratio = contrast(at(layer), at(under));
         if (ratio < minimum) found.push(`${palette} ${mode}: ${layer} ${at(layer)} on ${under} ${at(under)} is ${ratio.toFixed(2)}:1, under ${minimum}:1`);
       }
