@@ -1325,6 +1325,11 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         // plan's sleeping child, is refused as the plan words it (PRD
         // hide-plan-delegate B5, B6).
         code if code.starts_with("plan_") => hide_core::plans::next_action(code),
+        // A spawn under a mission node that may not start yet is refused as
+        // the mission words it (PRD node-presets D-06).
+        code @ ("mission_node_held" | "mission_gate_before_start") => {
+            hide_core::missions::next_action(code)
+        }
         "agent_pane_required" => {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
@@ -5408,6 +5413,17 @@ mod tests {
             refusal_answer(partial, next),
             ("operator_typing".to_owned(), next.to_owned())
         );
+    }
+
+    /// A spawn under a mission node held or behind its start gate says what
+    /// the mission owes, not to retry the same spawn (PRD node-presets D-06).
+    #[test]
+    fn a_spawn_under_a_node_that_may_not_start_says_what_the_mission_owes() {
+        for code in ["mission_node_held", "mission_gate_before_start"] {
+            let next = delivery_next_action(&format!("{code}\u{1f}ship"));
+            assert_eq!(next, hide_core::missions::next_action(code));
+            assert!(!next.contains("retry the same intent"), "{next}");
+        }
     }
 
     /// A refusal that lists the devices the caller could have named answers
