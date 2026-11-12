@@ -345,7 +345,7 @@ fn pr_less_done(mission: &Mission, node: &MissionNode, fact: &NodeFacts) -> bool
         && !node.criteria.is_empty()
         && fact.unmet.is_empty()
         && match node.kind {
-            NodeKind::Research | NodeKind::Verify => true,
+            NodeKind::General => true,
             NodeKind::Change => node.delivery == Some(Delivery::Direct),
             NodeKind::External => false,
         }
@@ -939,7 +939,7 @@ pub(crate) fn safety_net_due(
 
 /// Whether `node` could start and was not: not started (`started`), the
 /// mission's own work, and every node it depends on done.
-fn could_start(mission: &Mission, node: &MissionNode) -> bool {
+pub(crate) fn could_start(mission: &Mission, node: &MissionNode) -> bool {
     !node.started()
         && node.kind != NodeKind::External
         && node.depends_on.iter().all(|key| {
@@ -1423,7 +1423,7 @@ mod tests {
         m.nodes[0].prs = vec![7];
         assert!(evaluate(&m, &facts(None, vec![worker(WorkerLife::Running)])).is_empty());
         let mut research = running(&["r"]);
-        research.nodes[0].kind = NodeKind::Research;
+        research.nodes[0].kind = NodeKind::General;
         research.nodes[0].delivery = None;
         assert_eq!(
             evaluate(&research, &facts(None, vec![worker(WorkerLife::Running)])),
@@ -1525,7 +1525,7 @@ mod tests {
     #[test]
     fn a_resumed_node_without_a_pull_request_finishes_on_a_line_recorded_again() {
         let mut m = running(&["r"]);
-        m.nodes[0].kind = NodeKind::Research;
+        m.nodes[0].kind = NodeKind::General;
         m.nodes[0].delivery = None;
         m.nodes[0].resumed = Some(m.nodes[0].resumed_cause());
         let running = || facts(None, vec![worker(WorkerLife::Running)]);
@@ -1730,7 +1730,7 @@ mod tests {
         m.status = MissionStatus::Cancelled;
         assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
         m.status = MissionStatus::Running;
-        m.nodes[0].kind = NodeKind::Research;
+        m.nodes[0].kind = NodeKind::General;
         m.nodes[0].delivery = None;
         assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
     }

@@ -198,6 +198,14 @@ pub struct NodeView {
     pub key: String,
     pub title: String,
     pub kind: NodeKind,
+    /// A general node's preset and the icon key its row of `PRESETS` names,
+    /// the one table the card, the panel and the phone draw it by (PRD
+    /// node-presets D-02, D-08); both absent on a code or outside node, the
+    /// icon present on a general node with no preset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<crate::missions::Preset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'static str>,
     pub depends_on: Vec<String>,
     pub status: NodeStatus,
     pub blocked: Option<Blocked>,
@@ -373,6 +381,15 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
         NodeStatus::Planned => {
             if view.blocked.is_some() {
                 return Some(WaitingOn::Blocked);
+            }
+            // A start gate reached waits on the operator before the node can
+            // start, whether or not its question holds the decision yet.
+            if view
+                .gate
+                .as_ref()
+                .is_some_and(|gate| gate.state == super::mission_gates::GateState::Open)
+            {
+                return Some(WaitingOn::Decision);
             }
             let keys: Vec<String> = view
                 .depends_on
@@ -999,6 +1016,10 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     "The operator looked at your node {} of mission {} \"{}\" and asked for a fix: \"{words}\".\nIt is line {defect} of your node: fix it, record it with `hide mission record {} {defect} --pass --evidence <what shows it>`, and report to your Conductor as before.",
                     wake.node, mission.id, mission.title, wake.node
                 ),
+                None if node.is_some_and(MissionNode::waits_to_start) => format!(
+                    "The operator answered the start gate on node {} of mission {} \"{}\" with a fix: \"{words}\".\nHide added it as line {defect}; the node has not started, so make the fix and record it with `hide mission record {} {defect} --pass --evidence <what shows it>`, and the start gate asks again.",
+                    wake.node, mission.id, mission.title, wake.node
+                ),
                 None => format!(
                     "The operator answered the gate on node {} of mission {} \"{}\" with a fix: \"{words}\".\nHide added it as line {defect}, set the node to work and sent the words to its worker; the gate asks again once its lines are met. Read `hide mission show {} --mission {}`, and brief a worker if the node has none.",
                     wake.node, mission.id, mission.title, wake.node, mission.id
@@ -1006,7 +1027,15 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             }
         }
         WakeEvent::Attention => {
-            let (what, act) = attention_words(wake.reason, &pr);
+            // A node that could start but waits on the fix its start gate
+            // asked for owes that fix, not a start (PRD node-presets D-14).
+            let owed = node
+                .and_then(super::mission_gates::start_fix_owed)
+                .filter(|_| wake.reason == Some(crate::missions::AttentionReason::NotStarted));
+            let (what, act) = match owed {
+                Some(line) => fix_owed_words(line),
+                None => attention_words(wake.reason, &pr),
+            };
             news(
                 format!("Node {} needs you to look: {what}", wake.node),
                 &act,
@@ -1129,6 +1158,19 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             )
         }
     }
+}
+
+/// What a not-started stall tells the Conductor when its node waits on the
+/// fix its start gate asked for (PRD node-presets D-14): the fix it owes,
+/// worded as `attention_words` words a stall.
+fn fix_owed_words(line: &str) -> (String, String) {
+    let minutes = crate::mission_health::SAFETY_NET_AFTER_MS / 60_000;
+    (
+        format!("its start gate waits on the fix the operator asked for, line {line}"),
+        format!(
+            "make the fix and record its line with `hide mission record`, and the start gate asks the operator again; the operator is shown it in {minutes} minutes"
+        ),
+    )
 }
 
 /// What a raise tells the Conductor, and what it asks of it. A stall ends
@@ -3012,15 +3054,16 @@ impl Runtime {
     /// project's that may not run it (`admit_elsewhere`), or when it is none
     /// of the operator's worker candidates,
     /// and otherwise the mission whose cap the ledger checks.
-    /// Whether the node `intent` names in `mission` is held now
-    /// (`MissionNode::hold`): its worker's spawn is refused at its admission
-    /// and again where its place is reserved (`delivery::worker`).
-    pub(crate) fn mission_intent_held(&self, mission: &str, intent: &str) -> bool {
+    /// Why the node `intent` names in `mission` may not start now, if it
+    /// may not (`MissionNode::start_refusal`): its worker's spawn is refused
+    /// at its admission and again where its place is reserved
+    /// (`delivery::worker`).
+    pub(crate) fn mission_intent_refusal(&self, mission: &str, intent: &str) -> Option<String> {
         self.missions
             .book
             .get(mission)
             .and_then(|mission| mission.intent_node(intent))
-            .is_some_and(|node| node.hold.is_some())
+            .and_then(MissionNode::start_refusal)
     }
 
     /// The branch a mission made in `checkout` of `project` sends its
@@ -3061,10 +3104,11 @@ impl Runtime {
         if !briefed && node.is_some() {
             return Err("mission_brief_missing".into());
         }
-        // A held node's worker waits for the hold to be lifted, as a start
-        // by `hide mission node` does (`apply_patch`).
-        if let Some(node) = node.filter(|node| node.hold.is_some()) {
-            return Err(crate::coordination::refusal("mission_node_held", &node.key));
+        // A held node's worker waits for the hold to be lifted, and one
+        // behind a start gate for the operator's pass, as a start by `hide
+        // mission node` does (`apply_patch`).
+        if let Some(refused) = node.and_then(MissionNode::start_refusal) {
+            return Err(refused);
         }
         let worker_machine = machine.unwrap_or(actor.device_id.as_str());
         if worker_machine != mission.device_id {
@@ -4194,6 +4238,9 @@ impl Runtime {
                     key: node.key.clone(),
                     title: node.title.clone(),
                     kind: node.kind,
+                    preset: node.preset,
+                    icon: (node.kind == NodeKind::General)
+                        .then(|| crate::missions::preset_row(node.preset).icon),
                     depends_on: node.depends_on.clone(),
                     status: node.status,
                     blocked: blocked.get(&node.key).copied(),

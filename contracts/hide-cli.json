@@ -4611,6 +4611,8 @@
                 "invalid_brief",
                 "brief_not_submitted",
                 "mission_brief_missing",
+                "mission_node_held",
+                "mission_gate_before_start",
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
@@ -5592,6 +5594,8 @@
                 "mission_external_invalid",
                 "mission_destination_invalid",
                 "mission_operator_merge_invalid",
+                "mission_preset_invalid",
+                "mission_gate_node_started",
                 "mission_machine_node_refused",
                 "mission_profile_unknown",
                 "mission_candidate_refused"
@@ -5902,6 +5906,7 @@
             "refusals": [
                 "mission_node_held",
                 "mission_node_started",
+                "mission_gate_before_start",
                 "mission_node_unknown",
                 "mission_not_conductor",
                 "mission_ambiguous",
@@ -6675,7 +6680,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:4d9d6f8bb34fc0093a0e5b5d495da196f1f630cd082f0b16b4194efa8e8ca251",
+    "digest": "sha256:d771a99207c24bde61cc31d6a671e37f39b1bbf6f50976b075f10d7ed8188314",
     "envelopes": {
         "agent": {
             "answer": "value",

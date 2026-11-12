@@ -244,7 +244,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
       step("rehearse", t("mobile.demo.m1.rehearse"), "working", { depends_on: ["bump"], pr: 2093, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" } }),
       step("sign", t("mobile.demo.m1.sign"), "working", { depends_on: ["bump"], stage: 0 }),
       // What waits on the two steps at work, so the page shows which step waits on which.
-      step("verify", t("mobile.demo.m1.verify"), "planned", { kind: "verify", delivery: null, depends_on: ["rehearse", "sign"], agent_runtime: null }),
+      step("verify", t("mobile.demo.m1.verify"), "planned", { kind: "general", preset: "verify", delivery: null, depends_on: ["rehearse", "sign"], agent_runtime: null }),
       step("publish", t("mobile.demo.m1.publish"), "planned", { depends_on: ["verify", "notes"], agent_runtime: null }),
     ],
   });

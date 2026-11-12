@@ -81,7 +81,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   "merge_order": ["api", "screen"],
   "nodes": [
     {"key": "parser", "title": "#1232 parser (outside)", "kind": "external", "external": {"pr": 1232}},
-    {"key": "cause", "title": "#1487 find the cause", "kind": "research",
+    {"key": "cause", "title": "#1487 find the cause", "kind": "general", "preset": "research",
      "criteria": ["the cause is named with the line that shows it"],
      "steps": ["Reproduce it on the real screen", "Find the line that loses the filter", "Write the cause down"],
      "worker": {"agent": "claude", "model": "opus", "effort": "xhigh", "effort_auto": true}},
@@ -92,18 +92,26 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
      "checks": [{"as": "review", "by": [{"agent": "claude", "model": "opus", "effort": "high"}]}],
      "gate": "the task lens after a reload",
      "worker": {"agent": "codex", "profile": "work", "model": "gpt-6-astra", "effort": "medium"}},
-    {"key": "together", "title": "check together", "kind": "verify", "depends_on": ["fix-1487"],
+    {"key": "together", "title": "check together", "kind": "general", "preset": "verify", "depends_on": ["fix-1487"],
      "criteria": ["both screens load with the new API"]}
   ]
 }
 ```
 
-- A node is one of four kinds:
-  - `change` changes code and has a `delivery`: `pr` (a pull request into the destination) or `direct` (a branch merged into the destination by you).
-  - `research` reads and decides; it changes no code, runs in the project checkout without a worktree, and its conclusion goes in the plan.
-    A conclusion that changes the goal or the scope is asked about before it is applied.
-  - `verify` checks changes that only work together, merged in one place, with the check command.
-  - `external` is a pull request or branch outside the mission that a node waits on: `"external": {"pr": 1232}` or `{"branch": "feat/x"}`, with no worker, delivery, criteria or checks.
+- A node that works is one of two kinds, chosen by one question, whether it leaves code; a third, the waiting node, has no worker:
+  - `change`, a code node (코드 노드), changes code and has a `delivery`: `pr` (a pull request into the destination) or `direct` (a branch merged into the destination by you).
+  - `general`, a general node (일반 노드), leaves a line and no code: it runs in the project checkout without a worktree, on the project's machine, and its result is its `--line`, with a verdict when it judged something.
+    Its `preset` says what kind of work it is and what it starts with; leave it out for any other work that leaves no code.
+
+    | `preset` | Use it when | It leaves | It starts with |
+    | --- | --- | --- | --- |
+    | `research` (리서치) | the plan cannot be written without its answer | its conclusion in one line, which goes in the plan | nothing; a conclusion that changes the goal or the scope is asked about before it is applied |
+    | `verify` (검증) | changes that only work together are checked merged in one place, with the check command | `--verdict pass\|fail` and `--checks <passed>/<total>` | nothing |
+    | `deploy` (배포·출시) | a deploy, an app submission or a release: work that is hard to undo | what went out, in one line (a version, an address) | a start gate, `배포해도 될지`: the operator looks before its worker starts (below) |
+    | none (일반) | anything else that leaves no code, such as a setting changed on a site | its line | nothing |
+
+    A plan written with the old kinds, `"kind": "research"` or `"kind": "verify"`, reads as a general node with that preset; a preset on a code or waiting node, or another preset beside an old kind, is refused (`mission_preset_invalid`).
+  - `external`, a waiting node (기다림 노드), is a pull request or branch outside the mission that a node waits on: `"external": {"pr": 1232}` or `{"branch": "feat/x"}`, with no worker, delivery, criteria or checks.
     Hide marks it done when the pull request merges, whatever its base, or the branch's own work is in main (the default branch, whatever the mission's destination), and wakes you to start the nodes that waited; a pull request closed without a merge keeps it in progress and is raised to you (`pr_closed`).
     The branch counts only once Hide has seen a commit of its own on it and that commit is in main, or GitHub merged a pull request from it: a branch just cut from main waits for its commits, and one merged before you added the node, with no pull request, waits for good.
     The node's line says why it waits; name the pull request instead, or drop the node, when it will not finish by itself.
@@ -122,10 +130,15 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Which nodes get one, and how many, follows the mission's verification strength (below).
 - A `gate` is a place the operator looks before the node is done: one short line of what to look at, at most 80 characters and one per node (`mission_gate_too_long`, `mission_gate_too_many`, `mission_gate_invalid`, each naming the node).
   Hide adds it as the node's `human` line, which only the operator's answer passes; it asks once the node's other lines are met (below).
+  A start gate, `"gate": {"look": "<what to look at>", "when": "start"}`, asks before the node starts instead: once every node it depends on is done, and until the operator passes it its worker cannot be bound (`hide mission node <key> --agent-id` or `--status working`, and a spawn under its intent, are refused `mission_gate_before_start`); start the worker after their pass.
+  A plan cannot put a start gate on a node that already started (`mission_gate_node_started`).
+  A dropped node's start gate cannot ask, so `--status working` on it is refused too: plan its work again as a new node with a new key, whose start gate asks, or, on the operator's word only, give the dropped node `"gate": null`; the operator setting it to work from the map goes past the gate as their own answer.
+  A `deploy` node is planned with the start gate `배포해도 될지` when the plan names none; give it your own words in `gate` to change it, or `"gate": null` to take it away, only when the operator says so, and say the change in one line with the plan (`배포 · 시작 전 확인 없음 (운영자)`).
   Propose one only for what a person must see with their own eyes (a screen) or a large step that cannot be undone; never for the merge, which the mission's scope already decides, and never for routine work.
   When the operator says where they want to check ("여기는 내가 확인하고 싶어"), put a gate on those nodes, and take one away the same way; a later plan that leaves `gate` out keeps it, and `"gate": null` takes it away.
+  A plan that leaves `gate` out on a new node, or on one whose kind or preset it changes, gives it the new preset's gate, none included: moved off `deploy` a node loses its start gate, moved onto it a node gains one in place of its end gate, so name `gate` in that plan to keep a gate the operator asked for.
   A gate you change or take away while it asks takes its question off the map with it, and the next gate asks.
-  A done node keeps the gate it has (`mission_gate_node_done`), an outside node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
+  A done node keeps the gate it has (`mission_gate_node_done`), a waiting node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
 - `"operator_merge": "<why in one line>"` gives the operator a node's merge in a mission whose scope is `merge`: when the operator wants to merge one pull request themselves ("DB는 내가 머지할게"), put it on that `change` node delivered by `pr`, with why in at most 80 characters (`mission_operator_merge_invalid` on any other node, a longer or multi-line reason, or with scope `pr`, where every pull request is the operator's already).
   Hide marks that node `done` once its pull request is green and approved, as in scope `pr`, and its merge is left to the operator; a later plan that leaves `operator_merge` out keeps it, and `"operator_merge": null` gives the merge back to you.
   Say it in the plan's scope line, `머지까지 · <node>만 👤 내가 머지` in the operator's language, which `hide mission show` prints under its head too.
@@ -143,13 +156,13 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A node's worker spawned without `--profile` starts as its plan names it, the built-in default included, rather than with your own profile; a checker, and any other spawn, without `--profile` runs with your own profile when it is your kind of agent, else the project's choice, so start each with `--profile` set to its candidate's `profile`, `default` included.
   A node that started keeps the profiles it was planned with, so a profile renamed or removed since does not refuse your replan, and the same spawn command asked again answers the same worker.
   A `--profile` or `--model` other than the plan's is followed, and Hide judges the item the worker would actually start with: it refuses a worker that is none of the candidates (`mission_candidate_refused`, naming the item it would have started): another agent or another profile of it, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
-- Every node other than an outside one gets `steps`: three to five short lines of how its work goes, each something it delivers or checks (the core change, the screen, the tests, the pull request), in the operator's language, never the node's title restated and never research (at most 8 steps, each one line of at most 80 characters, otherwise `mission_steps_invalid` names the node).
+- Every node other than a waiting one gets `steps`: three to five short lines of how its work goes, each something it delivers or checks (the core change, the screen, the tests, the pull request), in the operator's language, never the node's title restated and never research (at most 8 steps, each one line of at most 80 characters, otherwise `mission_steps_invalid` names the node).
   They show on the node's card as one bar cell per step and in its panel as a list before anyone has started, so the operator reads how each node will be worked when they read the plan.
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
   Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
-- Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub account, and any overlap.
-  Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
+- Show the plan in the conversation: the nodes and their kinds (코드, 일반 with its preset, 기다림), dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub account, and any overlap.
+  Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈), deploy (시작 전: 배포해도 될지). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - With the plan, show the options this mission runs with, one line each and in this order, in the operator's language:
   머지 (the scope and who merges, and any node the operator merges), 워크트리 (whether a merged worktree is cleaned up, and that one with changes or in use stays), 확인 (the verification strength), 동시에 (the cap), 내 폴더 (that your checkout is brought up to the destination when the mission closes, or `없음` when no node's result goes into the destination).
@@ -196,13 +209,14 @@ Cut only on one of these four lines, and keep everything else inside one node:
 - the operator wants to merge it on its own.
 
 Do not cut a node into "implement, test, document": that is one worker's turn order, and three agents would each rebuild the context the first one had.
-A review or verify of one node is a checker in its `checks`, never another node; a `verify` node is only for changes that work only together.
+A review or verify of one node is a checker in its `checks`, never another node; a general node with the `verify` preset is only for changes that work only together.
 A checker's brief says what to check, where (an isolated candidate app, never the operator's), its line (`review` or `verify`), and to record its result with `hide mission record`.
 A `research` node only when the plan cannot be written without its answer; a question a worker can settle in its own pane is not a node.
+A `deploy` node for each step that goes out where it is hard to take back (a deploy, an app submission, a release), after the nodes whose work it ships.
 A mission that changes what existing code does starts with a node that lists everything the existing implementation does, one cell per behaviour, each with the check that proves it; later nodes' finish lines name those cells.
 Put the biggest cost (a long build, a measurement, a wide fix) in an early node of its own; the last node only confirms what the earlier ones made.
 
-Every worker's brief, change or verify, says in its first line what the node is, then:
+Every worker's brief, code or general, says in its first line what the node is, then:
 
 - the contract and the exact scope (the behaviours or decisions by number), and what is explicitly another node's;
 - for a node that changes existing behaviour, the places in the existing implementation's source that do the same thing;
@@ -219,7 +233,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 
 - Start nothing before the operator approves the plan; then run `hide mission start`.
   Hide refuses a worker before that (`mission_not_started`).
-- Start each worker with `hide agent spawn --parent here --intent <mission-id>:<node-key> --brief-file <path> …`, a `change` node in its own worktree (`--branch` a new branch, `--path` beside the project), a `research` node in the project's checkout.
+- Start each worker with `hide agent spawn --parent here --intent <mission-id>:<node-key> --brief-file <path> …`, a `change` node in its own worktree (`--branch` a new branch, `--path` beside the project), a `general` node in the project's checkout.
   The brief is the worker's first prompt: Hide submits it once the agent takes input and keeps it as a delivered letter under the node's intent, so the worker starts on it without anyone typing and a wake later finds it.
   Hide keeps the brief with the node when you bind the worker, and the node's panel shows it folded under 지시 원문 for as long as the node is on the map, so write it as the one place the worker's instructions live.
   A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.
@@ -228,7 +242,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   An agent whose pane is up but whose spawn never answered its id is not registered: the mission cannot bind it, and its `hide mission record` is refused (`participant_unavailable`).
 - Then record it: `hide mission node <key> --status working --agent-id <agent-N>`.
 - A worker runs on the machine the project is on, or, for a `change` node delivered by `pr` and its checkers only, on another connected device (`--machine <device id>`, with `--repo` and `--path` that device's paths) that has a project of the mission's GitHub repository.
-  Hide refuses it there with its reason: a node that is not a pull-request change (`mission_machine_node_refused`; a direct change, a research or a verify node runs on the project's machine), a device that is not connected (`mission_machine_unavailable`), a device whose projects Hide is still reading (`mission_projects_loading`, retry), or no project of the same GitHub repository there that Hide has read from GitHub (`mission_machine_no_repository`; also while GitHub is still being read for the mission's own project, so wait and retry; when GitHub's read failed, the refusal says what to fix, such as a `gh` too old or signed out on the core's machine, so tell the operator rather than retry).
+  Hide refuses it there with its reason: a node that is not a pull-request change (`mission_machine_node_refused`; a direct change or a general node runs on the project's machine), a device that is not connected (`mission_machine_unavailable`), a device whose projects Hide is still reading (`mission_projects_loading`, retry), or no project of the same GitHub repository there that Hide has read from GitHub (`mission_machine_no_repository`; also while GitHub is still being read for the mission's own project, so wait and retry; when GitHub's read failed, the refusal says what to fix, such as a `gh` too old or signed out on the core's machine, so tell the operator rather than retry).
   Binding an agent from another machine with `--agent-id`, `--reviewer` or `--verifier` is refused for the same reasons, since a checker's intent need not name its node; an agent the node already holds stays while its machine is away, and only a replan that would make its node one the project's machine runs is refused (`mission_machine_node_refused`).
   A worker there records its `check` line from its own checkout on that device, and Hide holds the line against that checkout while the device answers; while it is away the line shows open.
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
@@ -239,7 +253,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
 - When the usage `hide agent catalog` reports is close to a limit, or the machine cannot take another build, start nothing new, say why and for how long with `hide mission delay --line <why> --for <30m|2h>` (at most 24h; the delay ends by itself then, and you set it again if the reason still holds), and tell the operator in conversation if it holds for long. Clear it when you go on.
-- A node that waits on a pull request outside the mission waits on it as an `external` node it depends on, never on a delay: the map shows what it waits for, and Hide wakes you when it is in main.
+- A node that waits on a pull request outside the mission waits on it as a waiting (`external`) node it depends on, never on a delay: the map shows what it waits for, and Hide wakes you when it is in main.
 
 ## 4. While it runs
 
@@ -247,8 +261,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Writing code, CI, review and the merge wait are all `working`; what waits on you or the operator is the node's raise (below), not a status.
 - Keep each node's line current: `--line` says what it does now, its conclusion or its check's result; `--pr`, `--base-pr` and `--branch` name what it made.
   `--pr <n>` adds a pull request to the node as its current one, keeping those it holds; `--no-pr` lets go of every one.
-  When a `direct` change reaches the destination, record its commit with `--commit <sha>`; when a `verify` node ends, record `--verdict pass|fail` and `--checks <passed>/<total>`.
-  Hide refuses them on any other kind of node, and the map shows them as the node's result.
+  When a `direct` change reaches the destination, record its commit with `--commit <sha>`; when a general node ends with a judgment (a `verify` node always, any other that checked something), record `--verdict pass|fail` and `--checks <passed>/<total>`.
+  Hide refuses a commit on any other node and a verdict on a code or waiting node (`mission_field_kind_invalid`), and the map shows them as the node's result.
 - Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, and when an outside node is in main.
   The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI passed, was cancelled with no run replacing it, or failed, with the jobs that failed.
   Each result is told once per commit for good, the one a pull request already has when Hide first reads it included, so a rerun that fails again sends none, even after a pass between.
@@ -273,6 +287,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - A gate asks by itself: once its node's other lines are met, Hide puts its question on the map as your decision (`<what to look at> 확인하고 알려 주세요`, with `계속 진행` and `고칠 점 있음`, naming the node), with the Views you and the node's worker opened.
   While a question of yours holds the decision, the gate waits for it; your next `decide --line` replaces the gate's question and the gate asks again once the decision is free, and `decide --clear` cannot take it off (`mission_gate_operator_only`).
   `계속 진행` passes it and the node may finish; `고칠 점 있음` or the operator's own words keep it open and go to the node's worker as a defect line, the node works again, and the gate asks anew once that line is met. Either way Hide tells you in a letter, and nothing passes the gate on its own.
+  A start gate asks the same way once its node could start, with nothing linked from a worker it does not have yet: `계속 진행` lets you start the worker; `고칠 점 있음` or their words become a defect line and free the decision, and the gate asks again only once that line is met, as an end gate does.
+  The node has no worker yet, so make the fix yourself (a replan, a brief, the change they asked for) and record the line with `hide mission record <node> <line> --pass --evidence <what shows it>`, which you may on a node that never had a worker.
   When the operator answers in your conversation instead ("ㄱㄱ", "고쳐서 다시"), relay it with their words quoted: `hide mission gate <node> --pass --said "ㄱㄱ"` or `--fix --said "<their words>"`; it settles the gate exactly as the card does, and records that the answer came from your pane.
   Without their words it is refused (`mission_gate_words_missing`), and so is a gate not asking yet (`mission_gate_not_open`), so never relay your own judgment.
   A check you meet by chance while the mission runs stays an ordinary `decide`, with no gate behind it.
@@ -299,7 +315,7 @@ Anything else is yours to settle, with your reason recorded where the command ta
 
 Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a worker falling asleep or ending, a `record`, a node finishing, you leaving) and does what is certain by itself; each shows on the node as Hide's own line in `hide mission show <node>` and in the map's history.
 
-- A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a `research`, `verify` or `direct` node with no pull request is set `done` when its lines all pass.
+- A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a general or `direct` node with no pull request is set `done` when its lines all pass.
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
 - A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request is not merged or a `direct` change's branch is not in the destination, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
@@ -342,7 +358,7 @@ Every node not finished is someone's move, and a move that does not come is rais
 
 | Whose move | Raised to you |
 | --- | --- |
-| Yours: start a node whose dependencies are all done | 20 minutes after it could start |
+| Yours: start a node whose dependencies are all done, or, behind a start gate answered with a fix, make the fix and record its line | 20 minutes after it could start |
 | The worker's, after a no-push or stopped warning above | 30 minutes after the warning's letter, if it still stands |
 | Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push |
 
@@ -352,7 +368,7 @@ No move is owed while a delay holds the mission, a decision waits on the operato
 A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
 Each clock starts when Hide first sees the node stand there, so lifting a delay, freeing a place, answering a decision or restarting Hide starts it again, and an update raises nothing at once.
 Each stall is raised once while it stands and goes when its move comes or none is owed; if it stands again later, that is a new one.
-To hold on purpose: a node that waits on a pull request outside the mission depends on an `external` node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started and not `external`, at most 24h; neither it nor its worker's spawn starts until `--no-hold` or its end, and no stall is raised on it; the stall clock starts again when the hold ends); the whole mission is held with `hide mission delay`. There is no silent wait.
+To hold on purpose: a node that waits on a pull request outside the mission depends on a waiting (`external`) node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started and not `external`, at most 24h; neither it nor its worker's spawn starts until `--no-hold` or its end, and no stall is raised on it; the stall clock starts again when the hold ends); the whole mission is held with `hide mission delay`. There is no silent wait.
 
 ### Finish lines
 

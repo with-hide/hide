@@ -54,6 +54,27 @@ fn node_status(node: &Value) -> String {
     }
 }
 
+/// A node's kind in the operator's words (PRD node-presets D-10, D-13): a
+/// code node, a general node with its preset's name from the core's one
+/// table, or the 기다림 node that waits on work outside the mission.
+fn kind_words(node: &Value) -> String {
+    match text(node, "kind") {
+        "change" => "코드".to_owned(),
+        "external" => "기다림".to_owned(),
+        "general" => {
+            let row = hide_core::missions::PRESETS
+                .iter()
+                .find(|row| row.preset.is_some() && Some(row.key) == node["preset"].as_str())
+                .unwrap_or_else(|| hide_core::missions::preset_row(None));
+            match row.preset {
+                Some(_) => format!("일반 · {}", row.word),
+                None => row.word.to_owned(),
+            }
+        }
+        other => other.to_owned(),
+    }
+}
+
 fn pr_word(state: &Value) -> &'static str {
     match state.as_str() {
         Some("failed") => "실패",
@@ -391,6 +412,11 @@ fn recorded_words(by: &Value, at: &Value, now: u64) -> String {
 
 fn draw_line(out: &mut String, line: &Value, now: u64) {
     let mut words = format!("  {} {}", text(line, "key"), line_word(&line["state"]));
+    // A start gate asks before the node's worker is bound (PRD node-presets
+    // D-06); an end gate, the one before, carries no `when`.
+    if line["when"] == "start" {
+        words.push_str(" · 시작 전");
+    }
     if let Some(said) = line["text"].as_str() {
         let _ = write!(words, " · {said}");
     }
@@ -449,7 +475,7 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
         text(node, "key"),
         text(node, "title")
     );
-    let mut state = vec![node_status(node), text(node, "kind").to_owned()];
+    let mut state = vec![node_status(node), kind_words(node)];
     if let Some(delivery) = node["delivery"].as_str() {
         state.push(match delivery {
             "pr" => "PR로".to_owned(),
@@ -626,7 +652,7 @@ mod tests {
              "pr": 6, "prs": [{"number": 5, "state": "closed"}, {"number": 6, "state": "merged"}],
              "pr_state": "merged", "review_fails": 0, "warnings": [],
              "criteria": [{"key": "ci", "kind": "ci", "state": "pass"}]},
-            {"key": "later", "kind": "research", "status": "planned", "depends_on": ["show", "docs"],
+            {"key": "later", "kind": "general", "preset": "research", "status": "planned", "depends_on": ["show", "docs"],
              "waiting_on": {"kind": "nodes", "keys": ["show"]},
              "review_fails": 0, "warnings": [], "criteria": []},
             {"key": "old", "kind": "change", "delivery": "pr", "status": "dropped",
@@ -814,7 +840,7 @@ mod tests {
         assert_eq!(
             draw(&answer, NOW).unwrap(),
             "mission-33 · show · Summarize show\n\
-             상태 작업 중 · change · PR로 · 기다림 작업자\n\
+             상태 작업 중 · 코드 · PR로 · 기다림 작업자\n\
              작업자 claude opus · agent-2 · pane w1:p2 · 깨어 있음\n\
              PR #7 실패 · https://github.com/acme/hide/pull/7\n\
              브랜치 feat/show\n\
@@ -918,15 +944,67 @@ mod tests {
         };
         let text = alone(&planned);
         assert!(
-            text.contains("상태 계획 · research · 기다림 show\n"),
+            text.contains("상태 계획 · 일반 · 리서치 · 기다림 show\n"),
             "{text}"
         );
         let decided = mission()["mission"]["nodes"][1].clone();
         let text = alone(&decided);
         assert!(
-            text.contains("상태 작업 중 · change · PR로 · 기다림 운영자 결정\n"),
+            text.contains("상태 작업 중 · 코드 · PR로 · 기다림 운영자 결정\n"),
             "{text}"
         );
+    }
+
+    /// PRD node-presets D-10, D-13, B8: a node's kind is said in the
+    /// operator's words, a general node's with its preset's name and one
+    /// with none as 일반, and an outside node as the 기다림 node it is.
+    #[test]
+    fn a_nodes_kind_is_said_by_its_preset_and_an_outside_node_waits() {
+        let said = |kind: Value| {
+            let mut node = mission()["mission"]["nodes"][3].clone();
+            for (name, value) in kind.as_object().unwrap() {
+                node[name] = value.clone();
+            }
+            node.as_object_mut().unwrap().remove("waiting_on");
+            let text = draw(
+                &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                NOW,
+            )
+            .unwrap();
+            text.lines()
+                .find_map(|line| line.strip_prefix("상태 계획 · "))
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(said(json!({"preset": "verify"})), "일반 · 검증");
+        assert_eq!(said(json!({"preset": "deploy"})), "일반 · 배포·출시");
+        assert_eq!(said(json!({"preset": null})), "일반");
+        assert_eq!(said(json!({"kind": "external", "preset": null})), "기다림");
+    }
+
+    /// PRD node-presets D-06: a start gate's line says it asks before the
+    /// start; an end gate's reads as before.
+    #[test]
+    fn a_start_gate_line_says_it_asks_before_the_start() {
+        let gate_line = |gate: Value| {
+            let mut node = mission()["mission"]["nodes"][3].clone();
+            node["criteria"] = json!([gate]);
+            let text = draw(
+                &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                NOW,
+            )
+            .unwrap();
+            text.lines()
+                .find(|line| line.starts_with("  gate "))
+                .unwrap()
+                .to_owned()
+        };
+        let start = gate_line(json!({"key": "gate", "kind": "human", "state": "open",
+            "text": "배포해도 될지", "when": "start"}));
+        assert!(start.contains("시작 전 · 배포해도 될지"), "{start}");
+        let end = gate_line(json!({"key": "gate", "kind": "human", "state": "open",
+            "text": "배포된 화면"}));
+        assert!(!end.contains("시작 전"), "{end}");
     }
 
     /// PRD mission-destination B1, B15: a mission that records where its

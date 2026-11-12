@@ -1387,8 +1387,10 @@ export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "ca
 export type MissionScope = "pr" | "merge";
 /** How strongly the Conductor has a mission's nodes checked (`mission_strength`); guidance for the Conductor, never a gate. */
 export type MissionStrength = "fast" | "normal" | "thorough";
-/** A node's kind (`mission_node_kind`), each done by its own rule (D-15); `external` watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
-export type MissionNodeKind = "change" | "research" | "verify" | "external";
+/** A node's kind (`mission_node_kind`), each done by its own rule (D-15): a code node (`change`), a general node whose `preset` says its work (PRD node-presets D-01), or `external`, which watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
+export type MissionNodeKind = "change" | "general" | "external";
+/** A general node's preset (`mission_node_preset`, PRD node-presets D-02); a general node may have none. */
+export type MissionNodePreset = "research" | "verify" | "deploy";
 /** How a change node's work lands (`mission_delivery`). */
 export type MissionDelivery = "pr" | "direct";
 /** A registered agent's life (`hide agent show`'s `runtime`): running, put to sleep by Hide, or ended. */
@@ -1488,10 +1490,14 @@ export type MissionCriterion = {
 export type MissionGateVia = "card" | "phone" | "pane";
 /** Where a node's gate stands, derived by the core (`mission_gate_state`, PRD mission-human-gate D-09). */
 export type MissionGateState = "ahead" | "open" | "passed";
+/** When a gate asks (`mission_gate_when`, PRD node-presets D-06): before its node starts, or once its other lines are met. */
+export type MissionGateWhen = "start" | "end";
 /** The place the operator looks before a node is done (`GateView`): what to look at, the decision that asks it (`ask`, its question's key), since when it waits, when it has waited long (`오래 기다림`, compared with the clock), and once passed where the answer came from and the words. */
 export type MissionGate = {
   state: MissionGateState;
   look: string;
+  /** Absent from a core before start gates, which asks every gate at the end. */
+  when?: MissionGateWhen;
   ask: number | null;
   since_unix_ms: number | null;
   long_wait_at_unix_ms: number | null;
@@ -1595,6 +1601,9 @@ export type MissionNode = {
   key: string;
   title: string;
   kind: MissionNodeKind;
+  /** A general node's preset, and the icon key the core's preset table names for a general node (PRD node-presets D-02, D-08); absent on other nodes and from an older core. */
+  preset?: MissionNodePreset | null;
+  icon?: string | null;
   depends_on: string[];
   status: MissionNodeStatus;
   blocked: MissionBlocked | null;
@@ -1771,7 +1780,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;

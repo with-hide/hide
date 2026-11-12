@@ -131,16 +131,147 @@ pub enum MissionScope {
     Merge,
 }
 
-/// The kinds of node, each finished by its own rule (D-15). An external
-/// node is a pull request or a branch outside the mission that Hide watches
-/// until it reaches main (PRD mission-map-git-criteria D-20).
+/// The kinds of node, each finished by its own rule (D-15; PRD node-presets
+/// D-01): a code node (`change`) leaves a branch; a general node leaves a
+/// line, and its `preset` says what kind of work it is; an external node is
+/// a pull request or a branch outside the mission that Hide watches until it
+/// reaches main (PRD mission-map-git-criteria D-20).
+///
+/// A book or a plan written before general nodes names `research` or
+/// `verify` here: a book is read as a general node with that preset
+/// (`convert_old_kinds`), a plan as `PlanKind` names it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     Change,
+    General,
+    External,
+}
+
+/// What a general node's work is (PRD node-presets D-02), the defaults it
+/// starts with read from its row of `PRESETS`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Preset {
     Research,
     Verify,
+    Deploy,
+}
+
+/// When a node's gate asks the operator (PRD node-presets D-06): after the
+/// node's other lines are met (`end`, the gate of PRD mission-human-gate),
+/// or before its work starts, once every node it depends on is done
+/// (`start`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateWhen {
+    Start,
+    #[default]
+    End,
+}
+
+impl GateWhen {
+    pub fn is_end(&self) -> bool {
+        *self == Self::End
+    }
+}
+
+/// One row of `PRESETS`: the preset's name key, which the wire and the
+/// screens' words name it by, the name `hide mission show` says, the icon
+/// key its card draws, and the gate a node of it is planned with when the
+/// plan names none.
+#[derive(Debug, Eq, PartialEq)]
+pub struct PresetRow {
+    pub preset: Option<Preset>,
+    pub key: &'static str,
+    pub word: &'static str,
+    pub icon: &'static str,
+    pub gate: Option<(&'static str, GateWhen)>,
+}
+
+/// The general node's presets, and the row of a general node with none, the
+/// one table the plan's intake, the snapshot and the CLI read (PRD
+/// node-presets D-02, D-06, D-07).
+pub const PRESETS: [PresetRow; 4] = [
+    PresetRow {
+        preset: Some(Preset::Research),
+        key: "research",
+        word: "리서치",
+        icon: "search",
+        gate: None,
+    },
+    PresetRow {
+        preset: Some(Preset::Verify),
+        key: "verify",
+        word: "검증",
+        icon: "shield-check",
+        gate: None,
+    },
+    PresetRow {
+        preset: Some(Preset::Deploy),
+        key: "deploy",
+        word: "배포·출시",
+        icon: "rocket",
+        // It is hard to undo, so the operator looks before it starts.
+        gate: Some(("배포해도 될지", GateWhen::Start)),
+    },
+    PresetRow {
+        preset: None,
+        key: "general",
+        word: "일반",
+        icon: "file-text",
+        gate: None,
+    },
+];
+
+/// The row of a general node of `preset`, or of one with none.
+pub fn preset_row(preset: Option<Preset>) -> &'static PresetRow {
+    PRESETS
+        .iter()
+        .find(|row| row.preset == preset)
+        .expect("PRESETS has a row for every preset and for none")
+}
+
+/// A node's kind as a plan names it: the three kinds, and `research` and
+/// `verify`, the kinds before general nodes (PRD node-presets D-05), each
+/// read as a general node with that preset.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanKind {
+    Change,
+    General,
     External,
+    Research,
+    Verify,
+}
+
+impl PlanKind {
+    pub fn kind(self) -> NodeKind {
+        match self {
+            Self::Change => NodeKind::Change,
+            Self::General | Self::Research | Self::Verify => NodeKind::General,
+            Self::External => NodeKind::External,
+        }
+    }
+
+    /// The preset an old kind name stands for.
+    fn preset(self) -> Option<Preset> {
+        match self {
+            Self::Research => Some(Preset::Research),
+            Self::Verify => Some(Preset::Verify),
+            Self::Change | Self::General | Self::External => None,
+        }
+    }
+}
+
+impl From<NodeKind> for PlanKind {
+    fn from(kind: NodeKind) -> Self {
+        match kind {
+            NodeKind::Change => Self::Change,
+            NodeKind::General => Self::General,
+            NodeKind::External => Self::External,
+        }
+    }
 }
 
 /// What an external node watches (D-20, B19).
@@ -1009,6 +1140,10 @@ pub struct MissionNode {
     pub key: String,
     pub title: String,
     pub kind: NodeKind,
+    /// A general node's preset, none on every other node (PRD node-presets
+    /// D-02).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
     #[serde(default)]
     pub depends_on: Vec<String>,
     pub status: NodeStatus,
@@ -1245,6 +1380,34 @@ impl MissionNode {
             || self.agent_id.is_some()
             || !self.prs.is_empty()
             || self.branch.is_some()
+    }
+
+    /// Whether the node is at work: started, and not dropped, so a dropped
+    /// node taken back to work starts again (PRD node-presets D-06).
+    pub(crate) fn at_work(&self) -> bool {
+        self.started() && self.status != NodeStatus::Dropped
+    }
+
+    /// Why no worker may start on the node now: it is held, or its start
+    /// gate waits on the operator (PRD node-presets D-06).
+    pub(crate) fn start_refusal(&self) -> Option<String> {
+        let code = if self.hold.is_some() {
+            "mission_node_held"
+        } else if self.waits_to_start() {
+            "mission_gate_before_start"
+        } else {
+            return None;
+        };
+        Some(crate::coordination::refusal(code, &self.key))
+    }
+
+    /// Whether the node has a start gate the operator has not passed (PRD
+    /// node-presets D-06): no worker may be bound to it yet.
+    pub(crate) fn waits_to_start(&self) -> bool {
+        crate::mission_criteria::gate(&self.criteria).is_some_and(|line| {
+            line.when == GateWhen::Start
+                && line.state != crate::mission_criteria::CriterionState::Pass
+        })
     }
 
     /// The registrations the Conductor bound as checkers to the node's lines
@@ -2470,7 +2633,13 @@ pub struct PlanInput {
 pub struct NodeInput {
     pub key: String,
     pub title: String,
-    pub kind: NodeKind,
+    /// Read through `NodeInput::kind`, which takes the kinds before general
+    /// nodes too.
+    pub kind: PlanKind,
+    /// A general node's preset (PRD node-presets D-02); read through
+    /// `NodeInput::preset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
     #[serde(default)]
     pub depends_on: Vec<String>,
     #[serde(default)]
@@ -2500,17 +2669,20 @@ pub struct NodeInput {
     /// What a replan changed here and why (B18).
     #[serde(default)]
     pub change: Option<String>,
-    /// The place the operator looks before the node is done, in at most
-    /// `GATE_CHARS` characters (PRD mission-human-gate D-01, D-13): one
-    /// text, or a list a node may hold one of. Left out, a replan keeps the
-    /// gate the node has; `null` or an empty list takes it away, so a
-    /// gate left out is never written as `null`.
+    /// The place the operator looks, in at most `GATE_CHARS` characters
+    /// (PRD mission-human-gate D-01, D-13), before the node is done or,
+    /// with `when: start`, before it starts (PRD node-presets D-06): one
+    /// text, `{"look": …, "when": …}`, or a list a node may hold one of.
+    /// Left out, a replan keeps the gate the node has, and a new node, or one
+    /// whose preset changes, takes its new preset's (`PresetRow::gate`), none
+    /// included; `null` or an empty list takes it away, so a gate left out is
+    /// never written as `null`.
     #[serde(
         default,
         deserialize_with = "gate_input",
         skip_serializing_if = "Option::is_none"
     )]
-    pub gate: Option<Vec<String>>,
+    pub gate: Option<Vec<GateInput>>,
     /// The operator merges this node's pull request, and why in one line
     /// of at most `OPERATOR_MERGE_CHARS` characters (PRD mission-destination
     /// D-10). Left out, a replan keeps what the node has; `null` gives the
@@ -2521,6 +2693,28 @@ pub struct NodeInput {
         skip_serializing_if = "Option::is_none"
     )]
     pub operator_merge: Option<Option<String>>,
+}
+
+/// A node's gate as a plan names it: what to look at, and when.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateInput {
+    pub look: String,
+    #[serde(default, skip_serializing_if = "GateWhen::is_end")]
+    pub when: GateWhen,
+}
+
+impl NodeInput {
+    /// The node's kind, an old kind name read as the general node it is now.
+    pub fn kind(&self) -> NodeKind {
+        self.kind.kind()
+    }
+
+    /// The node's preset: the one it names, or the one its old kind name
+    /// stands for.
+    pub fn preset(&self) -> Option<Preset> {
+        self.preset.or(self.kind.preset())
+    }
 }
 
 /// A change to one node. An absent field is kept, `null` clears it, so a
@@ -2669,10 +2863,39 @@ fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::E
     })
 }
 
-/// A node's gate as the plan names it, present: one text, a list, or
-/// `null` for none.
-fn gate_input<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
-    lines(deserializer).map(Some)
+/// A node's gate as the plan names it, present: one text or
+/// `{"look": …, "when": …}`, a list of them, or `null` for none.
+fn gate_input<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<GateInput>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum One {
+        Text(String),
+        Gate(GateInput),
+    }
+    impl From<One> for GateInput {
+        fn from(one: One) -> Self {
+            match one {
+                One::Text(look) => GateInput {
+                    look,
+                    when: GateWhen::End,
+                },
+                One::Gate(gate) => gate,
+            }
+        }
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Gates {
+        One(One),
+        Many(Vec<One>),
+    }
+    Ok(Some(match Option::<Gates>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Gates::One(one)) => vec![one.into()],
+        Some(Gates::Many(many)) => many.into_iter().map(Into::into).collect(),
+    }))
 }
 
 fn null_is_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -2780,7 +3003,7 @@ pub(crate) fn apply_plan(
                 &node.key,
             ));
         }
-        if node.criteria.is_empty() && node.kind != NodeKind::External && !mission.exempt {
+        if node.criteria.is_empty() && node.kind() != NodeKind::External && !mission.exempt {
             return Err(crate::coordination::refusal(
                 "mission_criteria_missing",
                 &node.key,
@@ -2795,10 +3018,10 @@ pub(crate) fn apply_plan(
         check_gate(mission, node)?;
         check_operator_merge(mission, input, node)?;
         check_checkers(node)?;
-        if node.kind == NodeKind::Change && node.delivery.is_none() {
+        if node.kind() == NodeKind::Change && node.delivery.is_none() {
             return Err("mission_delivery_required".into());
         }
-        if node.kind != NodeKind::Change && node.delivery.is_some() {
+        if node.kind() != NodeKind::Change && node.delivery.is_some() {
             return Err("mission_delivery_invalid".into());
         }
         if let Some(worker) = &node.worker {
@@ -2852,7 +3075,8 @@ pub(crate) fn apply_plan(
             let mut node = mission.node(&input.key).cloned().unwrap_or(MissionNode {
                 key: input.key.clone(),
                 title: input.title.clone(),
-                kind: input.kind,
+                kind: input.kind(),
+                preset: None,
                 depends_on: Vec::new(),
                 status: NodeStatus::Planned,
                 delivery: None,
@@ -2898,8 +3122,12 @@ pub(crate) fn apply_plan(
                 hold: None,
                 operator_merge: None,
             });
+            // The node's gate, worked out before the node takes the plan's
+            // kind and preset, which it is judged against.
+            let gate = planned_gate(mission, input);
             node.title.clone_from(&input.title);
-            node.kind = input.kind;
+            node.kind = input.kind();
+            node.preset = input.preset();
             // A node planned as outside work loses its hold: outside work
             // moves it, and no hold can stop that.
             if node.kind == NodeKind::External {
@@ -2912,15 +3140,15 @@ pub(crate) fn apply_plan(
                 &node.criteria,
                 &input.criteria,
                 &input.checks,
-                with_check && input.kind == NodeKind::Change,
+                with_check && input.kind() == NodeKind::Change,
                 same_check,
             );
             // A gate changed or taken away takes its raise with it, so the
             // gate the plan names now is raised anew when it waits.
-            if let Some(gate) = &input.gate
+            if let Some(gate) = &gate
                 && crate::mission_criteria::set_gate(
                     &mut node.criteria,
-                    gate.first().map(|text| text.trim()),
+                    gate.first().map(|gate| (gate.look.trim(), gate.when)),
                 )
                 && node
                     .attention
@@ -3016,15 +3244,22 @@ fn valid_steps(steps: &[String]) -> bool {
 /// node already done, whose work the operator can no longer look at before
 /// it finishes; a mission made before node criteria gates nothing, so it
 /// takes none.
+///
+/// A start gate (PRD node-presets D-06) asks before the node's worker is
+/// bound, so a plan cannot put one on a node that already started
+/// (`mission_gate_node_started`), whether it names it or the node's preset
+/// brings it.
 fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
-    let Some(gate) = &node.gate else {
+    let refused = |code: &str| Err(crate::coordination::refusal(code, &node.key));
+    let before = mission.node(&node.key);
+    let Some(gate) = planned_gate(mission, node) else {
         return Ok(());
     };
-    let refused = |code: &str| Err(crate::coordination::refusal(code, &node.key));
     if gate.len() > 1 {
         return refused("mission_gate_too_many");
     }
-    let text = gate.first().map(|text| text.trim());
+    let gate = gate.first();
+    let text = gate.map(|gate| gate.look.trim());
     if let Some(text) = text {
         if text.is_empty() || text.chars().any(char::is_control) {
             return refused("mission_gate_invalid");
@@ -3036,17 +3271,52 @@ fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
             return refused("mission_gate_exempt");
         }
     }
-    let now = mission
-        .node(&node.key)
+    let now = before
         .and_then(|before| crate::mission_criteria::gate(&before.criteria))
-        .and_then(|line| line.text.as_deref());
-    let done = mission
-        .node(&node.key)
-        .is_some_and(|before| before.status == NodeStatus::Done);
-    if done && now != text {
+        .map(|line| (line.text.as_deref(), line.when));
+    let next = gate.map(|gate| (Some(gate.look.trim()), gate.when));
+    let done = before.is_some_and(|before| before.status == NodeStatus::Done);
+    if done && now != next {
         return refused("mission_gate_node_done");
     }
+    if next.is_some_and(|(_, when)| when == GateWhen::Start)
+        && now != next
+        && before.is_some_and(MissionNode::started)
+    {
+        return refused("mission_gate_node_started");
+    }
     Ok(())
+}
+
+/// The gate a plan gives `node`, or none to keep the one it has: the gate it
+/// names; left out, its preset's (`PresetRow::gate`, none included) for a
+/// node new to the plan or one whose preset changes (PRD node-presets D-06,
+/// D-07), so a node moved off `deploy` loses its start gate and one moved
+/// onto it gains one. A node's preset is its general node's preset, so a
+/// move between a general node and another kind changes it.
+fn planned_gate(mission: &Mission, node: &NodeInput) -> Option<Vec<GateInput>> {
+    if node.gate.is_some() {
+        return node.gate.clone();
+    }
+    let preset =
+        |kind: NodeKind, preset: Option<Preset>| (kind == NodeKind::General).then_some(preset);
+    let next = preset(node.kind(), node.preset());
+    if mission.exempt
+        || mission
+            .node(&node.key)
+            .is_some_and(|before| preset(before.kind, before.preset) == next)
+    {
+        return None;
+    }
+    let gate = next.and_then(|preset| preset_row(preset).gate);
+    Some(
+        gate.into_iter()
+            .map(|(look, when)| GateInput {
+                look: look.to_owned(),
+                when,
+            })
+            .collect(),
+    )
 }
 
 /// Who merges a node as the plan leaves it (PRD mission-destination D-10):
@@ -3072,7 +3342,7 @@ fn check_operator_merge(
     if why.is_empty()
         || why.chars().any(char::is_control)
         || why.chars().count() > OPERATOR_MERGE_CHARS
-        || node.kind != NodeKind::Change
+        || node.kind() != NodeKind::Change
         || node.delivery != Some(Delivery::Pr)
         || scope != MissionScope::Merge
     {
@@ -3085,9 +3355,22 @@ fn check_operator_merge(
 }
 
 /// An external node names one pull request or branch and nothing a worker
-/// would do (B19); no other node names one.
+/// would do (B19); no other node names one. A preset is a general node's,
+/// and an old kind name stands for its own preset only (PRD node-presets
+/// D-02, D-05).
 fn check_node_kind(node: &NodeInput) -> Result<(), String> {
-    let external = node.kind == NodeKind::External;
+    if (node.preset.is_some() && node.kind() != NodeKind::General)
+        || node
+            .kind
+            .preset()
+            .is_some_and(|old| node.preset.is_some_and(|named| named != old))
+    {
+        return Err(crate::coordination::refusal(
+            "mission_preset_invalid",
+            &node.key,
+        ));
+    }
+    let external = node.kind() == NodeKind::External;
     let named = match &node.external {
         None => false,
         Some(External::Pr(number)) => *number > 0,
@@ -3164,10 +3447,11 @@ pub(crate) fn apply_patch(
     {
         return Err("mission_text_invalid".into());
     }
-    // A commit is a direct change's and a verdict a verify node's (B33).
+    // A commit is a direct change's (B33) and a verdict a general node's
+    // (PRD node-presets D-04).
     let direct = node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct);
     if (patch.commit.is_some() && !direct)
-        || ((patch.verdict.is_some() || patch.checks.is_some()) && node.kind != NodeKind::Verify)
+        || ((patch.verdict.is_some() || patch.checks.is_some()) && node.kind != NodeKind::General)
     {
         return Err("mission_field_kind_invalid".into());
     }
@@ -3288,9 +3572,18 @@ pub(crate) fn apply_patch(
     if next.status != NodeStatus::Done {
         next.done_head = None;
     }
-    // A held node starts only once its hold is lifted.
+    // A held node starts only once its hold is lifted, and one behind a
+    // start gate once the operator passed it (PRD node-presets D-06): judged
+    // as the patch leaves it, so a dropped node taken back to work starts
+    // again, while a node already at work is not stopped.
     if next.hold.is_some() && next.started() {
         return Err(crate::coordination::refusal("mission_node_held", &node.key));
+    }
+    if !node.at_work() && next.at_work() && next.waits_to_start() {
+        return Err(crate::coordination::refusal(
+            "mission_gate_before_start",
+            &node.key,
+        ));
     }
     Ok(next)
 }
@@ -3503,7 +3796,16 @@ pub fn next_action(code: &str) -> &'static str {
             "Recommend an option by its number, counted from 1 in the order of --option"
         }
         "mission_field_kind_invalid" => {
-            "Record --commit on a direct change node and --verdict or --checks on a verify node"
+            "Record --commit on a direct change node and --verdict or --checks on a general node"
+        }
+        "mission_preset_invalid" => {
+            "Give a preset only to a general node (\"kind\": \"general\", \"preset\": \"research\", \"verify\" or \"deploy\"); an old kind name (\"research\", \"verify\") stands for its own preset"
+        }
+        "mission_gate_before_start" => {
+            "The node's start gate waits on the operator: start its worker once they pass it on the map, or relay their go with hide mission gate <node> --pass --said <their words>; after a fix they asked for, make it and record its line, and the gate asks again; a dropped node's gate cannot ask, so plan its work again as a new node with a new key, whose start gate asks, or, on the operator's word only, give the dropped node \"gate\": null"
+        }
+        "mission_gate_node_started" => {
+            "A start gate asks before the node's worker is bound, and this node already started: give it an end gate, or none with \"gate\": null"
         }
         "mission_commit_invalid" => "Give the commit as 7 to 64 hexadecimal digits",
         "mission_checks_invalid" => {
@@ -3701,6 +4003,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
             ));
         }
     }
+    convert_old_kinds(&mut value)?;
     let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
     for line in stored
         .book
@@ -3724,6 +4027,39 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         book: stored.book,
         from,
     })
+}
+
+/// A book written before general nodes, in any schema, read as this build
+/// writes it (PRD node-presets D-05, B7): a `research` or `verify` node is a
+/// general node with that preset, and is written so at its mission's next
+/// save. The schema stays: a build that reads the mission folder keeps a
+/// file it cannot read as it is (`mission_store`), so only a mission with a
+/// general node is hidden from it.
+fn convert_old_kinds(value: &mut serde_json::Value) -> Result<(), String> {
+    let Some(missions) = value
+        .get_mut("missions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    let nodes = missions.iter_mut().filter_map(|mission| {
+        mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+    });
+    for node in nodes.flatten() {
+        let node = node
+            .as_object_mut()
+            .ok_or("has a node that is not an object")?;
+        let preset = match node.get("kind").and_then(serde_json::Value::as_str) {
+            Some("research") => "research",
+            Some("verify") => "verify",
+            _ => continue,
+        };
+        node.insert("kind".into(), "general".into());
+        node.entry("preset").or_insert_with(|| preset.into());
+    }
+    Ok(())
 }
 
 /// A schema 1 book as schema 2 reads it (D-19, B23): every mission was made
@@ -4067,7 +4403,8 @@ pub(crate) mod tests {
         NodeInput {
             key: key.into(),
             title: format!("node {key}"),
-            kind,
+            kind: kind.into(),
+            preset: None,
             depends_on: depends.iter().map(|key| (*key).to_owned()).collect(),
             delivery: (kind == NodeKind::Change).then_some(Delivery::Pr),
             worker: None,
@@ -4123,7 +4460,7 @@ pub(crate) mod tests {
 
     #[test]
     fn only_a_change_node_carries_a_delivery() {
-        let mut research = node("r", NodeKind::Research, &[]);
+        let mut research = node("r", NodeKind::General, &[]);
         research.delivery = Some(Delivery::Pr);
         assert_eq!(
             apply_plan(&mission(), &plan(vec![research]), 2).unwrap_err(),
@@ -4163,7 +4500,7 @@ pub(crate) mod tests {
             &running,
             &plan(vec![
                 node("a", NodeKind::Change, &[]),
-                node("c", NodeKind::Research, &[]),
+                node("c", NodeKind::General, &[]),
             ]),
             4,
         )
@@ -4171,7 +4508,7 @@ pub(crate) mod tests {
         assert_eq!(again.nodes[0].prs, vec![7]);
         assert_eq!(again.nodes[0].status, NodeStatus::Working);
         assert!(again.node("b").is_none(), "a planned node left out goes");
-        let without = apply_plan(&running, &plan(vec![node("c", NodeKind::Research, &[])]), 4);
+        let without = apply_plan(&running, &plan(vec![node("c", NodeKind::General, &[])]), 4);
         assert_eq!(without.unwrap_err(), "mission_node_in_progress");
         // A node whose status still says planned but that names its pull
         // request ran too.
@@ -4188,7 +4525,7 @@ pub(crate) mod tests {
             &plan(vec![
                 node("a", NodeKind::Change, &[]),
                 node("b", NodeKind::Change, &["a"]),
-                node("c", NodeKind::Verify, &["b"]),
+                node("c", NodeKind::General, &["b"]),
                 node("d", NodeKind::Change, &[]),
             ]),
             2,
@@ -4462,7 +4799,7 @@ pub(crate) mod tests {
     fn a_plan_with_a_check_command_adds_it_to_change_nodes_and_keeps_what_was_recorded() {
         let mut input = plan(vec![
             node("a", NodeKind::Change, &[]),
-            node("r", NodeKind::Research, &[]),
+            node("r", NodeKind::General, &[]),
         ]);
         input.check = Some("cargo test".into());
         let mut planned = apply_plan(&mission(), &input, 2).unwrap();
@@ -4772,6 +5109,405 @@ pub(crate) mod tests {
             .0,
             "mission_external_invalid"
         );
+    }
+
+    /// PRD node-presets D-05, B7: a book written before general nodes, of
+    /// any schema, reads its research and verify nodes as general nodes
+    /// with those presets, with the same state, line and verdict, and is
+    /// written with the new names, which read back the same.
+    #[test]
+    fn a_book_from_before_general_nodes_reads_its_research_and_verify_as_presets() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([
+            {"key": "cause", "title": "Find the cause", "kind": "research", "status": "done",
+             "line": "the lock is let go first",
+             "criteria": [{"key": "c1", "kind": "own", "text": "named", "state": "pass"}]},
+            {"key": "together", "title": "Check together", "kind": "verify", "status": "working",
+             "verdict": "pass", "checks": {"passed": 7, "total": 7},
+             "criteria": [{"key": "c1", "kind": "own", "text": "both load", "state": "open"}]},
+            {"key": "fix", "title": "Fix it", "kind": "change", "status": "planned", "delivery": "pr",
+             "criteria": [{"key": "c1", "kind": "own", "text": "it works", "state": "open"}]}]);
+        for schema in [SCHEMA_VERSION, SCHEMA_BEFORE_GATES] {
+            let bytes = serde_json::to_vec(
+                &serde_json::json!({"schema_version": schema, "next": 1, "missions": [stored]}),
+            )
+            .unwrap();
+            let read = decode(&bytes).unwrap().book.missions.remove(0);
+            let nodes: Vec<_> = read
+                .nodes
+                .iter()
+                .map(|node| (node.key.as_str(), node.kind, node.preset, node.status))
+                .collect();
+            assert_eq!(
+                nodes,
+                [
+                    (
+                        "cause",
+                        NodeKind::General,
+                        Some(Preset::Research),
+                        NodeStatus::Done
+                    ),
+                    (
+                        "together",
+                        NodeKind::General,
+                        Some(Preset::Verify),
+                        NodeStatus::Working
+                    ),
+                    ("fix", NodeKind::Change, None, NodeStatus::Planned),
+                ],
+                "schema {schema}"
+            );
+            assert_eq!(
+                read.nodes[0].line.as_deref(),
+                Some("the lock is let go first")
+            );
+            assert_eq!(
+                (read.nodes[1].verdict, read.nodes[1].checks),
+                (
+                    Some(Verdict::Pass),
+                    Some(Checks {
+                        passed: 7,
+                        total: 7
+                    })
+                )
+            );
+            let written = encode_mission(&read).unwrap();
+            let raw: serde_json::Value = serde_json::from_slice(&written).unwrap();
+            let kinds: Vec<_> = raw["missions"][0]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| (node["kind"].clone(), node.get("preset").cloned()))
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    ("general".into(), Some("research".into())),
+                    ("general".into(), Some("verify".into())),
+                    ("change".into(), None),
+                ]
+            );
+            assert_eq!(decode(&written).unwrap().book.missions, [read]);
+        }
+    }
+
+    /// PRD node-presets D-01, D-02, D-05, B8: a plan names a general node
+    /// with its preset, or with the kinds before them, each read as a
+    /// general node with that preset; a preset is a general node's alone,
+    /// and an old kind stands for its own preset only.
+    #[test]
+    fn a_plan_reads_old_kind_names_as_general_nodes_with_their_presets() {
+        let planned = |nodes: serde_json::Value| -> Result<Mission, String> {
+            let nodes: Vec<serde_json::Value> = nodes
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|extra| {
+                    let mut node = serde_json::to_value(node(
+                        extra["key"].as_str().unwrap(),
+                        NodeKind::General,
+                        &[],
+                    ))
+                    .unwrap();
+                    node["delivery"] = serde_json::Value::Null;
+                    for (name, value) in extra.as_object().unwrap() {
+                        node[name] = value.clone();
+                    }
+                    node
+                })
+                .collect();
+            let input: PlanInput =
+                serde_json::from_value(serde_json::json!({"nodes": nodes})).unwrap();
+            apply_plan(&mission(), &input, 2)
+        };
+        let read = planned(serde_json::json!([
+            {"key": "a", "kind": "research"},
+            {"key": "b", "kind": "verify"},
+            {"key": "c", "kind": "general", "preset": "research"},
+            {"key": "d", "kind": "general"},
+            {"key": "e", "kind": "research", "preset": "research"},
+        ]))
+        .unwrap();
+        let kinds: Vec<_> = read
+            .nodes
+            .iter()
+            .map(|node| (node.kind, node.preset))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (NodeKind::General, Some(Preset::Research)),
+                (NodeKind::General, Some(Preset::Verify)),
+                (NodeKind::General, Some(Preset::Research)),
+                (NodeKind::General, None),
+                (NodeKind::General, Some(Preset::Research)),
+            ]
+        );
+        let refused = |nodes| {
+            crate::coordination::split_refusal(&planned(nodes).unwrap_err())
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            refused(serde_json::json!([{"key": "a", "kind": "verify", "preset": "deploy"}])),
+            "mission_preset_invalid"
+        );
+        assert_eq!(
+            refused(serde_json::json!([
+                {"key": "a", "kind": "change", "delivery": "pr", "preset": "research"}
+            ])),
+            "mission_preset_invalid"
+        );
+    }
+
+    /// PRD node-presets D-06, D-07, B3, B4: a deploy node is planned with
+    /// its preset's start gate when the plan names none, which a replan
+    /// keeps, `null` takes away and a change of preset replaces with the new
+    /// preset's, none included; a start gate is written with its `when`
+    /// and an end gate as before; and no start gate, named or brought by a
+    /// preset, goes on a node that already started.
+    #[test]
+    fn a_deploy_node_is_planned_with_a_start_gate_that_null_takes_away() {
+        let general = |preset: Option<&str>, gate: Option<serde_json::Value>| {
+            let mut ship = serde_json::to_value(node("ship", NodeKind::General, &[])).unwrap();
+            ship["delivery"] = serde_json::Value::Null;
+            ship["preset"] = serde_json::json!(preset);
+            if let Some(gate) = gate {
+                ship["gate"] = gate;
+            }
+            plan(vec![serde_json::from_value(ship).unwrap()])
+        };
+        let gate_of = |mission: &Mission| {
+            crate::mission_criteria::gate(&mission.nodes[0].criteria)
+                .map(|line| (line.text.clone().unwrap(), line.when))
+        };
+        let planned = apply_plan(&mission(), &general(Some("deploy"), None), 2).unwrap();
+        assert_eq!(
+            gate_of(&planned),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        let stored = serde_json::to_value(&planned).unwrap();
+        assert_eq!(stored["nodes"][0]["criteria"][1]["when"], "start");
+        let kept = apply_plan(&planned, &general(Some("deploy"), None), 3).unwrap();
+        assert_eq!(kept.nodes[0].criteria, planned.nodes[0].criteria);
+        let off = apply_plan(
+            &mission(),
+            &general(Some("deploy"), Some(serde_json::Value::Null)),
+            2,
+        )
+        .unwrap();
+        assert_eq!(gate_of(&off), None);
+        assert!(!off.nodes[0].waits_to_start());
+        // Its preset changed and its gate left out, a node takes the new
+        // preset's: none off `deploy`, the start gate again back onto it.
+        let research = apply_plan(&planned, &general(Some("research"), None), 3).unwrap();
+        assert_eq!(gate_of(&research), None);
+        let again = apply_plan(&research, &general(Some("deploy"), None), 4).unwrap();
+        assert_eq!(
+            gate_of(&again),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        // A gate the plan names stays across the change.
+        let named = apply_plan(
+            &planned,
+            &general(
+                Some("research"),
+                Some(serde_json::json!({"look": "배포해도 될지", "when": "start"})),
+            ),
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&named),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        // A gate of one's own words, at the start or at the end.
+        let own = apply_plan(
+            &mission(),
+            &general(
+                None,
+                Some(serde_json::json!({"look": "릴리스 노트", "when": "start"})),
+            ),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&own),
+            Some(("릴리스 노트".to_owned(), GateWhen::Start))
+        );
+        let end = apply_plan(
+            &mission(),
+            &general(Some("deploy"), Some(serde_json::json!("배포된 화면"))),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&end),
+            Some(("배포된 화면".to_owned(), GateWhen::End))
+        );
+        let stored = serde_json::to_value(&end).unwrap();
+        assert!(stored["nodes"][0]["criteria"][1].get("when").is_none());
+        // A node already started takes no start gate, named or by its preset.
+        let mut started = apply_plan(&mission(), &general(None, None), 2).unwrap();
+        started.nodes[0].agent_id = Some("agent-1".into());
+        let refused = |input: &PlanInput| {
+            crate::coordination::split_refusal(&apply_plan(&started, input, 3).unwrap_err())
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            refused(&general(Some("deploy"), None)),
+            "mission_gate_node_started"
+        );
+        assert_eq!(
+            refused(&general(
+                None,
+                Some(serde_json::json!({"look": "릴리스 노트", "when": "start"}))
+            )),
+            "mission_gate_node_started"
+        );
+        assert!(
+            apply_plan(
+                &started,
+                &general(Some("deploy"), Some(serde_json::Value::Null)),
+                3
+            )
+            .is_ok()
+        );
+        assert!(
+            apply_plan(
+                &started,
+                &general(None, Some(serde_json::json!("배포된 화면"))),
+                3
+            )
+            .is_ok()
+        );
+    }
+
+    /// PRD node-presets D-04, D-06, B2, B3: a verdict is recorded on every
+    /// general node and on no code node; a node behind a start gate takes
+    /// no worker and no start until the operator passed it, judged as the
+    /// change leaves it: it may be dropped, and dropped it goes back to work
+    /// only once a replan took its gate away, while a node already at work
+    /// is not stopped.
+    #[test]
+    fn every_general_node_records_a_verdict_and_a_start_gate_holds_its_worker() {
+        let verdict = NodePatch {
+            verdict: Some(Some(Verdict::Fail)),
+            checks: Some(Some(Checks {
+                passed: 5,
+                total: 7,
+            })),
+            ..NodePatch::default()
+        };
+        let planned = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("look", NodeKind::General, &[]),
+                node("fix", NodeKind::Change, &[]),
+            ]),
+            2,
+        )
+        .unwrap();
+        let general = apply_patch(&planned.nodes[0], &verdict, 3).unwrap();
+        assert_eq!(general.verdict, Some(Verdict::Fail));
+        assert_eq!(
+            apply_patch(&planned.nodes[1], &verdict, 3).unwrap_err(),
+            "mission_field_kind_invalid"
+        );
+
+        let mut ship = serde_json::to_value(node("ship", NodeKind::General, &[])).unwrap();
+        ship["preset"] = serde_json::json!("deploy");
+        let gated = apply_plan(
+            &mission(),
+            &plan(vec![serde_json::from_value(ship.clone()).unwrap()]),
+            2,
+        )
+        .unwrap();
+        let node = &gated.nodes[0];
+        let refused = |patch: NodePatch| {
+            crate::coordination::split_refusal(&apply_patch(node, &patch, 3).unwrap_err())
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            refused(NodePatch {
+                agent_id: Some(Some("agent-1".into())),
+                ..NodePatch::default()
+            }),
+            "mission_gate_before_start"
+        );
+        assert_eq!(
+            refused(NodePatch {
+                status: Some(NodeStatus::Working),
+                ..NodePatch::default()
+            }),
+            "mission_gate_before_start"
+        );
+        let dropped = apply_patch(
+            node,
+            &NodePatch {
+                status: Some(NodeStatus::Dropped),
+                ..NodePatch::default()
+            },
+            3,
+        )
+        .unwrap();
+        let back = NodePatch {
+            agent_id: Some(Some("agent-1".into())),
+            status: Some(NodeStatus::Working),
+            ..NodePatch::default()
+        };
+        assert_eq!(
+            crate::coordination::split_refusal(&apply_patch(&dropped, &back, 4).unwrap_err()).0,
+            "mission_gate_before_start"
+        );
+        let mut was_dropped = gated.clone();
+        was_dropped.nodes[0] = dropped;
+        ship["gate"] = serde_json::Value::Null;
+        let ungated = apply_plan(
+            &was_dropped,
+            &plan(vec![serde_json::from_value(ship).unwrap()]),
+            5,
+        )
+        .unwrap();
+        assert!(apply_patch(&ungated.nodes[0], &back, 6).is_ok());
+        let mut at_work = node.clone();
+        at_work.status = NodeStatus::Working;
+        assert!(
+            apply_patch(
+                &at_work,
+                &NodePatch {
+                    agent_id: Some(Some("agent-1".into())),
+                    ..NodePatch::default()
+                },
+                4
+            )
+            .is_ok()
+        );
+        let mut passed = node.clone();
+        passed
+            .criteria
+            .iter_mut()
+            .find(|line| line.kind == crate::mission_criteria::CriterionKind::Human)
+            .unwrap()
+            .pass_gate(
+                "계속 진행".into(),
+                crate::mission_criteria::GateVia::Card,
+                3,
+            );
+        assert!(!passed.waits_to_start());
+        let bound = apply_patch(
+            &passed,
+            &NodePatch {
+                agent_id: Some(Some("agent-1".into())),
+                status: Some(NodeStatus::Working),
+                ..NodePatch::default()
+            },
+            4,
+        )
+        .unwrap();
+        assert_eq!(bound.agent_id.as_deref(), Some("agent-1"));
     }
 
     /// PRD mission-node-simple D-16, B26: a failed node of a closed
