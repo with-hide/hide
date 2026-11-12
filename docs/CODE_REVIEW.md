@@ -45,7 +45,8 @@ So every review covers the perspectives below, and names the perspective of each
 ### 5. Ownership and limits
 
 - Whatever the change starts (a process, a thread, a timer, a watcher, a file, a connection) has an owner and ends on every exit path, and when that owner ends.
-- Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and crossing it is a reported failure rather than a larger number.
+- Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and it never grows past that cap.
+  At the cap, a record that keeps accumulating (agent registrations, the session archive, closed missions) makes room by dropping its oldest finished entries, with a diagnostic, rather than refusing the new one; new work is refused, as a reported failure, only when nothing finished can be dropped ([delivery.md](delivery.md), [ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
 - Work added to a high-frequency path says its cost per input, its fan-out and its bound (`docs/PERFORMANCE_TESTING.md`).
 
 ### 6. Tests
