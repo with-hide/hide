@@ -348,7 +348,9 @@ A scene is a screen a letter's bell can meet.
 Every agent declares the same fourteen in `hide-agent-adapter/src/scene.rs` (`rest`, `rest_draft`, `working`, `interrupted`, `session_picker`, `model_picker`, `popup`, `tool_approval`, `question`, `plan_approval`, `trust_dialog`, `hooks_review`, `first_run`, `update_notice`), one named field each, so an agent that leaves one out does not compile and `every_agent_declares_every_scene_with_a_door_or_an_absence_that_says_why` fails one that declares nothing about it.
 A scene is a door, which says how the journey puts the agent on it (a cell that already proves it, keys typed into the pane from rest or from a held turn, a start that meets the screen by itself, or a turn whose model call is scripted), with the finding a survey recorded there (`safe`, `unsafe` or `unknown`, with the version, date, engine read and guard for the first two); or it is an absence with its reason, its evidence in a guide and what would change it.
 `contracts/agent-journey.json` carries all fourteen for every agent and `scripts/agent_journey` reads the doors from it, never from Rust.
-Every finding is `unknown` until a survey closes it, so the adapter's `bell` is still declared by hand; `SceneDeclaration::bell_from_findings` is the derivation it moves to once the findings are measured.
+The findings of the survey of 2026-11-12 are in the declarations (`hide-agent-adapter/src/scene_declarations.rs`), and `docs/INSTALL.md` carries the table they generate ([What a letter's bell does on each screen](INSTALL.md#what-a-letters-bell-does-on-each-screen)): `export_scene_table --markdown` writes the block between its `bell-scenes` markers and `scene_table_is_generated` compares it byte for byte.
+A finding does not decide the bell: `bell` is a reviewed declaration, the table is the evidence it is reviewed against, and the contract keeps only that an agent that rings has its `rest` scene seen safe (`rest_is_safe_for_a_bell`).
+A new agent's row is born with all fourteen scenes `Unknown` and its bell off, which every scene contract accepts.
 
 The ordinary run of the journey (`--scenes check`, the default) does what `letter_menu` did and no more: a scene whose declaration carries a release check is opened, a letter is sent with `--now`, the scene stays open 10 s and is closed, and the letter must arrive once and be answered.
 Only Codex's `/model` picker carries one, because it is the one the journey had measured; a `safe` finding is proven again by the survey's probe, and every other scene reads `not measured` with its reason.
@@ -364,7 +366,20 @@ A survey adds the requests of the scenes it watches to the fake model's budget (
 
 A door that is a start or a scripted turn is not opened by the journey yet: a start needs the agent launched into a state the journey does not prepare (an untrusted folder, an empty account, Codex's hooks unreviewed), and a turn needs a model that calls a tool, which the fake model does not.
 Their cells read `not measured` with that reason in both modes.
-The tool approval, question and plan approval scenes are therefore measured on a real login in a scratch checkout, at two requests an agent, and are not CI-verified.
+The tool approval, question and plan approval scenes are therefore measured on a real login in a scratch checkout, at two requests an agent, with the model choosing the action, and are not CI-verified.
+A first-run and an update-notice screen have no way to be reached yet (the journey sets its accounts up before it starts the agent and turns every updater off), so those cells read `unknown` with that reason.
+
+A scene is measured in one of three ways, and the cell says which:
+
+- The survey on the pinned CLI and the journey's fake model, three repetitions, which is what a `safe` finding is written from.
+- A real login in a scratch checkout, for the screens that need a tool call.
+  The installed build is rarely the pin, so such a cell reads `unknown` with what it saw until it is measured on the pin, because a `safe` finding is written only for the pinned version (`a_safe_finding_was_seen_on_the_pinned_version`).
+- A forced letter (`hide request send --force`), for an agent whose bell is off, because the journey's `--now` letter is refused before it reaches a screen (`kind_not_belled`).
+  A forced letter skips the bell declaration and reads the composer right before it types, so the cell shows whether the composer read held the line and nothing about Hide's draft record or the 30 s quiet period, which a bell-on build adds.
+  Check both on a build with the bell on before turning that agent's bell on.
+
+A finding is closed by copying a survey's record into the declaration and regenerating the table; a hazard that stays open is a row of the table's second block with what would close it.
+The survey's own rules differ from a person's judgment in a few cells, which the declarations record as judged by hand (Codex's interrupted scene, and the working and interrupted scenes of the agents measured with a forced letter); changing the survey's rules is a follow-up, not part of copying a record.
 
 A survey of a scene takes about two minutes, so ten scenes of seven agents is hours, past the 75-minute cap of the journey's lanes: the scene cells do not belong in a pull request's lane or in the nightly fake-model lane's ordinary run.
 A separate nightly lane for them is not wired yet; run one by hand, one agent after another and never beside a cargo build in the same worktree, which relinks `target/debug` under the running daemon:
