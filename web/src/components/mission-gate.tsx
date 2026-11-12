@@ -3,11 +3,9 @@
 // desktop and the phone show one shape and one wording.
 
 import { CheckIcon, EyeIcon, UserRoundIcon } from "lucide-react";
-import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { mergePull } from "../missions";
-import type { MissionGate, MissionNodeBrief } from "../snapshot";
+import type { MissionGate } from "../snapshot";
 import { Button } from "./ui/button";
 
 /**
@@ -37,44 +35,34 @@ function stripTone(state: "ahead" | "open" | "passed"): string {
 }
 
 /**
- * The merge a node's own plan gives the operator (PRD mission-destination
- * D-45, B21), in the gate strip's shape: `👤 머지는 내가` ahead, `머지할 차례
- * PR #n` once its pull request is ready, `✓ 머지함` after the merge.
+ * A merge the core says is the operator's now (PRD mission-destination D-53,
+ * B56), in the gate strip's shape and its turn's tint: `머지할 차례`. The
+ * number and branch are the card's branch line; a merge ahead or done is the
+ * person on that line, never a strip.
  */
-export function MergeStrip({ node, className }: { node: Pick<MissionNodeBrief, "merge" | "pr" | "pr_state">; className?: string }) {
+export function MergeTurnStrip({ className }: { className?: string }) {
   const { t } = useInterfaceTranslation();
-  const state = node.merge?.state ?? "ahead";
-  const words = mergeWords(node, t);
   return (
-    <span className={cn("flex min-w-0 items-start gap-xs rounded-xs px-xs py-xxs text-caption", stripTone(state === "due" ? "open" : state === "merged" ? "passed" : "ahead"), className)} data-node-merge-strip={state}>
-      {state === "merged" ? <CheckIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0" /> : <UserRoundIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0 text-mission-hold" />}
-      <span className="min-w-0 truncate">{words}</span>
+    <span className={cn("flex min-w-0 items-start gap-xs rounded-xs px-xs py-xxs text-caption", stripTone("open"), className)} data-node-merge-turn="true">
+      <UserRoundIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0 text-mission-hold" />
+      <span className="min-w-0 truncate">{t("mission.merge.turn")}</span>
     </span>
   );
 }
 
-/** What the merge strip says, which the card's accessible name says too. */
-export function mergeWords(node: Pick<MissionNodeBrief, "merge" | "pr" | "pr_state">, t: TFunction<"translation">): string {
-  const state = node.merge?.state ?? "ahead";
-  if (state === "merged") return t("mission.merge.merged");
-  if (state === "ahead") return t("mission.merge.mine");
-  const pull = mergePull(node);
-  return `${t("mission.merge.due", { pr: String(pull.number ?? "") })}${pull.more > 0 ? ` +${pull.more}` : ""}`;
-}
-
 /**
- * The card's strip of planned human steps (D-45): the gate's alone as it
- * always was, the operator's merge alone in the same shape, or both on one
- * line joined by `·`, each part in its own state's tint.
+ * The operator's band right under a card's title (D-51, D-53): the gate's
+ * strip as it always was, the merge's turn in the same shape, or both on
+ * one line joined by `·`, each part in its own state's tint.
  */
-export function HumanStrip({ gate, merge, node, className }: { gate: Pick<MissionGate, "state" | "look"> | null; merge: boolean; node: Pick<MissionNodeBrief, "merge" | "pr" | "pr_state">; className?: string }) {
-  if (gate && !merge) return <GateStrip gate={gate} className={className} />;
-  if (!gate) return merge ? <MergeStrip node={node} className={className} /> : null;
+export function OperatorBand({ gate, mergeDue, className }: { gate: Pick<MissionGate, "state" | "look"> | null; mergeDue: boolean; className?: string }) {
+  if (gate && !mergeDue) return <GateStrip gate={gate} className={className} />;
+  if (!gate) return mergeDue ? <MergeTurnStrip className={className} /> : null;
   return (
-    <span className={cn("flex min-w-0 items-start gap-xxs", className)} data-node-human-strip="true">
+    <span className={cn("flex min-w-0 items-start gap-xxs", className)} data-node-band="true">
       <GateStrip gate={gate} className="min-w-0 flex-1" />
       <span aria-hidden="true" className="py-xxs text-caption text-muted-foreground">·</span>
-      <MergeStrip node={node} className="max-w-[60%] shrink-0" />
+      <MergeTurnStrip className="shrink-0" />
     </span>
   );
 }
