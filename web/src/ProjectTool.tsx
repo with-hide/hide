@@ -63,8 +63,9 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
   const repository = useShellStore((s) => projectRepository(s.rest, project));
   const device = useShellStore((s) => machineName(s.rest?.navigator?.devices, project.device_id, t));
   const where = [repository, project.path, device].filter(Boolean).join(" · ");
+  // The name's line sits on the centre of the agents' tab strip beside it, so it lines up with that strip's ⋯.
   return (
-    <div className="flex shrink-0 items-start gap-xxs py-xs pl-md pr-xs" data-lane-header="true">
+    <div className="flex shrink-0 items-start gap-xxs pt-[calc((var(--size-tab-strip)-var(--text-caption)*1.5)/2)] pb-xs pl-md pr-xs" data-lane-header="true">
       <span className="flex min-w-0 flex-1 flex-col" data-lane-scope={project.label} data-lane-scope-kind="project">
         <span className="truncate text-caption font-semibold text-foreground">{project.label}</span>
         <span className="truncate text-micro text-subtle-foreground" title={where} data-project-where="true">{where}</span>

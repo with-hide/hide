@@ -15,7 +15,7 @@ import { RowLetterMark } from "./letter-mark";
 import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
-import { AskLine, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
+import { AskLine, HUNG_CHEVRON, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
 import { AgentPrHover, PrHoverCard } from "./pr-mark";
 import { pullsStaleness, rowPulls } from "../prMark";
 import type { SessionPull } from "../snapshot";
@@ -222,6 +222,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       data-agent-device={device ?? undefined}
       data-depth={depth}
       data-unreachable={unreachable ? "true" : undefined}
+      data-row-selected={selected ? "true" : undefined}
       className={cn("group/row group/turn relative flex rounded-sm text-body", tree ? "items-stretch pr-xs" : "items-start gap-xs py-xs pr-xs", selected ? tree ? "bg-secondary" : "bg-selected" : "hover:bg-accent", (unreachable || rowDimmed(agent) || resting) && "opacity-(--opacity-dimmed)")}
       style={{ paddingLeft: inset }}
     >
@@ -331,7 +332,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
 function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: SidebarTreeSlot; returnFocus: () => void }) {
   const { t } = useInterfaceTranslation();
   if (!tree.popover || tree.open === null) {
-    return <TreeChevron name={agent.identity_label} open={tree.open} onToggle={tree.onToggle} hangs={tree.place.depth > 0} data-tree-chevron={agent.pane_id} />;
+    return <TreeChevron name={agent.identity_label} open={tree.open} onToggle={tree.onToggle} hangs={tree.place.depth > 0} masked data-tree-chevron={agent.pane_id} />;
   }
   const { agents, onOpenChild, onTask, actions } = tree.popover;
   const label = t("agentSessions.tree.expand", { name: agent.identity_label });
@@ -347,8 +348,8 @@ function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: Sideb
         returnFocus={returnFocus}
         triggerLabel={label}
         trigger={
-          <button type="button" tabIndex={-1} aria-label={label} aria-haspopup="dialog" data-tree-chevron={agent.pane_id} className="relative z-10 mt-xs flex h-(--size-sidebar-line) w-full items-center justify-center rounded-xs bg-sidebar text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
-            <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+          <button type="button" tabIndex={-1} aria-label={label} aria-haspopup="dialog" data-tree-chevron={agent.pane_id} className="relative z-10 mt-xs flex h-(--size-sidebar-line) w-full items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+            <span className={HUNG_CHEVRON}><ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></span>
           </button>
         }
       />
