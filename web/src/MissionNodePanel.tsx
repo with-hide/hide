@@ -213,7 +213,7 @@ function Gate({ mission, node }: { mission: Mission; node: MissionNode }) {
   const when = gate.state === "open" ? t("agents.mark.turn") : gate.state === "passed" ? t("mission.gate.passed") : t("mission.gate.when");
   return (
     <section
-      className={cn("flex min-w-0 flex-col gap-xs rounded-md border px-sm py-sm", gate.state === "open" ? "border-mission-hold bg-mission-hold/10" : gate.state === "ahead" ? "border-mission-hold/40 bg-mission-hold/5" : "border-border")}
+      className={cn("flex min-w-0 flex-col gap-xs rounded-md border px-sm py-sm [&>:not(:first-child)]:ml-[calc(var(--size-icon-sm)+var(--spacing-xs))]", gate.state === "open" ? "tone-hold border-mission-hold/40 bg-mission-hold/10" : gate.state === "ahead" ? "tone-hold border-mission-hold/30 bg-mission-hold/5" : "border-border")}
       data-panel-part="gate"
       data-panel-gate={gate.state}
     >

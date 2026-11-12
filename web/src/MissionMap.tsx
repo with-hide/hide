@@ -192,14 +192,20 @@ function useWide(root: HTMLElement | null): boolean {
   return wide;
 }
 
-/** Where the operator will look, over a plan that waits for approval (PRD mission-human-gate D-08, B1). */
+/**
+ * Where the operator will look, over a plan that waits for approval (PRD
+ * mission-human-gate D-08, B1). The rows above it are control-high, so their
+ * words carry slack under them that its caption head does not: `pt-xxs`
+ * puts its words as far below the Conductor's as those are below the head's.
+ */
 function GatePlan({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
-  return <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} onSelect={onSelect} className="px-md pb-sm" />;
+  return <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} onSelect={onSelect} className="px-md pt-xxs pb-sm" />;
 }
 
 /**
  * The head, one line (B24): the mission's state, its time, a cell per node,
- * `n / m` and its verification strength, which only the Conductor changes. A
+ * `n / m` and its verification strength, which only the Conductor changes;
+ * a plan waiting for approval says only how many steps it has. A
  * device that does not answer stops the running time, so no number moves
  * without the record (B35).
  */
@@ -225,7 +231,12 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
         </WorkPill>
       )}
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
-      {mission.nodes.length > 0 ? (
+      {/* A plan waiting for approval has nothing done yet, so it counts its steps as a plan under review does (PlanMap's `검토 · 8단계`). */}
+      {mission.nodes.length > 0 && mission.status === "planning" ? (
+        <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-stat="steps">
+          {t("plan.steps", { count: total })}
+        </span>
+      ) : mission.nodes.length > 0 ? (
         <>
           <ProgressCells tones={missionHeadCells(mission)} fill={HEAD_FILL} size="head" className="max-w-(--size-pr-popover)" />
           <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-stat="done">

@@ -29,8 +29,12 @@ const STATE_WORD: Record<Exclude<ConductorState, "gone" | "unknown">, MessageKey
 
 const STATE_TONE: Partial<Record<ConductorState, string>> = { working: "text-mission-working", deciding: "text-mission-hold" };
 
-/** The row under a work page's head that names who does the work: a mission's Conductor, a plan's own session. */
-export const OWNER_ROW = "mx-md mb-sm flex min-w-0 items-center gap-sm rounded-md border border-border bg-card px-sm py-xs text-body";
+/**
+ * The row under a work page's head that names who does the work: a mission's
+ * Conductor, a plan's own session. One line of words on the page, with no box
+ * of its own: the head above and the list below already set it apart.
+ */
+export const OWNER_ROW = "mx-md mb-sm flex min-w-0 items-center gap-sm text-body";
 
 export function ConductorRow({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();

@@ -18,12 +18,13 @@ export function PracticeInvite({ actions }: { actions: Actions }) {
   const shown = useShellStore((s) => s.rest?.ui_state !== undefined && practiceInvited(s.rest.ui_state));
   if (!shown) return null;
   return (
-    <div className="shrink-0 px-xs py-xs" data-practice-invite="true">
-      <div className="group/invite flex min-w-0 items-center gap-xs rounded-xs pr-xs hover:bg-accent focus-within:bg-accent">
+    <div className="shrink-0 px-sm pt-xs pb-sm" data-practice-invite="true">
+      {/* A banner of its own, tinted with practice's accent, so it never reads as one more project row above it. */}
+      <div className="group/invite flex min-w-0 items-center gap-xs rounded-md border border-(--practice-accent-strong)/25 bg-(--practice-accent-strong)/8 pr-xs hover:bg-(--practice-accent-strong)/12 focus-within:bg-(--practice-accent-strong)/12">
         <button
           type="button"
           onClick={() => openPractice(FIRST_CHAPTER)}
-          className="flex min-w-0 flex-1 items-center gap-sm py-xs pl-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex min-w-0 flex-1 items-center gap-sm py-sm pl-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
           data-practice-invite-open="true"
         >
           <GraduationCapIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-(--practice-accent-strong)" />

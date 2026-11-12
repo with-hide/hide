@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {contrast, failures} from '../check-token-contrast.mjs';
+import {contrast, failures, layerFailures} from '../check-token-contrast.mjs';
 
 // The expected ratios are the ones measured for hide-color-theme's intake,
 // independently of this checker: Tango red, blue, magenta and bright black on
@@ -63,6 +63,29 @@ test('a secondary grey is checked on the background, the sidebar and a card', ()
   assert.equal(found.length, 6, found.join('\n'));
   assert.ok(found.some(line => line.includes('--status-seen')), found.join('\n'));
   assert.ok(found.every(line => line.includes('light') && line.includes('on --card')), found.join('\n'));
+});
+
+test('a layer that draws the same step as the one under it fails, named with its floor for that mode', () => {
+  const step = (value, light) => color(value, light);
+  const tokens = {
+    '--background': step('#0E0F12', '#FFFFFF'),
+    '--sidebar': step('#151619', '#F8F8FA'),
+    '--card': step('#1C1D20', '#F3F3F5'),
+    '--secondary': step('#2A2B2E', '#E8E9EC'),
+    '--accent': step('#343539', '#E0E1E4'),
+    '--dialog': step('#232427', '#FFFFFF'),
+    '--dialog-raised': step('#2F3033', '#E8E9EC'),
+    '--dialog-hover': step('#3C3D40', '#D9DBDD'),
+    '--border': step('#393A3E', '#D9DBDD'),
+  };
+  assert.deepEqual(layerFailures(tokens), []);
+  tokens['--accent'] = {type: 'alias', value: '--secondary'};
+  assert.deepEqual(layerFailures(tokens), [
+    'neutral dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
+    'neutral light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
+    'hide dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
+    'hide light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
+  ]);
 });
 
 test('the doorbell letter words are checked on their band, per theme and mode', () => {

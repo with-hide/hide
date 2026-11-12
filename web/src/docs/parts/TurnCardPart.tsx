@@ -47,7 +47,7 @@ export default function TurnCardPart({ state }: PartProps) {
         {cards.map(({ label, header, agent }) => (
           <div key={agent.id} className="flex flex-col gap-xs" data-docs-card={agent.id}>
             <div className="text-micro text-muted-foreground">{label}</div>
-            <div className="rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-lg">
+            <div className="rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-overlay">
               <TurnCard agent={agent} header={header} onRecord={null} onReadWhole={() => undefined} onAsk={() => undefined} />
             </div>
           </div>

@@ -187,7 +187,8 @@ export function checkout(spec: CheckoutSpec, nowSeconds: number): Checkout {
     github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowSeconds * 1000 },
     tabs: panes.length ? [{ id: `${spec.id}:t1`, workspace_id: spec.workspace, checkout_id: spec.id, label: "1", sidebar: { manual_name: null, number: 1, named_by_operator: false }, empty: false, delegated: false, panes: panes.map(pane) }] : [],
     active_tab_id: panes.length ? `${spec.id}:t1` : null,
-    strip: [],
+    // The tab strip names the one tab, as the core does, so the strip never draws a blank tab beside its +.
+    strip: panes.length ? [{ id: `strip:${spec.id}:t1`, kind: "engine", source_id: `${spec.id}:t1`, label: "1", preview: false }] : [],
     next_tab_label: "2",
   };
 }
