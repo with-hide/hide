@@ -665,8 +665,8 @@ pub enum SshProblem {
     /// so it cannot start `ssh`: only Hide opened again, which runs the new
     /// build, can.
     HideUpdated,
-    /// ssh's connection ended before the device answered, and ssh printed
-    /// no error line about it.
+    /// ssh's output closed before the device answered, as it does when ssh
+    /// exits, and ssh printed no error line about it.
     SilentEnd,
     /// ssh printed nothing, and the device did not answer within the time
     /// ssh has to connect.
@@ -679,7 +679,9 @@ pub enum SshProblem {
     CheckFailed,
     /// Other devices kept every place to dial for the whole wait for a turn.
     Busy,
-    /// ssh printed an error line none of the above names; the row shows it.
+    /// Anything else: ssh printed an error line none of the above names,
+    /// which the row shows, or Hide ended the attempt for a reason of its
+    /// own while ssh still ran.
     Unclassified,
 }
 
@@ -1226,6 +1228,23 @@ pub trait DialedTransport: DeviceTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The classes that name what `Unclassified` once held keep its
+    /// handling: Hide tries each again by itself, and the row offers Retry.
+    #[test]
+    fn every_unexplained_ssh_ending_is_retried_like_an_unclassified_one() {
+        for problem in [
+            SshProblem::SilentEnd,
+            SshProblem::SilentTimeout,
+            SshProblem::ConfigUnreadable,
+            SshProblem::CheckFailed,
+            SshProblem::Busy,
+            SshProblem::Unclassified,
+        ] {
+            assert!(problem.retried(), "{problem:?}");
+            assert_eq!(problem.action(), FailureAction::Retry, "{problem:?}");
+        }
+    }
 
     /// A DNS name in two cases is one server; an IPv6 zone names an
     /// interface and keeps its case.

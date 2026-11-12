@@ -349,6 +349,8 @@ pub(super) fn sign_in(
             return Err(EstablishError::Unsupported(reason));
         }
         Err(ProbeError::Stopped(stop)) => {
+            // Read before the kill below ends ssh's output itself.
+            let closed = pipe.link.output_ended();
             pipe.link.kill();
             if cancel.is_cancelled() {
                 return Err(EstablishError::Helper(ENDED.to_owned()));
@@ -376,6 +378,7 @@ pub(super) fn sign_in(
                 browser_waited: pipe.browser_expired,
                 stopped: match &stop {
                     Stop::Quiet => openssh::Stopped::Quiet,
+                    Stop::Ended(reason) if closed => openssh::Stopped::Closed(reason),
                     Stop::Ended(reason) => openssh::Stopped::Ended(reason),
                 },
             });

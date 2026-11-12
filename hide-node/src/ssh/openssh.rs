@@ -510,7 +510,11 @@ pub enum Stopped<'a> {
     /// ssh still ran, and the device had not answered, when the time ssh
     /// has to connect ran out.
     Quiet,
-    /// The connection ended, for the reason Hide saw.
+    /// ssh's output closed, as it does when ssh exits, for the reason Hide
+    /// saw.
+    Closed(&'a str),
+    /// Hide ended the attempt while ssh still ran, for the reason it gives
+    /// (the device wrote a line too long to read, for one).
     Ended(&'a str),
 }
 
@@ -635,7 +639,8 @@ pub fn classify(ending: &Ending<'_>) -> SshFailure {
                     super::session::SIGN_IN_TIMEOUT.as_secs()
                 ),
             ),
-            Stopped::Ended(reason) => failure(SshProblem::SilentEnd, reason),
+            Stopped::Closed(reason) => failure(SshProblem::SilentEnd, reason),
+            Stopped::Ended(reason) => failure(SshProblem::Unclassified, reason),
         };
     }
     failure(SshProblem::Unclassified, &last())
@@ -870,7 +875,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: false,
-            stopped: Stopped::Ended(OUTPUT_CLOSED),
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         })
     }
 
@@ -940,14 +945,19 @@ mod tests {
                 stopped,
             })
         }
-        let ended = silent(&[], Stopped::Ended(OUTPUT_CLOSED));
+        let ended = silent(&[], Stopped::Closed(OUTPUT_CLOSED));
         assert_eq!(ended.problem, SshProblem::SilentEnd);
         assert_eq!(ended.detail, OUTPUT_CLOSED);
-        let blank = silent(&["  ".to_owned()], Stopped::Ended(OUTPUT_CLOSED));
+        let blank = silent(&["  ".to_owned()], Stopped::Closed(OUTPUT_CLOSED));
         assert_eq!(blank.problem, SshProblem::SilentEnd);
         let quiet = silent(&[], Stopped::Quiet);
         assert_eq!(quiet.problem, SshProblem::SilentTimeout);
         assert_eq!(quiet.detail, "ssh did not sign in within 90 s");
+        // ssh still ran: the end is Hide's, not a silent ssh.
+        let overlong = "the device wrote a line longer than 64 KiB before its helper started";
+        let cut = silent(&[], Stopped::Ended(overlong));
+        assert_eq!(cut.problem, SshProblem::Unclassified);
+        assert_eq!(cut.detail, overlong);
         let said = silent(&["something new went wrong".to_owned()], Stopped::Quiet);
         assert_eq!(said.problem, SshProblem::Unclassified);
         assert_eq!(said.detail, "something new went wrong");
@@ -965,7 +975,7 @@ mod tests {
             proxied: true,
             asking: Asking::Desk,
             browser_waited: false,
-            stopped: Stopped::Ended(OUTPUT_CLOSED),
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(proxied.problem, SshProblem::ProxyFailed);
         let direct = classify(&Ending {
@@ -974,7 +984,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: false,
-            stopped: Stopped::Ended(OUTPUT_CLOSED),
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(direct.problem, SshProblem::Unreachable);
     }
@@ -989,7 +999,7 @@ mod tests {
                 proxied: false,
                 asking: Asking::Desk,
                 browser_waited: false,
-                stopped: Stopped::Ended(OUTPUT_CLOSED),
+                stopped: Stopped::Closed(OUTPUT_CLOSED),
             });
             assert_eq!(failure.problem, SshProblem::SignInNeeded, "{refusal:?}");
         }
@@ -999,7 +1009,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: true,
-            stopped: Stopped::Ended(OUTPUT_CLOSED),
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(browser.problem, SshProblem::BrowserTimeout);
         let old = classify(&Ending {
@@ -1008,7 +1018,7 @@ mod tests {
             proxied: false,
             asking: Asking::OldSsh,
             browser_waited: false,
-            stopped: Stopped::Ended(OUTPUT_CLOSED),
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(old.problem, SshProblem::OpenSshOld);
     }
@@ -1069,7 +1079,7 @@ mod tests {
                 proxied: false,
                 asking: Asking::Nobody,
                 browser_waited: false,
-                stopped: Stopped::Ended(OUTPUT_CLOSED),
+                stopped: Stopped::Closed(OUTPUT_CLOSED),
             })
             .problem
         };
