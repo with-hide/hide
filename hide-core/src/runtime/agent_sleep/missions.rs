@@ -191,7 +191,8 @@ impl Runtime {
     /// Reads the letters `next` holds that `previous` did not, in the order
     /// they were sent: a delegated child's `report` to its parent marks it
     /// to sleep, and its later letter to its parent of any other kind, or a
-    /// `request` or `block` sent to it, drops that mark. Run by every
+    /// letter sent to it that would wake it asleep
+    /// (`Letter::wakes_a_sleeper`), drops that mark. Run by every
     /// publish of the ledger. The ledger this runtime started on is the
     /// first `previous`, so a restart marks nothing for a report it already
     /// held; with none (the ledger could not be read) nothing is new. A
@@ -208,7 +209,7 @@ impl Runtime {
             .take_while(|letter| sequence(letter).is_some_and(|sequence| sequence >= first))
             .collect::<Vec<_>>();
         for letter in new.into_iter().rev() {
-            if matches!(letter.kind.as_str(), "request" | "block") {
+            if letter.wakes_a_sleeper() {
                 self.drop_report_marks(next, letter, |actor| letter.recipient.same_identity(actor));
             }
             let Some(child) = next.agents.iter().rev().find(|record| {

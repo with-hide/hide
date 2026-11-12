@@ -163,21 +163,33 @@ fn letter(runtime: &mut Runtime, to: &str, kind: &str) -> String {
 /// The letter of `kind` from the agent in `from` to the agent in `to`,
 /// published as the store publishes each save.
 fn letter_from(runtime: &mut Runtime, from: &str, to: &str, kind: &str) -> String {
+    letters_from(runtime, &[(from, to, kind)]).remove(0)
+}
+
+/// Each `(from, to, kind)` letter in turn, all published in one save of the
+/// store, as sends that land together are.
+fn letters_from(runtime: &mut Runtime, letters: &[(&str, &str, &str)]) -> Vec<String> {
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    let intent = format!("{to}-{kind}-{}", ledger.next_id);
-    let letter = crate::delivery::mailbox::send(
-        &mut ledger,
-        &actor(from),
-        &actor(to),
-        &intent,
-        "Fix the next bug",
-        kind,
-        None,
-        unix_milliseconds(),
-    )
-    .unwrap();
+    let ids = letters
+        .iter()
+        .map(|(from, to, kind)| {
+            let intent = format!("{to}-{kind}-{}", ledger.next_id);
+            crate::delivery::mailbox::send(
+                &mut ledger,
+                &actor(from),
+                &actor(to),
+                &intent,
+                "Fix the next bug",
+                kind,
+                None,
+                unix_milliseconds(),
+            )
+            .unwrap()
+            .id
+        })
+        .collect();
     runtime.publish_delivery(Arc::new(ledger), true);
-    letter.id
+    ids
 }
 
 fn phase(runtime: &Runtime, pane: &str) -> Option<SleepPhase> {
@@ -825,6 +837,165 @@ fn a_later_letter_drops_a_reports_mark_before_the_child_sleeps() {
     letter(&mut runtime, WORKER, "reply");
     letter(&mut runtime, WORKER, "progress");
     assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// Letters that land in one save are read in the order they were sent: a
+/// report then a progress leaves the child unmarked, a progress then a
+/// report marks it.
+#[test]
+fn letters_saved_together_are_read_in_the_order_they_were_sent() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    letters_from(
+        &mut runtime,
+        &[(WORKER, LEAD, "report"), (WORKER, LEAD, "progress")],
+    );
+    assert!(marks(&runtime).is_empty());
+    letters_from(
+        &mut runtime,
+        &[(WORKER, LEAD, "progress"), (WORKER, LEAD, "report")],
+    );
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// The operator's Done on a person's turn the child declared after its
+/// report would wake it asleep, so it drops the report's mark as a
+/// `request` does; another report of the operator's leaves it.
+#[test]
+fn the_operators_done_on_a_childs_turn_drops_its_reports_mark() {
+    use crate::coordination::human_turn::HumanKind;
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    crate::coordination::apply(
+        &mut ledger,
+        &actor(WORKER),
+        &crate::coordination::Mutation::AskHuman {
+            turn: Some((HumanKind::Auth, "github.com/login".into())),
+        },
+        unix_milliseconds(),
+    )
+    .unwrap();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(marks(&runtime), ["agent-2"], "its turn alone drops nothing");
+    let operator = |runtime: &mut Runtime, intent: &str| {
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        let letter = crate::delivery::mailbox::send(
+            &mut ledger,
+            &Actor::operator(crate::node::TEST_NODE),
+            &actor(WORKER),
+            intent,
+            "운영자가 처리함: 인증",
+            "report",
+            None,
+            unix_milliseconds(),
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), true);
+        letter
+    };
+    let comment = operator(&mut runtime, "view-feedback:1");
+    assert!(!comment.wakes_a_sleeper());
+    assert_eq!(marks(&runtime), ["agent-2"], "a View's comment");
+    let turn = runtime
+        .delivery_state()
+        .unwrap()
+        .human_turns
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let done = operator(
+        &mut runtime,
+        &crate::coordination::human_turn::done_intent(&turn),
+    );
+    assert!(done.wakes_a_sleeper());
+    assert!(marks(&runtime).is_empty(), "the operator's Done");
+}
+
+/// A reported child whose pull request's checks still run is at work: it
+/// keeps its mark and stays awake, and sleeps at the minute after its
+/// checks end.
+#[test]
+fn a_reported_child_sleeps_once_its_pull_requests_checks_end() {
+    use crate::labels::overlay::LabelOverlay;
+    use crate::labels::store::PaneRecord;
+    use crate::model::{AgentWait, PullRequestChecks};
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    // The worker's session opened pull request #7, which its row links.
+    let mut facts = crate::labels::facts::SessionFacts::default();
+    facts.created_prs = vec![crate::labels::facts::CreatedPr {
+        repository: "acme/app".to_owned(),
+        number: 7,
+        sighted_at_unix_ms: 5,
+    }];
+    let records = [(
+        WORKER.to_owned(),
+        PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", &native(WORKER)),
+            facts,
+            ..PaneRecord::default()
+        },
+    )];
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        records.iter().map(|(pane, record)| (pane, record)),
+        true,
+        true,
+    ));
+    let mut pull_request = crate::model::PullRequestSnapshot {
+        closing_issues: Vec::new(),
+        title: "Fix the parser".to_owned(),
+        checks: PullRequestChecks::Pending,
+        number: 7,
+        head_branch: "fix/parser".to_owned(),
+        base_branch: "main".to_owned(),
+        url: "https://github.com/acme/app/pull/7".to_owned(),
+        badge: crate::model::PullRequestBadge::Open,
+        review: None,
+        is_draft: false,
+        merged_at_unix_ms: None,
+        updated_at_unix_ms: Some(10),
+        created_at_unix_ms: Some(5),
+        closed_at_unix_ms: None,
+        head_oid: None,
+        cross_repository: false,
+        work: Default::default(),
+    };
+    pull_request.work.running_checks = 2;
+    let github = |pull_request: &crate::model::PullRequestSnapshot| crate::model::GithubSnapshot {
+        projects: vec![crate::model::GithubProjectSnapshot {
+            root_path: "/work/app".to_owned(),
+            status: crate::model::GithubStatusSnapshot {
+                available: true,
+                ..Default::default()
+            },
+            pull_requests: vec![pull_request.clone()],
+            pull_requests_read: true,
+            ..Default::default()
+        }],
+    };
+    runtime.ingest_github(github(&pull_request));
+    show(&mut runtime, session("w-order:t1", Some("idle")));
+    let wait = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == WORKER)
+            .and_then(|agent| agent.wait)
+    };
+    assert_eq!(wait(&runtime), Some(AgentWait::Checks));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "its checks run");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+
+    pull_request.checks = PullRequestChecks::Passing;
+    pull_request.work.running_checks = 0;
+    runtime.ingest_github(github(&pull_request));
+    assert_eq!(wait(&runtime), None);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
 }
 
 /// Only a delegated child is marked by its report: a root (an agent with

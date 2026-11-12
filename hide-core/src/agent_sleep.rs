@@ -37,9 +37,9 @@ pub const SLEEP_AFTER_CHOICES_HOURS: [u32; 5] = [1, 2, 4, 12, 24];
 /// was the default, which could not tell that default from a 24 the
 /// operator chose.
 pub const DEFAULT_SLEEP_AFTER_HOURS: u32 = 12;
-/// How `core-state.json` writes an Off the operator chose. A build from
-/// before the 24-hour default reads it as Off too: zero is no choice it
-/// knows, and it loads such a value as Off.
+/// How `core-state.json` writes an Off the operator chose, under
+/// `agent_sleep_hours`. No earlier build reads that key, so one run after a
+/// downgrade sleeps after its own default, 24 hours, in place of Off.
 const STORED_OFF: u32 = 0;
 /// The decision runs at most this often; the coordinator tick is 250 ms.
 pub const DECISION_INTERVAL_MS: u64 = 60_000;
