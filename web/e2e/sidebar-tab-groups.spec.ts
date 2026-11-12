@@ -59,7 +59,7 @@ async function startAgent(engine: AgentFixture, daemon: Awaited<ReturnType<typeo
 
 const position = async (row: ReturnType<Page["locator"]>) => (await row.boundingBox())!;
 
-test("a tab with agents draws its guide and segment and no line, named or not, and a second agent joins the segment", { tag: "@platform" }, async ({ page }) => {
+test("the only tab of a checkout draws its segment with no guide and no line, named or not, and a second agent joins the segment", { tag: "@platform" }, async ({ page }) => {
   // The platform's engine owns pane/process existence.
   const engine = await startFixture();
   const daemon = await startHided(engine, "sidebar-tab-segments");
@@ -72,7 +72,7 @@ test("a tab with agents draws its guide and segment and no line, named or not, a
       await expect(tabButton(page, engine.tab)).toHaveCount(0);
       await expect(page.locator("[data-sidebar-tab-name]")).toHaveCount(0);
     };
-    await expect(guide(page, engine.tab)).toHaveCount(1);
+    await expect(guide(page, engine.tab)).toHaveCount(0);
     await expect(agents).toHaveCount(2);
     await noLine();
     await screenshot(page, "sidebar-tab-unnamed");
@@ -86,13 +86,13 @@ test("a tab with agents draws its guide and segment and no line, named or not, a
 
     await withControl(daemon, (control) => closePane(control, engine.panes[1]));
     await expect(agents).toHaveCount(1);
-    await expect(guide(page, engine.tab)).toHaveCount(1);
+    await expect(guide(page, engine.tab)).toHaveCount(0);
     await noLine();
 
-    // A second agent joins the same segment under the same guide.
+    // A second agent joins the same segment, still with no guide: one tab has no other segment to tell it from.
     await startAgent(engine, daemon, engine.tab);
     await expect(agents).toHaveCount(2);
-    await expect(guide(page, engine.tab)).toHaveCount(1);
+    await expect(guide(page, engine.tab)).toHaveCount(0);
     await noLine();
   } finally { daemon.stop(); engine.stop(); }
 });
@@ -133,12 +133,12 @@ test("2-1-2 tab segments align every tab's guide with its rows, and no tab with 
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));
 
-    // Every tab draws a 1px guide under the checkout's own kind glyph.
+    // Every tab draws a 1px guide under the checkout's own kind glyph, which bends into its last row toward the marks.
     const center = kind.x + kind.width / 2;
     for (const tab of tabs) {
       const line = await position(guide(page, tab));
-      expect(line.width).toBe(1);
-      expect(Math.abs(line.x + line.width / 2 - center)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(line.x + 0.5 - center)).toBeLessThanOrEqual(0.5);
+      expect(line.x + line.width).toBeLessThanOrEqual(marks[0]!.x);
     }
     const first = await position(segment(page, engine.tab));
     const middle = await position(segment(page, alone.tab));

@@ -7,7 +7,7 @@ import { Badge } from "./ui/badge";
 /** A badge's marks, each in the colour its rows draw it, with its count. */
 export function BadgeMarks({ parts }: { parts: BadgePart[] }) {
   return parts.map((part) => (
-    <span key={part.state} className="inline-flex items-center gap-xxs" data-badge-part={part.state}>
+    <span key={part.state} className="mark-with-count inline-flex items-center gap-xs" data-badge-part={part.state}>
       <StatusMark mark={part.mark} />
       {part.count}
     </span>

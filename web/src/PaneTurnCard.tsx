@@ -327,7 +327,7 @@ function AnswerItem({ answer, pill, read, onReadWhole, opened = false }: { answe
         {pill ?? <span>{t("paneTurn.answer")}</span>}
         <Clock at={answer.at_unix_ms} />
       </p>
-      <div className="mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-tl-xs bg-success/10 px-sm py-xs">
+      <div className="tone-success mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-tl-xs bg-success/10 px-sm py-xs">
         {answer.line ? <p className="whitespace-normal font-semibold text-foreground [overflow-wrap:anywhere]" data-turn-card-answer-line="true">{answer.line}</p> : null}
         {answer.head && !(open && phase === "ready") ? (
           <p className={cn("line-clamp-2 whitespace-pre-line [overflow-wrap:anywhere]", answer.line ? "text-muted-foreground" : "text-foreground")} data-turn-card-answer-head="true">{answer.head}</p>

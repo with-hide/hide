@@ -84,9 +84,9 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
               </ul>
             ) : null}
             {draft ? (
-              <MentionInput ref={inputRef} draft={draft} label={label} placeholder={placeholder} autoFocus={focused} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm)" onChange={onChange} onCaret={onCaret} onKeyDown={keyDown} />
+              <MentionInput ref={inputRef} draft={draft} label={label} placeholder={placeholder} autoFocus={focused} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)]" onChange={onChange} onCaret={onCaret} onKeyDown={keyDown} />
             ) : (
-              <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
+              <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)] py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
             )}
             <div className="flex min-w-0 items-center gap-xs">
               {onAttach ? (

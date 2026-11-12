@@ -41,7 +41,7 @@ export function contrast(a, b) {
 }
 
 /** The hex a token draws in one color theme and mode, following aliases. */
-function resolve(tokens, name, palette, mode) {
+export function resolve(tokens, name, palette, mode) {
   const token = tokens[name];
   if (!token) throw new Error(`No token named ${name}`);
   if (token.type === 'alias') return resolve(tokens, token.value, palette, mode);
@@ -68,8 +68,50 @@ export function failures(tokens) {
   return found;
 }
 
+// A surface, a line and a hover each have to stand apart from what they sit
+// on, or a layer reads as the one below it: a card on the page, a line on any
+// fill it is drawn on, and a hovered row or control on its resting fill (the
+// hover a modal's controls take is its own step). These are luminance steps,
+// not text: the floor is that the eye can see an edge. A popover and a modal
+// share white in Light and are told apart by --elevation-*, not by fill.
+// [layer, the layer under it, Dark minimum, Light minimum]. Light separates its layers with shadows
+// as well as fills (DESIGN_GUIDE.md, Tokens at a glance), so its fills may sit closer together.
+const LAYER_STEPS = [
+  ['--sidebar', '--background', 1.04, 1.03],
+  ['--card', '--background', 1.08, 1.04],
+  ['--secondary', '--card', 1.08, 1.05],
+  ['--accent', '--secondary', 1.06, 1.04],
+  ['--dialog-hover', '--dialog-raised', 1.06, 1.04],
+  ['--border', '--background', 1.2, 1.2],
+  ['--border', '--card', 1.2, 1.15],
+  ['--border', '--dialog', 1.2, 1.2],
+];
+
+/** Every layer that does not stand apart from the one it sits on, as readable lines. */
+export function layerFailures(tokens) {
+  const found = [];
+  for (const palette of ['neutral', 'hide']) {
+    for (const mode of ['dark', 'light']) {
+      const at = name => resolve(tokens, name, palette, mode);
+      for (const [layer, under, dark, light] of LAYER_STEPS) {
+        const minimum = mode === 'dark' ? dark : light;
+        const ratio = contrast(at(layer), at(under));
+        if (ratio < minimum) found.push(`${palette} ${mode}: ${layer} ${at(layer)} on ${under} ${at(under)} is ${ratio.toFixed(2)}:1, under ${minimum}:1`);
+      }
+    }
+  }
+  return found;
+}
+
 const invoked = process.argv[1] && process.argv[1].endsWith('check-token-contrast.mjs');
 if (invoked) {
+  const layers = layerFailures(readTokens(process.cwd()));
+  if (layers.length) {
+    console.error(`${layers.length} layer step(s) in design/tokens.json do not stand apart:\n`);
+    for (const line of layers) console.error(`  ${line}`);
+    console.error('\nMove the layer to a palette step further from the one it sits on.');
+    process.exit(1);
+  }
   const found = failures(readTokens(process.cwd()));
   if (found.length) {
     console.error(`${found.length} text color(s) in design/tokens.json fall below ${MINIMUM}:1:\n`);
@@ -77,5 +119,5 @@ if (invoked) {
     console.error('\nChoose a value that reaches the minimum; a terminal color used only as a background belongs in BACKGROUND_ONLY.');
     process.exit(1);
   }
-  console.log(`Text contrast holds: every terminal text color and secondary grey reaches ${MINIMUM}:1 in Neutral and Hide, Dark and Light.`);
+  console.log(`Text contrast holds: every terminal text color and secondary grey reaches ${MINIMUM}:1, and every surface, line and hover stands apart from the layer under it, in Neutral and Hide, Dark and Light.`);
 }

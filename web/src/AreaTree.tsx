@@ -645,7 +645,7 @@ function DragPreview({ session }: { session: Extract<DragSession, { phase: "drag
           <div className="absolute inset-0 bg-primary opacity-[var(--opacity-selected-fill)]" />
           <div className="absolute inset-0 border border-primary" />
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="rounded-sm bg-popover px-sm py-xxs text-caption text-foreground shadow-lg">{target.label}</span>
+            <span className="rounded-sm bg-popover px-sm py-xxs text-caption text-foreground shadow-overlay">{target.label}</span>
           </div>
         </div>
       ) : null}
@@ -665,7 +665,7 @@ function FloatingTab({ display, start, reason }: { display: I; start: Point; rea
   }, []);
   return (
     <div
-      className="pointer-events-none fixed z-50 flex max-w-[var(--size-tab-preferred)] translate-x-sm translate-y-sm flex-col gap-xxs rounded-sm border border-border bg-secondary px-sm py-xxs text-caption text-foreground shadow-lg"
+      className="pointer-events-none fixed z-50 flex max-w-[var(--size-tab-preferred)] translate-x-sm translate-y-sm flex-col gap-xxs rounded-sm border border-border bg-secondary px-sm py-xxs text-caption text-foreground shadow-overlay"
       style={{ left: point.x, top: point.y }}
       data-area-drag-tab={display.id} {...data("drag-tab", display.id)}
     >

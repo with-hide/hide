@@ -233,7 +233,7 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
   // operator closes it, with ⌘E, or Escape for an unpinned one (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, view.pinned, actions);
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : "inset-y-0 right-0 z-20";
-  const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-lg" : "";
+  const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-overlay" : "";
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane
@@ -244,6 +244,7 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
       </div>
       {slot > 0 ? (
         <>
+          {/* The divider draws the lane's own surface up to the agents' hairline, so no strip of another fill stands between them, while the lane's content (a page's native view included) starts after it and never covers it. */}
           <LaneDivider kind="lane" label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           <div className="shrink-0" style={{ width: slot }} aria-hidden="true" data-lane-slot="true" />
         </>

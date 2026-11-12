@@ -167,7 +167,7 @@ function HostedPage({ display, workspace, actions, external = false }: { display
         )}
       </div>
       <DeviceFrame width={size?.width ?? null}>
-        <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-lg ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>
+        <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-overlay ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>
           {page?.failure ? (
             <AreaEmpty state="browser-failed" text={t("documents.browserFailed", { address: external ? display.label : address, reason: page.failure })}>
               <Button variant="secondary" onClick={() => command("reload")} data-browser-retry={display.id}>

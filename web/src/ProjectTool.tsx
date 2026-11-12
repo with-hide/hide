@@ -63,12 +63,15 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
   const repository = useShellStore((s) => projectRepository(s.rest, project));
   const device = useShellStore((s) => machineName(s.rest?.navigator?.devices, project.device_id, t));
   const where = [repository, project.path, device].filter(Boolean).join(" · ");
+  // The name's line sits on the centre of the agents' tab strip beside it, so it lines up with that strip's ⋯.
   return (
-    <div className="flex shrink-0 items-start gap-xxs py-xs pl-md pr-xs" data-lane-header="true">
+    <div className="flex shrink-0 items-start gap-xxs pt-[calc((var(--size-tab-strip)-var(--text-caption)*1.5)/2)] pb-xs pl-md pr-xs" data-lane-header="true">
       <span className="flex min-w-0 flex-1 flex-col" data-lane-scope={project.label} data-lane-scope-kind="project">
         <span className="truncate text-caption font-semibold text-foreground">{project.label}</span>
         <span className="truncate text-micro text-subtle-foreground" title={where} data-project-where="true">{where}</span>
       </span>
+      {/* The actions sit in the head's top-right corner, centred on the name's line rather than on both lines. */}
+      <span className="flex h-[calc(var(--text-caption)*1.5)] shrink-0 items-center gap-xxs" data-lane-header-actions="true">
       <Hint label={t("projectTool.settings")}>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("projectTool.settings")} data-project-tool-settings={project.id} onClick={(event) => useUiStore.getState().openProjectSettings(settingsTarget(project), event.currentTarget)}>
           <SettingsIcon />
@@ -80,6 +83,7 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
           <XIcon />
         </Button>
       </Hint>
+      </span>
     </div>
   );
 }
@@ -266,14 +270,15 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
   return (
     <li className="group relative min-w-0 rounded-xs" data-stray-row={stray.checkout_id}>
       <RowOverlayButton aria-label={t("projectTool.strays.open", { name })} onClick={press} data-stray-open={stray.checkout_id} />
-      <span className="pointer-events-none relative flex min-h-(--size-control) min-w-0 items-center gap-xs px-xs py-xs">
-        <Icon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", STRAY_TONE[first.kind])} />
+      {/* The icon and the age stand on the name's line, not between the two lines; the hover actions stay centred on the row. */}
+      <span className="pointer-events-none relative flex min-h-(--size-control) min-w-0 items-start gap-sm px-xs py-xs">
+        <span className="flex h-[calc(var(--text-caption)*1.5)] shrink-0 items-center"><Icon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", STRAY_TONE[first.kind])} /></span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-caption text-foreground" title={name}>{name}</span>
           <span className="truncate text-micro text-muted-foreground" title={words}>{words}</span>
         </span>
-        <span className={cn("shrink-0 text-micro text-muted-foreground", !handedOff && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{handedOff ? null : age}</span>
-        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs", handedOff ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
+        <span className={cn("flex h-[calc(var(--text-caption)*1.5)] shrink-0 items-center text-micro text-muted-foreground", !handedOff && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{handedOff ? null : age}</span>
+        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs self-center", handedOff ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
           <Button size="sm" variant="secondary" disabled={handedOff} onClick={() => { const id = `stray-${crypto.randomUUID()}`; setRequest(id); actions.handOffStray(project.id, stray.checkout_id, id); }} data-stray-hand-off={stray.checkout_id}>
             {sending ? <LoaderCircleIcon role="status" aria-label={t("projectTool.strays.sending")} className="animate-spin" /> : null}
             {t("projectTool.strays.handOff")}
