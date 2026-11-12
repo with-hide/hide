@@ -138,7 +138,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
     // e2e overflow check sets to try other widths (PRD sidebar-typography D-13).
     <div className="relative h-full w-(--sidebar-total) shrink-0" style={columns} data-sidebar-box="true">
       <nav
-        className={cn("absolute inset-y-0 left-0 flex w-(--sidebar-total) bg-sidebar text-foreground", preview !== null && "z-30")}
+        className={cn("absolute inset-y-0 left-0 flex w-(--sidebar-total) border-r border-input bg-sidebar text-foreground", preview !== null && "z-30")}
         style={
           preview === null
             ? undefined
@@ -611,8 +611,9 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
           onClick={press}
         >
           <span>{name}</span>
-          <span className="flex-1 tabular-nums">{count}</span>
-          <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
+          <span className="tabular-nums">{count}</span>
+          {/* The fold mark sits by the words it folds, not at the row's far end. */}
+          <span className="flex shrink-0 items-center text-muted-foreground">
             <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
           </span>
         </RowButton>
