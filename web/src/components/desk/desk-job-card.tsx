@@ -301,7 +301,7 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
       {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" hover={false} aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
       {/* The lead marks take their own column, so the line under the title starts where the title does. */}
       <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-sm gap-y-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
-        <JobLead job={job} />
+        <span className="flex shrink-0 items-center gap-xs"><JobLead job={job} /></span>
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <span className="min-w-0 flex-1 truncate font-medium text-foreground">{job.title}</span>
           <span className="pointer-events-auto relative flex shrink-0 items-center gap-xxs">
