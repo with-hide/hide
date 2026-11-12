@@ -110,11 +110,15 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
         ) : null}
         {detail ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
         {branch || result || turn || long ? (
-          <span className="flex min-w-0 items-center gap-x-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
-            {/* The line takes the row and gives way first, `내 차례` keeping its place at the right (B55). */}
-            {branch ? <BranchLineView line={branch} className="flex-1" /> : result ? <ResultLineView line={result} className="flex-1" /> : <span className="flex-1" />}
-            {turn ? <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag={gate?.state}>{t("agents.mark.turn")}</span> : null}
-            {long ? <span className="shrink-0" data-node-gate-long="true">· {t("mission.gate.long")}</span> : null}
+          <span className="flow-root min-w-0 border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
+            {/* `내 차례` floats at the right end of the first row, as on the desktop, so a line that wraps under its number gives its second row the card's whole width (B55, D-56). */}
+            {turn || long ? (
+              <span className="float-right ml-xs flex h-lh items-center gap-x-xs" data-node-foot-end="true">
+                {turn ? <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag={gate?.state}>{t("agents.mark.turn")}</span> : null}
+                {long ? <span className="shrink-0" data-node-gate-long="true">· {t("mission.gate.long")}</span> : null}
+              </span>
+            ) : null}
+            {branch ? <BranchLineView line={branch} /> : result ? <ResultLineView line={result} /> : null}
           </span>
         ) : null}
       </MissionGraphCard>
