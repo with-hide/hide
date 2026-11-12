@@ -1730,6 +1730,20 @@ mod tests {
                 ssh(SshProblem::Unclassified, "Connection reset by peer"),
                 true,
             ),
+            (
+                ssh(SshProblem::SilentEnd, "the helper's output closed"),
+                true,
+            ),
+            (
+                ssh(SshProblem::SilentTimeout, "ssh did not sign in within 90 s"),
+                true,
+            ),
+            (ssh(SshProblem::ConfigUnreadable, "Bad configuration"), true),
+            (ssh(SshProblem::CheckFailed, "ssh -G did not answer"), true),
+            (
+                ssh(SshProblem::Busy, "4 other devices kept connecting"),
+                true,
+            ),
             (SessionError::Lost("the connection ended".to_owned()), true),
             (ssh(SshProblem::HostKeyChanged, "host key changed"), false),
             (

@@ -365,7 +365,7 @@ impl DialedTransport for SshDevice {
                     return ended();
                 }
                 EstablishError::Ssh(SshFailure {
-                    problem: SshProblem::Unclassified,
+                    problem: SshProblem::Busy,
                     detail: format!(
                         "{MAX_DIALING} other devices kept connecting for {} minutes",
                         TURN_WITHIN.as_secs() / 60
