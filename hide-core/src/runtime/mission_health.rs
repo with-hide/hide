@@ -1124,8 +1124,12 @@ impl Runtime {
             return false;
         };
         let before = mission.nodes[at].clone();
+        let exempt = mission.exempt;
         let node = &mut mission.nodes[at];
         node.attach_pr(pr);
+        if !exempt {
+            node.ensure_ci_line();
+        }
         if let Some(seen) = seen {
             super::missions::note_seen(node, seen, now);
         }
@@ -1613,6 +1617,9 @@ impl Runtime {
                     .and_then(|attention| attention.pr)
                     .ok_or("mission_attention_moved")?;
                 next.attach_pr(pr);
+                if !mission.exempt {
+                    next.ensure_ci_line();
+                }
                 if let Some(seen) = self.pull_seen(mission, pr) {
                     super::missions::note_seen(&mut next, seen, now);
                 }

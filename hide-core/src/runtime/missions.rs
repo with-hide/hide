@@ -415,7 +415,9 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
                 Some(CriterionKind::Human) => WaitingOn::Decision,
                 Some(CriterionKind::Review) => WaitingOn::Review,
                 Some(CriterionKind::Verify) => WaitingOn::Verify,
-                Some(CriterionKind::Ci) => WaitingOn::Ci,
+                // A CI line open for want of a read waits on no run.
+                Some(CriterionKind::Ci) if view.pr_state.is_some() => WaitingOn::Ci,
+                Some(CriterionKind::Ci) => WaitingOn::Conductor,
                 Some(_) => WaitingOn::Worker,
                 None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
                     WaitingOn::Merge
