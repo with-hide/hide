@@ -321,7 +321,7 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
-    asks_answered: bool,
+    asks_answered: Option<crate::links::ledger::AsksAnswered>,
     /// The ledger names the pane's parent, so its header shows its newest
     /// request, whoever sent it, rather than the operator's.
     delegated: bool,
@@ -2563,20 +2563,35 @@ impl LabelWorker {
         // letter answers it, or the operator typing into its pane (B12). The
         // parent is matched by the name the lineage gives it, its wire name,
         // never by the name a bell line shows, which is its pane's title.
+        // The operator's own answer, a person's turn they marked done
+        // included, settles every question; the parent's settles all but the
+        // operator's own steps.
         let parent = ledger.parent_name.as_deref();
-        let asks_answered = turn_events.iter().any(|event| {
-            event.kind == LabelEventKind::Human
-                && (facts.feeds_work(event, parent)
-                    || matches!(
-                        facts.requester_at(event.offset),
-                        Some(super::facts::Requester::Operator)
-                    )
-                    || parent.is_some_and(|parent| {
-                        facts
-                            .letter_of(event)
-                            .is_some_and(|letter| letter.from == parent && letter.answers())
-                    }))
-        });
+        let answered_by = |event: &LabelEvent| {
+            use crate::links::ledger::AsksAnswered;
+            if event.kind != LabelEventKind::Human {
+                return None;
+            }
+            let letter = facts.letter_of(event);
+            if matches!(
+                facts.requester_at(event.offset),
+                Some(super::facts::Requester::Operator)
+            ) || letter.as_ref().is_some_and(|letter| letter.operator)
+                || (parent.is_none() && facts.feeds_work(event, None))
+            {
+                return Some(AsksAnswered::Operator);
+            }
+            let parent = parent?;
+            (facts.feeds_work(event, Some(parent))
+                || letter.is_some_and(|letter| letter.from == parent && letter.answers()))
+            .then_some(AsksAnswered::Parent)
+        };
+        let answers: Vec<_> = turn_events.iter().filter_map(answered_by).collect();
+        let asks_answered = answers
+            .iter()
+            .copied()
+            .find(|by| *by == crate::links::ledger::AsksAnswered::Operator)
+            .or(answers.first().copied());
         let turn_witness = events
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)

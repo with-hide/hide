@@ -70,6 +70,8 @@ const words = {
   "paneTurn.mark.question": ["Question", "질문", "質問", "提问"],
   "paneTurn.laterBy": ["Next request from {{name}}", "그 뒤 요청 · {{name}}", "その後の依頼・{{name}}", "之后的请求 · {{name}}"],
   "record.waiting": ["Waiting on you", "나를 기다리는 것", "確認待ち", "等你处理"],
+  "record.folded": ["Settled {{count}}", "정리됨 {{count}}", "整理済み {{count}}", "已整理 {{count}}"],
+  "record.foldedReopen": ["Reopen", "다시 열기", "もう一度開く", "重新打开"],
   "openAsks.mark": ["{{count}} waiting on you", "나를 기다리는 것 {{count}}개", "確認待ち {{count}}件", "等你处理 {{count}} 项"],
   "record.flowNow": ["now", "지금", "現在", "当前"],
   "record.flowRequests": ["{{count}} requests", "요청 {{count}}개", "依頼 {{count}}", "请求 {{count}}"],

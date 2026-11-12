@@ -32,7 +32,7 @@ mod session_reads;
 pub(crate) use ledger::main_flow;
 pub use session_reads::{ListedSession, MainFlow, SessionFile, SessionPage, named_by_goal};
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -2652,6 +2652,15 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         let plans = if version < 9 { ledger::PLAN_SCHEMA } else { "" };
         let named = if version < 10 { NAMED_SCHEMA } else { "" };
         let reviews = if version < 13 { REVIEW_SCHEMA } else { "" };
+        // A test that rolls a store back to an earlier version keeps the
+        // columns, as an earlier `made` does.
+        let folds = if version >= 16
+            || (version > 0 && has_column(connection, "ledger_missed", "operator_only")?)
+        {
+            ""
+        } else {
+            ledger::ASK_FOLD_SCHEMA
+        };
         // A store before version 12 is read again for `made`, which also
         // gives one before version 10 its named pull requests; one before
         // version 14 for the sessions' `git commit` calls (PRD
@@ -2676,7 +2685,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} {folds} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

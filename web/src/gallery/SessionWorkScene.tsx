@@ -27,7 +27,7 @@ const pr = (number: number, title: string, state: string, source: WorkSession, s
 /** One PR of a session's list as the core lays it: its own when `holder` is null, else a descendant's. */
 const listed = (number: number, title: string, state: PrState, holder: string | null = null): SessionPull => ({ url: `https://example.invalid/pull/${number}`, number, title, state, own: holder === null, holders: holder ? [holder] : [], stale: false, last_read_at_unix_ms: AT });
 const flow = (id: string, name: string, minutes: number, requests: WorkRequest[], result: WorkFlow["result"]): WorkFlow => ({ id, name, at_unix_ms: AT + minutes * MIN, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
-const empty = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
+const empty = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
 // Invented content matching the user-approved record design.
 const CHILDREN = [
   ["기록 화면 조사", "claude", "done", []],

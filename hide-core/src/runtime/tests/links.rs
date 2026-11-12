@@ -310,7 +310,7 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
             at_unix_ms: CREATED + 1,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
-            asks_answered: true,
+            asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -318,6 +318,7 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
                     kind: MissedKind::Problem,
                     text: "One remote check remains".into(),
                     same_as: None,
+                    operator_only: None,
                 }],
                 ..Default::default()
             },

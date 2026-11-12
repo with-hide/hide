@@ -272,7 +272,7 @@ export function overviewWorld(now: number): OverviewWorld {
   } as SnapshotRest;
 
   const request = (offset: number, text: string, ago: number, summary: string | null = null) => ({ offset, text, at_unix_ms: now - ago, author: "operator" as const, images: 0, summary, answers: null, letter_from: null, count: 1, goal_command: false });
-  const blank = { asks: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
+  const blank = { asks: [], folded_asks: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
   const child = (pane: string, title: string): SessionRecord => ({
     ...blank,
     session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle",

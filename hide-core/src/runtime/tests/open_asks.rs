@@ -35,6 +35,7 @@ fn ask(id: &str, text: &str, at: u64) -> MissedWork {
         issue_number: None,
         backlog_key: None,
         creating: false,
+        reason: None,
     }
 }
 

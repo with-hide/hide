@@ -3259,7 +3259,7 @@ export type WorkSession = { device_id: string; agent: string; session_id: string
  */
 export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; images: number; summary: string | null; answers: string | null; letter_from: string | null; count: number; repeats?: number[]; goal_command: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
-export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
+export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog" | "folded"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean; /** Why Hide AI folded it; only on a folded question. */ reason?: string };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; source: WorkSession; source_name: string };
 export type TurnOutcome = { end: WorkEnd; line: string; at_unix_ms: number };
 /** Every pull request a flow made, merged or closed, from Hide's stored PR facts (PRD session-record-fact-status D-01). */
@@ -3285,7 +3285,7 @@ export type PrGroup = { child: WorkSession | null; name: string; pulls: SessionP
 export type SessionRecord = {
   session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null;
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
-  status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
+  status: RecordStatus | null; asks: MissedWork[]; /** The current flow's questions Hide AI folded (status-model.md, A question still waiting). */ folded_asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
   outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; artifacts: string[]; children: SessionRecord[];
   /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
   plan?: PlanView;

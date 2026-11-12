@@ -777,6 +777,7 @@ impl Doorbell {
             let writer = crate::labels::input::Letter {
                 from: crate::coordination::wire_name(&ledger, &letter.sender),
                 kind: letter.kind.clone(),
+                operator: letter.sender.operator_owned(),
             };
             match deliver(
                 owner,
