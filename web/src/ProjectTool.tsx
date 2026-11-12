@@ -270,14 +270,15 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
   return (
     <li className="group relative min-w-0 rounded-xs" data-stray-row={stray.checkout_id}>
       <RowOverlayButton aria-label={t("projectTool.strays.open", { name })} onClick={press} data-stray-open={stray.checkout_id} />
-      <span className="pointer-events-none relative flex min-h-(--size-control) min-w-0 items-center gap-xs px-xs py-xs">
-        <Icon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", STRAY_TONE[first.kind])} />
+      {/* The icon and the age stand on the name's line, not between the two lines; the hover actions stay centred on the row. */}
+      <span className="pointer-events-none relative flex min-h-(--size-control) min-w-0 items-start gap-sm px-xs py-xs">
+        <span className="flex h-[calc(var(--text-caption)*1.5)] shrink-0 items-center"><Icon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", STRAY_TONE[first.kind])} /></span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-caption text-foreground" title={name}>{name}</span>
           <span className="truncate text-micro text-muted-foreground" title={words}>{words}</span>
         </span>
-        <span className={cn("shrink-0 text-micro text-muted-foreground", !handedOff && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{handedOff ? null : age}</span>
-        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs", handedOff ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
+        <span className={cn("flex h-[calc(var(--text-caption)*1.5)] shrink-0 items-center text-micro text-muted-foreground", !handedOff && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{handedOff ? null : age}</span>
+        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs self-center", handedOff ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
           <Button size="sm" variant="secondary" disabled={handedOff} onClick={() => { const id = `stray-${crypto.randomUUID()}`; setRequest(id); actions.handOffStray(project.id, stray.checkout_id, id); }} data-stray-hand-off={stray.checkout_id}>
             {sending ? <LoaderCircleIcon role="status" aria-label={t("projectTool.strays.sending")} className="animate-spin" /> : null}
             {t("projectTool.strays.handOff")}
