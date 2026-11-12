@@ -284,6 +284,8 @@ fn mission(
             key: "fix".into(),
             title: "Fix it".into(),
             kind: NodeKind::Change,
+            preset: None,
+            icon: None,
             depends_on: Vec::new(),
             status: NodeStatus::Working,
             blocked: None,

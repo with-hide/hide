@@ -80,7 +80,10 @@ pub(crate) struct Analysis {
     /// operator is to answer or do when it ended on a question.
     pub(crate) line: String,
     pub(crate) end: LabelEnd,
-    pub(crate) work: Option<crate::links::ledger::TurnJudgment>,
+    /// At a turn's end, its work as the judgment answered it; the worker
+    /// checks its questions against the turn's answer before the ledger
+    /// keeps it.
+    pub(crate) work: Option<super::context_label::JudgedWork>,
     /// With a `replace`, the result of the flow it closes in one line
     /// (PRD session-record-fact-status D-02): the record shows it in place
     /// of that flow's last stopped turn.
@@ -809,6 +812,24 @@ pub(crate) fn work_context(ledger: &crate::links::ledger::LedgerContext) -> Stri
     let artifacts = serde_json::json!(ledger.artifacts).to_string();
     redact(&format!(
         "\n<open-missed>{missed}</open-missed>\n<recorded-artifacts>{artifacts}</recorded-artifacts>"
+    ))
+}
+
+/// The turn's own answer, its assistant messages after its newest request,
+/// masked and without code as the context gives them: what a question's
+/// quoted sentence is looked for in.
+pub(crate) fn turn_answer(events: &[LabelEvent]) -> String {
+    let start = events
+        .iter()
+        .rposition(|event| event.kind == LabelEventKind::Human)
+        .map_or(0, |index| index + 1);
+    mask(&strip_code_fences(
+        &events[start..]
+            .iter()
+            .filter(|event| event.kind == LabelEventKind::Assistant)
+            .map(|event| event.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
     ))
 }
 

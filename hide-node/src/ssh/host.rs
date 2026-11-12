@@ -1380,6 +1380,12 @@ pub(super) struct ChildLink {
 const MAX_START_LINE: usize = 64 * 1024;
 
 impl ChildLink {
+    /// Whether the child's standard output has ended: ssh closed its side,
+    /// as it does when it exits, rather than this side stopping it.
+    pub(super) fn output_ended(&self) -> bool {
+        self.stdout_ended.is_some()
+    }
+
     pub(super) fn start(
         target: &str,
         mut child: hide_platform::process::OwnedChild,

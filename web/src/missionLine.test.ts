@@ -78,8 +78,8 @@ it("says the line in words, its pull request's state and the operator's merge in
 });
 
 it("gives a node that changes no code its result line: its kind until done, lit while it works, then the conclusion or the verdict (D-54, B57)", () => {
-  const research = node({ kind: "research", delivery: null, branch: null });
-  const verify = node({ kind: "verify", delivery: null, branch: null });
+  const research = node({ kind: "general", preset: "research", delivery: null, branch: null });
+  const verify = node({ kind: "general", preset: "verify", delivery: null, branch: null });
   expect([branchLine(research, "main"), branchLine(verify, "main")]).toEqual([null, null]);
   expect(resultLine(node())).toBeNull();
   expect(resultLine({ ...research, status: "planned" })).toEqual({ kind: "research", working: false, shows: "kind" });

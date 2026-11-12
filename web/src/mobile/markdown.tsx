@@ -14,6 +14,10 @@
 // that is not on the list, or carries an attribute or an address that is not,
 // stays as the text it was, and an HTML comment is not drawn.
 //
+// A table is the one drawing every surface shares: the document view's Live
+// mode draws a top-level table through this renderer, with `html` on, so a
+// table reads the same on the phone, on a pull request's card and in a file.
+//
 // A fenced block whose language is `mermaid` is drawn as its diagram, shrunk
 // to the width it is given; until the picture is in, and when Mermaid cannot
 // read it, it is the code block it would otherwise be, the second under one
@@ -36,10 +40,19 @@ const TARGETS = new Set(["URL", "LinkTitle", "LinkLabel"]);
 const HEADINGS = /^(ATXHeading[1-6]|SetextHeading[12])$/;
 
 /** One parse: the source and whether its HTML is drawn. */
-type Source = { text: string; html: boolean };
+/** Which address a link may carry, or null when it stays its text. */
+export type LinkRule = (raw: string) => string | null;
 
-export function renderMarkdown(text: string, options: { html?: boolean } = {}): ReactNode {
-  return blocks(markdown.parse(text).topNode, { text, html: options.html === true });
+/** One parse: the source, whether its HTML is drawn, the link rule, and whether the run is a table cell's. */
+type Source = { text: string; html: boolean; link: LinkRule; cell?: boolean };
+
+/**
+ * `link` says which addresses a drawn link keeps: the web's by default (the
+ * phone and the pull request card); the document view's Live mode gives its
+ * own rule, which keeps a relative file for its modifier-click to open.
+ */
+export function renderMarkdown(text: string, options: { html?: boolean; link?: LinkRule } = {}): ReactNode {
+  return blocks(markdown.parse(text).topNode, { text, html: options.html === true, link: options.link ?? webAddress });
 }
 
 function childrenOf(node: SyntaxNode): SyntaxNode[] {
@@ -51,7 +64,7 @@ function childrenOf(node: SyntaxNode): SyntaxNode[] {
 /** A container's blocks; the whitespace between them is layout, not text. An HTML block opens or closes an element around the blocks that follow it. */
 function blocks(node: SyntaxNode, source: Source): ReactNode[] {
   if (!source.html) return childrenOf(node).map((child, index) => block(child, source, index));
-  const tree = new HtmlTree();
+  const tree = new HtmlTree(source.link);
   childrenOf(node).forEach((child) => {
     if (child.name === "HTMLBlock" || child.name === "CommentBlock") tree.html(source.text.slice(child.from, child.to), true);
     else tree.add(block(child, source, tree.key()));
@@ -109,11 +122,7 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
     case "HorizontalRule":
       return <hr key={key} className="border-border" />;
     case "Table":
-      return (
-        <table key={key} className="w-full border-collapse">
-          <tbody>{childrenOf(node).map((row, index) => tableRow(row, source, index))}</tbody>
-        </table>
-      );
+      return <MarkdownTable key={key} table={node} source={source} />;
     default:
       // A paragraph, a task, and anything the grammar knows that has no drawing of its own (raw HTML, a link reference).
       return (
@@ -124,17 +133,93 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
   }
 }
 
-function tableRow(row: SyntaxNode, source: Source, key: number): ReactNode {
-  if (row.name !== "TableHeader" && row.name !== "TableRow") return null;
-  const Cell = row.name === "TableHeader" ? "th" : "td";
-  return (
-    <tr key={key}>
-      {row.getChildren("TableCell").map((cell, index) => (
-        <Cell key={index} className={`border border-border px-sm py-xs text-left align-top wrap-anywhere ${Cell === "th" ? "font-semibold" : ""}`}>
-          {inline(cell, source)}
+type ColumnAlign = "left" | "center" | "right" | null;
+
+const ALIGN_CLASS = { left: "text-left", center: "text-center", right: "text-right" } as const;
+
+/** The delimiter row's alignment of each column: `:---` left, `:---:` centred, `---:` right, `---` the reading direction's start. */
+function columnAligns(row: string): ColumnAlign[] {
+  let marks = row.trim();
+  if (marks.startsWith("|")) marks = marks.slice(1);
+  if (marks.endsWith("|")) marks = marks.slice(0, -1);
+  return marks.split("|").map((cell) => {
+    const mark = cell.trim();
+    const left = mark.startsWith(":");
+    const right = mark.length > 1 && mark.endsWith(":");
+    return left && right ? "center" : right ? "right" : left ? "left" : null;
+  });
+}
+
+/**
+ * A row's cells in column order. The grammar gives an empty cell no node, so
+ * a cell is what lies between two pipes: `| a |  | c |` is three cells, the
+ * middle one empty, and a row without its outer pipes reads the same.
+ */
+function rowCells(row: SyntaxNode): (SyntaxNode | null)[] {
+  const cells: (SyntaxNode | null)[] = [];
+  let cell: SyntaxNode | null = null;
+  let opened = false;
+  for (const child of childrenOf(row)) {
+    if (child.name === "TableCell") cell = child;
+    else if (child.name === "TableDelimiter") {
+      if (opened || cell) cells.push(cell);
+      cell = null;
+      opened = true;
+    }
+  }
+  if (cell) cells.push(cell);
+  return cells;
+}
+
+/**
+ * A GFM table, the one drawing of it the phone, the pull request card and the
+ * document view's Live mode share: as many columns as the header has cells (a
+ * shorter row is filled with empty cells, a longer one cut, as GitHub draws
+ * it), each aligned as its delimiter mark says, under a quiet header and a
+ * hairline between rows. Columns take the width their text needs and wrap
+ * inside the width they are given: a word of prose stays whole, Korean
+ * included, while code, a link and a bare address (a path, a hash, a URL)
+ * break anywhere, so a long one wraps inside its column. A long token in
+ * plain prose is the one thing that can make the table wider than its place,
+ * and then the table scrolls sideways inside it, never the page.
+ */
+function MarkdownTable({ table, source }: { table: SyntaxNode; source: Source }) {
+  // The grammar starts every table with its header row.
+  const header = table.getChild("TableHeader")!;
+  const cellSource = { ...source, cell: true };
+  const columns = rowCells(header).length;
+  const delimiter = table.getChild("TableDelimiter");
+  const aligns = delimiter ? columnAligns(source.text.slice(delimiter.from, delimiter.to)) : [];
+  const row = (node: SyntaxNode, Cell: "th" | "td") => {
+    const cells = rowCells(node);
+    return Array.from({ length: columns }, (_, index) => {
+      const cell = cells[index] ?? null;
+      const align = ALIGN_CLASS[aligns[index] ?? "left"];
+      return (
+        <Cell key={index} className={`px-sm py-xs align-top break-words break-keep [&_a]:wrap-anywhere [&_code]:wrap-anywhere [&_[data-markdown-url]]:wrap-anywhere ${align} ${Cell === "th" ? "font-medium text-subtle-foreground" : ""}`}>
+          {cell ? inline(cell, cellSource) : null}
         </Cell>
-      ))}
-    </tr>
+      );
+    });
+  };
+  const rows = table.getChildren("TableRow");
+  return (
+    <div className="max-w-full overflow-x-auto">
+      <table className="border-collapse" data-markdown-table="true">
+        <thead>
+          <tr className="border-b border-border">{row(header, "th")}</tr>
+        </thead>
+        {rows.length > 0 ? (
+          <tbody>
+            {rows.map((node, index) => (
+              <tr key={index} className="border-b border-border last:border-b-0">
+                {row(node, "td")}
+              </tr>
+            ))}
+          </tbody>
+        ) : null}
+      </table>
+    </div>
   );
 }
 
@@ -191,7 +276,7 @@ function codeOf(node: SyntaxNode, text: string): string {
 /** A run of inline text: what lies between the child nodes is the text itself. With HTML drawn, an inline tag opens or closes an element around what follows it in the run. */
 function inline(node: SyntaxNode, source: Source, skip: ReadonlySet<string> = MARKS): ReactNode[] {
   const { text } = source;
-  const tree = source.html ? new HtmlTree() : null;
+  const tree = source.html ? new HtmlTree(source.link) : null;
   const out: ReactNode[] = [];
   const add = (part: ReactNode) => (tree ? tree.add(part) : out.push(part));
   let at = node.from;
@@ -220,16 +305,19 @@ function span(node: SyntaxNode, source: Source, key: number): ReactNode {
       );
     case "Strikethrough":
       return <s key={key}>{inline(node, source)}</s>;
-    case "InlineCode":
+    case "InlineCode": {
+      // In a table cell `\|` is the cell's pipe, and GFM reads it as `|` inside code too.
+      const code = inline(node, source);
       return (
         <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">
-          {inline(node, source)}
+          {source.cell ? code.map((part) => (typeof part === "string" ? part.replaceAll("\\|", "|") : part)) : code}
         </code>
       );
+    }
     case "Link":
     case "Image": {
       const url = node.getChild("URL");
-      const href = source.html && url ? (node.name === "Image" ? imageAddress : webAddress)(text.slice(url.from, url.to)) : null;
+      const href = source.html && url ? (node.name === "Image" ? imageAddress : source.link)(text.slice(url.from, url.to)) : null;
       const words = inline(node, source, LINK_PARTS);
       if (href && node.name === "Image") return <Picture key={key} src={href} alt={words.map((part) => (typeof part === "string" ? part : "")).join("")} />;
       if (href) return <WebLink key={key} href={href}>{words}</WebLink>;
@@ -237,6 +325,13 @@ function span(node: SyntaxNode, source: Source, key: number): ReactNode {
     }
     case "Autolink":
       return <span key={key}>{inline(node, source)}</span>;
+    case "URL":
+      // A bare address, which a table cell lets break anywhere.
+      return (
+        <span key={key} data-markdown-url="true">
+          {text.slice(node.from, node.to)}
+        </span>
+      );
     case "HardBreak":
       return <br key={key} />;
     case "Escape":
@@ -326,7 +421,7 @@ function privateHost(hostname: string): boolean {
 }
 
 /** One tag read against the allow-list, or null when it stays text: an unknown tag, an attribute it may not carry, an address that is not the web's. */
-function readTag(raw: string): Tag | null {
+function readTag(raw: string, link: LinkRule): Tag | null {
   const match = /^<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*?)\s*\/?\s*>$/.exec(raw);
   if (!match) return null;
   const name = match[2]!.toLowerCase();
@@ -344,7 +439,7 @@ function readTag(raw: string): Tag | null {
     if (!allowed.includes(attr)) return null;
     const value = (found[2] ?? found[3] ?? found[4] ?? "").replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, entity: string) => ENTITIES[entity]!);
     if (attr === "src" || attr === "href") {
-      const address = (attr === "src" ? imageAddress : webAddress)(value);
+      const address = (attr === "src" ? imageAddress : link)(value);
       if (!address) return null;
       attrs[attr] = address;
     } else if (attr === "width" || attr === "height") {
@@ -375,6 +470,8 @@ class HtmlTree {
   private stack: Frame[] = [{ tag: null, children: [] }];
   private next = 0;
 
+  constructor(private readonly link: LinkRule) {}
+
   key(): number {
     this.next += 1;
     return this.next;
@@ -389,7 +486,7 @@ class HtmlTree {
   html(raw: string, block: boolean): void {
     for (const piece of htmlPieces(raw)) {
       if (piece.startsWith("<!--")) continue;
-      const tag = piece.startsWith("<") ? readTag(piece) : null;
+      const tag = piece.startsWith("<") ? readTag(piece, this.link) : null;
       if (!tag) {
         // An HTML block's text is not Markdown: its line breaks and indents are layout, as GitHub draws them.
         const words = block && !piece.startsWith("<") ? piece.replace(/\s+/g, " ") : piece;

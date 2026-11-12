@@ -127,6 +127,21 @@ export type PhoneMissionNode = MissionNodeBrief & {
   escalation: WorkerEscalation | null;
 };
 
+/**
+ * A step as the frame carries it (PRD node-presets D-11): a general step of the `research` or `verify` preset keeps that preset's
+ * name as its kind, so a bundle from before general steps names it as before, and a Hide from before them sends only those names.
+ */
+export type PhoneMissionNodeOnWire = Omit<PhoneMissionNode, "kind"> & { kind: PhoneMissionNode["kind"] | "research" | "verify" };
+export type PhoneMissionOnWire = Omit<PhoneMission, "nodes"> & { nodes: PhoneMissionNodeOnWire[] };
+
+/** The frame's missions with every step read as this bundle names it: an old kind name is a general step of that preset. */
+export function missionsOnWire(items: readonly PhoneMissionOnWire[]): PhoneMission[] {
+  return items.map((mission) => ({
+    ...mission,
+    nodes: mission.nodes.map((node) => (node.kind === "research" || node.kind === "verify" ? { ...node, kind: "general", preset: node.kind } : { ...node, kind: node.kind })),
+  }));
+}
+
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */
 export type PhoneDecisionView = { device_id: string; display_id: string; view: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string; reopens?: DecisionReopen[] };
 
@@ -289,7 +304,7 @@ export type ServerFrame =
   /** `omitted` counts the agents hided left out to keep the frame within one relay message. */
   | { type: "agents"; groups: AgentGroup[]; omitted?: number; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
   /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read; `omitted` counts the ones past the frame's caps. */
-  | { type: "missions"; items: PhoneMission[]; failed: boolean; omitted?: number }
+  | { type: "missions"; items: PhoneMissionOnWire[]; failed: boolean; omitted?: number }
   /** hided's answer to `answer_mission`, `ask_mission_material` and `reopen_mission_view`; what the core does with it comes back on the mission itself. */
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */

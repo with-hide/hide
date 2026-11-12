@@ -123,7 +123,7 @@ it("ends the head with where results go and one line of the options this mission
     expect([...line.closest("[data-mission-summary]")!.querySelectorAll<HTMLElement>("button, [role=button], select, input")].map((control) => control.dataset.missionMore)).toEqual(["mission-1"]);
   } finally { await changed.unmount(); }
   // A scope `pr` mission from before verification strength opens with who merges and names no strength; one with no code node names no destination.
-  const before = await mount({ items: [mission({ nodes: [node("a", { kind: "research", delivery: null })], destination: "main" })] });
+  const before = await mount({ items: [mission({ nodes: [node("a", { kind: "general", preset: "research", delivery: null })], destination: "main" })] });
   try {
     expect(before.q("[data-mission-destination]")).toBeNull();
     expect([...before.container.querySelectorAll<HTMLElement>("[data-mission-head-option]")].map((option) => option.textContent)).toEqual(["Up to PRs · you merge them all", "Worktree cleanup", "4 at once"]);
@@ -639,11 +639,11 @@ it("draws what the operator does right under the title: the gate's strip, `머�
 
 it("ends a node that changes no code in its kind until it is done, then research's conclusion and verify's verdict, and draws a planned card with no time (PRD mission-destination D-54, D-55, B57, B58)", async () => {
   const nodes = [
-    node("cause", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
-    node("look", { kind: "research", delivery: null, status: "working" }),
-    node("pass", { kind: "verify", delivery: null, status: "done", verdict: "pass", checks: { passed: 7, total: 7 } }),
-    node("fail", { kind: "verify", delivery: null, status: "done", verdict: "fail", checks: { passed: 5, total: 7 } }),
-    node("later", { kind: "verify", delivery: null, status: "planned", worker: { agent: "codex", model: "gpt-6.1-sol", effort: "high", effort_auto: false } }),
+    node("cause", { kind: "general", preset: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
+    node("look", { kind: "general", preset: "research", delivery: null, status: "working" }),
+    node("pass", { kind: "general", preset: "verify", delivery: null, status: "done", verdict: "pass", checks: { passed: 7, total: 7 } }),
+    node("fail", { kind: "general", preset: "verify", delivery: null, status: "done", verdict: "fail", checks: { passed: 5, total: 7 } }),
+    node("later", { kind: "general", preset: "verify", delivery: null, status: "planned", worker: { agent: "codex", model: "gpt-6.1-sol", effort: "high", effort_auto: false } }),
   ];
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
@@ -672,7 +672,7 @@ it("draws a card's text at the regular weight, though the card is a medium-weigh
   const nodes = [
     node("core", { title: "Schema", status: "working", pr: 41, pr_state: "pending", prs: [{ number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", state: "ahead", prs: [41] } }),
     node("deploy", { title: "Deploy", status: "done", pr: 42, pr_state: "mergeable", merge: { by: "operator", state: "due", prs: [42] } }),
-    node("cause", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
+    node("cause", { kind: "general", preset: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
   ];
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
@@ -690,7 +690,7 @@ it("shows on a card's hover its title row and one row per fact under a grey labe
   const nodes = [
     node("core", { title: "A long title that the card cuts", status: "working", change: "split in two", branch: "feat/core-split", line: "replay 19/31", pr: 41, pr_state: "pending", prs: [{ number: 40, state: "closed", url: null }, { number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", why: "DB change", state: "ahead", prs: [41] } }),
     node("screen", { status: "working", branch: "feat/screen", pr: 42, pr_state: "draft", base_pr: 41, prs: [{ number: 42, state: "draft", url: null }] }),
-    node("research", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
+    node("research", { kind: "general", preset: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
   ];
   const rows = (hover: HTMLElement) => [...hover.querySelectorAll("dt")].map((label) => [label.textContent, (label.nextElementSibling as HTMLElement).dataset.nodeHoverPart]);
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
@@ -759,7 +759,7 @@ it("opens the options line's detail on focus: each value, where it comes from an
 it("tethers each agent checking a node to its card's right side as a satellite, its ring the check's state, its name the agent, the model and effort its pane was started with or the plan's marked planned, and the state (PRD mission-tool B17)", async () => {
   const nodes = [
     node("core", { status: "working", criteria: [line("review", "review", { checkers: [{ ...checker("codex", "open", "agent-7"), pane_id: "w1:p4" }] })] }),
-    node("all", { depends_on: ["core"], kind: "verify", delivery: null, criteria: [line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass", "agent-8"), { ...checker("codex", "fail", "agent-9"), summary: "The filter resets on reload", evidence: "Opened /lens, set a filter, reloaded: the filter was gone. Steps 1-4 of the plan pass." }, checker("gemini")] })] }),
+    node("all", { depends_on: ["core"], kind: "general", preset: "verify", delivery: null, criteria: [line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass", "agent-8"), { ...checker("codex", "fail", "agent-9"), summary: "The filter resets on reload", evidence: "Opened /lens, set a filter, reloaded: the filter was gone. Steps 1-4 of the plan pass." }, checker("gemini")] })] }),
     node("alone", { status: "working", criteria: [line("c1", "own")] }),
   ];
   // The reviewer's pane was started with another effort than the plan asked; the launch is what shows.
@@ -899,7 +899,7 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
       criteria: [line("c1", "own", { text: "명령 읽기가 cat/rg 잡음을 걸러낸다", state: "pass" }), line("c2", "own", { text: "실제 세션 50개 replay", state: "skipped", skip: { reason: "세션이 31개뿐" } }), line("check", "check", { state: "fail", summary: "3 tests fail", evidence: "cargo nextest: 3 failed, 120 passed" }), line("ci", "ci", { state: "pass", reruns: 1 }), line("review", "review", { checkers: [checker("codex")] })],
       criteria_met: 3, criteria_skipped: 1,
     }),
-    node("verify", { title: "세 PR 함께 확인", kind: "verify", delivery: null, depends_on: ["engine"] }),
+    node("verify", { title: "세 PR 함께 확인", kind: "general", preset: "verify", delivery: null, depends_on: ["engine"] }),
   ];
   // Held, as in the B28 test: the panel reads the clock again when it draws.
   const minute = Math.floor(Date.now() / 60_000) * 60_000;
@@ -993,7 +993,7 @@ it("draws a worker's plan as one bar of cells on its card with the step being wo
   const worker = { agent: "codex", model: "gpt-5.5", effort: "high", effort_auto: false };
   const nodes = [
     node("live", { status: "working", worker, plan: plan("live-session", 3, 5), change: "the operator asked for WASM" }),
-    node("over", { status: "done", worker, plan: plan("over-session", 4, 4), finished_at_unix_ms: 60, launched: { agent_id: "agent-2", agent: "codex", model: "gpt-5.5", effort: "high" }, kind: "research", delivery: null, pr: 1602, pr_state: "merged", prs: [{ number: 1601, state: "closed", url: null }, { number: 1602, state: "merged", url: null }] }),
+    node("over", { status: "done", worker, plan: plan("over-session", 4, 4), finished_at_unix_ms: 60, launched: { agent_id: "agent-2", agent: "codex", model: "gpt-5.5", effort: "high" }, kind: "general", preset: "research", delivery: null, pr: 1602, pr_state: "merged", prs: [{ number: 1601, state: "closed", url: null }, { number: 1602, state: "merged", url: null }] }),
     node("none", { status: "working", worker }),
   ];
   const map = await mount({ items: [mission({ nodes })] });
@@ -1264,7 +1264,7 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
 
 it("draws a defect a later node found as a red dashed edge back to the node it opened, until its line passes (B21)", async () => {
   const defect = (state: MissionCriterion["state"]) => line("d1", "defect", { text: "the filter resets on reload", found_by: "verify", state });
-  const nodes = (state: MissionCriterion["state"]) => [node("api", { status: "working", reopened: 1, criteria: [defect(state)], criteria_met: 0 }), node("verify", { kind: "verify", delivery: null, depends_on: ["api"], status: "working" })];
+  const nodes = (state: MissionCriterion["state"]) => [node("api", { status: "working", reopened: 1, criteria: [defect(state)], criteria_met: 0 }), node("verify", { kind: "general", preset: "verify", delivery: null, depends_on: ["api"], status: "working" })];
   const map = await mount({ items: [mission({ nodes: nodes("open") })] });
   try {
     const edge = map.q('[data-dependency-edge="verify~api"]');
@@ -1357,7 +1357,7 @@ it("leads a finished mission with its result tiles, its pull requests and its re
     expect(done.q("[data-mission-side]")).toBeNull();
   } finally { await done.unmount(); }
   // A tile the record holds nothing for is not drawn, nor a list without pull requests.
-  const bare = await mount({ items: [mission({ status: "cancelled", exempt: true, nodes: [node("r", { kind: "research", delivery: null, status: "done" })] })] });
+  const bare = await mount({ items: [mission({ status: "cancelled", exempt: true, nodes: [node("r", { kind: "general", preset: "research", delivery: null, status: "done" })] })] });
   try {
     expect(bare.q("[data-mission-results]")).toBeNull();
     expect(bare.q("[data-mission-pulls]")).toBeNull();

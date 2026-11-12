@@ -31,7 +31,7 @@ export function missionScreenMissions(workspace: string, path: string, other: st
         node("store", "설정 저장 경로", { status: "done", worker: codex, pr: 1902, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
         node("move", "탭별 화면 옮기기", { status: "working", worker: claude, depends_on: ["shell", "store"] }),
         node("order", "탭 순서", { status: "planned", depends_on: ["move"] }),
-        node("demo", "시연 검증", { kind: "verify", depends_on: ["move"] }),
+        node("demo", "시연 검증", { kind: "general", preset: "verify", depends_on: ["move"] }),
       ],
     }),
     mission("mission-40", "릴리스 CI 시간 줄이기", workspace, path, {
@@ -40,7 +40,7 @@ export function missionScreenMissions(workspace: string, path: string, other: st
         node("cache", "의존성 캐시", { status: "done", worker: codex, pr: 1905, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
         node("mini", "mac 잡 mini로 옮기기", { status: "working", worker: claude }),
         node("split", "테스트 샤드 나누기", { status: "working", worker: codex, pr: 1906, pr_state: "pending" }),
-        node("check", "시간 재기", { kind: "verify", depends_on: ["mini", "split"] }),
+        node("check", "시간 재기", { kind: "general", preset: "verify", depends_on: ["mini", "split"] }),
       ],
     }),
     mission("mission-38", "원격 기기 로그 모으기", workspace, path, {

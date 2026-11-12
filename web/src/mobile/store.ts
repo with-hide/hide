@@ -6,7 +6,7 @@
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
 import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
-import { keyTag, listedAgents, mergeConversation, sameKey } from "./protocol";
+import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
@@ -279,7 +279,7 @@ export function applyFrame(frame: ServerFrame): void {
     case "missions": {
       const listed = new Set(frame.items.map((mission) => mission.id));
       patch({
-        missions: frame.items,
+        missions: missionsOnWire(frame.items),
         missionsFailed: frame.failed,
         missionsOmitted: frame.omitted ?? 0,
         // A mission that left the record takes its page and its draft with it.

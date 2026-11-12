@@ -15,7 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::missions::Worker;
+use crate::missions::{GateWhen, Worker};
 
 /// Lines of its own one node's plan names (D-09).
 pub const OWN_LIMIT: usize = 3;
@@ -289,6 +289,13 @@ pub struct Criterion {
     /// and the open decision together (PRD mission-human-gate D-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked: Option<u64>,
+    /// On a human line: whether it asks before the node starts or after its
+    /// other lines are met (PRD node-presets D-06); a line written before
+    /// start gates asks at the end. A build before them ignores the field
+    /// and asks a start gate at the end (docs/missions.md in hide-private,
+    /// the downgrade limits).
+    #[serde(default, skip_serializing_if = "GateWhen::is_end")]
+    pub when: GateWhen,
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -340,6 +347,7 @@ impl Criterion {
             fails_in_a_row: 0,
             via: None,
             asked: None,
+            when: GateWhen::End,
         }
     }
 
@@ -881,23 +889,29 @@ pub fn gate(lines: &[Criterion]) -> Option<&Criterion> {
     lines.iter().find(|line| line.kind == CriterionKind::Human)
 }
 
-/// The node's human gate made `text`, or taken away with none (PRD
-/// mission-human-gate D-15): the same text keeps the line as it stands, a
-/// new one is open, and it goes before the defects. Whether it changed.
-pub(crate) fn set_gate(lines: &mut Vec<Criterion>, text: Option<&str>) -> bool {
+/// The node's human gate made `text`, asked `when`, or taken away with none
+/// (PRD mission-human-gate D-15, PRD node-presets D-06): the same text and
+/// time keep the line as it stands, a new one is open, and it goes before
+/// the defects. Whether it changed.
+pub(crate) fn set_gate(lines: &mut Vec<Criterion>, gate: Option<(&str, GateWhen)>) -> bool {
     let at = lines
         .iter()
         .position(|line| line.kind == CriterionKind::Human);
-    match (at, text) {
-        (Some(at), Some(text)) if lines[at].text.as_deref() == Some(text) => false,
+    match (at, gate) {
+        (Some(at), Some((text, when)))
+            if lines[at].text.as_deref() == Some(text) && lines[at].when == when =>
+        {
+            false
+        }
         (None, None) => false,
-        (at, text) => {
+        (at, gate) => {
             if let Some(at) = at {
                 lines.remove(at);
             }
-            if let Some(text) = text {
+            if let Some((text, when)) = gate {
                 let mut line = Criterion::new(GATE_KEY, CriterionKind::Human);
                 line.text = Some(text.to_owned());
+                line.when = when;
                 let place = lines
                     .iter()
                     .position(|line| line.kind == CriterionKind::Defect)

@@ -3784,6 +3784,145 @@ fn record_of(node: &str, line: &str, extra: Value) -> Value {
     command
 }
 
+/// with-hide/hide#2433: a refused record says which check failed, a
+/// registration that is not the line's, no registration of the pane's
+/// session, or a ledger Hide could not read, and leaves exactly one
+/// diagnostic line with the ids the judgment read and none of the record's
+/// text; the Conductor is judged by its identity, never by a registration.
+#[test]
+fn a_refused_record_names_its_cause_and_logs_the_ids_it_read() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    let review = || {
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "evidence": "read the private diff"}),
+        )
+    };
+    // Each refusal answers its reason and writes one line, without the
+    // record's evidence.
+    let refused = |runtime: &mut Runtime, pane: &str, record: Value| -> (String, Value) {
+        let (answer, logged) = crate::diagnostics::capture(|| command(runtime, pane, record));
+        let mut lines: Vec<Value> = logged
+            .into_iter()
+            .filter(|line| line["kind"] == "mission.record_refused")
+            .collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = lines.remove(0);
+        assert!(!line.to_string().contains("private diff"));
+        let reason = answer.unwrap_err();
+        assert_eq!(line["reason"], json!(reason));
+        (reason, line)
+    };
+    let bound = json!([{"mission": "mission-1", "worker": "agent-2", "checkers": ["agent-3"]}]);
+    let session_of =
+        |runtime: &Runtime, pane: &str| json!(runtime.delivery_observations[pane].actor.session);
+    // A registration that is not the line's checker: the line is not its own.
+    let (reason, line) = refused(&mut runtime, "recipient", review());
+    assert_eq!(reason, "mission_criterion_not_yours");
+    assert_eq!(
+        (
+            &line["node"],
+            &line["line"],
+            &line["pane"],
+            &line["session"],
+            &line["registrations"],
+            &line["pane_registrations"],
+            &line["bound"],
+        ),
+        (
+            &json!("fix"),
+            &json!("review"),
+            &json!("recipient"),
+            &session_of(&runtime, "recipient"),
+            &json!(["agent-2"]),
+            &json!(["agent-2"]),
+            &bound,
+        )
+    );
+    // Hide records the CI, whoever asks, and logs that refusal too.
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].ensure_ci_line();
+    let (reason, line) = refused(&mut runtime, "recipient", record_of("fix", "ci", json!({})));
+    assert_eq!(
+        (reason.as_str(), &line["line"]),
+        ("mission_criterion_not_yours", &json!("ci"))
+    );
+    // The checker's pane now runs another agent session than the one it
+    // registered: the record says so, and the line shows the new session
+    // beside the pane's registration of the old one.
+    let moved: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"sender-session"},
+        {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"recipient-session"},
+        {"id":"reviewer","pane_id":"reviewer","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"reviewer-session-2"},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &moved, None, None);
+    let (reason, line) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(reason, "participant_session_changed");
+    assert_eq!(
+        (
+            &line["session"],
+            &line["registrations"],
+            &line["pane_registrations"],
+            &line["bound"]
+        ),
+        (
+            &session_of(&runtime, "reviewer"),
+            &json!([]),
+            &json!(["agent-3"]),
+            &bound
+        )
+    );
+    // No registration on the pane at all; the Conductor, whose registration
+    // is gone too, is still told a checker's line is not its own.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .agents
+        .retain(|record| record.id != "agent-3" && record.id != "agent-1");
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let (reason, line) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(
+        (reason.as_str(), &line["pane_registrations"]),
+        ("participant_unavailable", &json!([]))
+    );
+    let (reason, _) = refused(&mut runtime, "sender", review());
+    assert_eq!(reason, "mission_criterion_not_yours");
+    // A ledger Hide could not read is never read as someone else's line,
+    // for a worker or a checker alike.
+    runtime.invalidate_delivery();
+    let (reason, line) = refused(&mut runtime, "recipient", record_of("fix", "c1", json!({})));
+    assert_eq!(
+        (reason.as_str(), &line["pane_registrations"]),
+        ("ledger_unavailable", &Value::Null)
+    );
+    let (reason, _) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(reason, "ledger_unavailable");
+    // The Conductor's record on a node never worked rests on its identity
+    // alone, so it needs no ledger.
+    assert!(
+        command(&mut runtime, "sender", record_of("docs", "c1", json!({})))
+            .unwrap()
+            .1
+    );
+}
+
 /// PRD mission-map-git-criteria B1-B10: a node is done only once every
 /// line is met, each line is recorded by its owner alone, the node's worker
 /// is never its reviewer, and the mission closes only with every node done
@@ -9210,8 +9349,11 @@ fn stopped_case(
     let mut row = shown_row("recipient", "recipient", "idle");
     row.lineage_session = worker.session.clone();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    // A warning judgment sees the stop as it lands, as the minute decision
+    // after it does.
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    runtime.warn_missions(STOPPED_SINCE);
     if stood_first {
-        runtime.snapshot.navigator.agents = vec![row.clone()];
         runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
         assert_eq!(
             warnings_of(&runtime).0,
@@ -9510,7 +9652,7 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
         let stop_letters = case
             .letters
             .iter()
-            .filter(|letter| letter.contains("has a worker whose turn ended"))
+            .filter(|letter| letter.contains("has a worker that has stood stopped"))
             .count();
         let holds = match expected {
             Some(_) => {
@@ -9542,7 +9684,7 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
                     && case.warnings[0].from_unix_ms == STOPPED_SINCE
                     && case.warnings[0].cause == cause
                     && case.letters.len() == 1
-                    && case.letters[0].contains("ended 5 minutes ago")
+                    && case.letters[0].contains("stood stopped 5 minutes")
                     && case.letters[0].contains(&why)
                     && case.work
                         == Some(NodeWork::Stopped {
@@ -9601,6 +9743,9 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
     row.lineage_session = worker.session.clone();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
     runtime.snapshot.navigator.agents = vec![row.clone()];
+    // The first sight of a stop warns nothing yet but redraws the map.
+    assert!(runtime.warn_missions(STOPPED_SINCE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]));
     assert!(!runtime.warn_missions(STOPPED_SINCE + 4 * MINUTE));
     assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
     assert!(!runtime.warn_missions(STOPPED_SINCE + 40 * MINUTE));
@@ -9615,6 +9760,9 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
     row.activity = "stopped".into();
     row.changed_at_unix_ms = Some(STOPPED_SINCE + 42 * MINUTE);
     runtime.snapshot.navigator.agents = vec![row];
+    assert!(runtime.warn_missions(STOPPED_SINCE + 42 * MINUTE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]));
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 46 * MINUTE));
     assert!(runtime.warn_missions(STOPPED_SINCE + 47 * MINUTE));
     assert_eq!(
         warnings_of(&runtime).0,
@@ -9658,7 +9806,7 @@ fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
     row.activity = "stopped".into();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
     runtime.snapshot.navigator.agents = vec![row.clone()];
-    assert!(runtime.warn_missions(STOPPED_SINCE + MINUTE));
+    assert!(runtime.warn_missions(STOPPED_SINCE));
     assert_eq!(
         warnings_of(&runtime),
         (vec![], vec![]),
@@ -9677,6 +9825,78 @@ fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
     assert_eq!(kinds, [WarningKind::NoPush], "the quiet is judged again");
     assert_eq!(letters.len(), 1);
     assert!(letters[0].contains("warn:no_push"), "{letters:?}");
+}
+
+/// mission-60: a stop is timed from the first judgment that saw it, never
+/// from its row's last change. A long turn's end lands while the row still
+/// holds the turn's start, and a Conductor's request ends the excuse its
+/// worker's report gave while the row holds the time before the report;
+/// both were warned at once, as "ended 62 minutes ago" and "11 minutes ago".
+/// Each is warned five minutes after it was first seen, and the judgment
+/// that first sees it announces it, so the map draws it from then.
+#[test]
+fn a_stop_is_warned_five_minutes_after_a_judgment_first_saw_it() {
+    use crate::missions::WarningKind;
+    use crate::runtime::missions::NodeWork;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
+        Some(STOPPED_SINCE - MINUTE);
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let from = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        mission.nodes[0]
+            .warnings
+            .iter()
+            .map(|warning| (warning.kind, warning.from_unix_ms))
+            .collect::<Vec<_>>()
+    };
+
+    // An hour's turn ends; its row last changed as the turn started.
+    let mut row = shown_row("recipient", "recipient", "idle");
+    row.lineage_session = worker.session.clone();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE - 60 * MINUTE);
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    assert!(
+        runtime.warn_missions(STOPPED_SINCE),
+        "the first sight of the stop redraws the map"
+    );
+    assert_eq!(from(&runtime), [], "no warning as the turn ends");
+    assert!(matches!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::Stopped {
+            since_unix_ms: STOPPED_SINCE,
+            ..
+        })
+    ));
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 4 * MINUTE));
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(from(&runtime), [(WarningKind::Stopped, STOPPED_SINCE)]);
+
+    // It works, reports and rests; the Conductor answers with a request.
+    row.activity = "working".into();
+    runtime.snapshot.navigator.agents = vec![row.clone()];
+    assert!(runtime.warn_missions(STOPPED_SINCE + 10 * MINUTE));
+    assert_eq!(from(&runtime), [], "back at work");
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE + 11 * MINUTE);
+    runtime.snapshot.navigator.agents = vec![row];
+    worker_letter(&mut runtime, "report", false, STOPPED_SINCE + 11 * MINUTE);
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 11 * MINUTE));
+    let asked = STOPPED_SINCE + 30 * MINUTE;
+    worker_letter(&mut runtime, "request", true, asked);
+    assert!(runtime.warn_missions(asked), "the request's stop is seen");
+    assert_eq!(from(&runtime), [], "no warning as the request lands");
+    assert!(!runtime.warn_missions(asked + 4 * MINUTE));
+    assert!(runtime.warn_missions(asked + 5 * MINUTE));
+    assert_eq!(from(&runtime), [(WarningKind::Stopped, asked)]);
 }
 
 /// The missions are drawn again when a row they read moves, and only then:
@@ -11376,6 +11596,226 @@ fn a_gate_with_no_conductor_is_raised_to_the_operator_until_one_comes_back() {
 
 /// `criteria_plan` with a gate on both nodes, `fix`'s and `docs`'s as given
 /// (`null` takes it away).
+/// PRD node-presets D-06, D-09, B3: a deploy node's start gate waits ahead
+/// while the node it depends on works and asks the operator once it is
+/// done, through the gate's decision card, with the node waiting on that
+/// decision; until the operator passes it no worker is bound or spawned
+/// under the node (`mission_gate_before_start`), a fix answer leaves the
+/// node planned with the words a line and no decision held, the gate asking
+/// again once the Conductor recorded that line, and the pass lets the
+/// Conductor start the node.
+#[test]
+fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed() {
+    use crate::mission_criteria::{CriterionKind, GateVia};
+    use crate::missions::{GateWhen, WaitingOn};
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Ship the site"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"]},
+            {"key": "ship", "title": "Deploy", "kind": "general", "preset": "deploy",
+             "depends_on": ["fix"], "criteria": ["the site serves the fix"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    let bind = |runtime: &mut Runtime| {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": "ship", "patch": {"agent_id": "agent-2", "status": "working"}}),
+        )
+        .map(|_| ())
+        .map_err(|refused| crate::coordination::split_refusal(&refused).0.to_owned())
+    };
+    let gate = |runtime: &Runtime| {
+        let view = node_view(runtime, "ship");
+        let gate = view.gate.unwrap();
+        (gate.state, gate.when, view.waiting_on)
+    };
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        gate(&runtime),
+        (
+            GateState::Ahead,
+            GateWhen::Start,
+            Some(WaitingOn::Nodes {
+                keys: vec!["fix".into()]
+            })
+        )
+    );
+    assert_eq!(asked_gate(&runtime), None);
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status = NodeStatus::Done;
+    runtime.missions.book_edit += 1;
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let (line, asked) = asked_gate(&runtime).expect("a start gate reached asks");
+    assert!(line.contains("배포해도 될지"), "{line}");
+    assert_eq!(asked.as_deref(), Some("ship"));
+    assert_eq!(
+        gate(&runtime),
+        (GateState::Open, GateWhen::Start, Some(WaitingOn::Decision))
+    );
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    let refused = runtime
+        .mission_intent_refusal("mission-1", "mission-1:ship")
+        .unwrap();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_gate_before_start", Some("ship"))
+    );
+    // The operator's fix keeps the node planned, the words a line, and the
+    // gate quiet until the Conductor made the fix and recorded it.
+    let key = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert!(runtime.mission_answer_event_from(
+        "mission-1",
+        key,
+        (None, Some("버전 번호를 1.2.8로".into()), false),
+        GateVia::Card,
+    ));
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let ship = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("ship")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (ship.status, ship.reopened, ship.agent_id.as_deref()),
+        (NodeStatus::Planned, 0, None)
+    );
+    let defect = ship.criteria.last().unwrap();
+    assert_eq!(
+        (defect.kind, defect.text.as_deref()),
+        (CriterionKind::Defect, Some("버전 번호를 1.2.8로"))
+    );
+    assert_eq!(asked_gate(&runtime), None, "no decision held for the fix");
+    assert_ne!(gate(&runtime).0, GateState::Open);
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    let defect = defect.key.clone();
+    command(
+        &mut runtime,
+        "sender",
+        record_of("ship", &defect, json!({})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert!(asked_gate(&runtime).is_some(), "the start gate asks again");
+    assert_eq!(gate(&runtime).0, GateState::Open);
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    // The pass lets the Conductor start it.
+    let key = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert!(runtime.mission_answer_event_from(
+        "mission-1",
+        key,
+        (Some(1), None, false),
+        GateVia::Card
+    ));
+    assert_eq!(gate(&runtime).0, GateState::Passed);
+    assert_eq!(
+        runtime.mission_intent_refusal("mission-1", "mission-1:ship"),
+        None
+    );
+    assert_eq!(bind(&mut runtime), Ok(()));
+    assert_eq!(asked_gate(&runtime), None);
+}
+
+/// PRD node-presets D-06 (review F1): a dropped node behind a start gate
+/// goes back to work only past that gate: the Conductor's set is refused,
+/// and the operator's own Resume goes past it as their word, so no node
+/// works behind a start gate that can no longer ask.
+#[test]
+fn a_dropped_node_behind_a_start_gate_works_again_only_past_it() {
+    use crate::missions::OperatorAction;
+    use crate::runtime::mission_gates::GateState;
+    use crate::runtime::mission_health::MissionAttentionPayload;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Ship the site"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"]},
+            {"key": "ship", "title": "Deploy", "kind": "general", "preset": "deploy",
+             "criteria": ["the site serves the fix"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "ship", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "ship", "patch": {"status": "working"}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused).0,
+        "mission_gate_before_start"
+    );
+    assert!(runtime.mission_attention_event(MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "ship".into(),
+        action: OperatorAction::Resume,
+        since_unix_ms: None,
+    }));
+    let ship = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("ship")
+        .unwrap()
+        .clone();
+    assert_eq!(ship.status, NodeStatus::Working);
+    assert!(!ship.waits_to_start());
+    assert_eq!(
+        node_view(&runtime, "ship").gate.unwrap().state,
+        GateState::Passed
+    );
+}
+
 fn two_gates(fix: Value, docs: Value) -> Value {
     let mut plan = criteria_plan();
     plan["plan"]["nodes"][0]["gate"] = fix;
@@ -11879,8 +12319,16 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
     .unwrap_err();
     assert!(refused.contains("mission_node_held"), "{refused}");
     // The same rule stops it again where its place is reserved.
-    assert!(runtime.mission_intent_held("mission-1", "mission-1:docs"));
-    assert!(!runtime.mission_intent_held("mission-1", "mission-1:fix"));
+    assert!(
+        runtime
+            .mission_intent_refusal("mission-1", "mission-1:docs")
+            .is_some()
+    );
+    assert!(
+        runtime
+            .mission_intent_refusal("mission-1", "mission-1:fix")
+            .is_none()
+    );
     command(&mut runtime, "sender", json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
         {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
          "criteria": ["the parser keeps v1 files"],
@@ -14391,6 +14839,7 @@ fn published(mission: &Value) -> Value {
             for name in [
                 "key",
                 "kind",
+                "preset",
                 "delivery",
                 "status",
                 "depends_on",
@@ -14480,7 +14929,32 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
         let report = folder.parent().unwrap().join(format!("{tag}.json"));
         let report: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
         // A folder made before the release's own view was kept names none.
-        let expected = by_id(report["missions"].as_array().cloned().unwrap_or_default());
+        // A release before general nodes published a research or verify
+        // node's kind as such: this build reads it as a general node with
+        // that preset (PRD node-presets D-05, B7), and every other node with
+        // none.
+        let expected = by_id(
+            report["missions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|mut mission| {
+                    for node in mission["nodes"].as_array_mut().into_iter().flatten() {
+                        let preset = match node["kind"].as_str() {
+                            Some(old @ ("research" | "verify")) => {
+                                let old = json!(old);
+                                node["kind"] = json!("general");
+                                old
+                            }
+                            _ => node.get("preset").cloned().unwrap_or(Value::Null),
+                        };
+                        node["preset"] = preset;
+                    }
+                    mission
+                })
+                .collect(),
+        );
         let now = read(&runtime);
         if !expected.is_empty() {
             assert_eq!(now, expected, "{tag}");
@@ -14906,4 +15380,60 @@ fn an_operator_merge_report_names_all_open_held_pull_requests() {
             .unwrap();
         assert_eq!(left, format!("- Fix it (fix) · {expected} · DB review"));
     }
+}
+
+/// A stall's letter asks its Conductor for a move and says when the operator
+/// is shown it, and a failed review's warning promises no stall (operator
+/// decision 2026-11-12): on mission-60 a `warning_stood` letter said
+/// "nothing unless the operator asks", the Conductor did nothing, and the
+/// operator's safety net rose 20 minutes later with nothing for them to do.
+#[test]
+fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
+    use crate::missions::{AttentionReason, PendingWake, WakeEvent, WarningKind};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let body = |event, reason, warning| {
+        crate::runtime::missions::wake_body(
+            mission,
+            &PendingWake {
+                seq: 1,
+                node: "fix".into(),
+                pr: None,
+                event,
+                head: None,
+                to: None,
+                reason,
+                why: None,
+                action: None,
+                warning,
+                ci: None,
+                key: None,
+            },
+        )
+    };
+    let stood = body(
+        WakeEvent::Attention,
+        Some(AttentionReason::WarningStood),
+        None,
+    );
+    assert!(
+        !stood.contains("nothing unless the operator asks"),
+        "{stood}"
+    );
+    assert!(stood.contains("shown it in 20 minutes"), "{stood}");
+    let review = body(WakeEvent::Warning, None, Some(WarningKind::ReviewFails));
+    assert!(!review.contains("raised on the node"), "{review}");
+    let quiet = body(WakeEvent::Warning, None, Some(WarningKind::NoPush));
+    assert!(
+        quiet.contains("still stands in 30 minutes it is raised on the node"),
+        "{quiet}"
+    );
 }

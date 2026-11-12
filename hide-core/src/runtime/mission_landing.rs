@@ -214,7 +214,7 @@ pub(super) fn node_landing(
             });
         }
         NodeKind::Change => {}
-        NodeKind::Research | NodeKind::Verify => return None,
+        NodeKind::General => return None,
     }
     if let Some(pull) = pull_state(node) {
         let action = LandingAction::Merge;

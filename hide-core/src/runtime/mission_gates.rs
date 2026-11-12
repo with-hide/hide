@@ -22,8 +22,8 @@ use crate::delivery::Actor;
 use crate::mission_criteria::{CriterionKind, CriterionState, GATE_KEY, GateVia};
 use crate::mission_events::{AnswerSource, EventKind, MissionEvent};
 use crate::missions::{
-    AttentionReason, Mission, MissionNode, MissionStatus, NodePatch, NodeStatus, PendingWake,
-    Question, WakeEvent, answer_text, asks_gate as asks, gate_asked,
+    AttentionReason, GateWhen, Mission, MissionNode, MissionStatus, NodePatch, NodeStatus,
+    PendingWake, Question, WakeEvent, answer_text, asks_gate as asks, gate_asked,
 };
 use crate::model::InterfaceLanguage;
 
@@ -74,6 +74,9 @@ pub struct GateView {
     pub state: GateState,
     /// What the operator looks at, as the plan names it.
     pub look: String,
+    /// Whether it asks before the node starts or once its other lines are
+    /// met (PRD node-presets D-06).
+    pub when: GateWhen,
     /// The key of the mission's decision that asks it now; none while it
     /// waits for the decision to be free, or once it passed.
     pub ask: Option<u64>,
@@ -111,25 +114,45 @@ fn gate_question(look: &str, language: InterfaceLanguage) -> String {
 }
 
 impl Runtime {
-    /// Whether `node`'s gate is reached now (D-10): it works, its gate is
-    /// open, and every other line is met, the CI GitHub has not reported
-    /// included, as the done refusal judges them.
+    /// Whether `node`'s gate is reached now (D-10): an end gate once the
+    /// node works and every other line is met, the CI GitHub has not
+    /// reported included, as the done refusal judges them; a start gate
+    /// (PRD node-presets D-06) once the node could start, not started and
+    /// every node it depends on done, with no fix the operator asked for
+    /// still open, as an end gate waits for its other lines.
     pub(super) fn gate_reached(&self, mission: &Mission, node: &MissionNode) -> bool {
-        node.status == NodeStatus::Working
-            && crate::mission_criteria::gate(&node.criteria)
-                .is_some_and(|line| line.state != CriterionState::Pass)
-            && self.node_unmet(mission, node) == [GATE_KEY]
+        let Some(line) = crate::mission_criteria::gate(&node.criteria)
+            .filter(|line| line.state != CriterionState::Pass)
+        else {
+            return false;
+        };
+        match line.when {
+            GateWhen::End => {
+                node.status == NodeStatus::Working && self.node_unmet(mission, node) == [GATE_KEY]
+            }
+            GateWhen::Start => {
+                crate::mission_health::could_start(mission, node) && open_fix(node).is_none()
+            }
+        }
     }
 
     /// Whether `node`'s gate waits on the operator now: reached, or asked by
-    /// the open decision, in a mission that runs.
+    /// the open decision, in a mission that runs, on a node at work for an
+    /// end gate and on one not started for a start gate.
     pub(super) fn gate_open(&self, mission: &Mission, node: &MissionNode) -> bool {
+        let Some(line) = crate::mission_criteria::gate(&node.criteria)
+            .filter(|line| line.state != CriterionState::Pass)
+        else {
+            return false;
+        };
+        let place = match line.when {
+            GateWhen::End => node.status == NodeStatus::Working,
+            GateWhen::Start => !node.started(),
+        };
         matches!(
             mission.status,
             MissionStatus::Running | MissionStatus::MergeWait
-        ) && node.status == NodeStatus::Working
-            && crate::mission_criteria::gate(&node.criteria)
-                .is_some_and(|line| line.state != CriterionState::Pass)
+        ) && place
             && (asks(mission.question.as_ref(), node) || self.gate_reached(mission, node))
     }
 
@@ -141,6 +164,7 @@ impl Runtime {
             return Some(GateView {
                 state: GateState::Passed,
                 look,
+                when: line.when,
                 ask: None,
                 since_unix_ms: None,
                 long_wait_at_unix_ms: None,
@@ -168,6 +192,7 @@ impl Runtime {
                 GateState::Ahead
             },
             look,
+            when: line.when,
             ask: asked.map(|question| question.key),
             since_unix_ms: since,
             long_wait_at_unix_ms: since.map(|since| since.saturating_add(LONG_WAIT_MS)),
@@ -266,28 +291,37 @@ impl Runtime {
                 {
                     line.asked = None;
                 }
-                next.reopened = next.reopened.saturating_add(1);
-                if next.status != NodeStatus::Working {
-                    next = crate::missions::apply_patch(
-                        &next,
-                        &NodePatch {
-                            status: Some(NodeStatus::Working),
-                            ..NodePatch::default()
-                        },
-                        now,
-                    )?;
+                // Before its start the node has no work to send back: the
+                // words wait as a line, and the gate asks again once the
+                // Conductor made the fix and recorded that line, holding no
+                // decision meanwhile, as an end gate does (PRD node-presets
+                // D-06).
+                if line.when == GateWhen::Start {
+                    Some(defect)
+                } else {
+                    next.reopened = next.reopened.saturating_add(1);
+                    if next.status != NodeStatus::Working {
+                        next = crate::missions::apply_patch(
+                            &next,
+                            &NodePatch {
+                                status: Some(NodeStatus::Working),
+                                ..NodePatch::default()
+                            },
+                            now,
+                        )?;
+                    }
+                    let mut event = MissionEvent::new(now, EventKind::Reopened)
+                        .node(key)
+                        .line(Some(&words));
+                    event.count = Some(u32::from(next.reopened));
+                    events.push(event);
+                    events.extend(
+                        super::mission_events::node_events(&before, &next, now)
+                            .into_iter()
+                            .filter(|event| event.kind == EventKind::Node),
+                    );
+                    Some(defect)
                 }
-                let mut event = MissionEvent::new(now, EventKind::Reopened)
-                    .node(key)
-                    .line(Some(&words));
-                event.count = Some(u32::from(next.reopened));
-                events.push(event);
-                events.extend(
-                    super::mission_events::node_events(&before, &next, now)
-                        .into_iter()
-                        .filter(|event| event.kind == EventKind::Node),
-                );
-                Some(defect)
             }
         };
         // Its raise goes with the answer, and is raised again by the next
@@ -615,6 +649,29 @@ impl Runtime {
         let words = words.ok_or("mission_answer_invalid")?;
         self.settle_gate(id, node, answer, via, &words, now)
     }
+}
+
+/// The first defect line of `node` not yet met (neither passed nor skipped,
+/// as the done refusal judges it), by its key: before a start gate's node
+/// starts, the fix the Conductor owes before the gate asks again (PRD
+/// node-presets D-06, D-14).
+pub(super) fn open_fix(node: &MissionNode) -> Option<&str> {
+    node.criteria
+        .iter()
+        .find(|line| {
+            line.kind == CriterionKind::Defect
+                && !matches!(line.state, CriterionState::Pass | CriterionState::Skipped)
+        })
+        .map(|line| line.key.as_str())
+}
+
+/// Whether `node` waits, before its start, on a fix the Conductor owes: its
+/// start gate is not passed and a defect line is open.
+pub(super) fn start_fix_owed(node: &MissionNode) -> Option<&str> {
+    node.waits_to_start()
+        .then(|| open_fix(node))
+        .flatten()
+        .filter(|_| !node.at_work())
 }
 
 /// The newest defect the operator's answer to `node`'s gate wrote, with its

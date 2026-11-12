@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodePreset, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -66,9 +66,15 @@ export function stackWaiting(mission: Mission): number {
 
 const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
   change: "mission.kind.change",
+  general: "mission.kind.general",
+  external: "mission.kind.external",
+};
+
+/** A general node's name by its preset (PRD node-presets D-02), the core's one table naming the preset. */
+const PRESET_WORD: Record<MissionNodePreset, MessageKey> = {
   research: "mission.kind.research",
   verify: "mission.kind.verify",
-  external: "mission.kind.external",
+  deploy: "mission.kind.deploy",
 };
 
 /** A node's own criteria in the Conductor's words, one after another; null when it names none. */
@@ -81,6 +87,11 @@ export function kindWord(kind: MissionNode["kind"]): MessageKey {
   return KIND_WORD[kind];
 }
 
+/** A node's kind as it is named: a general node by its preset, and by `일반` with none. */
+export function nodeKindWord(node: Pick<MissionNode, "kind" | "preset">): MessageKey {
+  return node.kind === "general" && node.preset ? PRESET_WORD[node.preset] : kindWord(node.kind);
+}
+
 /**
  * A node's line (B15, B51, B53): why it waits on a dropped node, else what
  * its worker last said, else its kind. A node that waits on a node not done
@@ -89,7 +100,7 @@ export function kindWord(kind: MissionNode["kind"]): MessageKey {
 export function nodeLine(node: MissionNode, t: TFunction<"translation">): string {
   if (node.blocked === "upstream_dropped") return t("mission.blocked.dropped");
   if (node.line) return node.line;
-  return t(kindWord(node.kind));
+  return t(nodeKindWord(node));
 }
 
 /** The launch Hide recorded for a pane (`overview_graph.sessions`), on its machine or the mission's; the store's own row, so a selector can return it. */
@@ -401,9 +412,10 @@ const PR_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.p
 const DIRECT_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.check", "mission.stage.review", "mission.stage.main"];
 
 /** Where a node's work is, named (B10): a change node's step of four, else its kind's one word. */
-export function stageWord(node: Pick<MissionNode, "kind" | "delivery" | "stage">): MessageKey {
-  if (node.kind === "research") return "mission.stage.research";
-  if (node.kind === "verify") return "mission.stage.verify";
+export function stageWord(node: Pick<MissionNode, "kind" | "preset" | "delivery" | "stage">): MessageKey {
+  if (node.kind === "general" && node.preset === "research") return "mission.stage.research";
+  if (node.kind === "general" && node.preset === "verify") return "mission.stage.verify";
+  if (node.kind === "general") return nodeKindWord(node);
   const stages = node.delivery === "direct" ? DIRECT_STAGES : PR_STAGES;
   return stages[Math.min(Math.max(node.stage ?? 1, 1), STAGE_STEPS) - 1]!;
 }
@@ -430,9 +442,9 @@ export function nodeResult(node: MissionNode): NodeResult | null {
     const commit = mainCommit(node);
     return commit ? { kind: "commit", commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
   }
-  if (node.kind === "verify" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
+  if (node.kind === "general" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
   if (!node.line) return null;
-  if (node.kind === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
+  if (node.kind === "general" && node.preset === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
   return node.status === "done" ? { kind: "verify", line: node.line } : null;
 }
 
@@ -453,7 +465,7 @@ export function shortCommit(commit: string): string {
 /** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, and a verify node with its verdict, in order. */
 export function missionResults(mission: Mission): { node: MissionNode; result: NodeResult }[] {
   return orderedNodes(mission).flatMap((node) => {
-    const result = node.status === "done" || (node.kind === "verify" && node.verdict) ? nodeResult(node) : null;
+    const result = node.status === "done" || (node.kind === "general" && node.verdict) ? nodeResult(node) : null;
     return result ? [{ node, result }] : [];
   });
 }

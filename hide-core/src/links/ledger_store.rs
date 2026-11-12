@@ -1317,8 +1317,15 @@ impl LinkStore {
                     {
                         continue;
                     }
+                    // A question the parent agent can answer is kept folded,
+                    // out of the operator's questions; never one only the
+                    // operator can take the step of.
+                    let to_parent = missed.kind == MissedKind::Ask
+                        && missed.to_parent
+                        && operator_only != Some(true);
                     // A turn a letter woke repeats a question still open, or one
                     // the operator put away: one line, and a put-away one stays put away.
+                    // A question for the parent asked again stays its one folded line.
                     // A question of a past flow is no longer open, so asking it
                     // again in a later turn of this one opens it again (D-03, B6).
                     if missed.kind == MissedKind::Ask
@@ -1326,7 +1333,8 @@ impl LinkStore {
                             .query_row(
                                 "WITH flow(at) AS (SELECT COALESCE(MAX(at),0) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3) \
                                 SELECT 1 FROM ledger_missed, flow WHERE device=?1 AND agent=?2 AND id=?3 \
-                                AND kind=?4 AND trim(text)=?6 AND (status=?7 OR (status=?5 AND ledger_missed.at>=flow.at)) LIMIT 1",
+                                AND kind=?4 AND trim(text)=?6 \
+                                AND (status=?7 OR ((status=?5 OR (?8 AND status=?9)) AND ledger_missed.at>=flow.at)) LIMIT 1",
                                 params![
                                     session.device_id,
                                     session.agent,
@@ -1334,7 +1342,9 @@ impl LinkStore {
                                     encoded(&MissedKind::Ask)?,
                                     encoded(&MissedStatus::Open)?,
                                     missed.text.trim(),
-                                    encoded(&MissedStatus::Dismissed)?
+                                    encoded(&MissedStatus::Dismissed)?,
+                                    to_parent,
+                                    encoded(&MissedStatus::Folded)?
                                 ],
                                 |_| Ok(()),
                             )
@@ -1344,10 +1354,15 @@ impl LinkStore {
                     {
                         continue;
                     }
+                    let status = if to_parent {
+                        MissedStatus::Folded
+                    } else {
+                        MissedStatus::Open
+                    };
                     tx.execute("INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset,turn_witness,operator_only) \
                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                         params![session.device_id,session.agent,session.session_id,format!("missed-{offset}-{index}"),
-                            encoded(&missed.kind)?,missed.text,encoded(&MissedStatus::Open)?,*at_unix_ms as i64,*offset as i64,turn_witness,operator_only]).map_err(failed)?;
+                            encoded(&missed.kind)?,missed.text,encoded(&status)?,*at_unix_ms as i64,*offset as i64,turn_witness,operator_only]).map_err(failed)?;
                 }
                 for resolved in &judgment.resolved {
                     // A printed existing issue is insufficient: only this
