@@ -908,6 +908,82 @@ fn an_accepted_phone_action_only_sends_new_waits_to_all_phones_until_computer_in
 }
 
 #[test]
+fn a_rested_declaration_preserves_an_eligible_settle_without_replaying_its_replacement() {
+    with_runtime(async {
+        let declared = |turns: &[&str]| {
+            projection::project(
+                &json!({"navigator":{"agents":[{
+                "pane_id":"root-0", "identity_label":"Task", "agent_kind":"claude",
+                "group":if turns.is_empty() {"working"} else {"needs_you"},
+                "mark":"going", "demand":"none", "status_code":"human_turn", "unread":true,
+                "human_turn":turns.first().map(|id| json!({"id":id,"own":false})),
+                "raised":turns.iter().map(|id| json!({"subject":{
+                    "cause":"human_turn","id":id,"kind":"auth","place":"login","device":"mini"
+                }})).collect::<Vec<_>>()
+            }],"workspaces":[],"devices":[{"id":"node","label":null}]}}),
+                "node",
+            )
+        };
+        for cancel_a in [false, true] {
+            for (disappears, check_c) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let mut fixture = RestFixture::new(1).await;
+                let t = std::time::Instant::now();
+                let desktop = Arc::clone(&fixture.mobile.config.desktop);
+                desktop.phone_input(t);
+                fixture.pass(&declared(&[]), t, true).await;
+                fixture.pass(&declared(&["A"]), t, true).await;
+                desktop.activity_at(1, true, t + Duration::from_millis(100));
+                fixture
+                    .pass(&declared(&["A", "B"]), t + Duration::from_millis(200), true)
+                    .await;
+                let turns = if cancel_a { vec!["B"] } else { vec!["A", "B"] };
+                if disappears {
+                    fixture
+                        .pass(&roots(0, &[], &[]), t + Duration::from_millis(300), true)
+                        .await;
+                }
+                fixture
+                    .pass(&declared(&turns), t + Duration::from_millis(400), true)
+                    .await;
+                desktop.phone_input(t + Duration::from_millis(1300));
+                fixture
+                    .pass(&declared(&turns), t + push::SETTLE, false)
+                    .await;
+                if cancel_a {
+                    assert!(
+                        fixture.take().is_empty(),
+                        "cancelled A cannot send B in its place"
+                    );
+                } else {
+                    let (_, _, body) = fixture.received.try_recv().expect("eligible A survives B");
+                    if !check_c {
+                        let payload: Value = serde_json::from_slice(
+                            &fixture.phone_key.take().unwrap().decrypt(&body),
+                        )
+                        .unwrap();
+                        assert_eq!(payload["subject"]["id"], "A");
+                    }
+                    assert!(fixture.take().is_empty(), "one A and no B");
+                }
+                let current = declared(&["B", "C"]);
+                fixture.pass(&current, t + push::SETTLE, true).await;
+                fixture.pass(&current, t + push::SETTLE * 2, false).await;
+                let (_, _, body) = fixture.received.try_recv().expect("new eligible C sends");
+                if check_c {
+                    let payload: Value =
+                        serde_json::from_slice(&fixture.phone_key.take().unwrap().decrypt(&body))
+                            .unwrap();
+                    assert_eq!(payload["subject"]["id"], "C");
+                }
+                assert!(fixture.take().is_empty(), "B never sends");
+            }
+        }
+    });
+}
+
+#[test]
 fn an_eligible_settle_uses_the_device_at_send_and_a_resting_candidate_never_replays() {
     with_runtime(async {
         for phone_at_send in [true, false] {

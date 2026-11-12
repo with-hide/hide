@@ -2726,8 +2726,10 @@ While either switch is on, the group shows what macOS allows with `Open System S
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
 Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
-On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, at least one attached desktop window has Needs You notifications enabled (`app_closed`), and no later accepted phone action has taken over.
-The most recently used device wins: a reply, answer or approval accepted from any phone (including a connected device's pane) permits subsequent new phone notifications; reading or opening the app, rejected requests and duplicate request IDs do not.
+On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, at least one attached desktop window has Needs You notifications enabled (`app_closed`), and no later admitted phone action has taken over.
+The most recently used device wins: a written reply or key from any phone (including a connected device's pane), an answer, approval or wake admitted for dispatch, or a successful start permits subsequent new phone notifications.
+A new authenticated, well-formed answer, approval or wake counts as phone use even when the core refuses its meaning, such as an old mission question key, a stale Done or wake, or a refused merge; this does not make that action succeed.
+Reading or opening the app, authentication or format refusals and duplicate request IDs do not count.
 Computer input reported after a pause of at least five seconds, or a return to in use, rests phone pushes again; continuous typing adds no reports to the existing one-second poll.
 Within one second the computer wins; when typing continuously while also using the phone, the phone stays in charge until the next pause and resumed input.
 This memory is lost on daemon restart and does not change desktop notifications or the switch's wording.

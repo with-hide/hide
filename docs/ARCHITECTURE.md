@@ -3653,9 +3653,11 @@ An older worker ignores the new fields; a new worker with an older page's words 
 Encryption accepts at most 3,993 plaintext bytes, so the aes128gcm HTTP body is at most 4,096 bytes including its 103-byte overhead; a payload beyond that returns the fixed size-limit failure through the existing push delivery diagnostic before a POST.
 An agent that leaves the list is remembered for ten minutes, so one that comes back in the same state is not announced again; the cost is that the notification of a root that left for good is cleared up to ten minutes later.
 Settings > Notifications stores `app_closed` by default (the pause switch on) or `always` (off); an old saved `off` deserializes as `app_closed` and is written back with that name.
-`app_closed` rests phone pushes only while any attached desktop host reports in use, any attached desktop window enables Needs You notifications, and no later accepted phone action has taken over; `always` permits pushes regardless of computer use.
-The most recently used device wins: hided timestamps accepted phone actions and computer-use reports on its own monotonic clock, in memory only.
-Phone replies and keys (including connected-device panes), answers, approvals, wakes and successful starts count only after acceptance; reads, opening the app, refusals and repeated request IDs do not.
+`app_closed` rests phone pushes only while any attached desktop host reports in use, any attached desktop window enables Needs You notifications, and no later admitted phone action has taken over; `always` permits pushes regardless of computer use.
+The most recently used device wins: hided timestamps admitted phone actions and computer-use reports on its own monotonic clock, in memory only.
+Phone replies and keys (including connected-device panes) count after a successful write; answers, approvals and wakes count once a fresh authenticated, well-formed action is admitted for dispatch, even if the core later refuses its meaning, such as an old mission question key or a stale Done or wake.
+Successful starts count once; reads, opening the app, authentication or format refusals and repeated request IDs do not.
+Admission acknowledges the phone action, not the core decision or its external effect.
 Desktop notifications are independent of this phone routing rule.
 The Electron main host owns one one-second timer reading `powerMonitor.getSystemIdleState` and `getSystemIdleTime`, and the lock/unlock/suspend/resume subscriptions.
 `COMPUTER_AWAY_SECONDS` is the single ten-minute threshold for input anywhere on the system; lock or suspend immediately reports away where Electron emits that event, and unsupported idle sources retain in-use behavior (the Linux limit is in `INSTALL.md`, What each system supports).
@@ -3667,7 +3669,8 @@ Two deliberate boundaries apply: inputs within one second favor the computer, an
 The same Electron idle-time API and poll run on macOS, Windows and Linux; the existing unknown-idle Linux limit still applies.
 Connection admission bounds the per-connection activity and notification demand sets; a web tab contributes neither.
 Computer rest discards new phone notice candidates while continuing to observe the shared transition ledger and to close notices whose roots stop waiting.
-The follower moves new resting candidates to standing without sending, remembering their observation boundary so a later declaration cannot replay an earlier ask.
+The follower excludes the new resting waits in its existing ledger without consuming an older eligible candidate on the same root.
+The ledger retains the original root cause alongside its observation boundary, so cancelling that cause cannot replace it with a discarded declaration; its existing disappearance grace preserves both facts.
 A wait that began during computer use stays silent even if the operator leaves before `SETTLE`; it remains in the phone's list and badge count.
 When resting ends, only a new wait or declaration starts the existing `SETTLE` window; no backlog is rebuilt, and switching to `always` does not replay discarded candidates.
 A candidate first observed while phone delivery is allowed waits out `SETTLE` and uses the device routing state at send time; changing devices during that window neither sends early nor schedules a replay.

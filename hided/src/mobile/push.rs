@@ -515,7 +515,9 @@ impl PhoneNotices {
                 .cloned(),
         );
         self.standing.retain(|key, _| !close.contains(key));
-        self.pending.retain(|key, _| ledger.waits_on_operator(key));
+        self.pending.retain(|key, _| {
+            !close.contains(key) && (!ledger.present(key) || ledger.waits_on_operator(key))
+        });
         for notice in announced {
             // A finished turn, a View to look at or anything else the ledger
             // announces for the desktop is no phone notice.
@@ -525,8 +527,7 @@ impl PhoneNotices {
             // Consume candidates first observed during computer rest now,
             // even if the operator switches to the phone before SETTLE.
             if resting {
-                self.pending.remove(&notice.key);
-                self.standing.insert(notice.key, self.ledger.observation());
+                self.ledger.discard_current_waits(&notice.key);
                 continue;
             }
             match self.pending.get_mut(&notice.key) {

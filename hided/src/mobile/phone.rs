@@ -1564,11 +1564,12 @@ async fn reopen_mission_view(mobile: &Arc<Mobile>, phone_id: &str, message: &Val
     }
 }
 
-/// One mission event a phone's press asks for, dispatched once per request
+/// One action a phone's press asks for, admitted for dispatch once per request
 /// id on one blocking thread: a repeat of the same press, on this socket or
 /// another, answers from the claim, one still being sent answers
 /// `in_flight`, and a dispatch that failed releases the claim so the phone
-/// may send the id again.
+/// may send the id again. Admission counts as phone use even when the core
+/// later refuses the action's meaning; it does not acknowledge that effect.
 async fn dispatch_action(
     mobile: &Arc<Mobile>,
     phone_id: &str,
@@ -3009,11 +3010,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_same_answer_request_is_answered_from_its_claim_and_reaches_the_core_once() {
+    async fn a_stale_phone_answer_counts_once_even_when_the_core_refuses_its_old_question() {
         let directory = tempfile::tempdir().unwrap();
+        // The phone still displays question 4, while the real core restored
+        // question 5. The answer is a human action but cannot answer key 5.
+        let mission: hide_core::missions::Mission = serde_json::from_value(json!({
+            "id":"mission-1", "title":"Ship it", "project":"/fixture", "device_id":"test-node",
+            "conductor":{"actor":{"pane_id":"w1:p1","name":"Conductor","kind":"claude","device_id":"test-node","session":null}},
+            "status":"running", "scope":"pr", "cap":4,
+            "decision":"Merge now?", "question":{"key":5,"options":["merge","wait"],"recommend":1,"asked_at_unix_ms":1},
+            "question_seq":5, "created_at_unix_ms":1, "updated_at_unix_ms":1
+        })).unwrap();
+        std::fs::write(
+            hide_kit::layout::missions(directory.path()),
+            serde_json::to_vec(&json!({
+                "schema_version":4,"missions":[mission],"next":2
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         mobile.missions.send_replace(Arc::new(deciding()));
+        let current = mobile.config.core.snapshot(0).unwrap().current_rest;
+        assert_eq!(current.missions.items[0].question.as_ref().unwrap().key, 5);
         let phone = paired(&mobile);
         mobile.config.desktop.set_waiting(1, true);
         mobile.config.desktop.activity_at(
@@ -3033,9 +3053,14 @@ mod tests {
         assert_eq!(first["request_id"], "press-1");
         assert_eq!(first["mission"], "mission-1");
         assert_eq!(first["ok"], true, "{first}");
+        // Snapshot follows dispatch on the owner thread: the stale answer
+        // left the actual current question unanswered.
+        let current = mobile.config.core.snapshot(0).unwrap().current_rest;
+        assert_eq!(current.missions.items[0].question.as_ref().unwrap().key, 5);
+        assert!(current.missions.items[0].answer.is_none());
         assert!(
             !mobile.config.desktop.rests_phone(),
-            "a newly accepted answer takes over"
+            "a new admitted phone action takes over even if the core refuses it"
         );
         assert!(
             matches!(

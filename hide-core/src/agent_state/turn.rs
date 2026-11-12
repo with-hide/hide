@@ -1293,6 +1293,7 @@ pub mod push {
     struct Seen {
         state: Effective,
         entered: u64,
+        entered_subject: Option<crate::model::AskSubject>,
         declared: BTreeMap<String, u64>,
     }
 
@@ -1316,6 +1317,23 @@ pub mod push {
             self.observation
         }
 
+        /// Exclude waits born in this observation from this consumer's
+        /// settled notices, preserving older candidates and disappearance
+        /// grace. Zero is before every consumable observation boundary.
+        pub fn discard_current_waits(&mut self, key: &AgentKey) {
+            let Some(seen) = self.last.as_mut().and_then(|last| last.get_mut(key)) else {
+                return;
+            };
+            if seen.entered == self.observation {
+                seen.entered = 0;
+            }
+            for observed in seen.declared.values_mut() {
+                if *observed == self.observation {
+                    *observed = 0;
+                }
+            }
+        }
+
         /// The newest current wait not consumed by a phone and included in a
         /// settled observation. The declaration map replaces the ledger's old
         /// ID set; it keeps no history beyond its existing current/grace rows.
@@ -1337,8 +1355,25 @@ pub mod push {
                 .filter(|(_, at)| after < **at && **at <= through)
                 .max_by_key(|(id, at)| (**at, *id))
                 .and_then(|(id, _)| agent.human_turns.get(id));
-            (declared.is_some() || (after < seen.entered && seen.entered <= through))
-                .then(|| waiting_notice(key, agent, declared))
+            if let Some(declared) = declared {
+                return Some(waiting_notice(key, agent, Some(declared)));
+            }
+            let original_still_waits = match &seen.entered_subject {
+                Some(subject @ crate::model::AskSubject::HumanTurn { .. }) => {
+                    agent.human_turns.values().any(|turn| turn == subject)
+                }
+                Some(subject) => agent.subject.as_ref() == Some(subject),
+                None => agent.subject.is_none() || agent.demand != "none",
+            };
+            (after < seen.entered && seen.entered <= through && original_still_waits).then(|| {
+                notice_of(
+                    key,
+                    agent,
+                    NoticeState::NeedsYou,
+                    false,
+                    seen.entered_subject.clone(),
+                )
+            })
         }
 
         /// Whether the last projection observed has `key` waiting on the
@@ -1394,6 +1429,12 @@ pub mod push {
                             entered: before
                                 .filter(|before| before.state == *state)
                                 .map_or(self.observation, |before| before.entered),
+                            entered_subject: before
+                                .filter(|before| before.state == *state)
+                                .map_or_else(
+                                    || agent.subject.clone(),
+                                    |before| before.entered_subject.clone(),
+                                ),
                             declared: agent
                                 .human_turns
                                 .keys()
@@ -1422,6 +1463,7 @@ pub mod push {
                     .unwrap_or(Seen {
                         state: Effective::Other,
                         entered: 0,
+                        entered_subject: None,
                         declared: BTreeMap::new(),
                     });
                 // Each declaration not seen before is a notice of its own,
