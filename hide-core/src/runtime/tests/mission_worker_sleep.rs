@@ -157,11 +157,17 @@ fn sleepers(panes: &[&str]) -> Runtime {
 
 /// The lead's letter of `kind` to the agent in `to`, as the store keeps it.
 fn letter(runtime: &mut Runtime, to: &str, kind: &str) -> String {
+    letter_from(runtime, LEAD, to, kind)
+}
+
+/// The letter of `kind` from the agent in `from` to the agent in `to`,
+/// published as the store publishes each save.
+fn letter_from(runtime: &mut Runtime, from: &str, to: &str, kind: &str) -> String {
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     let intent = format!("{to}-{kind}-{}", ledger.next_id);
     let letter = crate::delivery::mailbox::send(
         &mut ledger,
-        &actor(LEAD),
+        &actor(from),
         &actor(to),
         &intent,
         "Fix the next bug",
@@ -664,6 +670,239 @@ fn a_finish_sleeps_nothing_while_sleep_is_off() {
     let mut runtime = mission_runtime();
     runtime.snapshot.ui_state.agent_sleep_after_hours = None;
     set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+    assert!(marks(&runtime).is_empty());
+}
+
+/// Which kind of mark each marked agent carries: `mission`, `plan` or
+/// `report`.
+fn origins(runtime: &Runtime) -> Vec<(String, &'static str)> {
+    runtime
+        .missions
+        .sleep_marks
+        .iter()
+        .map(|mark| (mark.agent_id.clone(), mark.origin.trigger()))
+        .collect()
+}
+
+/// A delegated child's report to its parent puts it to sleep at the next
+/// minute it rests off screen, long before its idle hours, while its parent
+/// stays awake; the mark is spent when the end lands, so a wake does not
+/// put it to sleep again for the same report, and a request wakes it. Its
+/// next report marks it again.
+#[test]
+fn a_childs_report_puts_it_to_sleep_at_the_next_minute_and_once() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    assert!(marks(&runtime).is_empty());
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(origins(&runtime), [("agent-2".to_owned(), "report")]);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+    assert_eq!(phase(&runtime, LEAD), None, "the parent stays awake");
+    runtime.ingest_agent_sleep_end(WORKER, Ok(4));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    assert!(marks(&runtime).is_empty());
+
+    // The parent's request wakes it.
+    letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It is back, and the same report does not put it to sleep again.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    let ledger = runtime.delivery_state().unwrap();
+    runtime.publish_delivery(ledger, true);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// A reported child that works, asks the operator or is on the operator's
+/// screen keeps its mark and stays awake, and sleeps once it rests off
+/// screen.
+#[test]
+fn a_reported_child_that_works_asks_or_is_shown_sleeps_only_once_it_rests() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "it works");
+    show(&mut runtime, session("w-order:t1", Some("blocked")));
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "it asks the operator");
+    show(&mut runtime, session("w-order:t1", Some("idle")));
+    visit(&mut runtime, "w-order:t2");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(
+        phase(&runtime, WORKER),
+        None,
+        "it is on the operator's screen"
+    );
+    assert_eq!(marks(&runtime), ["agent-2"]);
+    visit(&mut runtime, "w-order:t1");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// A reported child whose own child still works waits for it: the
+/// grandchild's report must reach an awake parent.
+#[test]
+fn a_reported_child_waits_for_its_own_working_child() {
+    const TABS3: [&str; 3] = ["w-order:t1", "w-order:t2", "w-order:t3"];
+    const GRANDCHILD: &str = "w-order:t3:p";
+    let three = |grandchild: &str| {
+        let mut payload = tab_order_payload(CHECKOUT, &TABS3, &TABS3, "w-order:t1");
+        let mut two = session("w-order:t1", Some("idle"));
+        // The worker is the lead's child, one level down, as a delegated
+        // child is.
+        let worker = two
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+            .unwrap();
+        worker.spawned_from_pane_id = Some(LEAD.into());
+        worker.declared_parent_session = crate::engine::tokens::session_digest(&native(LEAD));
+        payload.agents.extend(two.agents);
+        let owned: SessionSnapshotPayload =
+            crate::sidebar::owned_label_fixture(serde_json::json!({ "agents": [{
+                "id": "grandchild", "pane_id": GRANDCHILD, "agent": "claude",
+                "agent_status": grandchild, "state_change_seq": 7, "cwd": CHECKOUT,
+                "agent_session": {"kind": "id", "value": native(GRANDCHILD)},
+                "lineage_session": crate::engine::tokens::session_digest(&native(GRANDCHILD)),
+                "spawned_from_pane_id": WORKER,
+                "declared_parent_session": crate::engine::tokens::session_digest(&native(WORKER)),
+            }]}))
+            .unwrap();
+        payload.agents.extend(owned.agents);
+        payload
+    };
+    let mut runtime = live(three("working"));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .agents
+        .push(registration("agent-3", GRANDCHILD, Some("agent-2")));
+    ledger.next_id = 4;
+    runtime.publish_delivery(Arc::new(ledger), true);
+    show(&mut runtime, three("working"));
+    let depth = |runtime: &Runtime, pane: &str| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == pane)
+            .map(|agent| agent.lineage_depth)
+    };
+    assert_eq!(depth(&runtime, WORKER), Some(1));
+    assert_eq!(depth(&runtime, GRANDCHILD), Some(2));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "its child works");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+    show(&mut runtime, three("idle"));
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// The child's next letter to its parent that is not a report, or a
+/// `request` or `block` sent to it before it sleeps, drops its report's
+/// mark; another letter to it (a reply) leaves it.
+#[test]
+fn a_later_letter_drops_a_reports_mark_before_the_child_sleeps() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    for kind in ["progress", "reply", "request", "block"] {
+        letter_from(&mut runtime, WORKER, LEAD, "report");
+        assert_eq!(marks(&runtime), ["agent-2"]);
+        letter_from(&mut runtime, WORKER, LEAD, kind);
+        assert!(marks(&runtime).is_empty(), "its {kind} to its parent");
+    }
+    for kind in ["request", "block"] {
+        letter_from(&mut runtime, WORKER, LEAD, "report");
+        letter(&mut runtime, WORKER, kind);
+        assert!(marks(&runtime).is_empty(), "a {kind} to it");
+    }
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    letter(&mut runtime, WORKER, "reply");
+    letter(&mut runtime, WORKER, "progress");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// Only a delegated child is marked by its report: a root (an agent with
+/// no parent, as every spawn beside its caller is) and an open mission's
+/// Conductor are not, and a report to an agent that is not the sender's
+/// parent marks nothing either.
+#[test]
+fn a_report_marks_only_a_delegated_child_and_never_a_conductor() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    letter_from(&mut runtime, LEAD, WORKER, "report");
+    assert!(marks(&runtime).is_empty(), "a root");
+    // A report to anyone but its parent.
+    let parent = |runtime: &mut Runtime, parent: &str| {
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        ledger.agents[1].parent = Some(parent.into());
+        runtime.publish_delivery(Arc::new(ledger), true);
+    };
+    parent(&mut runtime, "agent-9");
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert!(marks(&runtime).is_empty(), "not its parent");
+    parent(&mut runtime, "agent-1");
+    // agent-2 reports to its parent while it conducts an open mission.
+    let mut conducting = mission("working");
+    conducting.conductor.agent_id = Some("agent-2".into());
+    conducting.conductor.actor = actor(WORKER);
+    runtime.missions.book.missions.push(conducting);
+    runtime.save_missions();
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert!(marks(&runtime).is_empty(), "a Conductor");
+    // Once it conducts nothing, its report to its parent marks it.
+    runtime.missions.book.missions.clear();
+    runtime.save_missions();
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// The ledger a runtime starts on is the baseline: a report it already
+/// holds marks nothing, so a restart does not put to sleep children that
+/// reported days ago or were woken since; a report sent after the start
+/// does.
+#[test]
+fn a_restart_marks_nothing_for_a_report_the_ledger_already_held() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    // What a restart reads back: the marks are gone and the saved ledger
+    // is the one the runtime starts on.
+    runtime.missions.sleep_marks.clear();
+    let ledger = runtime.delivery_state().unwrap();
+    runtime.publish_delivery(ledger, true);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert!(marks(&runtime).is_empty());
+    assert_eq!(phase(&runtime, WORKER), None);
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// A node's finish takes the place of its worker's report mark, so a later
+/// letter that would drop a report's mark leaves the finished node's; with
+/// sleep Off a report puts nothing to sleep.
+#[test]
+fn a_nodes_finish_keeps_the_mark_a_later_letter_would_drop() {
+    let mut runtime = mission_runtime();
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(origins(&runtime), [("agent-2".to_owned(), "report")]);
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    assert_eq!(
+        origins(&runtime),
+        [
+            ("agent-2".to_owned(), "mission"),
+            ("agent-3".to_owned(), "mission")
+        ]
+    );
+    letter_from(&mut runtime, WORKER, LEAD, "progress");
+    assert_eq!(marks(&runtime), ["agent-2", "agent-3"]);
+
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    runtime.snapshot.ui_state.agent_sleep_after_hours = None;
+    letter_from(&mut runtime, WORKER, LEAD, "report");
     runtime.sleep_finished_mission_agents(unix_milliseconds());
     assert_eq!(phase(&runtime, WORKER), None);
     assert!(marks(&runtime).is_empty());

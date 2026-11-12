@@ -1,10 +1,13 @@
-//! A finished mission node's agents put to sleep (PRD mission-worker-sleep
-//! B8-B13): the save that tells a node has just finished marks its worker
-//! and its bound checkers, and the minute decision ends each marked agent
-//! that rests, off screen, under the same cap as every other end. A mark is
-//! spent only when its end lands, so an agent that started a turn between
-//! the check and the end is tried again the next minute; a node opened
-//! again drops its marks.
+//! Agents put to sleep before their idle hours, by a mark the minute
+//! decision spends: a finished mission node's worker and bound checkers (PRD
+//! mission-worker-sleep B8-B13), a plan step's child (PRD hide-plan-delegate
+//! B18), and a delegated child that has sent its parent its `report`. The
+//! minute decision ends each marked agent that rests, off screen, under the
+//! same cap as every other end. A mark is spent only when its end lands, so
+//! an agent that started a turn between the check and the end is tried again
+//! the next minute; a node opened again drops its marks, and a child's next
+//! letter to its parent that is not a report, or a `request` or `block` sent
+//! to it, drops its report's.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,36 +16,94 @@ use serde_json::json;
 use super::super::Runtime;
 use super::ends_left;
 use super::letters::Stage;
+use crate::delivery::ledger::{Ledger, Letter};
 use crate::missions::{Mission, MissionBook, MissionNode};
 use crate::model::AgentActionRefusal;
 
-/// An agent a node's finish asks to put to sleep.
+/// What asked an agent to sleep.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::runtime) enum Origin {
+    /// Its mission node finished.
+    Node { mission: String, node: String },
+    /// Its plan step was done or taken back by the plan's main.
+    Plan { plan: String, step: String },
+    /// Its report to its parent, the letter by id.
+    Report { letter: String },
+}
+
+impl Origin {
+    /// The sleep's trigger, as the `agent_sleep.ending` diagnostic names it.
+    pub(in crate::runtime) fn trigger(&self) -> &'static str {
+        match self {
+            Self::Node { .. } => "mission",
+            Self::Plan { .. } => "plan",
+            Self::Report { .. } => "report",
+        }
+    }
+
+    fn fields(&self) -> serde_json::Value {
+        match self {
+            Self::Node { mission, node } => json!({"mission": mission, "node": node}),
+            Self::Plan { plan, step } => json!({"plan": plan, "step": step}),
+            Self::Report { letter } => json!({"letter": letter}),
+        }
+    }
+}
+
+/// An agent asked to sleep at its next rest.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::runtime) struct SleepMark {
     pub(in crate::runtime) agent_id: String,
-    /// The mission and node whose finish marked it; for a plan's step, the
-    /// plan and the step (PRD hide-plan-delegate B18).
-    mission: String,
-    node: String,
-    /// A plan step's finish marked it, not a mission node's: the mission
-    /// book's finishes neither keep nor drop it.
-    plan: bool,
+    pub(in crate::runtime) origin: Origin,
     /// The pane whose end this mark started and that has not landed yet.
     ending: Option<String>,
 }
 
 impl SleepMark {
-    /// A plan step its main finished or took back asks its child to sleep
-    /// (B17, B18), by the minute decision a node's finish uses.
-    pub(in crate::runtime) fn plan(agent_id: &str, plan: &str, step: &str) -> Self {
-        Self {
-            agent_id: agent_id.to_owned(),
-            mission: plan.to_owned(),
-            node: step.to_owned(),
-            plan: true,
-            ending: None,
+    /// Asks `agent_id` to sleep for `origin`, one mark per agent: a node's
+    /// or a plan step's finish takes the place of a report's mark, which a
+    /// later letter could drop, and any other mark already standing stays.
+    /// Returns whether the marks changed.
+    pub(in crate::runtime) fn ask(marks: &mut Vec<Self>, agent_id: &str, origin: Origin) -> bool {
+        match marks.iter_mut().find(|mark| mark.agent_id == agent_id) {
+            Some(mark)
+                if matches!(mark.origin, Origin::Report { .. })
+                    && !matches!(origin, Origin::Report { .. }) =>
+            {
+                mark.origin = origin;
+                true
+            }
+            Some(_) => false,
+            None => {
+                marks.push(Self {
+                    agent_id: agent_id.to_owned(),
+                    origin,
+                    ending: None,
+                });
+                true
+            }
         }
     }
+
+    /// The diagnostic `kind` says about this mark.
+    fn event(&self, kind: &str) -> serde_json::Value {
+        let mut event = json!({
+            "component": "agent_sleep", "kind": kind, "agent_id": self.agent_id,
+            "origin": self.origin.trigger(),
+        });
+        if let (Some(event), serde_json::Value::Object(fields)) =
+            (event.as_object_mut(), self.origin.fields())
+        {
+            event.extend(fields);
+        }
+        event
+    }
+}
+
+/// The sequence of a letter's id (`letter-<n>`); the ledger keeps its
+/// letters in that order.
+fn sequence(letter: &Letter) -> Option<u64> {
+    letter.id.rsplit_once('-')?.1.parse().ok()
 }
 
 /// Whether a node is finished for its agents (D-17): its status is done or
@@ -100,9 +161,10 @@ impl Runtime {
             return;
         }
         let missions = &mut self.missions;
-        missions
-            .sleep_marks
-            .retain(|mark| mark.plan || now.contains(&(mark.mission.clone(), mark.node.clone())));
+        missions.sleep_marks.retain(|mark| match &mark.origin {
+            Origin::Node { mission, node } => now.contains(&(mission.clone(), node.clone())),
+            Origin::Plan { .. } | Origin::Report { .. } => true,
+        });
         for mission in &missions.book.missions {
             for node in &mission.nodes {
                 let key = (mission.id.clone(), node.key.clone());
@@ -110,28 +172,102 @@ impl Runtime {
                     continue;
                 }
                 for agent in node_agents(mission, node) {
-                    if missions
-                        .sleep_marks
-                        .iter()
-                        .any(|mark| mark.agent_id == agent)
-                    {
-                        continue;
-                    }
-                    crate::diagnostic!(json!({
-                        "component": "agent_sleep", "kind": "agent_sleep.mission_marked",
-                        "mission": mission.id, "node": node.key, "agent_id": agent,
-                    }));
-                    missions.sleep_marks.push(SleepMark {
-                        agent_id: agent.to_owned(),
+                    let origin = Origin::Node {
                         mission: mission.id.clone(),
                         node: node.key.clone(),
-                        plan: false,
-                        ending: None,
-                    });
+                    };
+                    if SleepMark::ask(&mut missions.sleep_marks, agent, origin) {
+                        crate::diagnostic!(json!({
+                            "component": "agent_sleep", "kind": "agent_sleep.mission_marked",
+                            "mission": mission.id, "node": node.key, "agent_id": agent,
+                        }));
+                    }
                 }
             }
         }
         missions.finished = now;
+    }
+
+    /// Reads the letters `next` holds that `previous` did not, in the order
+    /// they were sent: a delegated child's `report` to its parent marks it
+    /// to sleep, and its later letter to its parent of any other kind, or a
+    /// `request` or `block` sent to it, drops that mark. Run by every
+    /// publish of the ledger. The ledger this runtime started on is the
+    /// first `previous`, so a restart marks nothing for a report it already
+    /// held; with none (the ledger could not be read) nothing is new. A
+    /// root, a spawn beside its caller (which never has a parent) and an
+    /// open mission's Conductor are never marked.
+    pub(in crate::runtime) fn note_reports(&mut self, previous: Option<&Ledger>, next: &Ledger) {
+        let Some(first) = previous.map(|previous| previous.next_id) else {
+            return;
+        };
+        let new = next
+            .letters
+            .iter()
+            .rev()
+            .take_while(|letter| sequence(letter).is_some_and(|sequence| sequence >= first))
+            .collect::<Vec<_>>();
+        for letter in new.into_iter().rev() {
+            if matches!(letter.kind.as_str(), "request" | "block") {
+                self.drop_report_marks(next, letter, |actor| letter.recipient.same_identity(actor));
+            }
+            let Some(child) = next.agents.iter().rev().find(|record| {
+                !record.ended
+                    && record.parent.is_some()
+                    && record.actor.same_identity(&letter.sender)
+            }) else {
+                continue;
+            };
+            let to_parent = next.agents.iter().any(|record| {
+                Some(&record.id) == child.parent.as_ref()
+                    && record.actor.same_identity(&letter.recipient)
+            });
+            if !to_parent {
+                continue;
+            }
+            if letter.kind != "report" {
+                self.drop_report_marks(next, letter, |actor| child.actor.same_identity(actor));
+                continue;
+            }
+            let conducts = self.missions.book.missions.iter().any(|mission| {
+                mission.status.open() && mission.conductor.agent_id.as_deref() == Some(&child.id)
+            });
+            if conducts {
+                continue;
+            }
+            let origin = Origin::Report {
+                letter: letter.id.clone(),
+            };
+            if SleepMark::ask(&mut self.missions.sleep_marks, &child.id, origin) {
+                crate::diagnostic!(json!({
+                    "component": "agent_sleep", "kind": "agent_sleep.report_marked",
+                    "agent_id": child.id, "letter": letter.id,
+                }));
+            }
+        }
+    }
+
+    /// Drops the report marks of the registrations whose agent `addressed`
+    /// names, for `letter`.
+    fn drop_report_marks(
+        &mut self,
+        ledger: &Ledger,
+        letter: &Letter,
+        addressed: impl Fn(&crate::delivery::Actor) -> bool,
+    ) {
+        self.missions.sleep_marks.retain(|mark| {
+            let dropped = matches!(mark.origin, Origin::Report { .. })
+                && ledger
+                    .agents
+                    .iter()
+                    .any(|record| record.id == mark.agent_id && addressed(&record.actor));
+            if dropped {
+                let mut event = mark.event("agent_sleep.report_unmarked");
+                event["by"] = json!(letter.id);
+                crate::diagnostic!(event);
+            }
+            !dropped
+        });
     }
 
     /// Spends the mark whose end has just landed on `pane_id` (D-19): the
@@ -191,15 +327,15 @@ impl Runtime {
             let verdict = self.mission_sleep_verdict(&actor, &mut on_screen);
             match verdict {
                 Verdict::Keep => kept.push(mark),
-                Verdict::Drop(why) => crate::diagnostic!(json!({
-                    "component": "agent_sleep", "kind": "agent_sleep.mission_skipped",
-                    "mission": mark.mission, "node": mark.node, "agent_id": mark.agent_id,
-                    "reason": why,
-                })),
+                Verdict::Drop(why) => {
+                    let mut event = mark.event("agent_sleep.mark_skipped");
+                    event["reason"] = json!(why);
+                    crate::diagnostic!(event);
+                }
                 Verdict::Sleep(_) if budget == 0 => kept.push(mark),
                 Verdict::Sleep(pane) => {
                     budget -= 1;
-                    changed |= self.begin_agent_sleep(&pane, "mission", now_unix_ms);
+                    changed |= self.begin_agent_sleep(&pane, mark.origin.trigger(), now_unix_ms);
                     if self.asleep_route(&actor).is_some() {
                         mark.ending = Some(pane);
                     }
@@ -214,8 +350,8 @@ impl Runtime {
     }
 
     /// Whether the agent `actor` registers may be put to sleep now for its
-    /// node's finish (D-18): the pane menu's rules, off the operator's
-    /// screen, the same session still in its pane.
+    /// mark (D-18): the pane menu's rules, off the operator's screen, the
+    /// same session still in its pane.
     fn mission_sleep_verdict(
         &self,
         actor: &crate::delivery::Actor,
@@ -263,6 +399,12 @@ impl Runtime {
             Some(AgentActionRefusal::Asleep) => return Verdict::Drop("asleep"),
             Some(AgentActionRefusal::NoConversation) => return Verdict::Drop("no_conversation"),
             None => {}
+        }
+        // A child still moving under it would report to it asleep, and a
+        // report wakes no one. A root's row already reads that as working
+        // (`children_moving`); a delegated row's does not.
+        if agent.descendant_counts.working > 0 {
+            return Verdict::Keep;
         }
         let shown = on_screen
             .entry(device.map(str::to_owned))
