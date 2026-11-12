@@ -4,7 +4,8 @@
 // `branchLine` and `resultLine` (`web/src/missionLine.ts`). The pull
 // request's icon and colour are the PR list's (`PR_LOOK`); the branch
 // truncates first, so the number and the destination stay whole. The card's
-// accessible name says these words; the line itself is for the eye.
+// accessible name says these words; the line itself is for the eye. Only
+// the branch shrinks, so the number and the destination stay whole.
 
 import { ChevronRightIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -44,10 +45,11 @@ export function BranchLineView({ line, className }: { line: BranchLine; classNam
         </span>
       ) : null}
       {line.to ? (
-        <span className={cn("flex shrink-0 items-center gap-xxs", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
-          <span className={due ? undefined : "text-muted-foreground"}>→</span>
+        // The destination never gives way to the branch; only one too long for the line beside the icon and number is cut.
+        <span className={cn("flex max-w-[calc(100%-var(--spacing-xxxl)-var(--spacing-lg))] shrink-0 items-center gap-xxs", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
+          <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
           {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
-          <span>{lineToLabel(line.to)}</span>
+          <span className="min-w-0 truncate" title={lineToLabel(line.to)}>{lineToLabel(line.to)}</span>
         </span>
       ) : null}
       {line.direct ? <span className="shrink-0" data-line-direct="true">· {t("mission.foot.planDirect")}</span> : null}
