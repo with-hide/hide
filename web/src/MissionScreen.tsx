@@ -535,7 +535,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>
       {group !== "closed" && ((group === "turn" && turn[0]) || mission.nodes.length > 0) ? (
-        <span className="flex min-w-0 items-center gap-xs pl-(--size-icon-sm)">
+        <span className="flex min-w-0 items-center gap-xs pl-[calc(var(--size-icon-sm)+var(--spacing-xs))]">
           {group === "turn" && turn[0] ? (
             <span className="min-w-0 flex-1 truncate text-caption text-mission-hold">{t(missionPillKey(mission, turn[0]))}</span>
           ) : (

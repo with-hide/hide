@@ -503,7 +503,7 @@ function ProjectList({ actions }: { actions: Actions }) {
         {raised.map((row, stack) => (
           <ProjectRowView key={rowKey(row)} row={row} stack={stack} context={context} />
         ))}
-        {raised.length > 0 && listRows.length > 0 ? <li role="separator" className="my-xs border-t border-border" /> : null}
+        {raised.length > 0 && listRows.length > 0 ? <li role="separator" className="my-xs -mx-sm border-t border-border" /> : null}
         {listRows.map((row, index) => (
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
@@ -565,7 +565,7 @@ function rowKey(row: ProjectRow): string {
 
 
 const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack = 0, context }: { row: ProjectRow; first?: boolean; stack?: number; context: ListContext }) {
-  if (row.kind === "divider") return <li role="separator" className="my-sm border-t border-border" />;
+  if (row.kind === "divider") return <li role="separator" className="my-sm -mx-sm border-t border-border" />;
   if (row.kind === "raised") return <RaisedSection row={row} stack={stack} context={context} />;
   return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
 });

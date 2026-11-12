@@ -368,6 +368,8 @@ const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20
  * other agents checking it stand beside it as satellites tethered to its
  * right side. Pressing it picks it (B30).
  */
+const NODE_BODY_INSET = "[&>:not([data-node-head]):not(.absolute)]:ml-[calc(var(--size-agent-mark)+var(--spacing-xs))]";
+
 function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
@@ -431,6 +433,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       data-node-dimmed={dimmed || undefined}
       className={cn(
         "relative flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
+        // Only the state mark stands at the left edge; every line under the head starts where the title does.
+        NODE_BODY_INSET,
         yours ? ATTENTION_CARD : LOOK_CARD[look],
         // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
         node.kind === "external" && "border-dotted",
@@ -442,7 +446,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
       {/* The operator's turn wears a dot on its corner in the colour of 내 차례's card. */}
       {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
-      <span className="flex min-w-0 items-center gap-xs">
+      <span className="flex min-w-0 items-center gap-xs" data-node-head="true">
         <MissionNodeMark look={look} label={word} still={doing != null && doing.state !== "working"} />
         {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
         {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
