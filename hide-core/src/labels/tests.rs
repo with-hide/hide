@@ -6241,66 +6241,116 @@ fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
     path
 }
 
-/// B12: a parent's reply or request answers its delegated session's asks;
-/// its progress and report letters do not, and a doorbell line names no kind.
+/// B12: a parent's reply or request letter answers what its delegated
+/// session asked; its progress letter and a sibling's reply do not. The
+/// doorbell shows a writer on its line by the name a person knows it by,
+/// its pane's title for an agent registered without a name, while the
+/// lineage names the parent by its wire name (`coordination::wire_name`):
+/// the parent is the writer the bell record names by that wire name, whatever
+/// the line says.
 #[test]
-fn only_a_parents_reply_or_request_answers_what_its_child_asked() {
-    use super::input::Bell;
-    use hide_session::label_transcript::{LabelEvent, LabelEventKind};
-    let message = |text: &str| LabelEvent {
-        kind: LabelEventKind::Human,
-        at_unix_ms: 10_000,
-        text: text.to_owned(),
-        offset: 0,
-        images: 0,
-        sender: None,
-    };
-    let letter = |kind: &str| {
-        message(&format!(
-            "Hide letter letter-1 from lead (claude) [{kind}]\nbody"
-        ))
-    };
-    for (kind, answers) in [
-        ("reply", true),
-        ("request", true),
-        ("progress", false),
-        ("report", false),
-        ("block", false),
-    ] {
-        assert_eq!(
-            super::worker::letter_answers(&letter(kind), &[]),
-            answers,
-            "{kind}"
+fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_shows() {
+    use crate::delivery::bell::{Ring, line};
+    use crate::labels::input::Letter;
+    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    const LATER: u64 = 4_094_496_000_000;
+    let harness = Harness::new();
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (mut worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    client.prime_context_for_test(
+        SessionIdentity {
+            device_id: LOCAL_TARGET.into(),
+            agent: "claude".into(),
+            session_id: "native-a".into(),
+        },
+        LedgerContext {
+            parent_name: Some("agent-7".into()),
+            ..Default::default()
+        },
+    );
+    // Each bell as the doorbell types and records it: the line shows the
+    // writer's title, the record keeps its wire name and the letter's kind.
+    let bell = |shown: &str, from: &str, kind: &str, body: &str, index: u64| {
+        let typed = line(&Ring {
+            sender: shown,
+            kind,
+            body,
+            others: 0,
+            inbox: false,
+            language: crate::model::InterfaceLanguage::Korean,
+        });
+        harness.input.record_bell(
+            "w1:p1",
+            LATER + index * 1_000 - 100,
+            &typed,
+            shown,
+            Letter {
+                from: from.to_owned(),
+                kind: kind.to_owned(),
+            },
         );
-    }
-    // A bell line is judged by the kind Hide recorded when it typed it,
-    // whatever its words say.
-    let bell = |line: &str, kind: &str| Bell {
-        at_unix_ms: 10_000,
-        line: line.to_owned(),
-        sender: "lead".to_owned(),
-        kind: kind.to_owned(),
+        typed
     };
-    for (word, kind, answers) in [
-        ("답장", "reply", true),
-        ("요청", "request", true),
-        ("진행", "progress", false),
-        ("보고", "report", false),
-        ("막힘", "block", false),
-        ("감시", "watch", false),
-    ] {
-        let line = format!("🦉 lead {word}: 이렇게 해 주세요");
-        assert_eq!(
-            super::worker::letter_answers(&message(&line), &[bell(&line, kind)]),
-            answers,
-            "{kind}"
-        );
+    let mut lines: Vec<(&str, String)> = vec![
+        ("user", "모바일 출시 설정 PR 맡아줘".to_owned()),
+        (
+            "assistant",
+            "설정 변경을 이 PR에 넣을지 따로 낼지 정해 주세요".to_owned(),
+        ),
+    ];
+    let write = |lines: &[(&str, String)]| {
+        let turns: Vec<(&str, &str)> = lines.iter().map(|(k, t)| (*k, t.as_str())).collect();
+        later_session(&harness, &turns)
+    };
+    let path = write(&lines);
+    harness
+        .backend
+        .answer("모바일 출시 설정 PR", "question", "정해 주세요");
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+    let letters = [
+        // The parent's request, under a title that is not its name.
+        ("hide 앱 모바일 출시 계획", "agent-7", "request", true),
+        // A reviewer's reply answers the child's request to it, not what
+        // the child asked the operator through its parent.
+        ("review-push-quiet", "review-push-quiet", "reply", false),
+        // The parent's progress letter, under the title its next task gave it.
+        ("모바일 앱 데스크톱 유사 UI", "agent-7", "progress", false),
+        // A sender showing the parent's name on the line is not the parent.
+        ("agent-7", "agent-9", "reply", false),
+    ];
+    for (round, (shown, from, kind, _)) in letters.iter().enumerate() {
+        let index = lines.len() as u64;
+        let typed = bell(shown, from, kind, "별도 PR로 하세요", index);
+        lines.extend([("user", typed), ("assistant", "알겠습니다".to_owned())]);
+        let path = write(&lines);
+        harness.backend.answer("모바일 출시 설정 PR", "waiting", "");
+        observe(&mut worker, &agent(&path, "idle", 2 + round as u64));
+        settle(&mut worker, &woken);
     }
-    // Words that only look like a bell, with no bell Hide typed, answer nothing.
-    assert!(!super::worker::letter_answers(
-        &message("🦉 lead 답장: 이렇게 해 주세요"),
-        &[]
-    ));
+    let answered: Vec<bool> = client
+        .ledger_updates_for_test()
+        .into_iter()
+        .filter_map(|update| match update {
+            LedgerUpdate::TurnEnd { asks_answered, .. } => Some(asks_answered),
+            _ => None,
+        })
+        .collect();
+    let mut expected = vec![true];
+    expected.extend(letters.iter().map(|(.., answers)| *answers));
+    assert_eq!(answered, expected, "the brief, then each letter");
 }
 
 /// A turn's tool call left failed and the agent's stop for the operator are
