@@ -354,7 +354,7 @@ A new agent's row is born with all fourteen scenes `Unknown` and its bell off, w
 
 The ordinary run of the journey (`--scenes check`, the default) does what `letter_menu` did and no more: a scene whose declaration carries a release check is opened, a letter is sent with `--now`, the scene stays open 10 s and is closed, and the letter must arrive once and be answered.
 Only Codex's `/model` picker carries one, because it is the one the journey had measured; a `safe` finding is proven again by the survey's probe, and every other scene reads `not measured` with its reason.
-The lane that runs the ordinary mode (`scripts/agent-journey-lane.py`) requires each scene cell to read what `scene.lane_status` says of it: `pass` for a release check or a `safe` finding, `not measured` for the rest, so a cell that passed without a proof fails the lane too.
+The lane that runs the ordinary mode (`scripts/agent-journey-lane.py`) requires each scene cell to read what `scene.lane_status` says of it: `pass` only for a scene that carries a release check, today Codex's `/model` picker, and `not measured` for every other scene, a `safe` finding included, which `--scenes survey` proves again; so a cell that passed without a proof fails the lane too.
 The agent canary's record judges each report with the same function, so a healthy report is neither a lane failure nor a canary miss.
 
 A survey (`--scenes survey`, `--scene-repetitions N`, three by default) opens each scene the journey can open by keys, however its finding reads, and watches a letter sent with `--now` for 75 s, a read a second of the request, the engine and the core's `doorbell.held` reasons: the 30 s quiet period and 45 s of doorbell passes after it.
@@ -366,7 +366,7 @@ A survey adds the requests of the scenes it watches to the fake model's budget (
 
 A door that is a start or a scripted turn is not opened by the journey yet: a start needs the agent launched into a state the journey does not prepare (an untrusted folder, an empty account, Codex's hooks unreviewed), and a turn needs a model that calls a tool, which the fake model does not.
 Their cells read `not measured` with that reason in both modes.
-The tool approval, question and plan approval scenes are therefore measured on a real login in a scratch checkout, at two requests an agent, with the model choosing the action, and are not CI-verified.
+The tool approval, question and plan approval scenes are therefore measured outside the fake model, at about two requests an agent, and are not CI-verified: Claude Code, Codex, Grok, OpenCode and omp on a real login in a scratch checkout with the model choosing the action, and Antigravity in a private home with a scripted model call and no login.
 A first-run and an update-notice screen have no way to be reached yet (the journey sets its accounts up before it starts the agent and turns every updater off), so those cells read `unknown` with that reason.
 
 A scene is measured in one of three ways, and the cell says which:
