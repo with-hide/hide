@@ -1,31 +1,62 @@
 // What a mission node's card says on hover or focus on the desktop (PRD
-// mission-destination D-19, D-20, B32, B33): its title and one line, its
-// worker in full (agent, model, effort, profile, device), where its work is
-// now, where its result goes with who merges it and its worker's worktree
-// branch, and the Conductor's last line. It holds nothing to press and
-// changes nothing: Escape or leaving the card closes it, a press on the card
-// picks the node as before. A part the core does not send is left out. A
-// mark on the card with its own hint (`!`, `⚠`, Hide's mark) shows that hint
-// alone: the card's stays shut while the pointer is on it.
+// mission-destination D-19, D-20, D-58, B32, B33): the card's own title row
+// and the operator's band, then one row per fact under a grey label, each
+// drawn with the card's parts at the card's text size: its state and time,
+// its worker (agent, model, effort, a device away), its steps, where its
+// result goes as the whole branch line with the pull request's state, or a
+// node that changes no code its result, and who merges it. Each fact is said
+// once; a merge the plan moved away from Settings says Settings' owner and
+// the plan's reason, and how to change it under a hairline. It holds nothing
+// to press and changes nothing: Escape or leaving the card closes it, a press
+// on the card picks the node as before. A part the core does not send is
+// left out. A mark on the card with its own hint (`!`, `⚠`, Hide's mark)
+// shows that hint alone: the card's stays shut while the pointer is on it.
 
 import type { PointerEvent, ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
-import { agentProductName } from "../agentAdapters";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { branchLineWords, type BranchLine } from "../missionLine";
+import type { BranchLine, ResultLine } from "../missionLine";
+import type { NodeLook, NodeStep } from "../missions";
+import { lookWord, type RunLabel } from "../missionParts";
 import { planCount } from "../plans";
-import type { Mission, MissionNode } from "../snapshot";
-import { useElapsed } from "./elapsed";
+import { PR_LOOK } from "../prMark";
+import type { Mission, MissionGate, MissionNode } from "../snapshot";
+import { DeviceChip } from "./device-chip";
+import { OperatorBand } from "./mission-gate";
+import { BranchLineView, ResultLineView } from "./mission-line";
+import { MissionNodeMark } from "./mission-node-mark";
+import { ProgressCells, STEP_FILL } from "./mission-tone";
 import { Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui/tooltip";
 
 export type NodeHoverFacts = {
-  /** The worker as the card names it: its agent, the run's words (profile, model, effort, a planned mark) and the device away from this window. */
-  worker: { agent: string | null; words: string; device: string | null } | null;
-  /** The step being worked, when a worker's plan has one. */
-  now: string | null;
-  /** Where its result goes, for a node that changes code. */
+  /** The card's state: its look, its mark's word and whether its ring stands still, and a resting or absent worker's words. */
+  look: NodeLook;
+  word: string;
+  still: boolean;
+  doing: string | null;
+  /** `n째` while it runs, `n 걸림` once it ended; none for a planned node. */
+  took: string | null;
+  /** The worker as the card names it, with its run's words (model, effort, profile, a planned mark) and a device away from this window. */
+  worker: { agent: string | null; run: RunLabel; device: string | null } | null;
+  /** Its steps: the worker's plan once it exists, else the Conductor's. */
+  work: { source: "worker" | "plan"; steps: NodeStep[]; now: string | null } | null;
+  /** Where its result goes, for a node that changes code, or what it found for one that does not. */
   branch: BranchLine | null;
+  result: ResultLine | null;
+  /** What the operator does on the node, the card's band. */
+  gate: Pick<MissionGate, "state" | "look"> | null;
+  mergeDue: boolean;
+};
+
+/** The state word in the colour of the card's mark. */
+const LOOK_TONE: Record<NodeLook, string> = {
+  waiting: "text-muted-foreground",
+  working: "text-mission-working",
+  done: "text-mission-done",
+  external: "text-muted-foreground",
+  cancelled: "text-mission-cancelled",
+  dropped: "text-muted-foreground",
 };
 
 export function MissionNodeHover({ mission, node, facts, children }: { mission: Mission; node: MissionNode; facts: NodeHoverFacts; children: ReactNode }) {
@@ -51,47 +82,73 @@ export function MissionNodeHover({ mission, node, facts, children }: { mission: 
 
 function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: MissionNode; facts: NodeHoverFacts }) {
   const { t } = useInterfaceTranslation();
-  const pushed = useElapsed(node.pushed_at_unix_ms ?? null);
-  const plan = node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : null;
-  const now = [plan, facts.now, pushed ? t("mission.popover.pushed", { ago: pushed }) : null].filter(Boolean).join(" · ");
   const merge = mergeBy(mission, node);
   // The plan gave the operator a merge Settings give the Conductor (D-10): the core keeps its reason only then.
   const override = mission.scope === "merge" && node.merge?.by === "operator";
+  const current = node.prs.at(-1) ?? null;
+  const pr = current?.state ? PR_LOOK[current.state] : null;
+  const work = facts.work;
+  const finished = node.plan?.progress.finished ?? false;
+  const count = node.plan ? (finished ? t("mission.popover.stepsDone", { progress: planCount(node.plan) }) : planCount(node.plan)) : work ? t("mission.steps.planned", { count: work.steps.length }) : null;
   return (
     <div className="flex min-w-0 flex-col gap-sm text-caption">
-      <div className="flex min-w-0 flex-col gap-xxs">
-        <span className="break-words text-body font-semibold text-foreground" data-node-hover-title="true">{node.title}</span>
-        {node.change ? <span className="break-words text-muted-foreground" data-node-hover-change="true">{node.change}</span> : null}
-      </div>
-      {facts.worker ? (
-        <Part label={t("mission.role.worker")} data="worker">
-          <span className="flex min-w-0 items-start gap-xs">
-            {facts.worker.agent ? <span className="mt-xxs flex shrink-0"><AgentMark kind={facts.worker.agent} /></span> : null}
-            <span className="min-w-0 break-words">{[agentProductName(facts.worker.agent), facts.worker.words, facts.worker.device].filter(Boolean).join(" · ")}</span>
-          </span>
-        </Part>
-      ) : null}
-      {now ? <Part label={t("mission.steps.now")} data="now"><span className="break-words">{now}</span></Part> : null}
-      {facts.branch ? (
-        <Part label={t("mission.foot.where")} data="where">
-          <span className="break-words font-medium text-foreground" data-node-hover-path="true">{branchLineWords(facts.branch, t)}</span>
-          {node.prs.length > 1 ? <span className="break-words font-mono" data-node-hover-prs="true">{t("mission.popover.prs")} {node.prs.map((pr) => `#${pr.number}`).join(", ")}</span> : null}
-          {merge ? <span data-node-hover-merge={merge}>{t(`mission.popover.mergeBy.${merge}`)}</span> : null}
-          {override ? (
-            <span className="flex min-w-0 flex-col gap-xxs rounded-xs bg-mission-hold/10 px-xs py-xxs text-foreground" data-node-hover-override="true">
-              <span className="break-words">{t("mission.popover.override")}{node.merge?.why ? ` · ${node.merge.why}` : ""}</span>
-              <span className="text-muted-foreground">{t("mission.popover.change")}</span>
+      <span className="flex min-w-0 items-center gap-xs">
+        <MissionNodeMark look={facts.look} label={facts.word} still={facts.still} hint={false} />
+        <span className="min-w-0 break-words text-body font-semibold text-foreground" data-node-hover-title="true">{node.title}</span>
+      </span>
+      <OperatorBand gate={facts.gate} mergeDue={facts.mergeDue} />
+      <dl className="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-md gap-y-xs">
+        <Row label={t("mission.popover.status")} data="status">
+          <span className={cn("font-medium", LOOK_TONE[facts.look])}>{lookWord(facts.look, t)}</span>
+          {facts.doing ? <span className="text-muted-foreground">· {facts.doing}</span> : null}
+          {facts.took ? <span className="text-muted-foreground">· {facts.took}</span> : null}
+        </Row>
+        {facts.worker ? (
+          <Row label={t("mission.popover.worker")} data="worker">
+            {facts.worker.agent ? <span className="flex shrink-0" aria-hidden="true"><AgentMark kind={facts.worker.agent} profile={facts.worker.run.profile} /></span> : null}
+            <span className="min-w-0 break-words text-foreground">{facts.worker.run.words}</span>
+            {facts.worker.run.mark ? <span className="text-muted-foreground">{facts.worker.run.mark}</span> : null}
+            {facts.worker.device ? <DeviceChip label={facts.worker.device} variant="remote" /> : null}
+          </Row>
+        ) : null}
+        {work ? (
+          <Row label={t("mission.popover.steps")} data="steps" column>
+            <span className="flex min-w-0 items-center gap-xs">
+              <ProgressCells tones={work.steps.map((step) => step.tone)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) min-w-0 flex-1" />
+              {count ? <span className="shrink-0 tabular-nums text-muted-foreground" data-node-hover-count="true">{count}</span> : null}
             </span>
-          ) : null}
-          {node.branch ? (
-            <span className="flex min-w-0 gap-xs" data-node-hover-branch={node.branch}>
-              <span className="shrink-0 text-muted-foreground">{t("mission.popover.branch")}</span>
-              <span className="min-w-0 break-all font-mono">{node.branch}</span>
-            </span>
-          ) : null}
-        </Part>
-      ) : null}
-      {node.line ? <Part label={t("mission.popover.line")} data="line"><span className="break-words">{node.line}</span></Part> : null}
+            {work.now && node.status === "working" ? <span className="break-words text-subtle-foreground">{t("mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span> : null}
+          </Row>
+        ) : null}
+        {facts.branch ? (
+          <Row label={t("mission.popover.into")} data="into">
+            <BranchLineView line={facts.branch} whole />
+          </Row>
+        ) : null}
+        {facts.branch && pr ? (
+          <Row label={t("mission.popover.pr")} data="pr">
+            <pr.icon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", pr.tone)} />
+            <span className="text-foreground">{t(pr.word)}</span>
+          </Row>
+        ) : null}
+        {facts.result ? (
+          <Row label={t("mission.popover.result")} data="result">
+            <ResultLineView line={facts.result} whole />
+          </Row>
+        ) : null}
+        {merge ? (
+          <Row label={t("mission.popover.merge")} data="merge" column>
+            <span className="text-foreground" data-node-hover-merge={merge}>{t(`mission.popover.who.${merge}`)}</span>
+            {/* Why the plan moved it away from Settings, small under who. */}
+            {override ? (
+              <span className="break-words text-micro text-muted-foreground" data-node-hover-override="true">
+                {[t("mission.popover.setting", { who: t("mission.popover.who.conductor") }), node.merge?.why].filter(Boolean).join(" · ")}
+              </span>
+            ) : null}
+          </Row>
+        ) : null}
+      </dl>
+      {override ? <span className="border-t border-border pt-xs text-muted-foreground" data-node-hover-change="true">{t("mission.popover.change")}</span> : null}
     </div>
   );
 }
@@ -102,11 +159,14 @@ function mergeBy(mission: Mission, node: MissionNode): "operator" | "conductor" 
   return node.kind === "change" && mission.scope === "merge" ? "conductor" : null;
 }
 
-function Part({ label, data, children }: { label: string; data: string; children: ReactNode }) {
+/** One fact: its grey label in the first column, the card's parts for it in the second. */
+function Row({ label, data, column = false, children }: { label: string; data: string; column?: boolean; children: ReactNode }) {
   return (
-    <div className={cn("flex min-w-0 flex-col gap-xxs")} data-node-hover-part={data}>
-      <span className="text-micro font-semibold text-muted-foreground">{label}</span>
-      {children}
-    </div>
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn("m-0 flex min-w-0", column ? "flex-col gap-xxs" : "flex-wrap items-center gap-x-xxs")} data-node-hover-part={data}>
+        {children}
+      </dd>
+    </>
   );
 }

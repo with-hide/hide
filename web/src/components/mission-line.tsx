@@ -2,7 +2,8 @@
 // it (PRD mission-destination D-52-D-54, D-56, B55-B57, B59): the branch line
 // of a node that changes code and the result line of one that does not, from
 // `branchLine` and `resultLine` (`web/src/missionLine.ts`). The pull
-// request's icon and colour are the PR list's (`PR_LOOK`). A line with a
+// request's icon and colour are the PR list's (`PR_LOOK`), and so are those of
+// the pull request a stacked node goes into, drawn before its number (D-57). A line with a
 // number is one row while it fits, the number a step further from the branch
 // than the icon is from the number; otherwise the number keeps the first row
 // and `branch → destination` takes a second one from the card's left edge. A
@@ -18,8 +19,9 @@ import type { ReactNode } from "react";
 import { ChevronRightIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { linePrLabel, lineToLabel, resultLineWords, type BranchLine, type LineMark, type ResultLine } from "../missionLine";
+import { linePrLabel, lineToLabel, lineToWords, resultLineWords, type BranchLine, type LineMark, type ResultLine } from "../missionLine";
 import { PR_LOOK } from "../prMark";
+import type { PrState } from "../snapshot";
 
 /** A mark the PR list does not draw: a branch before any pull request, one not read yet, and a planned node's faint marks. */
 const OWN_MARK: Record<Exclude<LineMark, keyof typeof PR_LOOK>, { icon: LucideIcon; tone: string }> = {
@@ -36,17 +38,28 @@ function markLook(mark: LineMark): { icon: LucideIcon; tone: string } {
 /** The person before the destination (D-53): faint orange ahead, yellow when the merge is the operator's now, grey after. */
 const PERSON_TONE = { ahead: "text-mission-hold/70", due: "text-mission-hold", merged: "text-muted-foreground" } as const;
 
-/** `end` is the foot's right-end marks, drawn on the line's first row. */
-export function BranchLineView({ line, end, className }: { line: BranchLine; end?: ReactNode; className?: string }) {
+/** `end` is the foot's right-end marks, drawn on the line's first row; `whole` draws every name in full, wrapping, as the card's hover does (D-58). */
+export function BranchLineView({ line, end, whole = false, className }: { line: BranchLine; end?: ReactNode; whole?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const { icon: Icon, tone } = markLook(line.mark);
   const due = line.person === "due";
-  const bold = line.to != null && (line.to.kind === "stack" || line.to.elsewhere);
+  // Only another branch is bold (B55); the pull request a stacked node goes into is its mark and a grey number, so the node's own number stays the line's lead (D-57).
+  const bold = line.to?.kind === "branch" && line.to.elsewhere;
   const plan = line.plan ? t(line.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : null;
   // A direct change's `PR 없이` follows the destination's name, or the branch when there is none, and never gives way.
   const direct = (after: boolean) => (line.direct ? <span className="shrink-0 font-normal text-muted-foreground" data-line-direct="true">{after ? "· " : ""}{t("mission.foot.planDirect")}</span> : null);
   const from = plan != null || line.branch != null || (line.direct && line.to == null);
   const icon = <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />;
+  const to = (full: boolean) =>
+    line.to ? (
+      <span className={cn("flex min-w-0 items-center gap-xxs", full && "flex-wrap", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
+        <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
+        {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
+        {line.to.kind === "stack" ? <StackMark state={line.to.state} /> : null}
+        <span className={cn(full ? "break-all" : "min-w-0 truncate", line.to.kind === "stack" && "font-normal tabular-nums text-muted-foreground")} title={full ? undefined : lineToWords(line.to, t)}>{lineToLabel(line.to)}</span>
+        {direct(true)}
+      </span>
+    ) : null;
   const path = (
     // Where the branch and the destination do not both fit, a grid of auto columns grows them from zero alike, each frozen
     // at its whole width, so a name shorter than half the row stays whole and two long ones share it.
@@ -63,18 +76,29 @@ export function BranchLineView({ line, end, className }: { line: BranchLine; end
           {line.to ? null : direct(line.branch != null)}
         </span>
       ) : null}
-      {line.to ? (
-        <span className={cn("flex min-w-0 items-center gap-xxs", due ? "font-semibold text-mission-hold" : bold ? "font-bold text-foreground" : "text-subtle-foreground")} data-line-to={line.to.kind} data-line-elsewhere={bold || undefined}>
-          <span className={cn("shrink-0", !due && "text-muted-foreground")}>→</span>
-          {line.person ? <UserRoundIcon className={cn("size-(--size-icon-sm) shrink-0", PERSON_TONE[line.person])} data-line-person-mark={line.person} /> : null}
-          <span className="min-w-0 truncate" title={lineToLabel(line.to)}>{lineToLabel(line.to)}</span>
-          {direct(true)}
-        </span>
-      ) : null}
+      {to(false)}
     </span>
   );
   const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined };
   const number = line.pr ? <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span> : null;
+  if (whole) {
+    return (
+      <span className={cn("flex min-w-0 flex-wrap items-center gap-x-xxs text-caption text-muted-foreground", className)} {...data}>
+        <span aria-hidden="true" className="flex items-center gap-xxs" data-line-head="true">
+          {icon}
+          {number}
+        </span>
+        {plan ? <span data-line-plan={line.plan}>{plan}</span> : null}
+        {line.branch ? (
+          <span className="break-all" data-line-branch={line.branch.name}>
+            {line.branch.outside ? "↗ " : ""}
+            {line.branch.name}
+          </span>
+        ) : null}
+        {line.to ? to(true) : direct(line.branch != null)}
+      </span>
+    );
+  }
   // A numbered line with marks: the number and the marks on the first row, the number never giving way, and the path on
   // the second. Without marks it runs inline, so the path wraps whole under the number to a row of the card's whole
   // width. A line without a number is one flex row that never wraps, the marks at its end.
@@ -107,9 +131,15 @@ export function BranchLineView({ line, end, className }: { line: BranchLine; end
   );
 }
 
+/** The pull request a stacked node goes into, as the PR list draws it by its state; grey when no node of the mission holds it (D-57). */
+function StackMark({ state }: { state: PrState | null }) {
+  const { icon: Icon, tone } = state ? PR_LOOK[state] : OWN_MARK.pull;
+  return <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-to-mark={state ?? "unknown"} />;
+}
+
 const RESULT_ICON = { research: SearchIcon, verify: ShieldCheckIcon } as const;
 
-export function ResultLineView({ line, className }: { line: ResultLine; className?: string }) {
+export function ResultLineView({ line, whole = false, className }: { line: ResultLine; whole?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const Icon = RESULT_ICON[line.kind];
   const verdict = line.shows === "verdict" ? (line.verdict === "pass" ? "text-mission-done" : "text-mission-failed") : null;
@@ -117,7 +147,7 @@ export function ResultLineView({ line, className }: { line: ResultLine; classNam
   return (
     <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xxs text-caption", verdict ?? (line.shows === "conclusion" ? "text-subtle-foreground" : "text-muted-foreground"), className)} data-node-line="result" data-line-kind={line.kind} data-line-shows={line.shows} data-line-verdict={line.shows === "verdict" ? line.verdict : undefined}>
       <Icon className={cn("size-(--size-icon-sm) shrink-0", line.working && line.shows === "kind" ? "text-mission-working" : verdict)} />
-      <span className="min-w-0 truncate" title={line.shows === "conclusion" ? line.line : undefined}>{words}</span>
+      <span className={whole ? "min-w-0 break-words" : "min-w-0 truncate"} title={!whole && line.shows === "conclusion" ? line.line : undefined}>{words}</span>
       {line.shows !== "kind" ? <ChevronRightIcon className="size-(--size-icon-sm) shrink-0" /> : null}
     </span>
   );

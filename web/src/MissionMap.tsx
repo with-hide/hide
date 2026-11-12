@@ -351,7 +351,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // How the node's work goes is one bar of cells under its title, from the worker's plan once it exists, else the Conductor's steps; its count is in the card's name, never a second number on the card.
   const work = nodeSteps(node);
   // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
-  const branch = useMemo(() => branchLine(lineNode(node), mission.destination ?? null), [node, mission.destination]);
+  const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
   const result = branch ? null : resultLine(lineNode(node));
   const titleText = (
     <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
@@ -359,21 +359,21 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     </span>
   );
   // The foot's right-end marks, one group: a warning, then the operator's turn or who a raised reason waits on. Short of
-  // room the warning's words give way first, down to its icon, then a long wait's words, then the tag's own word, so the
-  // marks never cover the line's number; the card's name says each in full.
+  // room the warning's words give way, down to its icon, then a long wait's words; the tag's own word never does, and the
+  // group clips rather than cover the line's number. The card's name says each mark in full.
   const marks = warning || gate?.state === "open" || attention ? (
-    <span className="flex min-w-0 items-center justify-end gap-x-xs" data-node-foot-end="true">
+    <span className="flex min-w-0 items-center justify-end gap-x-xs overflow-hidden" data-node-foot-end="true">
       {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
       {gate?.state === "open" && !attention ? (
-        <span className="flex min-w-0 items-center gap-x-xxs font-semibold text-mission-hold" data-node-gate-tag="open">
-          <span className="min-w-0 truncate">{t("agents.mark.turn")}</span>
+        <span className="flex items-center gap-x-xxs font-semibold text-mission-hold" data-node-gate-tag="open">
+          <span className="shrink-0">{t("agents.mark.turn")}</span>
           {long ? <span className="min-w-0 shrink-[10] truncate font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
         </span>
       ) : null}
       {attention ? (
         <Hint label={attention.why}>
-          <span className={cn("flex min-w-0 items-center gap-x-xxs", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
-            <span className="min-w-0 truncate">{yours ? t("agents.mark.turn") : attention.who}</span>
+          <span className={cn("flex items-center gap-x-xxs", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
+            <span className="shrink-0">{yours ? t("agents.mark.turn") : attention.who}</span>
             {long ? <span className="min-w-0 shrink-[10] truncate font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
           </span>
         </Hint>
@@ -468,7 +468,11 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       </span>
     </MissionGraphCard>
   );
-  const hovered = <MissionNodeHover mission={mission} node={node} facts={{ worker: run ? { agent: worker?.agent ?? null, words: run.text, device } : null, now: work?.now && node.status === "working" ? work.now : null, branch }}>{card}</MissionNodeHover>;
+  const hovered = (
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+      {card}
+    </MissionNodeHover>
+  );
   // The card and its satellites are one box to the layout, the card centred in it, so edges meet the card's middle.
   // An empty column as wide as the satellites' keeps the card in the middle of the box.
   if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{hovered}</div>;

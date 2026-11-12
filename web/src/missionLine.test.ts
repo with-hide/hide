@@ -3,7 +3,8 @@
 // line of one that does not, as the desktop and the phone both read them.
 import { expect, it } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { branchLine, branchLineWords, resultLine, resultLineWords, type LineNode } from "./missionLine";
+import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords, type LineNode } from "./missionLine";
+import type { MissionNode } from "./snapshot";
 
 function node(extra: Partial<LineNode> = {}): LineNode {
   return { kind: "change", status: "working", pr: null, pr_state: null, landing: null, delivery: "pr", base_pr: null, branch: "feat/refund-db", ...extra };
@@ -20,8 +21,13 @@ it("draws a change by pull request as its PR list mark, number, branch and desti
   expect(branchLine(node({ pr: 3105, pr_state: null, pr_more: 2 }), "main")).toMatchObject({ mark: "pull", pr: { number: 3105, outside: false, more: 2 } });
 });
 
-it("ends in bold where the result does not go to the mission's destination: the pull request it is stacked on or another base (B55)", () => {
-  expect(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")?.to).toEqual({ kind: "stack", pr: 3105 });
+it("ends in another base, or in the pull request it is stacked on with that pull request's state as the mission's nodes know it (B55, D-57)", () => {
+  expect(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: null });
+  // The desktop reads the base's state from whichever node of the mission holds that pull request; none holds it, none is named.
+  const held = (number: number, state: MissionNode["prs"][number]["state"]) => ({ prs: [{ number, state, url: null }] });
+  const stacked = { kind: "change", status: "working", pr: 3106, pr_state: "pending", landing: null, merge: null, delivery: "pr", base_pr: 3105, branch: "feat/screen", prs: [{ number: 3106, state: "pending", url: null }] } as unknown as MissionNode;
+  expect(branchLine(lineNode(stacked, [held(3104, "merged"), held(3105, "mergeable")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: "mergeable" });
+  expect(branchLine(lineNode(stacked, [held(3104, "merged")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: null });
   expect(branchLine(node({ pr: 3106, pr_state: "pending", pr_base: "release/1.2" }), "main")?.to).toEqual({ kind: "branch", name: "release/1.2", elsewhere: true });
   expect(branchLine(node({ pr: 3106, pr_state: "pending", pr_base: "main" }), "main")?.to).toEqual({ kind: "branch", name: "main", elsewhere: false });
 });
@@ -65,7 +71,7 @@ it("names no branch or destination it was not sent: no branch, no `→` without 
 it("says the line in words, its pull request's state and the operator's merge included, so no state is only a colour (B55, B56)", () => {
   const words = t();
   expect(branchLineWords(branchLine(node({ pr: 3105, pr_state: "mergeable", pr_more: 1, merge: { by: "operator", state: "due" } }), "main")!, words)).toBe("#3105 +1 feat/refund-db → main · 머지 가능 · 머지는 내가 · 머지할 차례");
-  expect(branchLineWords(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")!, words)).toBe("#3106 feat/refund-db → #3105 · CI 실행 중이거나 리뷰 대기");
+  expect(branchLineWords(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")!, words)).toBe("#3106 feat/refund-db → PR 3105 · CI 실행 중이거나 리뷰 대기");
   expect(branchLineWords(branchLine(node({ status: "planned", delivery: "direct", branch: null }), "main")!, words)).toBe("PR 없이 → main");
   expect(branchLineWords(branchLine(node({ delivery: "direct" }), "main")!, words)).toBe("feat/refund-db → main · PR 없이");
   expect(branchLineWords(branchLine(node({ kind: "external", delivery: null, branch: null, external: { branch: "vendor/sdk" } }), null)!, words)).toBe("↗ vendor/sdk");

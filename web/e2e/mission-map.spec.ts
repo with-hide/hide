@@ -361,7 +361,7 @@ test("at the largest Interface text a working change's branch line stays inside 
     await expect(map.locator('[data-mission-node="screen"] [data-line-pr]')).toHaveText("#3115");
     // Each part of the line ends inside the card's padding. A numbered line too long for one row leaves the number alone on
     // the first row and starts `branch → destination` on the second at the card's left edge, where the title row starts too;
-    // a destination shorter than half the row stays whole (`#3114`), and two long names share the row, each cut at its own
+    // a destination shorter than half the row stays whole (the stacked `3114` beside its pull request's mark), and two long names share the row, each cut at its own
     // end with its whole name on hover. A line that fits keeps one row, its number a step further from the branch than the
     // icon from the number; a line without a number stays on one row however long, a direct one's `PR 없이` after its destination.
     // A numbered line with marks keeps `#n +N` whole and the marks on its first row, inside the card, and the path on the second.
@@ -399,8 +399,8 @@ test("at the largest Interface text a working change's branch line stays inside 
     );
     expect(lines).toEqual({
       api: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-db-state-columns-and-index", branchCut: true, to: LONG_DESTINATION, toCut: true },
-      screen: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: false, numberCut: false, branch: "feat/refund-screen-that-reads-the-api", branchCut: true, to: "#3114", toCut: false },
-      short: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: true, half: false, numberCut: false, branch: "fix/typo", branchCut: false, to: "#3114", toCut: false },
+      screen: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-screen-that-reads-the-api", branchCut: true, to: "PR 3114", toCut: false },
+      short: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: true, half: false, numberCut: false, branch: "fix/typo", branchCut: false, to: "PR 3114", toCut: false },
       draft: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: null, branch: "feat/refund-notice-mail-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
       marked: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, number: "#3116 +1", warning: true, turn: "Needs you" }, wider: null, half: true, numberCut: false, branch: "feat/refund-retry-queue-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
       hotfix: { inside: true, wrapped: false, edge: true, oneRow: true, direct: "· No PR", marks: null, wider: null, half: true, numberCut: null, branch: "fix/refund-rounding-in-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },

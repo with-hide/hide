@@ -13,16 +13,16 @@ import { Hint } from "./ui/tooltip";
 // turns only while the node is worked: a node in progress whose worker rests
 // or is gone (`still`, hide-private issue 680) keeps the ring and stops it.
 
-export function MissionNodeMark({ look, label, still = false, className }: { look: NodeLook; label: string; still?: boolean; className?: string }) {
-  return (
-    <Hint label={label}>
-      <span role="img" aria-label={label} data-node-mark={look} data-node-mark-still={still || undefined} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
-        <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && !still && "motion-safe:animate-spin")} aria-hidden="true">
-          <Shape look={look} />
-        </svg>
-      </span>
-    </Hint>
+/** `hint` false draws the mark alone, where its word stands beside it already (the card's hover, D-58). */
+export function MissionNodeMark({ look, label, still = false, hint = true, className }: { look: NodeLook; label: string; still?: boolean; hint?: boolean; className?: string }) {
+  const mark = (
+    <span role="img" aria-label={label} data-node-mark={look} data-node-mark-still={still || undefined} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
+      <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && !still && "motion-safe:animate-spin")} aria-hidden="true">
+        <Shape look={look} />
+      </svg>
+    </span>
   );
+  return hint ? <Hint label={label}>{mark}</Hint> : mark;
 }
 
 function Shape({ look }: { look: NodeLook }) {

@@ -686,33 +686,52 @@ it("draws a card's text at the regular weight, though the card is a medium-weigh
   } finally { await map.unmount(); }
 });
 
-it("shows on a card's hover its title, its worker in full, where it is, where its result goes in words with who merges and its worktree branch, and the Conductor's last line, with nothing to press (PRD mission-destination D-19, D-20, D-52, B32, B33)", async () => {
+it("shows on a card's hover its title row and one row per fact under a grey label, drawn with the card's parts in full and each said once, with nothing to press (PRD mission-destination D-19, D-20, D-58, B32, B33)", async () => {
   const nodes = [
     node("core", { title: "A long title that the card cuts", status: "working", change: "split in two", branch: "feat/core-split", line: "replay 19/31", pr: 41, pr_state: "pending", prs: [{ number: 40, state: "closed", url: null }, { number: 41, state: "pending", url: null, base: "release/1.2" }], worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, merge: { by: "operator", why: "DB change", state: "ahead", prs: [41] } }),
+    node("screen", { status: "working", branch: "feat/screen", pr: 42, pr_state: "draft", base_pr: 41, prs: [{ number: 42, state: "draft", url: null }] }),
     node("research", { kind: "research", delivery: null, status: "done", line: "the cause is the reopen order" }),
   ];
+  const rows = (hover: HTMLElement) => [...hover.querySelectorAll("dt")].map((label) => [label.textContent, (label.nextElementSibling as HTMLElement).dataset.nodeHoverPart]);
   const map = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
     await act(async () => card(map, "core").focus());
     const hover = document.querySelector<HTMLElement>('[data-node-hover="core"]')!;
     expect(hover.querySelector("[data-node-hover-title]")?.textContent).toBe("A long title that the card cuts");
-    expect(hover.querySelector("[data-node-hover-change]")?.textContent).toBe("split in two");
-    expect(hover.querySelector('[data-node-hover-part="worker"]')?.textContent).toContain("Claude Code · opus·high (planned)");
-    // Where it goes in words, a branch other than the destination named as it is; every pull request it holds; who merges, and why the plan changed Settings' choice.
-    expect(hover.querySelector("[data-node-hover-path]")?.textContent).toBe("#41 +1 feat/core-split → release/1.2 · CI running or review pending · You merge it");
-    expect(hover.querySelector("[data-node-hover-prs]")?.textContent).toBe("Pull requests #40, #41");
-    expect(hover.querySelector("[data-node-hover-merge]")?.textContent).toBe("You merge");
-    expect(hover.querySelector("[data-node-hover-override]")?.textContent).toBe("Settings have the Conductor merge; this node is yours · DB changeTo change it, tell the Conductor");
-    expect(hover.querySelector<HTMLElement>("[data-node-hover-branch]")?.dataset.nodeHoverBranch).toBe("feat/core-split");
-    expect(hover.querySelector('[data-node-hover-part="line"]')?.textContent).toContain("replay 19/31");
+    expect(rows(hover)).toEqual([["Status", "status"], ["Worker", "worker"], ["Goes into", "into"], ["PR", "pr"], ["Merge", "merge"]]);
+    const part = (key: string) => hover.querySelector<HTMLElement>(`[data-node-hover-part="${key}"]`)!;
+    expect(part("worker").textContent).toContain("opus·high");
+    // Where it goes is the card's branch line with no name cut; the pull request's state is the PR list's word beside its mark.
+    expect([part("into").querySelector("[data-line-pr]")?.textContent, part("into").querySelector<HTMLElement>("[data-line-branch]")?.dataset.lineBranch, part("into").querySelector("[data-line-to]")?.textContent]).toEqual(["#41 +1", "feat/core-split", "→release/1.2"]);
+    expect(part("into").querySelector(".truncate, [title]")).toBeNull();
+    expect(part("pr").textContent).toBe("CI running or review pending");
+    // Who merges, Settings' owner and the plan's reason when the plan moved it, and how to change it under a hairline.
+    expect([part("merge").querySelector("[data-node-hover-merge]")?.textContent, part("merge").querySelector("[data-node-hover-override]")?.textContent]).toEqual(["You", "Settings: Conductor · DB change"]);
+    expect(hover.querySelector("[data-node-hover-change]")?.textContent).toBe("To change who merges, tell the Conductor");
+    // Each fact once: no worktree branch beside the line's own branch, no change note, no last line.
+    expect(hover.textContent).not.toContain("split in two");
+    expect(hover.textContent).not.toContain("replay 19/31");
     expect(hover.querySelectorAll("button, a, input")).toHaveLength(0);
   } finally { await map.unmount(); }
-  // A node that changes no code has no part saying where it goes; its card ends in its conclusion.
+  // A stacked node goes into the pull request it stands on, that pull request's mark by its state and its number (D-57); a merge Settings decide says no reason and no way to change it.
+  const stacked = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
+  try {
+    await act(async () => card(stacked, "screen").focus());
+    const hover = document.querySelector<HTMLElement>('[data-node-hover="screen"]')!;
+    expect([hover.querySelector<HTMLElement>("[data-line-to-mark]")?.dataset.lineToMark, hover.querySelector("[data-line-to]")?.textContent]).toEqual(["pending", "→41"]);
+    expect([hover.querySelector("[data-node-hover-override]"), hover.querySelector("[data-node-hover-change]")]).toEqual([null, null]);
+    // On the card the base's number is grey and plain, so the node's own number leads the line; the card's name says `PR 41`.
+    const to = card(stacked, "screen").querySelector<HTMLElement>("[data-line-to]")!;
+    expect([to.className.includes("font-bold"), to.querySelector("[title]")?.className.includes("text-muted-foreground"), to.querySelector("[title]")?.getAttribute("title")]).toEqual([false, true, "PR 41"]);
+    expect(card(stacked, "screen").getAttribute("aria-label")).toContain("→ PR 41");
+  } finally { await stacked.unmount(); }
+  // A node that changes no code shows its result in full instead of where it goes and its pull request, and no merge.
   const plain = await mount({ items: [mission({ scope: "merge", destination: "main", nodes })] });
   try {
     await act(async () => card(plain, "research").focus());
     const hover = document.querySelector<HTMLElement>('[data-node-hover="research"]')!;
-    expect([hover.querySelector('[data-node-hover-part="where"]'), hover.querySelector('[data-node-hover-part="line"]')?.textContent]).toEqual([null, expect.stringContaining("the cause is the reopen order")]);
+    expect(rows(hover).map(([, key]) => key)).toEqual(["status", "result"]);
+    expect(hover.querySelector('[data-node-hover-part="result"]')?.textContent).toContain("the cause is the reopen order");
     expect(card(plain, "research").querySelector<HTMLElement>("[data-node-line]")?.dataset.nodeLine).toBe("result");
   } finally { await plain.unmount(); }
 });
@@ -780,7 +799,7 @@ it("tethers each agent checking a node to its card's right side as a satellite, 
   } finally { await map.unmount(); }
 });
 
-it("names each role: a reviewer and a verifier satellite carry their role's name as hover and description, and the card's hover names its worker by the worker's role", async () => {
+it("names each role: a reviewer and a verifier satellite carry their role's name as hover and description, and the card's hover has its worker's row (D-58)", async () => {
   const nodes = [
     node("core", { status: "working", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, criteria: [line("review", "review", { checkers: [checker("codex", "open", "agent-7")] }), line("verify", "verify", { checkers: [checker("claude", "open", "agent-8")] })] }),
   ];
@@ -793,10 +812,10 @@ it("names each role: a reviewer and a verifier satellite carry their role's name
     ]);
     await act(async () => marks[1]!.focus());
     expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain("Verification");
-    // The worker's mark is part of the card, whose hover names the worker's part by its role.
+    // The worker's mark is part of the card, whose hover gives the worker its own row.
     expect(card(map, "core").querySelector("[data-node-worker-mark]")).not.toBeNull();
     await act(async () => card(map, "core").focus());
-    expect(document.querySelector('[data-node-hover="core"] [data-node-hover-part="worker"] > span')?.textContent).toBe("Implementation");
+    expect(document.querySelector('[data-node-hover="core"] [data-node-hover-part="worker"]')?.previousElementSibling?.textContent).toBe("Worker");
   } finally { await map.unmount(); }
 });
 
