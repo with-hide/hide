@@ -39,6 +39,48 @@ describe("renderMarkdown", () => {
     expect(out).toContain("&lt;script&gt;");
   });
 
+  /** Each row of the drawn table as `tag[align]:text` cells. */
+  const tableRows = (text: string, options: { html?: boolean } = {}) => {
+    const out = renderToStaticMarkup(<>{renderMarkdown(text, options)}</>);
+    return Array.from(out.matchAll(/<tr[^>]*>(.*?)<\/tr>/g), ([, row]) =>
+      Array.from(row!.matchAll(/<(th|td) class="([^"]*)"[^>]*>(.*?)<\/\1>/g), ([, tag, classes, inner]) => {
+        const align = classes!.split(" ").find((name) => ["text-left", "text-center", "text-right"].includes(name))?.slice(5);
+        return `${tag}[${align}]:${inner}`;
+      }),
+    );
+  };
+
+  it("aligns each column as its delimiter mark says, header and body alike", () => {
+    expect(tableRows("| a | b | c | d |\n|:---|:---:|---:|---|\n| 1 | 2 | 3 | 4 |")).toEqual([
+      ["th[left]:a", "th[center]:b", "th[right]:c", "th[left]:d"],
+      ["td[left]:1", "td[center]:2", "td[right]:3", "td[left]:4"],
+    ]);
+  });
+
+  it("keeps an empty cell in its column, fills a short row and cuts a long one to the header's columns", () => {
+    expect(tableRows("|  | b | c |\n|---|---|:-:|\n| 1 |  | 3 |\n| only |\n| x | y | z | extra |")).toEqual([
+      ["th[left]:", "th[left]:b", "th[center]:c"],
+      ["td[left]:1", "td[left]:", "td[center]:3"],
+      ["td[left]:only", "td[left]:", "td[center]:"],
+      ["td[left]:x", "td[left]:y", "td[center]:z"],
+    ]);
+  });
+
+  it("reads an escaped pipe as text inside its cell and a row without outer pipes as the same row", () => {
+    expect(tableRows("a | b\n--- | ---:\nx \\| y | z")).toEqual([
+      ["th[left]:a", "th[right]:b"],
+      ["td[left]:x | y", "td[right]:z"],
+    ]);
+  });
+
+  it("draws a cell's emphasis, code and, with HTML on, its links and line breaks", () => {
+    const [, row] = tableRows("| a | b |\n|---|---|\n| **굵게** `c` | [링크](https://example.com/x)<br>다음 |", { html: true });
+    expect(row).toEqual([
+      'td[left]:<strong class="font-semibold">굵게</strong> <code class="rounded-xs bg-secondary px-xxs font-mono">c</code>',
+      expect.stringMatching(/^td\[left\]:<a href="https:\/\/example.com\/x"[^>]*>링크<\/a><br\/>다음$/),
+    ]);
+  });
+
   it("draws a pull request body's allowed HTML as elements, folding a details box around the Markdown inside it", () => {
     const body = "<details>\n<summary>Logs <b>here</b></summary>\n\n**inside** it\n\n</details>\n\nline<br>next <kbd>⌘K</kbd> H<sub>2</sub>O x<sup>2</sup> <i>it</i> <code>c</code>\n\n<p>para</p>\n\n<img src=\"https://example.com/a.png?x=1&amp;y=2\" alt=\"shot\" width=\"300\">\n\n<a href=\"https://example.com/docs\">docs</a> [md](https://example.com/md) ![pic](https://example.com/p.png)\n\n<!-- hidden -->";
     const out = html2(body);

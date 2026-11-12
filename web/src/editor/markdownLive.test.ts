@@ -169,6 +169,40 @@ describe("markdown live plan: HTML and images", () => {
     expect(markdownLivePlan(markdown.parse(source), doc, { from: 0, to: 0 }, false).map((range) => range.kind)).toEqual(["mermaid"]);
   });
 
+  const TABLE = "| 장치 | 질문 |\n|---|:---:|\n| 70년 | 왜 **지금**? |";
+
+  it("draws a top-level table as one block over its whole lines, its source the table, and nothing inside it on its own", () => {
+    const source = `${AWAY}${TABLE}\n\nafter **bold**`;
+    expect(plan(source).map((range) => [range.kind, source.slice(range.from, range.to), range.source])).toEqual([
+      ["table", TABLE, TABLE],
+      ["hide", "**", undefined],
+      ["hide", "**", undefined],
+    ]);
+  });
+
+  it("shows a table's source while the caret is anywhere in it, edges included, with its inline marks drawn off the caret's line", () => {
+    const source = `${AWAY}${TABLE}\n\nafter`;
+    const start = source.indexOf("| 장치");
+    const end = source.indexOf("? |") + 3;
+    for (const caret of [start, source.indexOf("|:---:"), end]) {
+      expect(plan(source, caret).some((range) => range.kind === "table")).toBe(false);
+    }
+    expect(shown(source, start)).toEqual(["hide:**", "hide:**"]);
+    expect(plan(source, start - 1).map((range) => range.kind)).toEqual(["table"]);
+    expect(plan(source, end + 1).map((range) => range.kind)).toEqual(["table"]);
+  });
+
+  it("keeps a table drawn under the caret a file opened with until the operator moves it", () => {
+    const doc = Text.of(TABLE.split("\n"));
+    expect(markdownLivePlan(markdown.parse(TABLE), doc, { from: 0, to: 0 }, false).map((range) => range.kind)).toEqual(["table"]);
+  });
+
+  it("leaves a table inside a list item or a quote as source", () => {
+    for (const source of [`${AWAY}- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |`, `${AWAY}> | a |\n> |---|\n> | 1 |`]) {
+      expect(plan(source).some((range) => range.kind === "table")).toBe(false);
+    }
+  });
+
   it("leaves another language, an empty diagram and a fence inside a list as code", () => {
     for (const source of [`${AWAY}\`\`\`mermaidish\ngraph TD\n\`\`\``, `${AWAY}\`\`\`mermaid\n\n\`\`\``, `${AWAY}- item\n\n  \`\`\`mermaid\n  graph TD\n  \`\`\``]) {
       expect(plan(source).some((range) => range.kind === "mermaid")).toBe(false);

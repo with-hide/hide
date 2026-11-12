@@ -14,6 +14,10 @@
 // that is not on the list, or carries an attribute or an address that is not,
 // stays as the text it was, and an HTML comment is not drawn.
 //
+// A table is the one drawing every surface shares: the document view's Live
+// mode draws a top-level table through this renderer, with `html` on, so a
+// table reads the same on the phone, on a pull request's card and in a file.
+//
 // A fenced block whose language is `mermaid` is drawn as its diagram, shrunk
 // to the width it is given; until the picture is in, and when Mermaid cannot
 // read it, it is the code block it would otherwise be, the second under one
@@ -108,12 +112,15 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
     }
     case "HorizontalRule":
       return <hr key={key} className="border-border" />;
-    case "Table":
+    case "Table": {
+      const header = node.getChild("TableHeader");
+      if (header) return <MarkdownTable key={key} table={node} header={header} source={source} />;
       return (
-        <table key={key} className="w-full border-collapse">
-          <tbody>{childrenOf(node).map((row, index) => tableRow(row, source, index))}</tbody>
-        </table>
+        <p key={key} className="whitespace-pre-line">
+          {inline(node, source)}
+        </p>
       );
+    }
     default:
       // A paragraph, a task, and anything the grammar knows that has no drawing of its own (raw HTML, a link reference).
       return (
@@ -124,17 +131,88 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
   }
 }
 
-function tableRow(row: SyntaxNode, source: Source, key: number): ReactNode {
-  if (row.name !== "TableHeader" && row.name !== "TableRow") return null;
-  const Cell = row.name === "TableHeader" ? "th" : "td";
-  return (
-    <tr key={key}>
-      {row.getChildren("TableCell").map((cell, index) => (
-        <Cell key={index} className={`border border-border px-sm py-xs text-left align-top wrap-anywhere ${Cell === "th" ? "font-semibold" : ""}`}>
-          {inline(cell, source)}
+type ColumnAlign = "left" | "center" | "right" | null;
+
+const ALIGN_CLASS = { left: "text-left", center: "text-center", right: "text-right" } as const;
+
+/** The delimiter row's alignment of each column: `:---` left, `:---:` centred, `---:` right, `---` the reading direction's start. */
+function columnAligns(row: string): ColumnAlign[] {
+  let marks = row.trim();
+  if (marks.startsWith("|")) marks = marks.slice(1);
+  if (marks.endsWith("|")) marks = marks.slice(0, -1);
+  return marks.split("|").map((cell) => {
+    const mark = cell.trim();
+    const left = mark.startsWith(":");
+    const right = mark.length > 1 && mark.endsWith(":");
+    return left && right ? "center" : right ? "right" : left ? "left" : null;
+  });
+}
+
+/**
+ * A row's cells in column order. The grammar gives an empty cell no node, so
+ * a cell is what lies between two pipes: `| a |  | c |` is three cells, the
+ * middle one empty, and a row without its outer pipes reads the same.
+ */
+function rowCells(row: SyntaxNode): (SyntaxNode | null)[] {
+  const cells: (SyntaxNode | null)[] = [];
+  let cell: SyntaxNode | null = null;
+  let opened = false;
+  for (const child of childrenOf(row)) {
+    if (child.name === "TableCell") cell = child;
+    else if (child.name === "TableDelimiter") {
+      if (opened || cell) cells.push(cell);
+      cell = null;
+      opened = true;
+    }
+  }
+  if (cell) cells.push(cell);
+  return cells;
+}
+
+/**
+ * A GFM table, the one drawing of it the phone, the pull request card and the
+ * document view's Live mode share: as many columns as the header has cells (a
+ * shorter row is filled with empty cells, a longer one cut, as GitHub draws
+ * it), each aligned as its delimiter mark says. Columns take the width their
+ * text needs and wrap inside the width they are given, whole words kept,
+ * under a quiet header and a hairline between rows. Only a word wider than
+ * its column's share (a long address) can make the table wider than its
+ * place, and then the table scrolls sideways inside it, never the page.
+ */
+function MarkdownTable({ table, header, source }: { table: SyntaxNode; header: SyntaxNode; source: Source }) {
+  const columns = rowCells(header).length;
+  const delimiter = table.getChild("TableDelimiter");
+  const aligns = delimiter ? columnAligns(source.text.slice(delimiter.from, delimiter.to)) : [];
+  const row = (node: SyntaxNode, Cell: "th" | "td") => {
+    const cells = rowCells(node);
+    return Array.from({ length: columns }, (_, index) => {
+      const cell = cells[index] ?? null;
+      const align = ALIGN_CLASS[aligns[index] ?? "left"];
+      return (
+        <Cell key={index} className={`px-sm py-xs align-top break-words break-keep first:pl-none last:pr-none ${align} ${Cell === "th" ? "font-medium text-subtle-foreground" : ""}`}>
+          {cell ? inline(cell, source) : null}
         </Cell>
-      ))}
-    </tr>
+      );
+    });
+  };
+  const rows = table.getChildren("TableRow");
+  return (
+    <div className="max-w-full overflow-x-auto">
+      <table className="border-collapse" data-markdown-table="true">
+        <thead>
+          <tr className="border-b border-border">{row(header, "th")}</tr>
+        </thead>
+        {rows.length > 0 ? (
+          <tbody>
+            {rows.map((node, index) => (
+              <tr key={index} className="border-b border-border last:border-b-0">
+                {row(node, "td")}
+              </tr>
+            ))}
+          </tbody>
+        ) : null}
+      </table>
+    </div>
   );
 }
 
