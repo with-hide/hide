@@ -731,12 +731,19 @@ impl Runtime {
             crate::agent_state::is_running(row),
         );
     }
-    /// Hide typed a letter's bell line into `pane_id` (D-19).
-    pub(crate) fn record_bell(&self, pane_id: &str, line: &str, letter: (&str, &str)) {
+    /// Hide typed a letter's bell line into `pane_id` (D-19), naming its
+    /// writer `sender` on the line.
+    pub(crate) fn record_bell(
+        &self,
+        pane_id: &str,
+        line: &str,
+        sender: &str,
+        letter: crate::labels::input::Letter,
+    ) {
         if let Some(services) = self.label_services.as_ref() {
             services
                 .input
-                .record_bell(pane_id, unix_milliseconds(), line, letter);
+                .record_bell(pane_id, unix_milliseconds(), line, sender, letter);
         }
     }
 

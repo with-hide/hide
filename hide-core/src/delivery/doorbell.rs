@@ -773,13 +773,18 @@ impl Doorbell {
                 .count();
             let sender = bell_sender(owner, &ledger, letter);
             let line = bell_line(&sender, letter, others, language);
+            // The writer as the lineage names it, which the line never shows.
+            let writer = crate::labels::input::Letter {
+                from: crate::coordination::wire_name(&ledger, &letter.sender),
+                kind: letter.kind.clone(),
+            };
             match deliver(
                 owner,
                 client,
                 engine.as_ref(),
                 letter,
                 &observed,
-                (&line, &sender, &letter.kind),
+                (&line, &sender, writer),
                 stop,
             ) {
                 Ok(Outcome::Rung(route)) => {
@@ -1574,7 +1579,7 @@ fn deliver(
     engine: &dyn Engine,
     letter: &Letter,
     observed: &Observation,
-    (line, sender, kind): (&str, &str, &str),
+    (line, sender, writer): (&str, &str, crate::labels::input::Letter),
     stop: &AtomicBool,
 ) -> Result<Outcome, SendFailure> {
     if stop.load(Ordering::Acquire) {
@@ -1610,13 +1615,13 @@ fn deliver(
     // input bypasses that contract.
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the
-    // label reads it as a letter from `sender` by this record, as it reads
+    // label reads it as a letter from `writer` by this record, as it reads
     // an operator's message by a submit.
     {
         let mut guard = owner
             .lock()
             .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?;
-        guard.record_bell(&observed.actor.pane_id, line, (sender, kind));
+        guard.record_bell(&observed.actor.pane_id, line, sender, writer);
         guard.note_hide_typing(&observed.actor.pane_id);
     }
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears
