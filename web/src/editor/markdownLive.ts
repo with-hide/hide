@@ -13,13 +13,15 @@
 // say; the plan only names their source (`html`, `image`), and the plugin
 // sanitizes and loads it. Other inline HTML (`<br>`, `<kbd>`, `<sub>`) stays
 // source. A top-level fenced block whose language is `mermaid` is drawn as its
-// diagram the same way (`mermaid`), and is revealed like an HTML block.
+// diagram the same way (`mermaid`), and is revealed like an HTML block; so is
+// a top-level GFM table (`table`), which the plugin draws with the renderer
+// the phone uses.
 
 import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Text } from "@codemirror/state";
 import { isMermaidInfo } from "../markdownMermaid";
 
-export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid";
+export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid" | "table";
 
 export type LiveRange = {
   from: number;
@@ -36,7 +38,7 @@ export type LiveRange = {
   src?: string;
   alt?: string;
   title?: string;
-  /** `mermaid`: the diagram's source, the text between the fences. */
+  /** `mermaid`: the diagram's source, the text between the fences; `table`: the table's source. */
   source?: string;
 };
 
@@ -116,6 +118,21 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
           const last = doc.lineAt(node.to);
           if (!(embedsRevealed && overlaps(first.from, last.to))) {
             ranges.push({ from: first.from, to: last.to, kind: "mermaid", source: diagram });
+            return false;
+          }
+        }
+        return;
+      }
+
+      if (name === "Table") {
+        // A table inside a quote or a list item shares its lines with that
+        // container's marks, so only a top-level table is drawn; it is one
+        // unit like a diagram, revealed by a selection anywhere in it.
+        if (parent === "Document") {
+          const first = doc.lineAt(node.from);
+          const last = doc.lineAt(node.to);
+          if (!(embedsRevealed && overlaps(first.from, last.to))) {
+            ranges.push({ from: first.from, to: last.to, kind: "table", source: doc.sliceString(node.from, node.to) });
             return false;
           }
         }

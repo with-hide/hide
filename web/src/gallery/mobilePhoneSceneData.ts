@@ -141,10 +141,11 @@ curl -fsSL https://withhide.dev/install.sh | sh
 1. \`hide uninstall\`을 실행해요.
 2. 남은 상태 폴더 \`~/.hide\`를 지워요.
 
-| 시스템 | 지원 |
-| --- | --- |
-| Ubuntu 24.04 | 예 |
-| Fedora 40 | 예 |
+| 시스템 | 지원 | 메모 |
+| --- | :---: | --- |
+| Ubuntu 24.04 | 예 | 셸 설정은 \`~/.config/hide/shell-integration.zsh\`에 들어가요 |
+| Fedora 40 | 예 | SELinux가 켜져 있으면 홀더 소켓 폴더에 쓸 수 있어야 해요 |
+| Windows 11 |  | WSL로 연결해요 |
 `;
 
 /** A chart drawn as an image, so the viewer has pixels to show without a file. */
