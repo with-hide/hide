@@ -903,7 +903,7 @@ test("the phone's start sheet starts an agent in a checkout, lists no Home, and 
 });
 
 /** A plan whose steps end in each kind of bottom line: a change by pull request whose merge the plan gives the operator, an outside pull request and branch, and research. */
-const STATION_PLAN = {
+const LINE_PLAN = {
   scope: "merge",
   nodes: [
     { key: "schema", title: "결제 DB · 환불 상태 열", kind: "change", delivery: "pr", operator_merge: "DB 변경은 직접 확인", criteria: ["마이그레이션이 돈다"] },
@@ -945,7 +945,7 @@ test("the phone's mission page ends each step in the desktop's line to the missi
     await enterWorkspace(page, "fixture");
     const conductor = fixture.runAs(fixture.panes[0]);
     await withControl(live, (control) => control.until((rest) => rest.git_worktrees_loading === false || undefined, "the project catalog read"));
-    for (const args of [["create", "--title", "결제 테이블 정리"], ["plan", "--json", JSON.stringify(STATION_PLAN)], ["start"], ["node", "schema", "--status", "working", "--pr", "32"], ["node", "schema", "--pr", "31"]]) {
+    for (const args of [["create", "--title", "결제 테이블 정리"], ["plan", "--json", JSON.stringify(LINE_PLAN)], ["start"], ["node", "schema", "--status", "working", "--pr", "32"], ["node", "schema", "--pr", "31"]]) {
       const ran = await conductor(["mission", ...args]);
       expect(JSON.parse(ran.out.trim().split("\n").at(-1) ?? "null")?.ok, `${args[0]}: ${ran.out}`).toBe(true);
     }
