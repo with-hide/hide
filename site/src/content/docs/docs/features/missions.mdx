@@ -58,14 +58,14 @@ Pressing a mission opens its map. Anywhere else, such as the chip on a Conductor
 
 ## Settings
 
-Settings > Mission holds the defaults for new missions. A change applies from the next mission, and a running mission keeps its own, except the cleanup switch below.
+Settings > Mission holds the defaults for new missions. A change applies from the next mission, and a running mission keeps its own, except a worker candidate you add and the cleanup switch below.
 
 | Setting | What it does |
 | --- | --- |
 | **Concurrent agents** | How many agents one mission runs at once, from 1 to 16. Reviews and checks count; the Conductor does not. |
 | **Default scope** | `Stop before main` or `Through the merge`, when you do not say how far a mission goes. |
 | **Clean up a worktree once merged** | On by default. Removes the worktree and build cache of a branch whose pull request merged, unless it still holds files being changed or is in use. The branch is kept. This switch applies to every mission at once. |
-| **Worker candidates** | The agents the Conductor may choose workers from, up to 16, each with its model, effort and purpose. Left empty, the Conductor chooses among the agents installed on this machine. |
+| **Worker candidates** | The agents the Conductor may choose workers from, up to 16, each with its model, effort and purpose. Left empty, the Conductor chooses among the agents installed on this machine. A candidate you add applies at once, to running missions too; one you remove or change applies from the next mission. |
 | **Verification strength** | `Fast`, `Normal` (default) or `Thorough`: how much checking a mission does and how often it re-reviews. The Conductor proposes a strength in its plan and changes it when you say so. |
 
 ## Commands and keys

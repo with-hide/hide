@@ -1325,9 +1325,11 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         // plan's sleeping child, is refused as the plan words it (PRD
         // hide-plan-delegate B5, B6).
         code if code.starts_with("plan_") => hide_core::plans::next_action(code),
-        // A spawn under a mission node that may not start yet is refused as
-        // the mission words it (PRD node-presets D-06).
-        code @ ("mission_node_held" | "mission_gate_before_start") => {
+        // A spawn under a mission node that may not start yet (PRD
+        // node-presets D-06), or of an item none of the mission's candidates
+        // admits, is refused as the mission words it for a plan too.
+        code
+        @ ("mission_node_held" | "mission_gate_before_start" | "mission_candidate_refused") => {
             hide_core::missions::next_action(code)
         }
         "agent_pane_required" => {
@@ -1464,9 +1466,6 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "mission_machine_no_repository" => {
             "Hide knows no project of the mission's GitHub repository on that machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own (its pull requests show once it is), then run the same command again with --repo naming it; or leave out --machine"
-        }
-        "mission_candidate_refused" => {
-            "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them: its agent with --profile set to the candidate's profile (a spawn without --profile takes your own profile), its fixed model or the CLI's default, its fixed effort. The words after this say what the spawn would have started"
         }
         // A spawn whose agent would start without Hide's hook on its
         // machine (`runtime::start_hook`): nothing was made or typed, and the
@@ -5432,10 +5431,16 @@ mod tests {
     }
 
     /// A spawn under a mission node held or behind its start gate says what
-    /// the mission owes, not to retry the same spawn (PRD node-presets D-06).
+    /// the mission owes, not to retry the same spawn (PRD node-presets D-06),
+    /// and a spawn none of the mission's candidates admits is told what a
+    /// plan naming that item is told.
     #[test]
-    fn a_spawn_under_a_node_that_may_not_start_says_what_the_mission_owes() {
-        for code in ["mission_node_held", "mission_gate_before_start"] {
+    fn a_spawn_the_mission_refuses_says_what_the_mission_owes() {
+        for code in [
+            "mission_node_held",
+            "mission_gate_before_start",
+            "mission_candidate_refused",
+        ] {
             let next = delivery_next_action(&format!("{code}\u{1f}ship"));
             assert_eq!(next, hide_core::missions::next_action(code));
             assert!(!next.contains("retry the same intent"), "{next}");

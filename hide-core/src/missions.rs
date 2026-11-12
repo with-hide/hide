@@ -1657,8 +1657,10 @@ pub struct Mission {
     pub destination: Option<String>,
     pub cap: u8,
     /// Settings › Mission's worker candidates when the mission was
-    /// created (D-34, B48); a book written before them has none, which
-    /// admits any agent.
+    /// created (D-34, B48), which it keeps: Settings' candidates as they
+    /// are now admit beside them (`Runtime::mission_candidates`), so one
+    /// removed there stays admitted here. A book written before them has
+    /// none, which admits any agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
     /// How strongly the Conductor has the nodes checked: Settings ›
@@ -3941,7 +3943,7 @@ pub fn next_action(code: &str) -> &'static str {
             "The node holds 16 defects; ask the operator how to go on with it"
         }
         "mission_candidate_refused" => {
-            "Plan and start each worker as one of the operator's candidates: run hide mission settings for the agent items (each with its --profile value, which a plan's worker names as profile), models and efforts it allows"
+            "The worker is none of the candidates this mission admits: the ones in Settings > Mission when it was created and the ones there now. Run hide mission settings and plan or start it as one of them: its agent with the candidate's profile (its --profile value, which a plan's worker names as profile; a spawn without --profile takes your own profile), its fixed model or the CLI's default, its fixed effort. To use another agent item, ask the operator to add it in Settings > Mission, which applies to this mission at once. The words after this name the item it would have started, after its node for a plan"
         }
         "mission_profile_unknown" => {
             "Name the worker's profile as hide agent catalog lists it for that agent (its profile value), or leave profile out for the agent's built-in default"
