@@ -58,16 +58,16 @@ export function OverviewBacklog({ projects, actions }: { projects: readonly Boar
   const matching = filterRows(rows, query, labels, filters);
   const visible = only ? order : visibleBacklogProjects(order, query, labels, filters, made);
   return <div className="flex min-w-0 flex-col gap-lg px-xxl py-xl overview-narrow:px-md" data-overview-backlog="true">
-    <div className="flex flex-wrap items-center gap-sm"><h2 className="text-headline font-semibold">{t("overviewTasks.backlogTab")}</h2><span className="rounded-sm border border-border px-sm font-mono text-body text-muted-foreground">{matching.length}</span></div>
+    <div className="flex flex-wrap items-center gap-sm"><h2 className="text-headline font-semibold">{t("overviewTasks.backlogTab")}</h2><span className="rounded-sm bg-foreground/6 px-sm font-mono text-body text-muted-foreground">{matching.length}</span></div>
     <MissedGroup projects={scoped} actions={actions} />
     <div className="min-w-0 rounded-lg border border-border">
     <div className="flex min-w-0 flex-col gap-md rounded-t-lg border-b border-border bg-muted/30 px-lg py-lg" data-backlog-toolbar="true">
       <div className="flex flex-wrap items-center gap-sm">
       <div className="flex flex-wrap items-center gap-xxs" role="group" aria-label={t("backlogView.status")}>
-        {(["open", "started", "all"] as const).map((status) => <Button key={status} size="sm" variant={filters.status === status ? "secondary" : "ghost"} aria-pressed={filters.status === status} data-backlog-status={status} onClick={() => setFilters({ ...filters, status })}>{t(`backlogView.${status}`)} <span className="font-mono text-micro text-muted-foreground">{counts[status]}</span></Button>)}
+        {(["open", "started", "all"] as const).map((status) => <Button key={status} size="sm" variant="ghost" className={cn(filters.status === status && "bg-foreground/6 text-foreground hover:bg-foreground/6")} aria-pressed={filters.status === status} data-backlog-status={status} onClick={() => setFilters({ ...filters, status })}>{t(`backlogView.${status}`)} <span className="font-mono text-micro text-muted-foreground">{counts[status]}</span></Button>)}
       </div>
-      <div className="ml-auto flex items-center gap-xxs rounded-md border border-border bg-background p-xxs" role="group" aria-label={t("backlogView.source")}>
-        {(["all", "github", "local"] as const).map((source) => <Button key={source} size="sm" variant={filters.source === source ? "outline" : "ghost"} aria-pressed={filters.source === source} data-backlog-source={source} onClick={() => setFilters({ ...filters, source })}>{t(source === "all" ? "backlogView.allSources" : source === "local" ? "backlogView.memo" : "backlog.sourceGithub")}</Button>)}
+      <div className="ml-auto flex items-center gap-xxs rounded-sm bg-foreground/6 p-xxs" role="group" aria-label={t("backlogView.source")}>
+        {(["all", "github", "local"] as const).map((source) => <Button key={source} size="sm" variant="ghost" className={cn("rounded-xs", filters.source === source && "bg-raised text-foreground shadow-raised hover:bg-raised")} aria-pressed={filters.source === source} data-backlog-source={source} onClick={() => setFilters({ ...filters, source })}>{t(source === "all" ? "backlogView.allSources" : source === "local" ? "backlogView.memo" : "backlog.sourceGithub")}</Button>)}
       </div>
       </div>
       <div className="flex min-w-0 items-center gap-sm">
