@@ -6247,12 +6247,13 @@ fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
 /// its pane's title for an agent registered without a name, while the
 /// lineage names the parent by its wire name (`coordination::wire_name`):
 /// the parent is the writer the bell record names by that wire name, whatever
-/// the line says.
+/// the line says. The operator's own letter, a person's turn they marked
+/// done, is the operator's answer, which settles their own steps too.
 #[test]
 fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_shows() {
     use crate::delivery::bell::{Ring, line};
     use crate::labels::input::Letter;
-    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    use crate::links::ledger::{AsksAnswered, LedgerContext, LedgerUpdate, SessionIdentity};
     const LATER: u64 = 4_094_496_000_000;
     let harness = Harness::new();
     let store = harness.store();
@@ -6283,6 +6284,7 @@ fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_show
     // Each bell as the doorbell types and records it: the line shows the
     // writer's title, the record keeps its wire name and the letter's kind.
     let bell = |shown: &str, from: &str, kind: &str, body: &str, index: u64| {
+        let operator = from == "operator";
         let typed = line(&Ring {
             sender: shown,
             kind,
@@ -6299,6 +6301,7 @@ fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_show
             Letter {
                 from: from.to_owned(),
                 kind: kind.to_owned(),
+                operator,
             },
         );
         typed
@@ -6320,16 +6323,24 @@ fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_show
         .answer("모바일 출시 설정 PR", "question", "정해 주세요");
     observe(&mut worker, &agent(&path, "idle", 1));
     settle(&mut worker, &woken);
+    let parent = Some(AsksAnswered::Parent);
     let letters = [
         // The parent's request, under a title that is not its name.
-        ("hide 앱 모바일 출시 계획", "agent-7", "request", true),
+        ("hide 앱 모바일 출시 계획", "agent-7", "request", parent),
         // A reviewer's reply answers the child's request to it, not what
         // the child asked the operator through its parent.
-        ("review-push-quiet", "review-push-quiet", "reply", false),
+        ("review-push-quiet", "review-push-quiet", "reply", None),
         // The parent's progress letter, under the title its next task gave it.
-        ("모바일 앱 데스크톱 유사 UI", "agent-7", "progress", false),
+        ("모바일 앱 데스크톱 유사 UI", "agent-7", "progress", None),
         // A sender showing the parent's name on the line is not the parent.
-        ("agent-7", "agent-9", "reply", false),
+        ("agent-7", "agent-9", "reply", None),
+        // The operator marked a person's turn done: a report, theirs.
+        (
+            "operator",
+            "operator",
+            "report",
+            Some(AsksAnswered::Operator),
+        ),
     ];
     for (round, (shown, from, kind, _)) in letters.iter().enumerate() {
         let index = lines.len() as u64;
@@ -6340,7 +6351,7 @@ fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_show
         observe(&mut worker, &agent(&path, "idle", 2 + round as u64));
         settle(&mut worker, &woken);
     }
-    let answered: Vec<bool> = client
+    let answered: Vec<Option<AsksAnswered>> = client
         .ledger_updates_for_test()
         .into_iter()
         .filter_map(|update| match update {
@@ -6348,7 +6359,8 @@ fn a_parents_reply_or_request_bell_answers_its_child_whatever_name_the_line_show
             _ => None,
         })
         .collect();
-    let mut expected = vec![true];
+    // The brief is the parent's first request.
+    let mut expected = vec![parent];
     expected.extend(letters.iter().map(|(.., answers)| *answers));
     assert_eq!(answered, expected, "the brief, then each letter");
 }

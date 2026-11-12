@@ -106,7 +106,7 @@ export function landingRecord(nowMs: number, agents: AgentRow[]): SessionRecord 
     return {
       session, title, fallback_title: agent, native_title: title, manual_title: null, state: end === "working" ? "working" : "idle", cwd: "/work/billing-app", path: null,
       started_at_unix_ms: nowMs - 50 * MINUTE, ended_at_unix_ms: null, status: { end, line, at_unix_ms: nowMs - 4 * MINUTE, limited: null, settled: null },
-      asks: [], flows: [], omitted_requests: 0, outputs: made, pr_groups: outputs.length ? [{ child: null, name: title, pulls: outputs.map(([number, name, state]) => listedPull(number, name, state, null, pullUrl(number))) }] : [], artifacts: [], children: [],
+      asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: made, pr_groups: outputs.length ? [{ child: null, name: title, pulls: outputs.map(([number, name, state]) => listedPull(number, name, state, null, pullUrl(number))) }] : [], artifacts: [], children: [],
     };
   };
   const children = [
@@ -130,7 +130,7 @@ export function landingRecord(nowMs: number, agents: AgentRow[]): SessionRecord 
         request(nowMs, 4, 22, `${ref(431)} is ready and its tests pass.`, { letter_from: "Export invoices as CSV", summary: null }),
       ], null),
     ],
-    omitted_requests: 0, outputs, pr_groups: children.filter((one) => one.pr_groups.length).map((one) => ({ child: one.session, name: one.title, pulls: one.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [one.title] })) })), artifacts: [], children,
+    folded_asks: [], omitted_requests: 0, outputs, pr_groups: children.filter((one) => one.pr_groups.length).map((one) => ({ child: one.session, name: one.title, pulls: one.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [one.title] })) })), artifacts: [], children,
   };
 }
 

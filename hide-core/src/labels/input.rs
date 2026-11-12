@@ -55,6 +55,11 @@ pub(crate) struct Bell {
 pub(crate) struct Letter {
     pub(crate) from: String,
     pub(crate) kind: String,
+    /// The operator wrote it, from Hide's screen (`Actor::operator_owned`):
+    /// a person's turn done (`hide agent ask-human`), which is their own
+    /// answer.
+    #[serde(default)]
+    pub(crate) operator: bool,
 }
 
 impl Letter {

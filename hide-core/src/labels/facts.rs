@@ -442,7 +442,11 @@ impl SessionFacts {
             return None;
         }
         if let Some((from, kind)) = hide_session::envelope_header(&event.text) {
-            return Some(Letter { from, kind });
+            return Some(Letter {
+                from,
+                kind,
+                operator: false,
+            });
         }
         self.verdicts
             .iter()
@@ -894,6 +898,7 @@ mod tests {
             letter: Letter {
                 from: "agent-7".into(),
                 kind: "request".into(),
+                operator: false,
             },
         }];
         fold_with_bells(

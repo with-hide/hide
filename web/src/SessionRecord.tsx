@@ -30,6 +30,7 @@ import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
 import { PlanChecklist } from "./components/plan-checklist";
 import { OpenAskList } from "./components/open-asks";
+import { FoldedAskList } from "./components/folded-asks";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
@@ -404,6 +405,7 @@ function Work({ record, summaries, onOpen, actions, locator }: { record: RecordV
   const omitted = workKey(record.session) === (section?.session ? workKey(section.session) : null) ? section?.views_omitted ?? 0 : 0;
   return <>
     {summaries ? <Asks record={record} actions={actions} /> : null}
+    {summaries ? <FoldedAskList asks={record.folded_asks} onReopen={(id) => actions.setMissedStatus(record.session, id, "open")} /> : null}
     {summaries ? <Flows record={record} locator={locator} /> : <RawRequests record={record} locator={locator} />}
     {record.plan && !planAbove ? <RecordPlan plan={record.plan} /> : null}
     <Prs record={record} actions={actions} />

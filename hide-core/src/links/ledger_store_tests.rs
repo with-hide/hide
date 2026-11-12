@@ -956,7 +956,7 @@ fn end(store: &mut LinkStore, offset: u64, judgment: TurnJudgment) {
             at_unix_ms: offset * 1_000 + 500,
             end: LabelEnd::Done,
             work_author: true,
-            asks_answered: true,
+            asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
             line: String::new(),
             turn_witness: None,
             judgment,
@@ -1158,6 +1158,7 @@ fn turn_replay_and_status_undo_survive_restart() {
             kind: MissedKind::Problem,
             text: "모바일 줄바꿈이 남음".into(),
             same_as: None,
+            operator_only: None,
         }],
         ..Default::default()
     };
@@ -1283,6 +1284,7 @@ fn an_off_or_failed_turn_remains_raw_after_restart_and_a_late_answer() {
                 kind: MissedKind::Leftover,
                 text: "과거 보고를 뒤늦게 등록하면 안 됨".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -1309,6 +1311,7 @@ fn the_durable_issue_intent_keeps_the_original_attempt_and_closes_without_an_out
                 kind: MissedKind::Problem,
                 text: "모바일 검증이 남음".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -1403,6 +1406,7 @@ fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolvin
                 kind: MissedKind::FollowUp,
                 text: "회귀 검증 이슈 등록".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -1418,6 +1422,7 @@ fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolvin
             resolved: vec![ResolvedMissedWork {
                 id: id.clone(),
                 issue_number: Some(1),
+                reason: None,
             }],
             ..Default::default()
         },
@@ -1599,7 +1604,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
                 at_unix_ms: 1_400,
                 end: LabelEnd::Done,
                 work_author: true,
-                asks_answered: true,
+                asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
                 line: String::new(),
                 turn_witness: None,
                 judgment: TurnJudgment {
@@ -1607,6 +1612,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
                         kind: MissedKind::Leftover,
                         text: "정리할 일".into(),
                         same_as: None,
+                        operator_only: None,
                     }],
                     ..Default::default()
                 },
@@ -1722,6 +1728,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
                 kind: MissedKind::Problem,
                 text: "parent follow-up".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -1735,13 +1742,14 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
             at_unix_ms: 2500,
             end: LabelEnd::Blocked,
             work_author: true,
-            asks_answered: true,
+            asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
                 resolved: vec![ResolvedMissedWork {
                     id: "missed-1-0".into(),
                     issue_number: None,
+                    reason: None,
                 }],
                 ..Default::default()
             },
@@ -1757,6 +1765,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
                 kind: MissedKind::Problem,
                 text: "invalid follow-up".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -1920,6 +1929,7 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
                 kind: MissedKind::FollowUp,
                 text: "문서 갱신".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -2275,7 +2285,7 @@ fn turn(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, artifacts
             at_unix_ms: offset * 1_000 + 500,
             end,
             work_author: true,
-            asks_answered: true,
+            asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
             line: line.into(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -2603,11 +2613,13 @@ fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_
                     kind: MissedKind::Ask,
                     text: "Q4 범위를 정해 주세요".into(),
                     same_as: None,
+                    operator_only: None,
                 },
                 NewMissedWork {
                     kind: MissedKind::Problem,
                     text: "e2e가 로컬에서 깨짐".into(),
                     same_as: None,
+                    operator_only: None,
                 },
             ],
             ..Default::default()
@@ -2681,6 +2693,7 @@ fn a_project_past_the_session_limit_is_summarized_by_its_newest_sessions() {
                 kind: MissedKind::Ask,
                 text: "Q4 범위를 정해 주세요".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -2727,7 +2740,7 @@ fn a_summary_carries_the_last_turn_line_and_the_last_commit() {
                 at_unix_ms: offset * 1_000 + 500,
                 end: LabelEnd::Done,
                 work_author: true,
-                asks_answered: true,
+                asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
                 line: line.into(),
                 turn_witness: None,
                 judgment: TurnJudgment::default(),
@@ -2780,6 +2793,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
         kind: MissedKind::Ask,
         text: text.into(),
         same_as: None,
+        operator_only: None,
     };
     let asks = |store: &LinkStore| {
         store
@@ -2808,7 +2822,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
             at_unix_ms: 2_500,
             end: LabelEnd::Question,
             work_author: false,
-            asks_answered: false,
+            asks_answered: None,
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -2837,7 +2851,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
             at_unix_ms: 4_500,
             end: LabelEnd::Done,
             work_author: false,
-            asks_answered: true,
+            asks_answered: Some(crate::links::ledger::AsksAnswered::Parent),
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment::default(),
@@ -2888,6 +2902,7 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
             kind: MissedKind::Ask,
             text: "PRD로 넘어갈까요?".into(),
             same_as: None,
+            operator_only: None,
         }],
         ..Default::default()
     };
@@ -2910,7 +2925,7 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
             at_unix_ms: 2_500,
             end: LabelEnd::Question,
             work_author: false,
-            asks_answered: false,
+            asks_answered: None,
             line: String::new(),
             turn_witness: None,
             judgment: ask(),
@@ -2919,9 +2934,170 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
     assert!(store.ledger_record(&session()).unwrap().asks.is_empty());
 }
 
+/// Questions of each kind a judgment can list: one anyone holding the answer
+/// could give, one only the operator can take (`operator_only`), and one
+/// whose kind the judgment did not say, as every line before it was asked.
+fn three_asks() -> TurnJudgment {
+    let ask = |text: &str, operator_only: Option<bool>| NewMissedWork {
+        kind: MissedKind::Ask,
+        text: text.into(),
+        same_as: None,
+        operator_only,
+    };
+    TurnJudgment {
+        missed: vec![
+            ask("설정 변경을 이 PR에 넣을까요?", Some(false)),
+            ask("App Store Connect에 전화번호를 넣어 주세요", Some(true)),
+            ask("체험 행을 설정 탭에 둘까요?", None),
+        ],
+        ..Default::default()
+    }
+}
+
+fn open_ask_texts(store: &LinkStore) -> Vec<String> {
+    store
+        .ledger_record(&session())
+        .unwrap()
+        .asks
+        .iter()
+        .map(|ask| ask.text.clone())
+        .collect()
+}
+
+/// B12: a parent's letter settles its child's questions but not a step only
+/// the operator can take, which a parent cannot take for them; the
+/// operator's own answer settles that one too.
+#[test]
+fn a_parents_answer_leaves_the_operators_own_step_open_and_the_operators_answer_closes_it() {
+    use crate::links::ledger::AsksAnswered;
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "모바일 출시 맡아줘");
+    chapter(&mut store);
+    store
+        .apply_ledger_update(&turn_end(1, None, three_asks()))
+        .unwrap();
+    assert_eq!(open_ask_texts(&store).len(), 3);
+    store
+        .apply_ledger_update(&turn_end(
+            2,
+            Some(AsksAnswered::Parent),
+            TurnJudgment::default(),
+        ))
+        .unwrap();
+    assert_eq!(
+        open_ask_texts(&store),
+        ["App Store Connect에 전화번호를 넣어 주세요"]
+    );
+    store
+        .apply_ledger_update(&turn_end(
+            3,
+            Some(AsksAnswered::Operator),
+            TurnJudgment::default(),
+        ))
+        .unwrap();
+    assert!(open_ask_texts(&store).is_empty());
+}
+
+/// A question Hide AI reads as settled in a turn no answer came in is
+/// folded with the reason it gave, never closed, and only one known not to
+/// be the operator's own step; one press opens it again, after which only
+/// the operator's answer settles it (docs/status-model.md, A question still
+/// waiting).
+#[test]
+fn a_settled_question_is_folded_with_its_reason_and_one_press_opens_it_for_good() {
+    use crate::links::ledger::{AsksAnswered, ResolvedMissedWork};
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "모바일 출시 맡아줘");
+    chapter(&mut store);
+    store
+        .apply_ledger_update(&turn_end(1, None, three_asks()))
+        .unwrap();
+    let ids: Vec<String> = store
+        .ledger_record(&session())
+        .unwrap()
+        .asks
+        .iter()
+        .map(|ask| ask.id.clone())
+        .collect();
+    let settle = |reason: &str| TurnJudgment {
+        resolved: ids
+            .iter()
+            .map(|id| ResolvedMissedWork {
+                id: id.clone(),
+                issue_number: None,
+                reason: Some(reason.into()),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    // No reason folds nothing.
+    store
+        .apply_ledger_update(&turn_end(2, None, settle(" ")))
+        .unwrap();
+    assert_eq!(open_ask_texts(&store).len(), 3);
+    store
+        .apply_ledger_update(&turn_end(3, None, settle("리드가 별도 PR로 정함")))
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(
+        record
+            .asks
+            .iter()
+            .map(|ask| ask.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "App Store Connect에 전화번호를 넣어 주세요",
+            "체험 행을 설정 탭에 둘까요?"
+        ]
+    );
+    assert_eq!(record.folded_asks.len(), 1);
+    assert_eq!(record.folded_asks[0].text, "설정 변경을 이 PR에 넣을까요?");
+    assert_eq!(record.folded_asks[0].status, MissedStatus::Folded);
+    assert_eq!(
+        record.folded_asks[0].reason.as_deref(),
+        Some("리드가 별도 PR로 정함")
+    );
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id: ids[0].clone(),
+            status: MissedStatus::Open,
+        })
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(record.asks.len(), 3);
+    assert!(record.folded_asks.is_empty());
+    assert_eq!(record.asks[0].reason, None);
+    // Opened by the operator, it is theirs: neither the label nor a
+    // parent's letter settles it again.
+    store
+        .apply_ledger_update(&turn_end(4, None, settle("다시 정리")))
+        .unwrap();
+    store
+        .apply_ledger_update(&turn_end(
+            5,
+            Some(AsksAnswered::Parent),
+            TurnJudgment::default(),
+        ))
+        .unwrap();
+    assert_eq!(
+        open_ask_texts(&store),
+        [
+            "설정 변경을 이 PR에 넣을까요?",
+            "App Store Connect에 전화번호를 넣어 주세요"
+        ]
+    );
+}
+
 /// The turn-end update of a turn at `offset`, woken by a letter
-/// (`asks_answered` false) or by a reply.
-fn turn_end(offset: u64, asks_answered: bool, judgment: TurnJudgment) -> LedgerUpdate {
+/// (`asks_answered` none) or by an answer.
+fn turn_end(
+    offset: u64,
+    asks_answered: Option<crate::links::ledger::AsksAnswered>,
+    judgment: TurnJudgment,
+) -> LedgerUpdate {
     LedgerUpdate::TurnEnd {
         session: session(),
         offset,
@@ -2944,6 +3120,7 @@ fn asks(lines: &[(&str, Option<&str>)]) -> TurnJudgment {
                 kind: MissedKind::Ask,
                 text: (*text).into(),
                 same_as: same_as.map(str::to_owned),
+                operator_only: None,
             })
             .collect(),
         ..Default::default()
@@ -2964,7 +3141,7 @@ fn an_open_ask_a_letter_turn_rewords_stays_one_line() {
     store
         .apply_ledger_update(&turn_end(
             2,
-            false,
+            None,
             asks(&[
                 ("main에 push 안 된 커밋 61개를 push할지 결정", Some(&id)),
                 ("Hide 문제를 이슈로 올릴지", None),
@@ -2992,7 +3169,7 @@ fn an_ask_named_again_after_a_reply_is_this_turns_line() {
     store
         .apply_ledger_update(&turn_end(
             2,
-            true,
+            Some(crate::links::ledger::AsksAnswered::Operator),
             asks(&[("커밋 61개를 push할지 결정", Some(&id))]),
         ))
         .unwrap();
@@ -3019,7 +3196,7 @@ fn repeated_asks_do_not_count_against_a_turns_new_lines() {
     store
         .apply_ledger_update(&turn_end(
             2,
-            false,
+            None,
             asks(&[
                 ("가 다시", Some(ids[0])),
                 ("나 다시", Some(ids[1])),
@@ -3034,7 +3211,7 @@ fn repeated_asks_do_not_count_against_a_turns_new_lines() {
     assert_eq!(
         store.apply_ledger_update(&turn_end(
             3,
-            false,
+            None,
             asks(&[("사", None), ("아", None), ("자", None), ("차", None)]),
         )),
         Err("ledger_judgment_capacity".to_owned())
@@ -3057,6 +3234,7 @@ fn a_label_cannot_resolve_an_ask_in_a_turn_no_answer_came_in() {
                 kind: MissedKind::Ask,
                 text: "Q4 범위를 정해 주세요".into(),
                 same_as: None,
+                operator_only: None,
             }],
             ..Default::default()
         },
@@ -3070,13 +3248,14 @@ fn a_label_cannot_resolve_an_ask_in_a_turn_no_answer_came_in() {
             at_unix_ms: 2_500,
             end: LabelEnd::Done,
             work_author: false,
-            asks_answered: false,
+            asks_answered: None,
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
                 resolved: vec![ResolvedMissedWork {
                     id,
                     issue_number: None,
+                    reason: None,
                 }],
                 ..Default::default()
             },
@@ -3180,7 +3359,7 @@ fn stopped(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, asks: 
             at_unix_ms: offset * 1_000 + 500,
             end,
             work_author: true,
-            asks_answered: false,
+            asks_answered: None,
             line: line.into(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -3190,6 +3369,7 @@ fn stopped(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, asks: 
                         kind: MissedKind::Ask,
                         text: (*text).into(),
                         same_as: None,
+                        operator_only: None,
                     })
                     .collect(),
                 ..Default::default()
@@ -3503,7 +3683,7 @@ fn the_top_state_places_its_turn_by_when_it_began() {
             at_unix_ms: 2_500,
             end: LabelEnd::Waiting,
             work_author: true,
-            asks_answered: false,
+            asks_answered: None,
             line: "CI 기다림".into(),
             turn_witness: None,
             judgment: TurnJudgment::default(),
