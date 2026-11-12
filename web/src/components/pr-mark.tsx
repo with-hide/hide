@@ -41,30 +41,24 @@ export function PrMark({
   );
 }
 
-/** From this many states on, a several-PR mark is coloured numbers alone. */
-const BARE_COUNTS = 3;
-
 /**
  * The mark of several PRs: each state's icon and how many PRs stand in it, in
  * that state's colour, worst first, so a mergeable PR beside a merged one
  * reads green 1 purple 1 rather than one colour for both. A stale mark dims.
  */
 function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: { state: PrState; count: number }[]; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
-  // Three states or more would crowd the row's title out, so the counts drop their icons and keep their colours.
-  const bare = counts.length >= BARE_COUNTS;
   return (
     <span
       data-pr-counts={counts.map(({ state, count }) => `${state}:${count}`).join(" ")}
       data-stale={stale ? "true" : undefined}
-      data-pr-bare={bare || undefined}
-      className={cn("inline-flex shrink-0 items-center font-mono text-caption", bare ? "gap-sm" : "gap-xs", stale && "opacity-(--opacity-dimmed)", className)}
+      className={cn("inline-flex shrink-0 items-center gap-xs font-mono text-caption", stale && "opacity-(--opacity-dimmed)", className)}
       {...rest}
     >
       {counts.map(({ state, count }) => {
         const { icon: Icon, tone } = PR_LOOK[state];
         return (
           <span key={state} className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-pr-count={state}>
-            {bare ? null : <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />}
+            <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
             {count}
           </span>
         );
