@@ -11,7 +11,7 @@ import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
 import { askSubjectText } from "./askSubject";
 import { humanTurnText } from "./humanTurn";
-import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, HumanKind, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
+import type { AgentRow, AgentSleep, AgentStatusCode, AskSubject, AgentWait, HumanKind, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
  * Why a row's second line is on screen at rest (the core's `RowLine::mode`).
@@ -218,15 +218,16 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  * names what it waits on, a delegated child's request its own word (질문,
  * 막힘); a working row names nothing more, its line says why. A row of unknown state
  * has no mark and says only `상태 모름`. A sleeping row says its
- * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
+ * own words, `재움 · 열면 깨어남` (B31), and why when Hide slept it for
+ * memory, `재움 · 메모리 부족 · 열면 깨어남`, and a finished turn with tasks left
  * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27), as it does the
  * children still working under it, `읽을 것 · 끝남 · 자식 2개 작업 중`. A person's turn names
  * the key and what it asks, `사람 차례 · 인증 · github.com/login`.
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; children_left?: number; wait?: AgentWait | null; human_turn?: { kind: HumanKind; place: string } | null }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; children_left?: number; wait?: AgentWait | null; human_turn?: { kind: HumanKind; place: string } | null; sleep?: Pick<AgentSleep, "cause"> | null }): string {
   // The key's name and what it asks, on the declaring row and its root (PRD ask-human B9).
   if (agent.human_turn && agent.mark !== "unknown") return [t("agents.human.mark"), humanTurnText(t, agent.human_turn)].join(" · ");
-  if (agent.mark === "asleep") return statusText(t, agent.status_code);
+  if (agent.mark === "asleep") return agent.status_code === "sleeping" && agent.sleep?.cause ? t(`agents.sleepCause.${agent.sleep.cause}`) : statusText(t, agent.status_code);
   if (agent.mark === "look") return [markName(t, "look"), agent.look?.label].filter(Boolean).join(" · ");
   if (agent.mark === "unknown") return statusText(t, agent.status_code === "starting" ? "starting" : "unknown");
   const name = markName(t, agent.mark);

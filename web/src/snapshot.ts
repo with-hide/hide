@@ -340,7 +340,12 @@ export type AgentSleep = {
   since_unix_ms: number;
   /** The last progress line it reported before it slept. */
   progress?: string | null;
+  /** Why Hide put it to sleep, when its hover says so; absent otherwise. */
+  cause?: SleepCause | null;
 };
+
+/** Why Hide put an agent to sleep (`contracts/snapshot-wire-enums.json`: `sleep_cause`): its machine was short of memory. */
+export type SleepCause = "memory_pressure";
 
 /**
  * Where a fork came from (`ForkSourceSnapshot`): the source's pane and title while
@@ -3394,6 +3399,8 @@ export type SleepingSession = {
   reason: string | null;
   wake_available: boolean;
   checking: boolean;
+  /** Why Hide put it to sleep, when its hover says so; absent otherwise. */
+  cause?: SleepCause | null;
 };
 
 /** One archived root and the descendants archived with it (`ArchivedSessionSnapshot`, PRD session-archive). */

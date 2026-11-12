@@ -88,6 +88,9 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     // A finished root names the children still working under it.
     expect(markWords(t, { mark: "done", status_code: "done", children_left: 2 })).toBe("읽을 것 · 끝남 · 자식 2개 작업 중");
     expect(markWords(t, { mark: "asleep", status_code: "sleeping" })).toBe("재움 · 열면 깨어남");
+    // Slept for memory, it says so; a waking row says only that it wakes.
+    expect(markWords(t, { mark: "asleep", status_code: "sleeping", sleep: { cause: "memory_pressure" } })).toBe("재움 · 메모리 부족 · 열면 깨어남");
+    expect(markWords(t, { mark: "asleep", status_code: "waking", sleep: { cause: "memory_pressure" } })).toBe("깨우는 중");
     // In progress names nothing more while the agent works, and its wait while it waits (D-25, B36).
     expect(markWords(t, { mark: "going", status_code: "working" })).toBe("진행 중");
     expect(markWords(t, { mark: "waiting", status_code: "waiting" })).toBe("진행 중 · 대기");
