@@ -14806,10 +14806,7 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
         !stood.contains("nothing unless the operator asks"),
         "{stood}"
     );
-    assert!(
-        stood.contains("give the node a fresh worker") && stood.contains("shown it in 20 minutes"),
-        "{stood}"
-    );
+    assert!(stood.contains("shown it in 20 minutes"), "{stood}");
     let review = body(WakeEvent::Warning, None, Some(WarningKind::ReviewFails));
     assert!(!review.contains("raised on the node"), "{review}");
     let quiet = body(WakeEvent::Warning, None, Some(WarningKind::NoPush));

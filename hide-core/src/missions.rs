@@ -267,9 +267,9 @@ pub enum AttentionReason {
     /// The node could start, nothing holds it, and it was not started
     /// (`mission_health::stall_acts`).
     NotStarted,
-    /// A warning its Conductor was sent stood with nothing moving
-    /// (`mission_health::stall_acts`): raised to the Conductor as every
-    /// other stall is.
+    /// A no-push or stopped warning its Conductor was sent stood with
+    /// nothing moving (`mission_health::stall_acts`, `WarningKind::stalls`):
+    /// raised to the Conductor as every other stall is.
     WarningStood,
     /// The node's pull request waited on CI, a review or the merge for longer
     /// than any of those takes (`mission_health::stall_acts`).

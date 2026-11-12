@@ -1067,7 +1067,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => (
                     format!("failed its review {} times in a row", node.review_fails()),
-                    "judge whether its worker needs another approach or the node a fresh worker; the operator is not shown this warning, so ask with `hide mission decide --node` when what is left is theirs to decide",
+                    "judge whether its worker needs another approach or the node a fresh worker; the operator is not called about this warning, so ask with `hide mission decide --node` when what is left is theirs to decide",
                 ),
                 (Some(WarningKind::NoPush), _, Some(warning)) => (
                     format!("has worked {} minutes with no push", minutes(warning)),
