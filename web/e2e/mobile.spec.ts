@@ -902,7 +902,7 @@ test("the phone's start sheet starts an agent in a checkout, lists no Home, and 
   }
 });
 
-/** A plan whose steps end in each kind of station line: a change by pull request whose merge the plan gives the operator, an outside pull request and branch, and research with none. */
+/** A plan whose steps end in each kind of bottom line: a change by pull request whose merge the plan gives the operator, an outside pull request and branch, and research. */
 const STATION_PLAN = {
   scope: "merge",
   nodes: [
@@ -913,12 +913,12 @@ const STATION_PLAN = {
   ],
 };
 
-// PRD mission-destination D-13-D-16, D-38, D-45, B21, B24, B26, B28, B30, B32: the core's own frame, through a phone paired with
-// it, ends each step that changes code in the desktop's stations to the branch the mission's results go to (the checkout's
-// `main`), with the newest pull request and its count and GitHub's answer lighting them, puts the plan's `👤` on the strip
-// and the last station, and names the branch in the head; a step that changes no code has no line, and nothing spills
+// PRD mission-destination D-51-D-54, B55-B57, B59: the core's own frame, through a phone paired with it, ends each step that
+// changes code in the desktop's branch line without the branch name, to the branch the mission's results go to (the
+// checkout's `main`), with the newest pull request and its count, lit by GitHub's answer as the PR list lights it, and the
+// plan's merge a person before the destination; research ends in its kind, the head names the branch, and nothing spills
 // past a card at the phone's width. A unit test cannot see that the core's frame carries what the card reads.
-test("the phone's mission page draws each step's stations to the mission's destination from the core's frame", async ({ browser, page }) => {
+test("the phone's mission page ends each step in the desktop's line to the mission's destination from the core's frame", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture({ family: true });
   const tailscale = new FakeTailscale();
@@ -931,7 +931,7 @@ test("the phone's mission page draws each step's stations to the mission's desti
     fs.mkdirSync(repo, { recursive: true });
     initGithubRepository(repo);
     const gh = fakeGh(fixture.root);
-    daemon = await startHided(fixture, "mobile-mission-stations", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin, PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
+    daemon = await startHided(fixture, "mobile-mission-lines", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin, PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
     const live = daemon;
     const checkout = fs.realpathSync(repo);
     const origin = path.join(fixture.root, "origin.git");
@@ -967,22 +967,25 @@ test("the phone's mission page draws each step's stations to the mission's desti
 
     await expect(phone.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
     const card = (key: string) => phone.locator(`[data-mission-node="${key}"]`);
-    // Pull request #31, ready as GitHub answered, after #32: every station passed, and the operator's merge ahead of them.
-    await expect(card("schema").locator("[data-node-stations]")).toHaveAttribute("data-node-stations", "work:done pr:done approve:done land:ahead", { timeout: 30_000 }); // wait-ok: GitHub's answer for #31 reaches the phone's frame
-    await expect(card("schema").locator("[data-station-label]")).toHaveText(["Work", "#31 +1", "Approval", "main"]);
-    await expect(card("schema").locator("[data-node-merge-strip]")).toHaveText("You merge it");
-    await expect(card("schema")).toHaveAttribute("aria-label", /Where it goes: Work \(done\) → #31 \+1 \(done\) → Approval \(done\) → main · You merge it \(yours later\)/);
-    // An outside pull request and branch start at what they watch and end where it goes.
-    await expect(card("outside").locator("[data-station-label]")).toHaveText(["↗#34", "Approval", "main"], { timeout: 30_000 }); // wait-ok: the outside pull request's state reaches the phone's frame
-    await expect(card("lib").locator("[data-station-label]")).toHaveText(["↗ feat/lib", "main"]);
-    await expect(card("cause").locator("[data-node-stations]")).toHaveCount(0);
+    // Pull request #31, ready as GitHub answered, after #32: the PR list's mergeable mark, the newest number and the other's count, to `main`, the operator's merge ahead.
+    const line = (key: string) => card(key).locator("[data-node-line]");
+    await expect(line("schema")).toHaveAttribute("data-line-mark", "mergeable", { timeout: 30_000 }); // wait-ok: GitHub's answer for #31 reaches the phone's frame
+    await expect(line("schema")).toHaveText("#31 +1→main");
+    await expect(line("schema")).toHaveAttribute("data-line-person", "ahead");
+    await expect(card("schema").locator("[data-node-merge-turn]")).toHaveCount(0);
+    await expect(card("schema")).toHaveAttribute("aria-label", /Where it goes: #31 \+1 → main · Mergeable · You merge it/);
+    // An outside pull request and branch name what they watch and end where it goes; research ends in its kind.
+    await expect(line("outside")).toHaveText("↗#34→main", { timeout: 30_000 }); // wait-ok: the outside pull request's base reaches the phone's frame
+    await expect(line("lib")).toHaveText("↗ feat/lib→main");
+    await expect(line("cause")).toHaveAttribute("data-node-line", "result");
+    await expect(line("cause")).toHaveText("Research");
     const spills = await phone.locator("[data-mission-node]").evaluateAll((cards) => cards.flatMap((one) => {
       const right = one.getBoundingClientRect().right + 1;
-      const out = one.scrollWidth > one.clientWidth + 1 || [...one.querySelectorAll("[data-station]")].some((part) => part.getBoundingClientRect().right > right);
+      const out = one.scrollWidth > one.clientWidth + 1 || [...one.querySelectorAll("[data-node-foot] *")].some((part) => part.getBoundingClientRect().right > right);
       return out ? [one.getAttribute("data-mission-node")] : [];
     }));
     expect(spills).toEqual([]);
-    await screenshot(phone, "mobile-phone-mission-stations");
+    await screenshot(phone, "mobile-phone-mission-lines");
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();

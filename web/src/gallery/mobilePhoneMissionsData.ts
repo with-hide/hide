@@ -6,7 +6,7 @@
 import type { PhoneMission, PhoneMissionNode } from "../mobile/protocol";
 
 export const RELEASE_MISSION = "mission-release";
-/** The branch the release mission's results go to (PRD mission-destination D-38): its steps' stations end there and its head names it. */
+/** The branch the release mission's results go to (PRD mission-destination D-52, B59): its steps' branch lines end there and its head names it. */
 const RELEASE_BRANCH = "release/1.2";
 
 const MINUTE = 60_000;
@@ -36,7 +36,6 @@ function release(views: boolean): PhoneMission {
   const started = Date.now() - (2 * 60 + 14) * MINUTE;
   return mission(RELEASE_MISSION, "1.2.0 릴리스 준비", {
     destination: RELEASE_BRANCH,
-    scope: "merge",
     created_at_unix_ms: started,
     started_at_unix_ms: started,
     decision: "CI 인증서가 만료됐어요. 이번 릴리스는 서명 없이 내보낼까요?",
@@ -52,7 +51,7 @@ function release(views: boolean): PhoneMission {
       merged("pin", "agy 고정 버전 올리기", 2082, "codex"),
       merged("bump", "버전 번호 올리기", 2080, "claude"),
       merged("log", "체인지로그 확인", 2079, "codex"),
-      // The plan gives the operator this merge: its strip and last station wear a faint orange 👤 until the pull request is ready.
+      // The plan gives the operator this merge: a faint orange person stands before its destination until the pull request is ready.
       step("holder", "holder 버전 폴더 정리", "working", { pr: 2091, pr_state: "pending", merge: { by: "operator", why: "holder 경로는 직접 확인", state: "ahead", prs: [2091] }, worker_agent: "codex", stage: 2, agent: { device_id: "local", pane_id: "gallery-holder" } }),
       step("rehearsal", "마이그레이션 리허설", "working", { depends_on: ["holder"], pr: 2093, pr_state: "pending", base_pr: 2091, worker_agent: "claude", stage: 1, agent: { device_id: "local", pane_id: "gallery-rehearsal" } }),
       step("sign", "Windows 서명 단계", "working", { depends_on: ["bump"], worker_agent: "claude", stage: 0 }),
