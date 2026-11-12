@@ -40,7 +40,7 @@ describe("renderMarkdown", () => {
   });
 
   /** Each row of the drawn table as `tag[align]:text` cells. */
-  const tableRows = (text: string, options: { html?: boolean } = {}) => {
+  const tableRows = (text: string, options: Parameters<typeof renderMarkdown>[1] = {}) => {
     const out = renderToStaticMarkup(<>{renderMarkdown(text, options)}</>);
     return Array.from(out.matchAll(/<tr[^>]*>(.*?)<\/tr>/g), ([, row]) =>
       Array.from(row!.matchAll(/<(th|td) class="([^"]*)"[^>]*>(.*?)<\/\1>/g), ([, tag, classes, inner]) => {
@@ -66,11 +66,24 @@ describe("renderMarkdown", () => {
     ]);
   });
 
-  it("reads an escaped pipe as text inside its cell and a row without outer pipes as the same row", () => {
-    expect(tableRows("a | b\n--- | ---:\nx \\| y | z")).toEqual([
+  it("reads an escaped pipe as text inside its cell, in code too, and a row without outer pipes as the same row", () => {
+    expect(tableRows("a | b\n--- | ---:\nx \\| y | `p \\| q`")).toEqual([
       ["th[left]:a", "th[right]:b"],
-      ["td[left]:x | y", "td[right]:z"],
+      ["td[left]:x | y", 'td[right]:<code class="rounded-xs bg-secondary px-xxs font-mono">p | q</code>'],
     ]);
+    // Outside a table a code span keeps its backslash, as GFM reads it.
+    expect(html("`p \\| q`")).toContain(">p \\| q</code>");
+  });
+
+  it("draws a link with the address the caller's rule keeps, and the web's rule by default", () => {
+    const text = "| a |\n|---|\n| [노트](notes.md) <a href=\"docs/x.md\">x</a> [웹](https://example.com/w) |";
+    const [, web] = tableRows(text, { html: true });
+    expect(web![0]).not.toContain("<a href=\"notes.md\"");
+    expect(web![0]).toContain("<span>노트</span>");
+    expect(web![0]).toMatch(/<a href="https:\/\/example.com\/w"/);
+    const [, live] = tableRows(text, { html: true, link: (raw) => raw.trim() });
+    expect(live![0]).toMatch(/<a href="notes.md"[^>]*>노트<\/a>/);
+    expect(live![0]).toMatch(/<a href="docs\/x.md"[^>]*>x<\/a>/);
   });
 
   it("draws a cell's emphasis, code and, with HTML on, its links and line breaks", () => {

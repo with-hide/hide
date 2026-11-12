@@ -16,7 +16,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { FileSource } from "../fileBytes";
 import { translate } from "../i18n/client";
 import { useShellStore } from "../store";
-import { hasVisibleHtml, imageTarget, resolveInCheckout, sanitizeHtml, type ImageBase } from "./liveHtml";
+import { hasVisibleHtml, imageTarget, liveLinkAddress, resolveInCheckout, sanitizeHtml, type ImageBase } from "./liveHtml";
 import { LiveImages, readImageFile } from "./liveImages";
 import { markdownLivePlan, MARKDOWN_LIVE_BYTE_LIMIT } from "./markdownLive";
 import { drawMermaid, showMermaidSvg, watchPalette } from "../markdownMermaid";
@@ -307,9 +307,10 @@ function Drawn({ drawn, children }: { drawn: () => void; children: ReactNode }):
 
 /**
  * A top-level GFM table drawn by the renderer the phone and the pull request
- * card use (`mobile/markdown.tsx`, its HTML on), read-only. Its links open on
- * modifier-click like a drawn HTML block's and never navigate the page; any
- * other press puts the caret at the table's start, which shows its source.
+ * card use (`mobile/markdown.tsx`, its HTML on), read-only. Its links keep
+ * Live's addresses, a relative file among them, and open on modifier-click
+ * like a drawn HTML block's, never navigating the page; any other press puts
+ * the caret at the table's start, which shows its source.
  */
 class TableWidget extends WidgetType {
   constructor(
@@ -325,8 +326,10 @@ class TableWidget extends WidgetType {
     const root = document.createElement("div");
     root.className = "cm-md-table";
     const react = createRoot(root);
-    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true }) }));
+    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress }) }));
     tableRoots.set(root, react);
+    // A picture in a cell changes the table's height when it arrives or gives up.
+    for (const type of ["load", "error"]) root.addEventListener(type, () => view.requestMeasure(), true);
     const anchorOf = (event: Event) => (event.target instanceof Element ? event.target.closest("a") : null);
     root.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;

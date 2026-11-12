@@ -253,20 +253,20 @@ const TABLES = [
   "",
   "| 장치 | 관객이 품는 질문 | 답이 회수해야 할 지점 |",
   "|---|:---:|---|",
-  "| 70년 | 왜 하필 [지금](https://example.com/now)? | 70이라는 길이에 이유가 있어야 한다. |",
+  "| 70년 | 왜 하필 [지금](https://example.com/now)? | 70이라는 길이에 이유가 있어야 한다. [노트](notes.md) |",
   `| 7체 | 왜 일곱이고, 왜 **흩어져** 있었나? | ${LONG} \`${"a1b2c3d4".repeat(8)}\` https://example.com/${"long/".repeat(16)}end |`,
   "",
   "below the table",
   "",
 ].join("\n");
 
-test("a table draws as a header row and wrapping cells inside the column, its link opens on modifier-click, a press shows its source, and the gutter under it holds", async ({ page, context }) => {
-  const stack = await openStack(page, { "table.md": TABLES });
+test("a table draws as a header row and wrapping cells inside the column, its links open on modifier-click, a press shows its source, and the gutter under it holds", async ({ page, context }) => {
+  const stack = await openStack(page, { "table.md": TABLES, "notes.md": "# Notes\n" });
   try {
     await page.locator(`[data-explorer-row="${stack.repo}/table.md"]`).click();
     const block = page.locator(".cm-md-table");
     const table = block.locator("table");
-    await expect(table).toBeVisible({ timeout: 20_000 });
+    await expect(table).toBeVisible({ timeout: 20_000 }); // wait-ok: the Markdown language pack loading before the first Live draw
     await expect(table.locator("th")).toHaveText(["장치", "관객이 품는 질문", "답이 회수해야 할 지점"]);
     await expect(table.locator("th").nth(1)).toHaveCSS("text-align", "center");
     await expect(table.locator("tbody td").nth(4).locator("strong")).toHaveText("흩어져");
@@ -287,18 +287,24 @@ test("a table draws as a header row and wrapping cells inside the column, its li
     expect(plus.y).toBeGreaterThanOrEqual(row.y - 1);
     expect(plus.y + plus.height).toBeLessThanOrEqual(row.y + row.height + 1);
 
-    // A link in a cell opens on modifier-click only and the table stays drawn; a plain press, on the link too, shows its source.
+    // A link in a cell opens on modifier-click only and the table stays drawn: a web address in the browser, a relative file as a tab.
     const link = table.locator("a", { hasText: "지금" });
     const opened = context.waitForEvent("page");
     await link.click({ modifiers: ["ControlOrMeta"] });
     expect((await opened).url()).toContain("example.com/now");
+    await table.locator("a", { hasText: "노트" }).click({ modifiers: ["ControlOrMeta"] });
+    await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]')).toHaveAttribute("aria-label", /\/notes\.md/);
+    await page.locator(`[data-explorer-row="${stack.repo}/table.md"]`).click();
     await expect(table).toBeVisible();
+    // A plain press, on the link too, shows its source and opens nothing, to the end of the test.
+    const later: string[] = [];
+    context.on("page", (opened) => later.push(opened.url()));
     await link.click();
     await expect(block).toHaveCount(0);
-    expect(context.pages()).toHaveLength(2);
     await expect(page.locator(".cm-content")).toContainText("|---|:---:|---|");
     await below.click();
     await expect(table).toBeVisible();
+    expect(later).toEqual([]);
   } finally {
     close(stack);
   }

@@ -206,9 +206,11 @@ export const liveTheme = EditorView.theme({
   ".cm-md-alt": { color: "var(--muted-foreground)", fontSize: "var(--text-caption)" },
   ".cm-md-alt[data-state='loading']": { display: "none" },
   // A table, drawn by the phone's renderer: the page's prose at a reading
-  // leading, with links in the document's link colour.
+  // leading, with links in the document's link colour and code at the size
+  // inline code has outside a table.
   ".cm-md-table": { display: "block", padding: "var(--spacing-xs) 0", fontFamily: "var(--font-sans)", lineHeight: "1.5", whiteSpace: "normal" },
   ".cm-md-table a[href]": { color: "var(--file-blue)", textDecoration: "underline" },
+  ".cm-md-table code": { fontSize: "0.86em" },
   // A Mermaid diagram: centred in the column and never wider than it; it
   // takes no room until it is drawn, and one that is not shows its source as
   // a code block would.
