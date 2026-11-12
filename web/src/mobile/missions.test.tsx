@@ -620,7 +620,7 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     expect(container.querySelector("[data-mission-destination]")).toBeNull();
     // Its merge is still the operator's: the band says so and the line names its pull request, with nowhere to go.
     expect(cardOf(container, "db")).toMatchObject({ band: "Yours to merge", text: "#33", to: null, yours: true });
-    expect(cardOf(container, "docs")).toMatchObject({ mark: "branch", text: "· No PR", to: null });
+    expect(cardOf(container, "docs")).toMatchObject({ mark: "branch", text: "No PR", to: null });
     // An outside step whose watch was not sent still names the pull request the frame carries.
     expect(cardOf(container, "sdk")).toMatchObject({ text: "↗#77", to: null });
     // One sent with nothing it watches has no line at all, rather than a mark that names nothing.
