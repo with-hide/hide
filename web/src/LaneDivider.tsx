@@ -20,7 +20,7 @@ const DIVIDER_STEP = 32;
  * press, each step measured from the last one the core has not yet
  * confirmed.
  */
-export function LaneDivider({ kind, label, workspace, acknowledged, frame, origin, sizes, setGuide, actions, edge = false }: { kind: "lane" | "column"; label: string; workspace: string; acknowledged: string | null; frame: LaneFrame; origin: HTMLElement | null; sizes: LaneSizes; setGuide: (x: number | null) => void; actions: Actions; edge?: boolean }) {
+export function LaneDivider({ kind, label, workspace, acknowledged, frame, origin, sizes, setGuide, actions, edge = false, inset = false }: { kind: "lane" | "column"; label: string; workspace: string; acknowledged: string | null; frame: LaneFrame; origin: HTMLElement | null; sizes: LaneSizes; setGuide: (x: number | null) => void; actions: Actions; edge?: boolean; inset?: boolean }) {
   const cancelDrag = useRef<(() => void) | null>(null);
   const [keySession] = useState(() => crypto.randomUUID());
   const keyIntent = useRef<{ frame: LaneFrame; published: LaneFrame; extent: number; request: string; observed: string | null } | null>(null);
@@ -110,7 +110,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
       aria-valuemax={value + Math.max(0, spare)}
       tabIndex={0}
       data-lane-divider={kind}
-      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? "absolute inset-y-0" : "relative border-l border-border bg-card"}`}
+      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? "absolute inset-y-0" : inset ? "absolute inset-y-0 left-0 border-l border-border" : "relative border-l border-border bg-background"}`}
       style={edge ? { left: -sizes.divider } : undefined}
       onPointerDown={drag}
       onBlur={() => { keyIntent.current = null; }}

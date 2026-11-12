@@ -345,3 +345,8 @@ html[data-view-drag="row-resize"] * {
 @utility mark-with-count {
   --size-agent-mark: 0.85em;
 }
+
+/* A line icon drawn filled outweighs the outline icons around it at the same size, so it shrinks a little about its centre inside the same box. */
+@layer components {
+  svg.lucide.fill-current { scale: 0.85; }
+}

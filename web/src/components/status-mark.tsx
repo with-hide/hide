@@ -23,6 +23,9 @@ import { Hint } from "./ui/tooltip";
  * `label`, the mark's words, so its hover and accessible name tell a waiting
  * ring from a working one (B36).
  */
+/** A filled badge (the operator's turn, a View to look at, a person's step) carries more weight than an outline at the same size, so it is drawn a little smaller inside the same box, about its centre. */
+const FILLED_VIEW = "-1 -1 14 14";
+
 export function StatusMark({ mark, label, read = false, human = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean; human?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   const shape = (
     <span
@@ -34,7 +37,7 @@ export function StatusMark({ mark, label, read = false, human = false, className
       {...rest}
     >
       {human && mark !== null ? (
-        <svg viewBox="0 0 12 12" className="size-full">
+        <svg viewBox={read ? "0 0 12 12" : FILLED_VIEW} className="size-full">
           {/* A step only a person can take: the same badge, a key in place of the `!`, on the declaring row whatever its own mark (PRD ask-human D-09, B14); read, it is hollow as a read `!` is. */}
           {read ? <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" /> : <circle cx="6" cy="6" r="6" className="fill-warning" />}
           <circle cx="4.3" cy="6" r="1.7" fill="none" strokeWidth="1.2" className={read ? "stroke-warning" : "stroke-status-foreground"} />
@@ -47,12 +50,12 @@ export function StatusMark({ mark, label, read = false, human = false, className
           <path d="M5.3 3.1h1.4l-.23 4.1h-.94zM5.3 8.1h1.4v1.3H5.3z" className="fill-warning" />
         </svg>
       ) : mark === "turn" ? (
-        <svg viewBox="0 0 12 12" className="size-full">
+        <svg viewBox={FILLED_VIEW} className="size-full">
           <circle cx="6" cy="6" r="6" className="fill-warning" />
           <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-status-foreground" />
         </svg>
       ) : mark === "look" ? (
-        <svg viewBox="0 0 12 12" className="size-full">
+        <svg viewBox={FILLED_VIEW} className="size-full">
           {/* The operator's turn to look at a View: the same badge, an eye in place of the `!` (PRD unseen-agent-views D-15). */}
           <circle cx="6" cy="6" r="6" className="fill-warning" />
           <path d="M2.2 6C3.1 4.3 4.4 3.4 6 3.4S8.9 4.3 9.8 6C8.9 7.7 7.6 8.6 6 8.6S3.1 7.7 2.2 6Z" className="fill-status-foreground" />
