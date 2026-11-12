@@ -286,7 +286,9 @@ pub enum Refused {
     ProposedPlan,
     /// `gh pr merge` by a worker of a mission that goes up to pull requests.
     MissionMerge,
-    /// `git push --force*` or `git rebase`, in any Hide pane.
+    /// `git push --force*` or `git rebase` by an agent of a mission node,
+    /// whose checked commit has to stay the one checked. Outside a mission
+    /// the project's guardrails alone judge these.
     HistoryRewrite,
 }
 
@@ -309,7 +311,7 @@ impl Refused {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."
             }
             Self::HistoryRewrite => {
-                "Not run: Hide panes do not rewrite pushed history. Push a new commit instead of a force push, and merge the base into the branch instead of rebasing."
+                "Not run: an agent of a mission does not force push or rebase, so the commit its node was checked on stays the one checked. Do not replace it with another command; tell the Conductor what you needed and wait for its answer."
             }
         }
     }
@@ -338,9 +340,12 @@ pub fn refusal(context: &PlanContext, action: &Action) -> Option<Refused> {
         .mission
         .as_ref()
         .is_some_and(|work| work.scope == "pr");
+    let rewrite_barred = context.mission.is_some();
     match action {
         Action::Write(_) | Action::UnreadWrite if proposed => Some(Refused::ProposedPlan),
-        Action::Shell { command, syntax } => shell(command, *syntax, proposed, merge_barred),
+        Action::Shell { command, syntax } => {
+            shell(command, *syntax, proposed, merge_barred, rewrite_barred)
+        }
         _ => None,
     }
 }
@@ -365,6 +370,7 @@ fn shell(
     syntax: hide_shell::Syntax,
     proposed: bool,
     merge_barred: bool,
+    rewrite_barred: bool,
 ) -> Option<Refused> {
     let line = shell_line(command, syntax);
     for words in &line.commands {
@@ -385,11 +391,12 @@ fn shell(
                         || (arg.starts_with('+') && arg.len() > 1)
                 });
                 match subcommand {
-                    "push" if force => return Some(Refused::HistoryRewrite),
+                    "push" if rewrite_barred && force => return Some(Refused::HistoryRewrite),
                     "rebase"
-                        if !rest
-                            .iter()
-                            .any(|arg| matches!(arg.as_str(), "--abort" | "--quit")) =>
+                        if rewrite_barred
+                            && !rest
+                                .iter()
+                                .any(|arg| matches!(arg.as_str(), "--abort" | "--quit")) =>
                     {
                         return Some(Refused::HistoryRewrite);
                     }
@@ -462,49 +469,84 @@ mod tests {
         assert_eq!(refusal(&context, &Action::Read(vec!["a".into()])), None);
     }
 
-    #[test]
-    fn an_approved_or_absent_plan_refuses_only_history_rewrites() {
-        let approved = PlanContext {
-            plan: Some(plan("approved", 0)),
-            ..PlanContext::default()
-        };
-        assert_eq!(
-            refusal(&approved, &shell_action("git commit -m x && git push")),
-            None
-        );
-        for rewrite in [
-            "git push --force origin b",
-            "git push -f",
-            "git push --force-with-lease",
-            "git push origin +b",
-            "git rebase main",
-        ] {
-            assert_eq!(
-                refusal(&PlanContext::default(), &shell_action(rewrite)),
-                Some(Refused::HistoryRewrite),
-                "{rewrite}"
-            );
-        }
-        assert_eq!(
-            refusal(&PlanContext::default(), &shell_action("git rebase --abort")),
-            None
-        );
-    }
-
-    #[test]
-    fn only_a_pr_scope_worker_is_refused_a_merge() {
-        let worker = |scope: &str| PlanContext {
+    fn mission_agent(scope: &str, role: &str) -> PlanContext {
+        PlanContext {
             mission: Some(MissionWork {
                 mission: "m1".into(),
                 node: "core".into(),
                 scope: scope.into(),
                 range: "up to the PR".into(),
-                role: "worker".into(),
+                role: role.into(),
                 line: None,
                 criteria: None,
             }),
             ..PlanContext::default()
+        }
+    }
+
+    const REWRITES: [&str; 5] = [
+        "git push --force origin b",
+        "git push -f",
+        "git push --force-with-lease",
+        "git push origin +b",
+        "git rebase main",
+    ];
+
+    /// A user's agent asked to rebase was refused in every Hide pane and
+    /// merged the base instead; outside a mission a rebase or a force push
+    /// is the operator's call and the project's guardrails alone judge it.
+    #[test]
+    fn outside_a_mission_a_rebase_or_force_push_runs() {
+        let approved = PlanContext {
+            plan: Some(plan("approved", 0)),
+            ..PlanContext::default()
         };
+        for context in [&approved, &PlanContext::default()] {
+            for rewrite in REWRITES {
+                assert_eq!(refusal(context, &shell_action(rewrite)), None, "{rewrite}");
+            }
+        }
+        assert_eq!(
+            refusal(&approved, &shell_action("git commit -m x && git push")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_mission_agent_is_refused_a_rebase_or_force_push() {
+        for context in [
+            mission_agent("pr", "worker"),
+            mission_agent("merge", "worker"),
+            mission_agent("pr", "checker"),
+        ] {
+            for rewrite in REWRITES {
+                assert_eq!(
+                    refusal(&context, &shell_action(rewrite)),
+                    Some(Refused::HistoryRewrite),
+                    "{rewrite}"
+                );
+            }
+            assert_eq!(refusal(&context, &shell_action("git rebase --abort")), None);
+        }
+    }
+
+    /// The refusal names no other command to run in its place: a reason
+    /// that offered one was followed over the operator's own request.
+    #[test]
+    fn no_refusal_offers_another_command_in_its_place() {
+        for refused in [
+            Refused::ProposedPlan,
+            Refused::MissionMerge,
+            Refused::HistoryRewrite,
+        ] {
+            let reason = refused.reason();
+            assert!(!reason.contains("instead"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn only_a_pr_scope_worker_is_refused_a_merge() {
+        let worker = |scope: &str| mission_agent(scope, "worker");
         assert_eq!(
             refusal(&worker("pr"), &shell_action("gh pr merge 12 --squash")),
             Some(Refused::MissionMerge)
@@ -546,8 +588,15 @@ mod tests {
             Some(Refused::ProposedPlan)
         );
         assert_eq!(
-            judged(&PlanContext::default(), "GIT.EXE push --force origin x"),
+            judged(
+                &mission_agent("pr", "worker"),
+                "GIT.EXE push --force origin x"
+            ),
             Some(Refused::HistoryRewrite)
+        );
+        assert_eq!(
+            judged(&PlanContext::default(), "GIT.EXE push --force origin x"),
+            None
         );
         assert_eq!(
             judged(&proposed, "$r = git commit -m x"),
