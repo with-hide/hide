@@ -188,10 +188,13 @@ fn pr_words(node: &Value) -> Option<String> {
         let _ = write!(
             words,
             " · CI {}",
-            match ci["state"].as_str() {
-                Some("pass") => "통과",
-                Some("fail") => "실패",
-                Some("skipped") => "건너뜀",
+            match (ci["state"].as_str(), node["pr_state"].is_null()) {
+                (Some("pass"), _) => "통과",
+                (Some("fail"), _) => "실패",
+                (Some("skipped"), _) => "건너뜀",
+                // The pull request itself is not read: nothing is running that
+                // Hide knows of.
+                (_, true) => "읽지 못함",
                 _ => "도는 중",
             }
         );
@@ -1013,6 +1016,22 @@ mod tests {
             alone.contains("\n👤 머지할 차례 · DB는 직접 보고 머지\n"),
             "{alone}"
         );
+    }
+
+    /// with-hide/hide#2463: a node whose pull request Hide cannot read holds
+    /// its CI line open; the text says the CI is not read, not that it runs.
+    #[test]
+    fn an_open_ci_line_of_a_pull_request_not_read_is_not_a_running_ci() {
+        let mut value = mission();
+        let node = &mut value["mission"]["nodes"][1];
+        node["pr_state"] = Value::Null;
+        node["criteria"][2]["state"] = json!("open");
+        let text = draw(&value, NOW).unwrap();
+        assert!(text.contains("#8 읽지 못함 · CI 읽지 못함 ·"), "{text}");
+        let node = &mut value["mission"]["nodes"][1];
+        node["pr_state"] = json!("pending");
+        let text = draw(&value, NOW).unwrap();
+        assert!(text.contains("#8 대기 · CI 도는 중 ·"), "{text}");
     }
 
     /// A `waiting_on` this build does not read refuses the text, so the

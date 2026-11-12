@@ -1306,6 +1306,15 @@ impl MissionNode {
         self.prs.push(number);
     }
 
+    /// Gives a node with a pull request its CI line, open until GitHub's
+    /// checks are read (`mission_criteria::ensure_ci_line`); an external node,
+    /// which Hide finishes itself, has none. Whether the line was made.
+    pub(crate) fn ensure_ci_line(&mut self) -> bool {
+        self.kind != NodeKind::External
+            && self.current_pr().is_some()
+            && crate::mission_criteria::ensure_ci_line(&mut self.criteria).1
+    }
+
     /// The mark a person leaves by taking the node back to work from done
     /// or dropped: Hide does not finish it again on the facts it was taken
     /// back on, only once it holds another pull request or a line is
