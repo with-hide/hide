@@ -435,8 +435,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54); the line takes the row and its branch truncates first; `⚠` and `!` keep their place at the right end. */}
-      <span className="flex min-w-0 items-center gap-x-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
+      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54); the line takes the row and wraps under its number as D-56 says; `⚠` and `!` keep their place at the right end of its first row. */}
+      <span className="flex min-w-0 items-start gap-x-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
         {branch ? <BranchLineView line={branch} className="flex-1" /> : result ? <ResultLineView line={result} className="flex-1" /> : null}
         {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
         {gate?.state === "open" && !attention ? (

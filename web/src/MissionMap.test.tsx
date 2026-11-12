@@ -537,13 +537,14 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // An outside node's pull request or branch carries `↗` and goes to its own base, bold where that is not the destination; a node not started says its plan; no branch or base the core did not send is named (B60).
     const branch = (key: string) => {
       const one = card(map, key).querySelector<HTMLElement>("[data-node-foot] [data-node-line='branch']");
-      return one ? [one.dataset.lineMark, one.querySelector("[data-line-plan]")?.textContent ?? one.querySelector("[data-line-pr]")?.textContent ?? null, one.querySelector("[data-line-branch]")?.textContent ?? null, one.querySelector("[data-line-to]")?.textContent ?? null, one.querySelector("[data-line-to]")?.hasAttribute("data-line-elsewhere") ?? false, one.querySelector("[data-line-direct]") !== null] : null;
+      return one ? [one.dataset.lineMark, one.querySelector("[data-line-plan]")?.textContent ?? one.querySelector("[data-line-pr]")?.textContent ?? null, one.querySelector("[data-line-branch]")?.textContent ?? null, one.querySelector("[data-line-to]")?.textContent ?? null, one.querySelector("[data-line-to]")?.hasAttribute("data-line-elsewhere") ?? false, one.querySelector("[data-line-to] [data-line-direct]") ? "after-to" : one.querySelector("[data-line-direct]") ? "after-branch" : false] : null;
     };
     expect(Object.fromEntries(["core", "asked", "api", "branch", "outside", "closed-out", "merged-out", "branch-out", "next"].map((key) => [key, branch(key)]))).toEqual({
       core: ["pull", `${"#"}1704 +1`, null, "→main", false, false],
       asked: ["branch", null, null, "→main", false, false],
       api: ["merged", `${"#"}1650`, null, "→main", false, false],
-      branch: ["branch", null, "feat/a-very-long-branch-name-for-the-screen-node", "→main", false, true],
+      // A direct change's `PR 없이` rides after the destination's name, so the two move together (D-56).
+      branch: ["branch", null, "feat/a-very-long-branch-name-for-the-screen-node", "→main· No PR", false, "after-to"],
       outside: ["pending", `↗${"#"}1232`, null, "→main", false, false],
       "closed-out": ["closed", `↗${"#"}1605`, null, "→release/1.2", true, false],
       "merged-out": ["merged", `↗${"#"}1702`, null, "→main", false, false],
