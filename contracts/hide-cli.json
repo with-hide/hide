@@ -5999,6 +5999,10 @@
                 "mission_node_unknown",
                 "mission_criterion_unknown",
                 "mission_criterion_not_yours",
+                "participant_session_changed",
+                "participant_registering",
+                "participant_unavailable",
+                "ledger_unavailable",
                 "mission_ambiguous",
                 "mission_commit_required",
                 "mission_rerun_spent",
@@ -6671,7 +6675,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6f83d736a6b3743548310c0a3eb7c3c95a7af4e40e1ebe81032a26fa32005c29",
+    "digest": "sha256:4d9d6f8bb34fc0093a0e5b5d495da196f1f630cd082f0b16b4194efa8e8ca251",
     "envelopes": {
         "agent": {
             "answer": "value",

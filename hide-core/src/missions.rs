@@ -3548,6 +3548,18 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_criterion_not_yours" => {
             "Record only your own lines: a worker its node's own lines, check command and defects, a checker its review or verification; Hide records the CI, and the Conductor can only skip"
         }
+        "participant_session_changed" => {
+            "Your pane's registration belongs to an earlier agent session than the one running in it now, so this session cannot record the line: tell your Conductor, who starts a new agent for the line with hide agent spawn and a new intent and binds the id it answers"
+        }
+        "participant_registering" => {
+            "The spawn that started you is still registering you: run the same record again in a few seconds"
+        }
+        "participant_unavailable" => {
+            "Your pane has no registration: tell your Conductor, who starts the line's agent with hide agent spawn until it answers an agent id and binds that one"
+        }
+        "ledger_unavailable" => {
+            "Stop and tell the operator: Hide could not read its agent ledger (the reason is in Hide's diagnostic log); retry once Hide reads it again"
+        }
         "mission_commit_required" => {
             "Give --commit <sha>: the commit the check command ran on, or the head of the pull request a review or verification read (git rev-parse HEAD in the worktree it read)"
         }

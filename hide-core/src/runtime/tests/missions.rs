@@ -3784,6 +3784,145 @@ fn record_of(node: &str, line: &str, extra: Value) -> Value {
     command
 }
 
+/// with-hide/hide#2433: a refused record says which check failed, a
+/// registration that is not the line's, no registration of the pane's
+/// session, or a ledger Hide could not read, and leaves exactly one
+/// diagnostic line with the ids the judgment read and none of the record's
+/// text; the Conductor is judged by its identity, never by a registration.
+#[test]
+fn a_refused_record_names_its_cause_and_logs_the_ids_it_read() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    let review = || {
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "evidence": "read the private diff"}),
+        )
+    };
+    // Each refusal answers its reason and writes one line, without the
+    // record's evidence.
+    let refused = |runtime: &mut Runtime, pane: &str, record: Value| -> (String, Value) {
+        let (answer, logged) = crate::diagnostics::capture(|| command(runtime, pane, record));
+        let mut lines: Vec<Value> = logged
+            .into_iter()
+            .filter(|line| line["kind"] == "mission.record_refused")
+            .collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = lines.remove(0);
+        assert!(!line.to_string().contains("private diff"));
+        let reason = answer.unwrap_err();
+        assert_eq!(line["reason"], json!(reason));
+        (reason, line)
+    };
+    let bound = json!([{"mission": "mission-1", "worker": "agent-2", "checkers": ["agent-3"]}]);
+    let session_of =
+        |runtime: &Runtime, pane: &str| json!(runtime.delivery_observations[pane].actor.session);
+    // A registration that is not the line's checker: the line is not its own.
+    let (reason, line) = refused(&mut runtime, "recipient", review());
+    assert_eq!(reason, "mission_criterion_not_yours");
+    assert_eq!(
+        (
+            &line["node"],
+            &line["line"],
+            &line["pane"],
+            &line["session"],
+            &line["registrations"],
+            &line["pane_registrations"],
+            &line["bound"],
+        ),
+        (
+            &json!("fix"),
+            &json!("review"),
+            &json!("recipient"),
+            &session_of(&runtime, "recipient"),
+            &json!(["agent-2"]),
+            &json!(["agent-2"]),
+            &bound,
+        )
+    );
+    // Hide records the CI, whoever asks, and logs that refusal too.
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].ensure_ci_line();
+    let (reason, line) = refused(&mut runtime, "recipient", record_of("fix", "ci", json!({})));
+    assert_eq!(
+        (reason.as_str(), &line["line"]),
+        ("mission_criterion_not_yours", &json!("ci"))
+    );
+    // The checker's pane now runs another agent session than the one it
+    // registered: the record says so, and the line shows the new session
+    // beside the pane's registration of the old one.
+    let moved: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"sender-session"},
+        {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"recipient-session"},
+        {"id":"reviewer","pane_id":"reviewer","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"reviewer-session-2"},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &moved, None, None);
+    let (reason, line) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(reason, "participant_session_changed");
+    assert_eq!(
+        (
+            &line["session"],
+            &line["registrations"],
+            &line["pane_registrations"],
+            &line["bound"]
+        ),
+        (
+            &session_of(&runtime, "reviewer"),
+            &json!([]),
+            &json!(["agent-3"]),
+            &bound
+        )
+    );
+    // No registration on the pane at all; the Conductor, whose registration
+    // is gone too, is still told a checker's line is not its own.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .agents
+        .retain(|record| record.id != "agent-3" && record.id != "agent-1");
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let (reason, line) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(
+        (reason.as_str(), &line["pane_registrations"]),
+        ("participant_unavailable", &json!([]))
+    );
+    let (reason, _) = refused(&mut runtime, "sender", review());
+    assert_eq!(reason, "mission_criterion_not_yours");
+    // A ledger Hide could not read is never read as someone else's line,
+    // for a worker or a checker alike.
+    runtime.invalidate_delivery();
+    let (reason, line) = refused(&mut runtime, "recipient", record_of("fix", "c1", json!({})));
+    assert_eq!(
+        (reason.as_str(), &line["pane_registrations"]),
+        ("ledger_unavailable", &Value::Null)
+    );
+    let (reason, _) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(reason, "ledger_unavailable");
+    // The Conductor's record on a node never worked rests on its identity
+    // alone, so it needs no ledger.
+    assert!(
+        command(&mut runtime, "sender", record_of("docs", "c1", json!({})))
+            .unwrap()
+            .1
+    );
+}
+
 /// PRD mission-map-git-criteria B1-B10: a node is done only once every
 /// line is met, each line is recorded by its owner alone, the node's worker
 /// is never its reviewer, and the mission closes only with every node done
