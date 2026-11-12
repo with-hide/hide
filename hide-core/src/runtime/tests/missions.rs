@@ -3786,8 +3786,9 @@ fn record_of(node: &str, line: &str, extra: Value) -> Value {
 
 /// with-hide/hide#2433: a refused record says which check failed, a
 /// registration that is not the line's, no registration of the pane's
-/// session, or a ledger Hide could not read, and leaves one diagnostic
-/// line with the ids the judgment read and none of the record's text.
+/// session, or a ledger Hide could not read, and leaves exactly one
+/// diagnostic line with the ids the judgment read and none of the record's
+/// text; the Conductor is judged by its identity, never by a registration.
 #[test]
 fn a_refused_record_names_its_cause_and_logs_the_ids_it_read() {
     let fixture = conducting();
@@ -3815,36 +3816,57 @@ fn a_refused_record_names_its_cause_and_logs_the_ids_it_read() {
             json!({"commit": HEAD, "evidence": "read the private diff"}),
         )
     };
+    // Each refusal answers its reason and writes one line, without the
+    // record's evidence.
+    let refused = |runtime: &mut Runtime, pane: &str, record: Value| -> (String, Value) {
+        let (answer, logged) = crate::diagnostics::capture(|| command(runtime, pane, record));
+        let mut lines: Vec<Value> = logged
+            .into_iter()
+            .filter(|line| line["kind"] == "mission.record_refused")
+            .collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = lines.remove(0);
+        assert!(!line.to_string().contains("private diff"));
+        let reason = answer.unwrap_err();
+        assert_eq!(line["reason"], json!(reason));
+        (reason, line)
+    };
+    let bound = json!([{"mission": "mission-1", "worker": "agent-2", "checkers": ["agent-3"]}]);
+    let session_of =
+        |runtime: &Runtime, pane: &str| json!(runtime.delivery_observations[pane].actor.session);
     // A registration that is not the line's checker: the line is not its own.
-    let (refused, logged) =
-        crate::diagnostics::capture(|| command(&mut runtime, "recipient", review()));
-    assert_eq!(refused.unwrap_err(), "mission_criterion_not_yours");
-    let logged: Vec<&Value> = logged
-        .iter()
-        .filter(|record| record["kind"] == "mission.record_refused")
-        .collect();
-    assert_eq!(logged.len(), 1);
+    let (reason, line) = refused(&mut runtime, "recipient", review());
+    assert_eq!(reason, "mission_criterion_not_yours");
     assert_eq!(
         (
-            &logged[0]["reason"],
-            &logged[0]["node"],
-            &logged[0]["line"],
-            &logged[0]["pane"],
-            &logged[0]["registrations"],
-            &logged[0]["bound"],
+            &line["node"],
+            &line["line"],
+            &line["pane"],
+            &line["session"],
+            &line["registrations"],
+            &line["pane_registrations"],
+            &line["bound"],
         ),
         (
-            &json!("mission_criterion_not_yours"),
             &json!("fix"),
             &json!("review"),
             &json!("recipient"),
+            &session_of(&runtime, "recipient"),
             &json!(["agent-2"]),
-            &json!([{"mission": "mission-1", "worker": "agent-2", "checkers": ["agent-3"]}]),
+            &json!(["agent-2"]),
+            &bound,
         )
     );
-    assert!(!logged[0].to_string().contains("private diff"));
+    // Hide records the CI, whoever asks, and logs that refusal too.
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].ensure_ci_line();
+    let (reason, line) = refused(&mut runtime, "recipient", record_of("fix", "ci", json!({})));
+    assert_eq!(
+        (reason.as_str(), &line["line"]),
+        ("mission_criterion_not_yours", &json!("ci"))
+    );
     // The checker's pane now runs another agent session than the one it
-    // registered: the record says so instead of 'not yours'.
+    // registered: the record says so, and the line shows the new session
+    // beside the pane's registration of the old one.
     let moved: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
         {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"sender-session"},
         {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"recipient-session"},
@@ -3852,38 +3874,52 @@ fn a_refused_record_names_its_cause_and_logs_the_ids_it_read() {
     ]}))
     .unwrap();
     runtime.observe_delivery_laid(crate::node::TEST_NODE, &moved, None, None);
-    let (refused, logged) =
-        crate::diagnostics::capture(|| command(&mut runtime, "reviewer", review()));
-    assert_eq!(refused.unwrap_err(), "participant_session_changed");
-    let logged: Vec<&Value> = logged
-        .iter()
-        .filter(|record| record["kind"] == "mission.record_refused")
-        .collect();
+    let (reason, line) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(reason, "participant_session_changed");
     assert_eq!(
         (
-            &logged[0]["reason"],
-            &logged[0]["registrations"],
-            &logged[0]["bound"][0]["checkers"]
+            &line["session"],
+            &line["registrations"],
+            &line["pane_registrations"],
+            &line["bound"]
         ),
         (
-            &json!("participant_session_changed"),
+            &session_of(&runtime, "reviewer"),
             &json!([]),
-            &json!(["agent-3"])
+            &json!(["agent-3"]),
+            &bound
         )
     );
-    // No registration on the pane at all.
+    // No registration on the pane at all; the Conductor, whose registration
+    // is gone too, is still told a checker's line is not its own.
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    ledger.agents.retain(|record| record.id != "agent-3");
+    ledger
+        .agents
+        .retain(|record| record.id != "agent-3" && record.id != "agent-1");
     runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let (reason, line) = refused(&mut runtime, "reviewer", review());
     assert_eq!(
-        command(&mut runtime, "reviewer", review()).unwrap_err(),
-        "participant_unavailable"
+        (reason.as_str(), &line["pane_registrations"]),
+        ("participant_unavailable", &json!([]))
     );
-    // A ledger Hide could not read is never read as someone else's line.
+    let (reason, _) = refused(&mut runtime, "sender", review());
+    assert_eq!(reason, "mission_criterion_not_yours");
+    // A ledger Hide could not read is never read as someone else's line,
+    // for a worker or a checker alike.
     runtime.invalidate_delivery();
+    let (reason, line) = refused(&mut runtime, "recipient", record_of("fix", "c1", json!({})));
     assert_eq!(
-        command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap_err(),
-        "ledger_unavailable"
+        (reason.as_str(), &line["pane_registrations"]),
+        ("ledger_unavailable", &Value::Null)
+    );
+    let (reason, _) = refused(&mut runtime, "reviewer", review());
+    assert_eq!(reason, "ledger_unavailable");
+    // The Conductor's record on a node never worked rests on its identity
+    // alone, so it needs no ledger.
+    assert!(
+        command(&mut runtime, "sender", record_of("docs", "c1", json!({})))
+            .unwrap()
+            .1
     );
 }
 

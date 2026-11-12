@@ -3538,7 +3538,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Record only your own lines: a worker its node's own lines, check command and defects, a checker its review or verification; Hide records the CI, and the Conductor can only skip"
         }
         "participant_session_changed" => {
-            "Your pane's registration belongs to an earlier agent session than the one running in it now: tell your Conductor, who binds this session's registration to the line (hide agent show here prints it)"
+            "Your pane's registration belongs to an earlier agent session than the one running in it now, so this session cannot record the line: tell your Conductor, who starts a new agent for the line with hide agent spawn and a new intent and binds the id it answers"
         }
         "participant_unavailable" => {
             "Your pane has no registration: tell your Conductor, who starts the line's agent with hide agent spawn until it answers an agent id and binds that one"
