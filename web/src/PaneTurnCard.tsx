@@ -16,7 +16,7 @@ import { sessionOfAgent } from "./sessionWork";
 import { type AgentRow, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PeerLine, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead, type WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { lettersBefore, peerCount } from "./turnCard";
-import { OpenAskList, OpenAsksMark } from "./components/open-asks";
+import { OpenAskList } from "./components/open-asks";
 
 /** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
@@ -175,7 +175,7 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
 }
 
 /** A turn's place on the card's rail: a ring in its end's colour, filled for the shown turn's two halves; the answer filled in success, the letters a small ring. */
-type RailDot = "past" | "past-asks" | "past-done" | "request" | "answer" | "letters" | Tone;
+type RailDot = "past" | "past-asks" | "past-done" | "request" | "answer" | "letters" | "open-asks" | Tone;
 
 /** How the agent stands on the shown turn: waiting on the operator, working, finished or quiet. */
 type Tone = "asks" | "working" | "done" | "quiet";
@@ -187,6 +187,7 @@ const DOT: Record<RailDot, string> = {
   request: "border-foreground bg-foreground",
   answer: "border-success bg-success",
   letters: "border-muted-foreground bg-popover",
+  "open-asks": "border-open-ask bg-popover",
   asks: "border-warning bg-warning ring-3 ring-warning/25",
   working: "border-agent-working bg-agent-working ring-3 ring-agent-working/25",
   done: "border-success bg-success",
@@ -442,13 +443,11 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, onAsk, answerOp
               asks={open?.items ?? []}
               onSet={(id, status) => asking && onAsk(asking, id, status)}
               time={(at) => <Clock at={at} />}
+              mark="text-muted-foreground"
               frame={(list, count) => (
-                <RailItem dot="past-asks" data-turn-card-asks={count}>
-                  <div className="flex min-w-0 flex-col rounded-md border border-warning/60 bg-warning/10 px-sm pt-xs">
-                    <h3 className="flex items-center gap-xs text-micro font-semibold text-warning">
-                      <OpenAsksMark count={count} />
-                      <span>{t("record.waiting")}</span>
-                    </h3>
+                <RailItem dot="open-asks" data-turn-card-asks={count}>
+                  <div className="flex min-w-0 flex-col border-l-2 border-open-ask pl-sm">
+                    <h3 className="text-micro font-semibold text-open-ask">{t("record.waiting")} · {t("openAsks.count", { count })}</h3>
                     {list}
                   </div>
                 </RailItem>
