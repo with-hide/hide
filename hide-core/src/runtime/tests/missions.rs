@@ -14759,3 +14759,62 @@ fn an_operator_merge_report_names_all_open_held_pull_requests() {
         assert_eq!(left, format!("- Fix it (fix) · {expected} · DB review"));
     }
 }
+
+/// A stall's letter asks its Conductor for a move and says when the operator
+/// is shown it, and a failed review's warning promises no stall (operator
+/// decision 2026-11-12): on mission-60 a `warning_stood` letter said
+/// "nothing unless the operator asks", the Conductor did nothing, and the
+/// operator's safety net rose 20 minutes later with nothing for them to do.
+#[test]
+fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
+    use crate::missions::{AttentionReason, PendingWake, WakeEvent, WarningKind};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let body = |event, reason, warning| {
+        crate::runtime::missions::wake_body(
+            mission,
+            &PendingWake {
+                seq: 1,
+                node: "fix".into(),
+                pr: None,
+                event,
+                head: None,
+                to: None,
+                reason,
+                why: None,
+                action: None,
+                warning,
+                ci: None,
+                key: None,
+            },
+        )
+    };
+    let stood = body(
+        WakeEvent::Attention,
+        Some(AttentionReason::WarningStood),
+        None,
+    );
+    assert!(
+        !stood.contains("nothing unless the operator asks"),
+        "{stood}"
+    );
+    assert!(
+        stood.contains("give the node a fresh worker") && stood.contains("shown it in 20 minutes"),
+        "{stood}"
+    );
+    let review = body(WakeEvent::Warning, None, Some(WarningKind::ReviewFails));
+    assert!(!review.contains("raised on the node"), "{review}");
+    let quiet = body(WakeEvent::Warning, None, Some(WarningKind::NoPush));
+    assert!(
+        quiet.contains("still stands in 30 minutes it is raised on the node"),
+        "{quiet}"
+    );
+}

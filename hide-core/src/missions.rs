@@ -449,6 +449,17 @@ impl WarningKind {
             Self::Stopped => "stopped",
         }
     }
+
+    /// Whether the warning, still standing after its letter, is raised as a
+    /// stall (`warning_stood`): the one rule raising and keeping that stall
+    /// read. A warning the worker's own move takes off (a push, the stopped
+    /// worker at work again) stands only while no move came. A failed review
+    /// goes only once a review passes, which a worker fixing the findings
+    /// does not reach for a whole round, so standing says nothing of a move:
+    /// it stays the Conductor's warning and never reaches the operator.
+    pub fn stalls(self) -> bool {
+        !matches!(self, Self::ReviewFails)
+    }
 }
 
 /// Why a node's worker stopped, as its agent's hook reported the turn's

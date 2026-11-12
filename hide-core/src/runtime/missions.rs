@@ -997,7 +997,10 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
         }
         WakeEvent::Attention => {
             let (what, act) = attention_words(wake.reason, &pr);
-            news(format!("Node {} needs you to look: {what}", wake.node), act)
+            news(
+                format!("Node {} needs you to look: {what}", wake.node),
+                &act,
+            )
         }
         WakeEvent::Resolved => {
             let how = match wake.action {
@@ -1064,7 +1067,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => (
                     format!("failed its review {} times in a row", node.review_fails()),
-                    "judge whether its worker needs another approach or the node a fresh worker",
+                    "judge whether its worker needs another approach or the node a fresh worker; the operator is not shown this warning, so ask with `hide mission decide --node` when what is left is theirs to decide",
                 ),
                 (Some(WarningKind::NoPush), _, Some(warning)) => (
                     format!("has worked {} minutes with no push", minutes(warning)),
@@ -1101,58 +1104,79 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     "judge whether its worker needs another approach or the node a fresh worker",
                 ),
             };
+            // Only a warning the worker's own move takes off is raised again
+            // as a stall (`WarningKind::stalls`).
+            let stood = match wake.warning {
+                Some(kind) if kind.stalls() => format!(
+                    "; if the warning still stands in {} minutes it is raised on the node for you to settle",
+                    crate::mission_health::WARNING_THAT_STALLS_MS / 60_000
+                ),
+                _ => String::new(),
+            };
             format!(
-                "Node {} {what} (mission {} \"{}\").\n{read} and {ask}; if the warning still stands in 30 minutes it is raised on the node for you to settle.",
+                "Node {} {what} (mission {} \"{}\").\n{read} and {ask}{stood}.",
                 wake.node, mission.id, mission.title
             )
         }
     }
 }
 
-/// What a raise tells the Conductor, and what it asks of it.
-fn attention_words(
-    reason: Option<crate::missions::AttentionReason>,
-    pr: &str,
-) -> (String, &'static str) {
+/// What a raise tells the Conductor, and what it asks of it. A stall ends
+/// its ask with when the operator is shown it: one left standing is held in
+/// the mission's safety net (`mission_health::SAFETY_NET_AFTER_MS`).
+fn attention_words(reason: Option<crate::missions::AttentionReason>, pr: &str) -> (String, String) {
     use crate::missions::AttentionReason as Reason;
+    let raise = |what: String, act: &str| (what, act.to_owned());
+    let stall = |what: String, act: &str| {
+        let minutes = crate::mission_health::SAFETY_NET_AFTER_MS / 60_000;
+        (
+            what,
+            format!("{act}; the operator is shown it in {minutes} minutes"),
+        )
+    };
     match reason {
-        Some(Reason::MergedUnproven) => (
+        Some(Reason::MergedUnproven) => raise(
             format!("{pr} is merged but a finish line is missing or failed"),
             "record the lines with `hide mission record`, skip one with its reason, or set the node",
         ),
-        Some(Reason::WorkerEnded) => (
+        Some(Reason::WorkerEnded) => raise(
             "its worker ended with work left".to_owned(),
             "start a worker again, set the node, or drop it",
         ),
-        Some(Reason::PrClosed) => (
+        Some(Reason::PrClosed) => raise(
             format!("{pr} was closed without a merge"),
             "replan the node or the nodes it blocks, or ask the operator",
         ),
-        Some(Reason::UnplannedPr) => (
+        Some(Reason::UnplannedPr) => raise(
             format!("its worker opened {pr}, which no node holds"),
             "attach it with `hide mission node --pr`, or leave it",
         ),
-        Some(Reason::WakeRefused) => (
+        Some(Reason::WakeRefused) => raise(
             format!("Hide could not wake its sleeping worker about {pr}"),
             "wake or start the worker yourself",
         ),
-        Some(Reason::CloseRefused) => (
+        Some(Reason::CloseRefused) => raise(
             "Hide could not close the mission with every node finished".to_owned(),
             "check the node's lines and close the mission",
         ),
-        Some(Reason::HumanGate) => (
+        Some(Reason::HumanGate) => raise(
             "its gate waits on the operator".to_owned(),
             "nothing: the operator answers on the decision card",
         ),
-        Some(Reason::NotStarted) => (
+        Some(Reason::NotStarted) => stall(
             "it could start and was not started".to_owned(),
-            "start its worker; or, to hold it, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`; the operator is told in ten minutes",
+            "start its worker; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`",
         ),
-        Some(Reason::WaitStood) => (
+        Some(Reason::WaitStood) => stall(
             format!("{pr} has waited over an hour on CI, a review or the merge"),
-            "find what it waits on and move it, or merge it; the operator is told in ten minutes",
+            "find what it waits on and move it, or merge it",
         ),
-        Some(Reason::ConductorFailed | Reason::WarningStood) | None => (
+        Some(Reason::WarningStood) => stall(
+            "a warning you were told about its worker still stands, with no move from the worker"
+                .to_owned(),
+            "send its worker on with a letter saying what is left, or give the node a fresh worker; when what is left is the operator's to decide, ask with `hide mission decide --node`",
+        ),
+        Some(Reason::ConductorFailed) | None => raise(
             "the operator is asked to look".to_owned(),
             "nothing unless the operator asks",
         ),
