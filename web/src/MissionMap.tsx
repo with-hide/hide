@@ -192,9 +192,14 @@ function useWide(root: HTMLElement | null): boolean {
   return wide;
 }
 
-/** Where the operator will look, over a plan that waits for approval (PRD mission-human-gate D-08, B1). */
+/**
+ * Where the operator will look, over a plan that waits for approval (PRD
+ * mission-human-gate D-08, B1). The rows above it are control-high, so their
+ * words carry slack under them that its caption head does not: `pt-xxs`
+ * puts its words as far below the Conductor's as those are below the head's.
+ */
 function GatePlan({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
-  return <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} onSelect={onSelect} className="px-md pb-sm" />;
+  return <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} onSelect={onSelect} className="px-md pt-xxs pb-sm" />;
 }
 
 /**

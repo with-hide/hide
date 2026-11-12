@@ -37,7 +37,9 @@ export function GateStrip({ gate, className }: { gate: Pick<MissionGate, "state"
  * whole, under it. It wears no hold colour, since none of it is the
  * operator's turn (B9); the operator turns a place on or off by saying so to
  * the Conductor, whose replan redraws the list. With `onSelect` the node is a
- * word button that picks it on the map.
+ * word button that picks it on the map. A place's caption line leaves more
+ * room under its words than its bold line leaves over them, so a row pads
+ * less below than above and its divider sits midway between the two places.
  */
 export function GatePlanList({ nodes, onSelect, className }: { nodes: readonly { key: string; title: string; gate?: Pick<MissionGate, "look"> | null }[]; onSelect?: (key: string) => void; className?: string }) {
   const { t } = useInterfaceTranslation();
@@ -53,7 +55,7 @@ export function GatePlanList({ nodes, onSelect, className }: { nodes: readonly {
       </h3>
       <ul className="flex min-w-0 flex-col divide-y divide-border pl-[calc(var(--size-icon-sm)+var(--spacing-xs))]">
         {nodes.map((node) => (
-          <li key={node.key} className="flex min-w-0 flex-col items-start gap-xxs py-xs text-body first:pt-none last:pb-none" data-mission-gate-row={node.key}>
+          <li key={node.key} className="flex min-w-0 flex-col items-start gap-xxs pt-xs pb-xxs text-body first:pt-none last:pb-none" data-mission-gate-row={node.key}>
             <span className="min-w-0 break-keep font-semibold wrap-anywhere" data-mission-gate-look="true">{node.gate?.look}</span>
             {onSelect ? (
               <Button variant="text-link" size="inline" onClick={() => onSelect(node.key)} className="min-w-0 justify-start whitespace-normal text-left text-caption break-keep wrap-anywhere" data-mission-gate-node={node.key}>
