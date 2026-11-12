@@ -256,8 +256,12 @@ it("answers a decision with one request once a marked choice is sent with 답하
 
     // A press only marks the row; 답하기 sends it, and cannot before one is marked.
     expect(container.querySelector<HTMLButtonElement>("[data-phone-choice-send]")!.disabled).toBe(true);
+    expect(container.querySelector("[data-phone-answer-hint]")).toBeNull();
     await click('[data-phone-option="1"]');
     expect(answers()).toHaveLength(0);
+    // Marked, not sent: the hint shows and 답하기 is the primary button.
+    expect(container.querySelector("[data-phone-answer-hint]")?.textContent).toBe("Selected. Press Answer to send.");
+    expect(container.querySelector("[data-phone-choice-send]")!.className).toContain("bg-primary");
     await click("[data-phone-choice-send]");
     expect(answers()).toHaveLength(1);
     expect(answers()[0]).toMatchObject({ type: "answer_mission", mission: "m-turn", key: 4, option: 1 });

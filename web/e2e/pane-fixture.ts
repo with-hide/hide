@@ -138,7 +138,7 @@ export type FixtureLabel = {
    * `question`, else done. A turn start's answer carries none: the provider shim
    * leaves `end` out when the request's schema asks for none. */
   end?: "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
-  work?: { missed:{kind:"problem"|"follow_up"|"ask";text:string;/** The open ask this line repeats, by its id; none when left out. */same_as?:string|null}[]; resolved:{id:string;issue_number:number|null}[]; artifacts:string[] };
+  work?: { missed:{kind:"problem"|"follow_up"|"ask";text:string;/** The open ask this line repeats, by its id; none when left out. */same_as?:string|null;/** Only the operator can take the step; false when left out. */operator_only?:boolean}[]; resolved:{id:string;issue_number:number|null;/** What settled it without an answer; empty when left out. */reason?:string}[]; artifacts:string[] };
   at?: number;
   /** Native cwd witness, when repository provenance is part of the journey. */
   cwd?: string;
@@ -190,8 +190,8 @@ export function labelMarker(label: FixtureLabel): string {
     // One line: the reply asked for when there is one, else the progress.
     line: label.reply ?? label.progress ?? "",
     end: label.end ?? (label.question ? "question" : "done"),
-    // The schema asks every line for `same_as`, as a provider answers it.
-    work: label.work ? { ...label.work, missed: label.work.missed.map((line) => ({ same_as: null, ...line })) } : {missed:[],resolved:[],artifacts:[]},
+    // The schema asks every line for `same_as` and `operator_only` and every resolution for `reason`, as a provider answers them.
+    work: label.work ? { ...label.work, missed: label.work.missed.map((line) => ({ same_as: null, operator_only: false, ...line })), resolved: label.work.resolved.map((done) => ({ reason: "", ...done })) } : {missed:[],resolved:[],artifacts:[]},
   };
   const delay = label.delayMs ? `HIDE_E2E_DELAY_MS ${label.delayMs}\n` : "";
   return `${delay}HIDE_E2E_LABEL ${JSON.stringify(answer)}`;

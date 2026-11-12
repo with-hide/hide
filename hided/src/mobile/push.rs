@@ -431,34 +431,28 @@ pub const SETTLE_CAP: usize = 64;
 /// The phones' notice state: the ledger of transitions every phone shares,
 /// the roots that entered the operator's turn and are waiting out `SETTLE`
 /// (`pending`), and the roots whose notice may stand on a phone (`standing`).
-/// Every root the ledger holds as waiting on the operator is in one of the
-/// two. A root that leaves the operator's turn while pending is dropped and
-/// sends nothing; one that leaves while standing is closed once. The deadline
-/// is set when a root enters and never moves, so a notice is late by at most
-/// `SETTLE` and one follower pass. Nothing pending survives a restart: the
+/// A root may be pending, standing or both. A root that leaves the operator's
+/// turn while pending is dropped and sends nothing; one that leaves while
+/// standing is closed once. Its SETTLE deadline never moves; an absent root
+/// waits within the ledger's existing disappearance grace. Nothing pending
+/// survives a restart: the
 /// ledger seeds silently and every root then waiting is standing, so a
 /// restart never sends a notice twice and still closes the ones it finds.
+/// Computer use records new resting waits as standing without replacing an
+/// existing pending root; ending rest never rebuilds a pending backlog.
 #[derive(Default)]
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
-    standing: BTreeMap<AgentKey, Settled>,
+    standing: BTreeSet<AgentKey>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
 }
 
-/// The observation covered by the last settle, and where a phone first
-/// joining that notice starts. No declaration identities live per phone.
-#[derive(Clone, Copy)]
-pub(super) struct Settled {
-    pub before: u64,
-    pub through: u64,
-}
-
 struct Pending {
     due: Instant,
-    observed: u64,
+    notice: Notice,
 }
 
 impl PhoneNotices {
@@ -479,21 +473,7 @@ impl PhoneNotices {
         let seeding = !self.ledger.seeded();
         let judged = self.ledger.observe_at(projection, at);
         if seeding {
-            self.standing = self
-                .ledger
-                .waiting()
-                .cloned()
-                .map(|key| {
-                    let through = self.ledger.observation();
-                    (
-                        key,
-                        Settled {
-                            before: through,
-                            through,
-                        },
-                    )
-                })
-                .collect();
+            self.standing = self.ledger.waiting().cloned().collect();
         }
         judged
     }
@@ -502,10 +482,20 @@ impl PhoneNotices {
     /// turn start waiting out `SETTLE`, the pending ones that left it stop,
     /// and the standing ones that left it are closed. Returns what goes out
     /// now (only past the cap) and the agents whose notices to close.
+    #[cfg(test)]
     pub fn observe(
         &mut self,
         projection: &Projection,
         at: Instant,
+    ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
+        self.observe_with_rest(projection, at, false)
+    }
+
+    pub(super) fn observe_with_rest(
+        &mut self,
+        projection: &Projection,
+        at: Instant,
+        resting: bool,
     ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
         let (announced, mut close) = self.judge(projection, at);
         let ledger = &self.ledger;
@@ -514,28 +504,36 @@ impl PhoneNotices {
         // `close` itself.
         close.extend(
             self.standing
-                .keys()
+                .iter()
                 .filter(|key| ledger.present(key) && !ledger.waits_on_operator(key))
                 .cloned(),
         );
-        self.standing.retain(|key, _| !close.contains(key));
-        self.pending.retain(|key, _| ledger.waits_on_operator(key));
+        self.standing.retain(|key| !close.contains(key));
+        self.pending.retain(|key, _| {
+            !close.contains(key) && (!ledger.present(key) || ledger.waits_on_operator(key))
+        });
         for notice in announced {
             // A finished turn, a View to look at or anything else the ledger
             // announces for the desktop is no phone notice.
             if !self.ledger.waits_on_operator(&notice.key) {
                 continue;
             }
+            // Resting creates no candidate and leaves any existing pending
+            // root alone. Standing still owns its eventual clear.
+            if resting {
+                self.standing.insert(notice.key);
+                continue;
+            }
             match self.pending.get_mut(&notice.key) {
                 Some(pending) => {
-                    pending.observed = self.ledger.observation();
+                    pending.notice = notice;
                 }
                 None => {
                     self.pending.insert(
                         notice.key.clone(),
                         Pending {
                             due: at + SETTLE,
-                            observed: self.ledger.observation(),
+                            notice,
                         },
                     );
                 }
@@ -578,7 +576,7 @@ impl PhoneNotices {
         let due: Vec<AgentKey> = self
             .pending
             .iter()
-            .filter(|(_, pending)| pending.due <= at)
+            .filter(|(key, pending)| self.ledger.present(key) && pending.due <= at)
             .map(|(key, _)| key.clone())
             .collect();
         due.iter()
@@ -586,56 +584,26 @@ impl PhoneNotices {
             .collect()
     }
 
-    pub(super) fn settled(&self, key: &AgentKey) -> Settled {
-        *self
-            .standing
-            .get(key)
-            .expect("a delivered notice passed settle")
-    }
-
-    pub(super) fn waiting_after(
-        &self,
-        key: &AgentKey,
-        after: u64,
-        projection: &Projection,
-    ) -> Option<(Notice, u64)> {
-        let through = self.standing.get(key)?.through;
-        self.ledger
-            .waiting_between(key, after, through, projection)
-            .map(|notice| (notice, through))
-    }
-
-    #[cfg(test)]
-    pub(super) fn stand(&mut self, key: AgentKey) {
-        self.standing.insert(
-            key,
-            Settled {
-                before: 0,
-                through: 1,
-            },
-        );
-    }
-
     /// When the next pending notice is due.
     pub fn next_due(&self) -> Option<Instant> {
-        self.pending.values().map(|pending| pending.due).min()
+        self.pending
+            .iter()
+            .filter(|(key, _)| self.ledger.present(key))
+            .map(|(_, pending)| pending.due)
+            .min()
     }
 
     fn send(&mut self, key: &AgentKey, projection: &Projection) -> Option<Notice> {
         let pending = self.pending.remove(key)?;
-        projection.find(key)?;
-        let before = self.standing.get(key).map_or(0, |old| old.through);
-        // A cancelled newest declaration still settles this observed range.
-        // Earlier current declarations in it can remain owed to a phone.
-        self.standing.insert(
-            key.clone(),
-            Settled {
-                before,
-                through: pending.observed,
-            },
-        );
-        self.ledger
-            .waiting_between(key, before, pending.observed, projection)
+        let agent = projection.find(key)?;
+        self.standing.insert(key.clone());
+        self.ledger.waits_on_operator(key).then(|| {
+            hide_core::agent_state::push::waiting_notice(
+                key,
+                agent,
+                pending.notice.subject.as_ref(),
+            )
+        })
     }
 }
 
@@ -1786,18 +1754,18 @@ mod tests {
         serde_json::to_value(&notice.subject).unwrap()["id"].clone()
     }
 
-    /// A turn added to a wait whose notice already stands, and taken back
-    /// inside its moment, sends nothing: never the older ask again, whether
-    /// that ask was announced before a restart or in this run.
+    /// SETTLE belongs to a root: a withdrawn new declaration can still
+    /// announce its older wait if the root remains in Needs You (lead's
+    /// root-level settle policy).
     #[test]
-    fn a_turn_added_to_a_standing_wait_and_taken_back_sends_nothing() {
+    fn a_withdrawn_declaration_still_sends_once_if_its_root_keeps_waiting() {
         let t0 = Instant::now();
         let mut phone = PhoneNotices::default();
         phone.seed(&declared(&["agent-1.1"]), t0);
         phone.observe(&declared(&["agent-1.1", "agent-2.2"]), t0);
         let back = declared(&["agent-1.1"]);
         phone.observe(&back, t0 + Duration::from_secs(2));
-        assert!(phone.due(&back, t0 + SETTLE).is_empty());
+        assert_eq!(phone.due(&back, t0 + SETTLE).len(), 1);
         let t1 = t0 + SETTLE * 2;
         let kept = declared(&["agent-1.1", "agent-3.3"]);
         phone.observe(&kept, t1);

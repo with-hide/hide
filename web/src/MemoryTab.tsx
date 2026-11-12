@@ -207,7 +207,7 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
       </div>
       {project.forgotten !== null ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex p-md">
-          <div role="status" className="pointer-events-auto flex items-center gap-sm rounded-md border border-border bg-popover px-md py-xs text-caption text-foreground shadow-md" data-memory-forgotten={project.forgotten}>
+          <div role="status" className="pointer-events-auto flex items-center gap-sm rounded-md border border-border bg-popover px-md py-xs text-caption text-foreground shadow-overlay" data-memory-forgotten={project.forgotten}>
             <span>{t("memory.forgotten", { card: cardName(project.forgotten) })}</span>
             <span aria-hidden="true" className="text-muted-foreground">·</span>
             <Button variant="text-link" size="inline" disabled={busy} className="gap-xxs font-medium text-foreground" onClick={() => actions.memoryAction(id, "undo", project.forgotten)}>

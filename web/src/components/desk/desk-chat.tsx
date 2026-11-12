@@ -245,11 +245,13 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
   const refuse = () => onAnswer("reject", line.trim() || undefined);
   return (
     <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-irreversible={irreversible.length > 0 ? "true" : undefined}>
-      <p className="flex min-w-0 items-center gap-xs">
+      <p className="flex min-w-0 items-center gap-sm">
         <StatusMark mark="turn" />
         <span className="font-medium text-foreground">{t(irreversible.length > 0 ? "desk.approval.irreversibleTitle" : "desk.approval.title")}</span>
-        <span className="min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
+        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
       </p>
+      {/* What follows the title starts where the title does, so the card reads as one item under its mark. */}
+      <div className="flex min-w-0 flex-col gap-xs pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]">
       <pre className="min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground" data-desk-approval-command="true">{item.command}</pre>
       {irreversible.map(({ kind, subject }) => (
         <p key={kind} className="flex min-w-0 items-baseline gap-xs text-caption text-subtle-foreground" data-desk-approval-why={kind}>
@@ -292,6 +294,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
           <Button variant="secondary" size="sm" data-desk-approval-answer="once" onClick={() => onAnswer("once")}>{t("desk.approval.allow")}</Button>
         </div>
       )}
+      </div>
     </section>
   );
 }

@@ -6,7 +6,11 @@
 //! its tree is clean and no agent or running program is in it, the branch
 //! always kept. A worktree that stays is named in the diagnostic log and
 //! stays in the project's disk cleanup. Nothing is removed while GitHub's
-//! answer about the node's pull requests is missing or stale.
+//! answer about the node's pull requests is missing or stale. A done
+//! `direct` change's branch is retired the same way once Hide read it in the
+//! mission's destination (PRD mission-destination D-48, `node_landing`),
+//! which needs no GitHub answer; a mission from before it whose direct
+//! changes were read there is cleaned on the first pass after an upgrade.
 //!
 //! What to retire is chosen under the lock from the book and GitHub's last
 //! answer, in the mission evaluation that runs when a fact it reads moved
@@ -19,6 +23,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use serde_json::json;
 
 use super::Runtime;
+use super::mission_landing::{LandingProof, NodeLanding, node_landing};
 use super::worktree_retire::{Outcome, Retirement};
 use crate::missions::NodeStatus;
 use crate::model::PullRequestBadge;
@@ -68,10 +73,11 @@ fn settles(outcome: &Outcome) -> bool {
 impl Runtime {
     /// The worktrees a pass retires now: every done node's merged branches
     /// that nothing more is known to need, none while the switch is off.
-    /// A node is judged only on GitHub's fresh answer holding every pull
-    /// request it names, each merged or closed, and only a merged one's
-    /// branch of this repository is retired; a branch an open pull request
-    /// or a node still at work holds is not.
+    /// A node with pull requests is judged only on GitHub's fresh answer
+    /// holding every one it names, each merged or closed, and only a merged
+    /// one's branch of this repository is retired; a direct change's branch
+    /// once Hide read it in the mission's destination. A branch an open pull
+    /// request or a node still at work holds is not.
     pub(super) fn mission_cleanup_targets(&self) -> Vec<Target> {
         if !self.snapshot.ui_state.conductor_settings.clean_merged {
             return Vec::new();
@@ -92,77 +98,101 @@ impl Runtime {
             if self.mission_stale(mission) {
                 continue;
             }
-            let Some(github) = self.mission_pulls(mission) else {
-                continue;
-            };
+            let github = self.mission_pulls(mission);
             let open: HashSet<&str> = github
-                .pull_requests
-                .iter()
-                .filter(|pull| {
-                    !matches!(
-                        pull.badge,
-                        PullRequestBadge::Merged | PullRequestBadge::Closed
-                    )
+                .map(|github| {
+                    github
+                        .pull_requests
+                        .iter()
+                        .filter(|pull| {
+                            !matches!(
+                                pull.badge,
+                                PullRequestBadge::Merged | PullRequestBadge::Closed
+                            )
+                        })
+                        .map(|pull| pull.head_branch.as_str())
+                        .collect()
                 })
-                .map(|pull| pull.head_branch.as_str())
-                .collect();
+                .unwrap_or_default();
             for node in &mission.nodes {
-                if node.status != NodeStatus::Done || node.prs.is_empty() {
+                if node.status != NodeStatus::Done {
                     continue;
                 }
-                let Some(pulls) = node
-                    .prs
-                    .iter()
-                    .map(|number| {
-                        github
-                            .pull_requests
-                            .iter()
-                            .find(|pull| pull.number == *number)
-                    })
-                    .collect::<Option<Vec<_>>>()
-                else {
-                    continue;
-                };
-                if pulls.iter().any(|pull| {
-                    !matches!(
-                        pull.badge,
-                        PullRequestBadge::Merged | PullRequestBadge::Closed
-                    )
-                }) {
-                    continue;
-                }
-                // The project on the mission's machine, and the one of the
-                // same GitHub repository where the node's worker ran when
-                // that is another machine that answers.
+                // The project on the mission's machine, and for a pull
+                // request the one of the same GitHub repository where the
+                // node's worker ran when that is another machine that
+                // answers; a direct change runs on the project's machine.
                 let mut places = vec![(mission.device_id.clone(), mission.project.clone())];
-                let elsewhere = node
-                    .agent_id
-                    .as_deref()
-                    .and_then(|id| {
-                        ledger
-                            .as_deref()?
-                            .agents
-                            .iter()
-                            .find(|record| record.id == id)
-                    })
-                    .map(|record| record.machine.as_str())
-                    .filter(|machine| {
-                        *machine != mission.device_id && self.device_answers(machine)
-                    });
-                if let (Some(machine), Some(repository)) =
-                    (elsewhere, github.issues.repository_id.as_deref())
-                    && let Some(project) = self
-                        .github_projects_on(machine)
-                        .find(|project| project.issues.repository_id.as_deref() == Some(repository))
-                {
-                    places.push((machine.to_owned(), project.root_path.clone()));
-                }
-                for pull in pulls {
-                    if pull.badge != PullRequestBadge::Merged
-                        || pull.cross_repository
-                        || open.contains(pull.head_branch.as_str())
-                        || held.contains(pull.head_branch.as_str())
+                let branches: Vec<&str> = if node.prs.is_empty() {
+                    // A direct change once Hide read its branch in the
+                    // destination (PRD mission-destination D-48), which needs
+                    // no GitHub answer.
+                    match (node_landing(mission, node, false), node.branch.as_deref()) {
+                        (
+                            Some(NodeLanding::Landed {
+                                proof: LandingProof::InMain { .. },
+                            }),
+                            Some(branch),
+                        ) => vec![branch],
+                        _ => continue,
+                    }
+                } else {
+                    let Some(github) = github else {
+                        continue;
+                    };
+                    let Some(pulls) = node
+                        .prs
+                        .iter()
+                        .map(|number| {
+                            github
+                                .pull_requests
+                                .iter()
+                                .find(|pull| pull.number == *number)
+                        })
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    if pulls.iter().any(|pull| {
+                        !matches!(
+                            pull.badge,
+                            PullRequestBadge::Merged | PullRequestBadge::Closed
+                        )
+                    }) {
+                        continue;
+                    }
+                    let elsewhere = node
+                        .agent_id
+                        .as_deref()
+                        .and_then(|id| {
+                            ledger
+                                .as_deref()?
+                                .agents
+                                .iter()
+                                .find(|record| record.id == id)
+                        })
+                        .map(|record| record.machine.as_str())
+                        .filter(|machine| {
+                            *machine != mission.device_id && self.device_answers(machine)
+                        });
+                    if let (Some(machine), Some(repository)) =
+                        (elsewhere, github.issues.repository_id.as_deref())
+                        && let Some(project) = self.github_projects_on(machine).find(|project| {
+                            project.issues.repository_id.as_deref() == Some(repository)
+                        })
                     {
+                        places.push((machine.to_owned(), project.root_path.clone()));
+                    }
+                    pulls
+                        .into_iter()
+                        .filter(|pull| {
+                            pull.badge == PullRequestBadge::Merged && !pull.cross_repository
+                        })
+                        .map(|pull| pull.head_branch.as_str())
+                        .collect()
+                };
+                for branch in branches {
+                    if open.contains(branch) || held.contains(branch) {
                         continue;
                     }
                     for (machine, root) in &places {
@@ -171,7 +201,7 @@ impl Runtime {
                             node: node.key.clone(),
                             machine: machine.clone(),
                             root: root.clone(),
-                            branch: pull.head_branch.clone(),
+                            branch: branch.to_owned(),
                         });
                     }
                 }

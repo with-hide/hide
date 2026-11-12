@@ -1284,6 +1284,9 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   // Keep subpixel CSS edges until zooming into native window points.
   const slot = (await page.locator(`[data-browser-slot="${displayId}"]`).boundingBox())!;
   expect(slot.width).toBeGreaterThan(880);
+  // A page is a native view drawn over the shell, so it starts after the lane's divider; one under it would take the drag.
+  const grip = (await divider.boundingBox())!;
+  expect(slot.x).toBeGreaterThanOrEqual(grip.x + grip.width - 0.5);
   await expect.poll(async () => {
     const bounds = (await viewOf(site)).bounds;
     return Math.max(

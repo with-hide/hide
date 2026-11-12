@@ -40,8 +40,8 @@ test("closing a named tab's last agent keeps the tab, its name and its sidebar l
     await expect(input).toHaveCount(0);
     const line = page.locator(`[data-sidebar-tab-line="${fixture.tab}"]`);
     await expect(page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`)).toContainText("Planning");
-    // A tab holding agents draws its guide and rows, and says its name only in the tab strip.
-    await expect(page.locator(`[data-sidebar-tab-guide="${fixture.tab}"]`)).toHaveCount(1);
+    // A tab holding agents draws its rows, with no guide while it is the checkout's only tab, and says its name only in the tab strip.
+    await expect(page.locator(`[data-sidebar-tab-guide="${fixture.tab}"]`)).toHaveCount(0);
     await expect(line).toHaveCount(0);
 
     // One agent of two leaves as any pane does.

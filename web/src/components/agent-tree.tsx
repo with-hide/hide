@@ -151,6 +151,12 @@ export function cappedPlaces(depths: readonly number[], limit: number): TreePlac
 }
 
 /**
+ * The last child's elbow: its parent's rail bends into the row on a rounded corner and stops there, rather than
+ * a straight rail that runs on below the last row. Position it with the rail's left and the elbow's height.
+ */
+export const RAIL_ELBOW = "border-0 border-b-(length:--size-hairline) border-l-(length:--size-hairline) border-solid border-lineage-rail rounded-bl-md";
+
+/**
  * The rails left of a tree row (D-38): a rail down each level whose ancestor
  * has a later sibling, then this row's elbow from its parent's chevron lane.
  * No tint is laid behind an opened subtree.
@@ -170,8 +176,10 @@ export function TreeRails({ place }: { place: TreePlace }) {
         </span>
       ) : (
         <span className="relative w-(--size-lineage-indent) shrink-0" data-tree-elbow={place.last ? "last" : "middle"}>
-          <span className={cn("absolute top-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail", place.last ? "h-(--size-lineage-elbow-y)" : "bottom-0")} />
-          <span className="absolute top-(--size-lineage-elbow-y) right-0 left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          {place.last ? <span className={cn("absolute top-0 right-0 left-(--size-lineage-rail-x) h-(--size-lineage-elbow-y)", RAIL_ELBOW)} /> : <>
+            <span className="absolute top-0 bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" />
+            <span className="absolute top-(--size-lineage-elbow-y) right-0 left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          </>}
         </span>
       )}
     </span>
@@ -191,8 +199,10 @@ export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = fal
       <span aria-hidden="true" className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
         {chain ? <>
           {/* Below the indent limit the parent's rail comes down this lane and turns to the mark. */}
-          <span className={cn("absolute top-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail", chain.on ? "bottom-0" : "h-(--size-lineage-elbow-y)")} />
-          <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          {chain.on ? <>
+            <span className="absolute top-0 bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" />
+            <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          </> : <span className={cn("absolute top-0 right-xxs left-(--size-lineage-rail-x) h-(--size-lineage-elbow-y)", RAIL_ELBOW)} />}
         </> : hangs ? <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-none h-(--size-hairline) bg-lineage-rail" /> : null}
       </span>
     );

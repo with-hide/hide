@@ -424,7 +424,9 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
                 Some(CriterionKind::Human) => WaitingOn::Decision,
                 Some(CriterionKind::Review) => WaitingOn::Review,
                 Some(CriterionKind::Verify) => WaitingOn::Verify,
-                Some(CriterionKind::Ci) => WaitingOn::Ci,
+                // A CI line open for want of a read waits on no run.
+                Some(CriterionKind::Ci) if view.pr_state.is_some() => WaitingOn::Ci,
+                Some(CriterionKind::Ci) => WaitingOn::Conductor,
                 Some(_) => WaitingOn::Worker,
                 None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
                     WaitingOn::Merge
@@ -737,6 +739,9 @@ pub(crate) struct MissionRuntime {
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
+    /// The pulls of the operator's checkout that closes owe
+    /// (`mission_pull.rs`).
+    pub(super) pulls: super::mission_pull::MissionPulls,
     /// The projects, by device and path, a worker's letter or a Conductor's
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
@@ -1512,6 +1517,9 @@ impl Runtime {
         if status == MissionStatus::MergeWait {
             self.follow_outside_stored(&place.0, &place.1);
         }
+        if matches!(status, MissionStatus::Done | MissionStatus::MergeWait) {
+            self.owe_folder_pull(id);
+        }
         Ok(changed)
     }
 
@@ -1543,6 +1551,7 @@ impl Runtime {
         }));
         self.missions.answers_held.remove(id);
         self.record_mission_events(id, events);
+        self.owe_folder_pull(id);
         true
     }
 
@@ -1940,6 +1949,7 @@ impl Runtime {
                     delay: None,
                     delay_until_unix_ms: None,
                     report: None,
+                    folder_line: None,
                     created_at_unix_ms: now,
                     updated_at_unix_ms: now,
                     started_at_unix_ms: None,
@@ -3756,9 +3766,11 @@ impl Runtime {
                 }
             }
         }
+        let mut closed = Vec::with_capacity(ended.len());
         for (id, events) in ended {
             self.missions.answers_held.remove(&id);
             self.stage_mission_events(&id, events);
+            closed.push(id);
         }
         for id in reopened {
             // Two done missions of one Conductor changed in one read: the
@@ -3772,6 +3784,9 @@ impl Runtime {
         // One save keeps every change of this read with its events (B27).
         if changed {
             self.save_missions();
+        }
+        for id in closed {
+            self.owe_folder_pull(&id);
         }
         // The outside nodes follow the same answer (B19, B20).
         for project in self.outside_projects(device) {

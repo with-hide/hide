@@ -32,7 +32,7 @@ const output = (number: number, state: string, source: WorkSession): WorkOutput 
 const pull = (number: number, state: PrState, extra: Partial<SessionPull> = {}) => sessionPull(number, state, { title: `PR title ${number}`, ...extra });
 const flow = (id: string, name: string, at: number, requests: WorkRequest[], result: WorkFlow["result"] = null): WorkFlow => ({ id, name, at_unix_ms: at, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
 const status = (end: RecordStatus["end"], line: string, limited: string | null = null): RecordStatus => ({ end, line, at_unix_ms: AT + 20 * MIN, limited, settled: null });
-const EMPTY = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
+const EMPTY = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
 const child: RecordValue = { ...EMPTY, session: CHILD, title: "Child work", fallback_title: "Codex", native_title: null, manual_title: null, state: "idle", cwd: null, path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, status: status("done", "Report sent") };
 const BASE: RecordValue = {
   ...EMPTY,
@@ -227,6 +227,28 @@ it("lists what waits on the operator, puts one away with Skip and brings it back
   } finally { await reopened.unmount(); }
   const none = await mount(BASE);
   try { expect(none.container.querySelector("[data-record-asks]")).toBeNull(); } finally { await none.unmount(); }
+});
+
+it("keeps what Hide AI settled folded under one closed line with each reason, and one press opens it again as the operator's (status-model.md, A question still waiting)", async () => {
+  const folded: MissedWork = { ...ask("ask-2", "Split the settings change into its own PR?"), status: "folded", reason: "The lead chose a separate PR" };
+  const { container, sent, unmount } = await mount({ ...BASE, asks: [ask("ask-1", "Approve the PRD?")], folded_asks: [folded] });
+  try {
+    // Folded, not waiting: the open list neither counts nor shows it.
+    expect(container.querySelector("[data-record-asks]")!.getAttribute("data-record-asks")).toBe("1");
+    expect(text(container.querySelector("[data-record-asks]"))).not.toContain("Split the settings");
+    const toggle = container.querySelector<HTMLButtonElement>("[data-record-folded-toggle]")!;
+    expect(text(toggle)).toBe("Settled 1");
+    expect(container.querySelector('[data-record-folded-ask="ask-2"]')).toBeNull();
+    await act(async () => toggle.click());
+    const line = container.querySelector('[data-record-folded-ask="ask-2"]')!;
+    expect(text(line)).toContain("Split the settings change into its own PR?");
+    expect(text(line.querySelector("[data-record-folded-reason]"))).toBe("The lead chose a separate PR");
+    sent.length = 0;
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-record-folded-reopen="ask-2"]')!.click());
+    expect(sent.map((event) => event.payload)).toEqual([{ session: SESSION, id: "ask-2", status: "open" }]);
+  } finally { await unmount(); }
+  const none = await mount({ ...BASE, asks: [ask("ask-1", "Approve the PRD?")] });
+  try { expect(none.container.querySelector("[data-record-folded-asks]")).toBeNull(); } finally { await none.unmount(); }
 });
 
 it("shows the last real turn on top with a usage limit as a badge, and blocked when every turn hit it (B10)", async () => {

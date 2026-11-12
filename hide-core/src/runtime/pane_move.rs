@@ -7,12 +7,15 @@ use crate::sidebar::SessionSnapshotPayload;
 use crate::split_tree::Edge;
 use crate::workspace_views;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::Duration;
 
 const ACTIVE_LIMIT: usize = 16;
 const RECEIPT_LIMIT: usize = 128;
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+const UNCHECKED_MESSAGE: &str =
+    "Hide could not read where the pane is now. Move it again if it is not where you wanted.";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct Workspace {
@@ -75,9 +78,14 @@ pub(super) struct Request {
     source: Source,
     destination: Destination,
 }
+/// The page asks where a move ended up. It sends the request it holds, so a
+/// move the core never received can still be settled (as one that did not
+/// happen) instead of left unanswered.
 #[derive(Debug, Deserialize)]
 pub(super) struct Check {
     request_id: String,
+    #[serde(default)]
+    request: Option<Request>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(crate) struct Intent {
@@ -103,6 +111,9 @@ pub(super) struct Operation {
     worker: bool,
     remote_baseline: Option<RemoteSessionSnapshot>,
     publication_barrier: Option<std::time::Instant>,
+    /// When a page last asked about this settled move: it is listed again for
+    /// a minute from then, so a page that missed the answer reads it now.
+    checked_at: u64,
 }
 pub(super) struct SaveWaiter {
     key: (String, String),
@@ -607,6 +618,7 @@ impl Runtime {
                 remote_baseline,
                 worker,
                 publication_barrier: None,
+                checked_at: 0,
             },
         );
         self.sync_async_operations();
@@ -627,10 +639,15 @@ impl Runtime {
             !matches
         });
     }
+    /// The one way a move whose answer the page did not get is settled, asked
+    /// by the page itself without the operator: whatever the answer was, the
+    /// move ends `completed` or `failed`, read from where the pane is now,
+    /// and the original mutation is never sent again.
     pub(super) fn check_pane_move(&mut self, check: Check) -> bool {
+        let id = check.request_id.as_str();
         let intent = self
             .pane_moves
-            .get(&check.request_id)
+            .get(id)
             .map(|op| op.intent.clone())
             .or_else(|| {
                 self.workspace_views.as_ref().and_then(|store| {
@@ -638,29 +655,66 @@ impl Runtime {
                         .views
                         .workspaces
                         .iter()
-                        .find_map(|view| view.pane_moves.get(&check.request_id).cloned())
+                        .find_map(|view| view.pane_moves.get(id).cloned())
                 })
             });
         let Some(mut intent) = intent else {
-            return false;
+            // Saved before every effect, so a move the core has no receipt of
+            // never started: the page's request did not arrive.
+            let Some(request) = check.request.filter(|request| request.request_id == id) else {
+                crate::diagnostic!(json!({
+                    "component": "pane_move", "kind": "pane_move.check_unknown_request",
+                    "request_id": id,
+                }));
+                return false;
+            };
+            crate::diagnostic!(json!({
+                "component": "pane_move", "kind": "pane_move.request_not_received",
+                "request_id": id,
+            }));
+            self.reject_pane_move(
+                request,
+                "The move did not reach Hide and nothing was moved. Move the pane again.".into(),
+            );
+            return true;
         };
-        if matches!(intent.phase.as_str(), "failed" | "completed")
-            || self
-                .pane_moves
-                .get(&check.request_id)
-                .is_some_and(|op| op.worker || op.publication_barrier.is_some())
+        if self
+            .pane_moves
+            .get(id)
+            .is_some_and(|op| op.worker || op.publication_barrier.is_some())
         {
+            // Still being settled: its worker publishes the end.
             return false;
         }
-        self.pane_moves
-            .entry(check.request_id.clone())
-            .or_insert_with(|| Operation {
-                intent: intent.clone(),
-                baseline: None,
-                remote_baseline: None,
-                worker: false,
-                publication_barrier: None,
-            });
+        if matches!(intent.phase.as_str(), "failed" | "completed") {
+            self.pane_moves
+                .entry(id.to_owned())
+                .or_insert_with(|| Operation {
+                    intent: intent.clone(),
+                    baseline: None,
+                    remote_baseline: None,
+                    worker: false,
+                    publication_barrier: None,
+                    checked_at: 0,
+                })
+                .checked_at = unix_milliseconds();
+            self.sync_async_operations();
+            return true;
+        }
+        let engine = match self.pane_move_engine(&intent.request.workspace.device_id) {
+            Ok(value) => value,
+            Err(message) => {
+                crate::diagnostic!(json!({
+                    "component": "pane_move", "kind": "pane_move.check_engine_unavailable",
+                    "request_id": id, "reason": message,
+                }));
+                self.settle_unchecked_pane_move(intent);
+                return true;
+            }
+        };
+        let Some(context) = self.worker_context.clone() else {
+            return false;
+        };
         if self
             .pane_moves
             .values()
@@ -668,42 +722,54 @@ impl Runtime {
             .count()
             >= ACTIVE_LIMIT
         {
-            self.finish_pane_move(
-                &check.request_id,
-                "unknown",
-                Some("Too many pane moves are being checked".into()),
-                None,
-            );
+            crate::diagnostic!(json!({
+                "component": "pane_move", "kind": "pane_move.check_capacity",
+                "request_id": id,
+            }));
+            self.settle_unchecked_pane_move(intent);
             return true;
         }
-        let engine = match self.pane_move_engine(&intent.request.workspace.device_id) {
-            Ok(value) => value,
-            Err(message) => {
-                self.finish_pane_move(&check.request_id, "unknown", Some(message), None);
-                return true;
-            }
-        };
-        let Some(context) = self.worker_context.clone() else {
-            return false;
-        };
         intent.phase = "unknown".into();
+        let id = id.to_owned();
         self.pane_moves.insert(
-            check.request_id.clone(),
+            id.clone(),
             Operation {
                 intent: intent.clone(),
                 baseline: None,
                 remote_baseline: None,
                 worker: true,
                 publication_barrier: None,
+                checked_at: 0,
             },
         );
         if let Err(error) = thread::Builder::new()
             .name("hide-pane-move-check".into())
             .spawn(move || run(context, engine, intent, None, true))
         {
-            self.finish_pane_move(&check.request_id, "unknown", Some(error.to_string()), None);
+            crate::diagnostic!(json!({
+                "component": "pane_move", "kind": "pane_move.check_not_started",
+                "request_id": id, "reason": error.to_string(),
+            }));
+            self.finish_unchecked_pane_move(&id);
         }
         true
+    }
+    /// A check that could not read the pane's position still ends the move:
+    /// the pane may be anywhere, which is for the operator to look at.
+    fn settle_unchecked_pane_move(&mut self, intent: Intent) {
+        let id = intent.request.request_id.clone();
+        self.pane_moves.entry(id.clone()).or_insert(Operation {
+            intent,
+            baseline: None,
+            remote_baseline: None,
+            worker: false,
+            publication_barrier: None,
+            checked_at: 0,
+        });
+        self.finish_unchecked_pane_move(&id);
+    }
+    fn finish_unchecked_pane_move(&mut self, id: &str) {
+        self.finish_pane_move(id, "failed", Some(UNCHECKED_MESSAGE.into()), None);
     }
     pub(super) fn pane_move_operations(&self) -> Vec<crate::model::AsyncOperationSnapshot> {
         let mut intents = BTreeMap::new();
@@ -725,7 +791,15 @@ impl Runtime {
                         .pane_moves
                         .get(&intent.request.request_id)
                         .is_some_and(|op| op.publication_barrier.is_some())
-                    || intent.started_at.saturating_add(60_000) > unix_milliseconds()
+                    || intent
+                        .started_at
+                        .max(
+                            self.pane_moves
+                                .get(&intent.request.request_id)
+                                .map_or(0, |op| op.checked_at),
+                        )
+                        .saturating_add(60_000)
+                        > unix_milliseconds()
             })
             .map(|intent| crate::model::AsyncOperationSnapshot {
                 related_scope_ids: {
@@ -1474,7 +1548,17 @@ fn run(
                             && !payload_for_comparison.panes.iter().any(|pane| {
                                 pane.terminal_id.as_deref() == Some(&intent.terminal_id)
                             });
-                        guard.finish_pane_move(id, if gone{"failed"}else{"unknown"}, Some(if gone{"The original terminal is no longer live; no replacement was started".into()}else{message}), None)
+                        if gone {
+                            guard.finish_pane_move(id, "failed", Some("The original terminal is no longer live; no replacement was started".into()), None)
+                        } else if check_only {
+                            crate::diagnostic!(json!({
+                                "component": "pane_move", "kind": "pane_move.check_unlocated",
+                                "request_id": id, "reason": message,
+                            }));
+                            guard.finish_unchecked_pane_move(id);
+                        } else {
+                            guard.finish_pane_move(id, "unknown", Some(message), None)
+                        }
                     }
                 }
                 if let Some((payload, remote)) = publication {
@@ -1499,6 +1583,13 @@ fn run(
                     }
                     guard.sync_async_operations();
                 }
+            }
+            Err(error) if check_only => {
+                crate::diagnostic!(json!({
+                    "component": "pane_move", "kind": "pane_move.check_unread",
+                    "request_id": id, "reason": error,
+                }));
+                guard.finish_unchecked_pane_move(id);
             }
             Err(error) => guard.finish_pane_move(
                 id,
@@ -2172,5 +2263,124 @@ mod tests {
         assert!(!guard.pane_move_holds_tab("w1:t1"));
         assert!(!guard.pane_move_holds_tab("w1:t2"));
         assert!(server.methods().iter().all(|method| *method == "session"));
+    }
+
+    fn run_check(
+        runtime: &crate::runtime::tests::SharedRuntime,
+        engine: SharedEngine,
+        intent: &Intent,
+    ) {
+        run(
+            RuntimeWorkerContext {
+                runtime: runtime.weak(),
+                notifier: ChangeNotifier::noop(),
+            },
+            engine,
+            intent.clone(),
+            None,
+            true,
+        );
+    }
+    fn phase_of(runtime: &crate::runtime::tests::SharedRuntime, id: &str) -> String {
+        let guard = runtime.lock().unwrap();
+        guard
+            .pane_move_operations()
+            .into_iter()
+            .find(|op| op.id == id)
+            .map(|op| op.phase)
+            .unwrap_or_default()
+    }
+    fn at_destination_snapshot() -> crate::session_sync::ProjectionState {
+        let first = json!({"pane_id":"w1:p2","rect":rect(0,0,40,24)});
+        let second = json!({"pane_id":"w1:p1","rect":rect(40,0,40,24)});
+        let layout = json!({"workspace_id":"w1","tab_id":"w1:t2","zoomed":false,"area":rect(0,0,80,24),"focused_pane_id":"w1:p1","panes":[first,second],"splits":[{"direction":"right","ratio":0.5,"rect":rect(0,0,80,24)}]});
+        session(json!({
+            "focused_workspace_id":"w1","focused_pane_id":"w1:p1",
+            "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":2,"tab_count":1,"active_tab_id":"w1:t2","agent_status":"unknown"}],
+            "tabs":[{"tab_id":"w1:t2","workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":2,"agent_status":"unknown"}],
+            "panes":[
+                {"pane_id":"w1:p1","terminal_id":"term-original","workspace_id":"w1","tab_id":"w1:t2","focused":true,"agent_status":"unknown","revision":1},
+                {"pane_id":"w1:p2","terminal_id":"term-target","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1}
+            ],
+            "layouts":[layout],"agents":[]
+        }))
+    }
+    #[test]
+    fn a_check_ends_an_uncertain_move_as_completed_where_the_pane_is_at_its_destination() {
+        let server = FakeEngine::start(|method, _| match method {
+            "session" => reply(at_destination_snapshot()),
+            other => panic!("status check mutated {other}"),
+        });
+        let runtime = crate::runtime::tests::SharedRuntime::new(crate::runtime::tests::runtime());
+        let mut intent = intent(Edge::Right, "w1:t2");
+        intent.phase = "unknown".into();
+        // A move that just ran; a completed one older than a minute is not listed.
+        intent.started_at = unix_milliseconds();
+        runtime.lock().unwrap().record_pane_move(intent.clone());
+        run_check(&runtime, server.engine(), &intent);
+        assert_eq!(phase_of(&runtime, "move-fixture"), "completed");
+        assert!(!runtime.lock().unwrap().pane_move_holds_tab("w1:t2"));
+    }
+    #[test]
+    fn a_check_that_cannot_read_the_pane_still_ends_the_move_as_failed() {
+        let server = FakeEngine::start(|method, _| match method {
+            "session" => refused("engine_unavailable", "no answer"),
+            other => panic!("status check mutated {other}"),
+        });
+        let runtime = crate::runtime::tests::SharedRuntime::new(crate::runtime::tests::runtime());
+        let mut intent = intent(Edge::Right, "w1:t2");
+        intent.phase = "unknown".into();
+        runtime.lock().unwrap().record_pane_move(intent.clone());
+        run_check(&runtime, server.engine(), &intent);
+        assert_eq!(phase_of(&runtime, "move-fixture"), "failed");
+        let guard = runtime.lock().unwrap();
+        assert!(!guard.pane_move_holds_tab("w1:t1"));
+        assert!(!guard.pane_move_holds_tab("w1:t2"));
+    }
+    #[test]
+    fn a_check_for_a_move_the_core_never_received_settles_it_as_not_received() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let request = intent(Edge::Right, "w1:t2").request;
+        let id = request.request_id.clone();
+        assert!(runtime.pane_move_operations().iter().all(|op| op.id != id));
+        // With nothing but an id there is nothing to settle.
+        assert!(!runtime.check_pane_move(Check {
+            request_id: id.clone(),
+            request: None,
+        }));
+        assert!(runtime.check_pane_move(Check {
+            request_id: id.clone(),
+            request: Some(request),
+        }));
+        let operations = runtime.pane_move_operations();
+        let operation = operations.iter().find(|op| op.id == id).unwrap();
+        assert_eq!(operation.phase, "failed");
+        assert!(operation.retryable);
+        assert!(!runtime.pane_move_holds_tab("w1:t1"));
+    }
+    #[test]
+    fn a_check_lists_a_settled_move_again_for_a_page_that_missed_its_answer() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let mut intent = intent(Edge::Right, "w1:t2");
+        // Settled long ago: no longer listed.
+        intent.phase = "completed".into();
+        intent.started_at = 1;
+        runtime.record_pane_move(intent.clone());
+        assert!(
+            runtime
+                .pane_move_operations()
+                .iter()
+                .all(|op| op.id != "move-fixture")
+        );
+        assert!(runtime.check_pane_move(Check {
+            request_id: "move-fixture".into(),
+            request: None,
+        }));
+        let operations = runtime.pane_move_operations();
+        let operation = operations
+            .iter()
+            .find(|op| op.id == "move-fixture")
+            .unwrap();
+        assert_eq!(operation.phase, "completed");
     }
 }

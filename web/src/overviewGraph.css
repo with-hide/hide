@@ -3,9 +3,9 @@
 .overview-graph:has(> [data-graph-welcome]) { display: flex; flex-direction: column; min-height: 100%; }
 .og-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg); }
 .og-toolbar h2 { margin: 0 0 var(--spacing-sm); font-size: var(--text-headline); font-weight: 600; }
-.og-toolbar-actions, .og-toolbar-actions > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
-.og-toolbar-actions > div { padding: var(--spacing-xxs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); }
-.og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xxs); }
+.og-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
+.og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
+.og-state-counts > span { --size-agent-mark: 0.85em; }
 .og-state-counts { gap: var(--spacing-sm); color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-state-counts b { font-weight: 500; font-variant-numeric: tabular-nums; }
 .og-state-counts [data-state="turn"] { color: var(--warning); }
@@ -82,14 +82,14 @@
 .og-session-target:hover .og-orb, .og-session[data-selected="true"] .og-orb { background: var(--accent); }
 .og-session-target:focus-visible, .og-list > button:focus-visible, .og-project-list button:focus-visible, .og-ask-who:focus-visible, .og-team-list button:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 /* The orb's ring says the state: working, my turn, a result to read, quiet. */
-.og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border: var(--graph-edge-flow-width) solid var(--border); border-radius: 50%; background: var(--secondary); }
+.og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border: var(--graph-edge-flow-width) solid var(--border); border-radius: 50%; background: var(--raised); box-shadow: var(--elevation-raised); }
 .og-orb .og-provider { width: 60%; height: 60%; }
 /* A profile agent's logo wears its badge in a wrapper (`AgentMark`): the wrapper takes the logo's place and the logo fills it. */
 .og-orb [data-agent-mark-badged] { width: 60%; height: 60%; }
 .og-orb [data-agent-mark-badged] > .og-provider { width: 100%; height: 100%; }
 .og-session[data-mark="going"] .og-orb, .og-session[data-mark="waiting"] .og-orb { border-color: var(--agent-working); }
 .og-session[data-mark="waiting"] .og-orb { border-style: dashed; }
-.og-session[data-mark="turn"] .og-orb, .og-session[data-mark="look"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
+.og-session[data-mark="turn"] .og-orb, .og-session[data-mark="look"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning), var(--elevation-raised); }
 .og-session[data-mark="done"] .og-orb { border-color: var(--success); }
 .og-session[data-mark="unread"] .og-orb { border-color: var(--foreground); }
 .og-session-drag { cursor: grab; }
@@ -135,7 +135,7 @@
 .og-exchange > span { display: inline-flex; align-items: center; gap: var(--size-hairline); }
 .og-exchange svg { width: var(--text-micro); height: var(--text-micro); color: var(--muted-foreground); }
 
-.og-zoom { position: absolute; right: var(--spacing-lg); bottom: var(--spacing-xl); z-index: 5; display: flex; padding: var(--spacing-xs); background: var(--card); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); }
+.og-zoom { position: absolute; right: var(--spacing-lg); bottom: var(--spacing-xl); z-index: 5; display: flex; padding: var(--spacing-xs); background: var(--raised); border: var(--size-hairline) solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: var(--radius-sm); box-shadow: var(--elevation-raised); }
 .overview-graph .react-flow__attribution { background: var(--background); color: var(--muted-foreground); font-size: var(--text-micro); }
 .og-list { height: 100%; overflow-y: auto; padding: var(--spacing-sm) var(--spacing-lg); }
 .og-list > button { display: flex; align-items: center; gap: var(--spacing-sm); width: 100%; padding: var(--spacing-md) var(--spacing-sm); border: 0; border-bottom: var(--size-hairline) solid var(--border); background: transparent; text-align: left; font-size: var(--text-body); color: var(--muted-foreground); cursor: pointer; }
@@ -152,10 +152,10 @@
 .og-project-list { margin-top: var(--spacing-sm); }
 .og-project-list > div { display: flex; align-items: center; gap: var(--spacing-xs); border-bottom: var(--size-hairline) solid var(--border); }
 .og-project-list > div[data-hidden="true"] > button:first-child { opacity: var(--opacity-dimmed); }
-.og-project-list > div > button:first-child { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: var(--spacing-xs) var(--spacing-sm); border: 0; padding: var(--spacing-sm); background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
+.og-project-list > div > button:first-child { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs) var(--spacing-sm); border: 0; padding: var(--spacing-sm); background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
 .og-project-list > div > button:first-child:disabled { cursor: default; }
 .og-project-list strong { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
-.og-count { flex-shrink: 0; margin-left: auto; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.og-count { flex-shrink: 0; min-width: 2ch; margin-left: auto; text-align: right; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 /* The row's eye shows on pointer or keyboard focus, and always on a hidden row (PRD overview-graph-remembered D-02). */
 .og-project-list .og-eye { flex-shrink: 0; opacity: 0; }
 .og-project-list > div:hover .og-eye, .og-project-list > div:focus-within .og-eye, .og-project-list > div[data-hidden="true"] .og-eye { opacity: 1; }
@@ -163,7 +163,15 @@
 @media (hover: none) { .og-project-list .og-eye { opacity: 1; } }
 .og-navigator h3, .og-details h3, .og-waiting-alone h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
 .og-waiting h3 span { color: var(--warning); font-variant-numeric: tabular-nums; }
-.og-ask { display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); margin-bottom: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); border: var(--size-hairline) solid color-mix(in srgb, var(--warning) 40%, var(--border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); }
+.og-waiting h3 { margin-bottom: var(--spacing-sm); }
+/* The asks waiting on the operator share one quiet container, each set apart by a line, rather than a ring of their own; a button inside takes its fill and line from the same warning tint. */
+.og-ask-list { --og-ask-line: color-mix(in srgb, var(--warning) 10%, color-mix(in srgb, var(--border) 70%, transparent)); --og-ask-fill: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); overflow: hidden; border: var(--size-hairline) solid var(--og-ask-line); border-radius: var(--radius-md); background: var(--og-ask-fill); }
+.og-ask { --border: transparent; --secondary: color-mix(in srgb, var(--warning) calc(var(--opacity-selected-fill) * 100%), transparent); --accent: color-mix(in srgb, var(--warning) calc(var(--opacity-emphasis-fill) * 100%), transparent); display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); padding: var(--spacing-sm) var(--spacing-md); }
+/* Only the mark stands at the card's left edge; the line and its actions under it start where the title does. */
+.og-ask { --og-ask-mark: var(--size-agent-badge-compact); }
+.og-ask-who > :first-child { width: var(--og-ask-mark); height: var(--og-ask-mark); flex-shrink: 0; }
+.og-ask > :not(.og-ask-who) { margin-left: calc(var(--og-ask-mark) + var(--spacing-xs)); }
+.og-ask + .og-ask { border-top: var(--size-hairline) solid var(--og-ask-line); }
 .og-ask p { margin: 0; overflow-wrap: anywhere; }
 .og-ask small { color: var(--warning); font-size: var(--text-caption); }
 .og-ask-who { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--spacing-xs); border: 0; padding: 0; background: transparent; color: var(--warning); font-size: var(--text-caption); text-align: left; cursor: pointer; }

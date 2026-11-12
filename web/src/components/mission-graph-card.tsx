@@ -19,6 +19,9 @@ const LOOK_CARD: Record<NodeLook, string> = {
 /** A card waiting on the operator wears 내 차례's card colour as a thick border and ring over its look, readable at the map's smallest zoom (PRD mission-node-simple B2). */
 const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20";
 
+/** Only the state mark stands at the card's left edge; every line under the head starts where the title does. */
+const NODE_BODY_INSET = "[&>:not([data-node-head]):not(.absolute)]:ml-[calc(var(--size-agent-mark)+var(--spacing-xs))]";
+
 /** The same card frame, state, title and touch target on the desktop and phone; its rows stand one spacing token apart and carry no gaps of their own (PRD mission-destination D-51). */
 export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, title, accessory, children, ...props }: {
   node: Pick<MissionNode, "key" | "title" | "kind" | "status" | "blocked">;
@@ -40,13 +43,14 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
       data-node-blocked={node.blocked ?? undefined} data-node-dimmed={dimmed || undefined}
       className={cn(
         "relative flex h-auto w-(--size-mission-node) min-w-0 min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-md border bg-card px-sm py-xs text-left font-normal text-foreground hover:text-foreground whitespace-normal outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
+        NODE_BODY_INSET,
         yours ? ATTENTION_CARD : LOOK_CARD[look], node.kind === "external" && "border-dotted",
         selected && "outline-2 outline-offset-2 outline-primary", dimmed && "opacity-(--opacity-dimmed)",
       )}
       {...props}
     >
       {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
-      <span className="flex min-w-0 items-center gap-xs">
+      <span className="flex min-w-0 items-center gap-xs" data-node-head="true">
         <MissionNodeMark look={look} label={word} still={still} />
         {title ?? <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")}>{node.title}</span>}
         {accessory}

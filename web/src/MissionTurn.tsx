@@ -120,7 +120,7 @@ function SafetyNetCard({ mission, net, actions, onSelect }: { mission: Mission; 
   const count = net.nodes.length;
   const head = !net.conductor_present ? t("mission.net.noConductor", { count }) : age ? t("mission.net.title", { count, age }) : t("mission.net.line", { count });
   return (
-    <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-mission-hold/10 px-sm py-xs" data-mission-turn-item="safety_net" data-mission-safety-net={net.conductor_present ? "present" : "absent"}>
+    <div className="tone-hold flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold/30 bg-mission-hold/8 px-sm py-xs [&>:not(:first-child)]:ml-[calc(var(--size-agent-mark)+var(--spacing-sm))]" data-mission-turn-item="safety_net" data-mission-safety-net={net.conductor_present ? "present" : "absent"}>
       <div className="flex min-w-0 items-center gap-sm">
         <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full bg-mission-hold" />
         <span className="flex min-w-0 flex-1 flex-col">

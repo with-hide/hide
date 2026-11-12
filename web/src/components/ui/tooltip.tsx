@@ -81,7 +81,7 @@ function TooltipContent({ ref, className, side = "top", align = "center", sideOf
         side={clear ?? side}
         align={align}
         sideOffset={sideOffset}
-        className={cn("pointer-events-none z-50 max-w-(--size-tooltip-max-width) text-balance rounded-sm border border-border bg-popover px-sm py-xs text-caption text-popover-foreground shadow-lg", className)}
+        className={cn("pointer-events-none z-50 max-w-(--size-tooltip-max-width) text-balance rounded-sm border border-border bg-popover px-sm py-xs text-caption text-popover-foreground shadow-overlay", className)}
         {...props}
         onMouseDown={(event) => {
           props.onMouseDown?.(event);

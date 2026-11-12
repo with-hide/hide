@@ -26,7 +26,7 @@ import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
 import { useMissionTurnCount } from "./MissionScreen";
-import { TreeRails } from "./components/agent-tree";
+import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
 import { groupFoldKey, useGroupFolds, useGroupName } from "./groupTabs";
@@ -138,7 +138,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
     // e2e overflow check sets to try other widths (PRD sidebar-typography D-13).
     <div className="relative h-full w-(--sidebar-total) shrink-0" style={columns} data-sidebar-box="true">
       <nav
-        className={cn("absolute inset-y-0 left-0 flex w-(--sidebar-total) bg-sidebar text-foreground", preview !== null && "z-30")}
+        className={cn("absolute inset-y-0 left-0 flex w-(--sidebar-total) border-r border-input bg-sidebar text-foreground", preview !== null && "z-30")}
         style={
           preview === null
             ? undefined
@@ -503,7 +503,7 @@ function ProjectList({ actions }: { actions: Actions }) {
         {raised.map((row, stack) => (
           <ProjectRowView key={rowKey(row)} row={row} stack={stack} context={context} />
         ))}
-        {raised.length > 0 && listRows.length > 0 ? <li role="separator" className="my-xs border-t border-border" /> : null}
+        {raised.length > 0 && listRows.length > 0 ? <li role="separator" className="my-xs -mx-sm border-t border-border" /> : null}
         {listRows.map((row, index) => (
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
@@ -565,7 +565,7 @@ function rowKey(row: ProjectRow): string {
 
 
 const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack = 0, context }: { row: ProjectRow; first?: boolean; stack?: number; context: ListContext }) {
-  if (row.kind === "divider") return <li role="separator" className="my-sm border-t border-border" />;
+  if (row.kind === "divider") return <li role="separator" className="my-sm -mx-sm border-t border-border" />;
   if (row.kind === "raised") return <RaisedSection row={row} stack={stack} context={context} />;
   return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
 });
@@ -611,8 +611,9 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
           onClick={press}
         >
           <span>{name}</span>
-          <span className="flex-1 tabular-nums">{count}</span>
-          <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
+          <span className="tabular-nums">{count}</span>
+          {/* The fold mark sits by the words it folds, not at the row's far end. */}
+          <span className="flex shrink-0 items-center text-muted-foreground">
             <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
           </span>
         </RowButton>
@@ -746,9 +747,12 @@ function FoldRow({
       <span className="min-w-0 flex-1 truncate">
         {label} {count}
       </span>
-      {badge}
-      <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
-        <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
+      {/* The badge keeps a project row's gap to the fold slot, so its right edge lines up with the project badges around it. */}
+      <span className="flex shrink-0 items-center gap-xs">
+        {badge}
+        <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
+          <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
+        </span>
       </span>
     </RowButton>
   );
@@ -1500,7 +1504,7 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, ins
   return <ul className={cn("isolate", groupTabs && "mt-xxs mb-sm")} data-checkout-agents-open={checkout.id}>
     {groups.map((group, index) => (
       <li key={group.tab?.id ?? "unplaced"} className={cn("relative", groupTabs && index > 0 && "mt-sm")} data-sidebar-tab-group={group.tab?.id ?? undefined}>
-        {groupTabs ? <TabSegmentHead group={group} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={glyphColumn} context={context} /> : null}
+        {groupTabs ? <TabSegmentHead group={group} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={glyphColumn} alone={groups.filter((entry) => entry.tab).length === 1} context={context} /> : null}
         <AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={group.rows} inset={inset} fold={guideCenter(glyphColumn, "var(--size-checkout-icon)")} context={context} />
       </li>
     ))}
@@ -1522,7 +1526,7 @@ function CollectionRows({ checkout, deviceId, collection, inset, guideColumn, gu
     {group.tabs.map((id) => {
       if (drafts.includes(id)) return <li key={id}><RowButton data-sidebar-tab={id} className="h-(--size-sidebar-line) rounded-sm py-0 text-caption text-subtle-foreground" style={{ paddingLeft: inset }} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select", tab_id: id })}><PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{t("groups.newTab")}</span></RowButton></li>;
       const segment = segments.find((candidate) => candidate.tab?.id === id);
-      return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={guideColumn} glyphSize={guideSize} context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} fold={guideCenter(guideColumn, guideSize)} context={context} /></li> : null;
+      return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={guideColumn} glyphSize={guideSize} alone={segments.filter((entry) => entry.tab).length === 1} context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} fold={guideCenter(guideColumn, guideSize)} context={context} /></li> : null;
     })}
     {segments.filter((segment) => segment.tab === null || !placed.has(segment.tab.id!)).map((segment) => <li key={segment.tab?.id ?? "unplaced"}><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} fold={guideCenter(guideColumn, guideSize)} context={context} /></li>)}
   </>;
@@ -1538,11 +1542,12 @@ const TAB_LINE = "calc(var(--size-sidebar-line) + var(--spacing-xxs))";
 
 /**
  * A tab is a segment of its checkout's agent list, not a level (docs/UI_BEHAVIOR.md, Sidebar hierarchy): every tab, whatever it holds or is named,
- * draws a hairline guide centered under the glyph of the row it hangs from (its group's briefcase, or the checkout's kind glyph when no group header is drawn) spanning the segment's rows, and, unless it is an unnamed tab
+ * draws a hairline guide centered under the glyph of the row it hangs from (its group's briefcase, or the checkout's kind glyph when no group header is drawn) down to its last root row, where it bends into that row;
+ * a checkout with one tab draws no guide, since there is no other segment to tell it from. Unless it is an unnamed tab
  * holding one agent, opens with one quiet line inside the guide, the tab glyph on the status-mark column and its name (the manual one, else `Tab N`) on the title column, so it reads as part of
  * the checkout rather than beside it. The line opens the real tab, and the hint says its name and agent count, or only its name with no agent.
  */
-function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSize = "var(--size-checkout-icon)", context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; glyphSize?: string; context: TreeContext }) {
+function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSize = "var(--size-checkout-icon)", alone, context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; glyphSize?: string; alone: boolean; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const removing = useShellStore((s) => checkoutRemoving(s.rest?.worktree_removal, deviceId, checkout.path, localDeviceId(s.rest)));
   const tab = group.tab;
@@ -1552,11 +1557,28 @@ function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSi
   const label = group.count === 0 ? name : t("sidebar.tabAgents", { name, count: group.count });
   const center = guideCenter(glyphColumn, glyphSize);
   const open = () => context.actions.openSurface(tabSurface(checkout, tab!.id!, deviceId));
+  // The guide ends where it bends into the segment's last root row, so it never runs on below the rows it gathers.
+  const guide = useRef<HTMLSpanElement>(null);
+  const [guideEnd, setGuideEnd] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const segment = guide.current?.parentElement;
+    if (!segment) return;
+    const measure = () => {
+      const roots = segment.querySelectorAll<HTMLElement>(':scope > ul > li[data-depth="0"]');
+      const last = roots[roots.length - 1];
+      setGuideEnd(last ? Math.round(last.getBoundingClientRect().top - segment.getBoundingClientRect().top) : null);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(segment);
+    return () => observer.disconnect();
+  }, [group.glyph, alone]);
   if (!group.glyph) return null;
   return (
     <>
       {/* It stands above a selected or hovered row's fill, so only a tab boundary breaks it; the list isolates its stacking so it never rises over the sticky section header. */}
-      <span aria-hidden="true" data-sidebar-tab-guide={tab!.id!} className="pointer-events-none absolute top-xs bottom-xs z-10 w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${center} - var(--size-hairline) / 2)` }} />
+      {alone ? null : <span ref={guide} aria-hidden="true" data-sidebar-tab-guide={tab!.id!} className={cn("pointer-events-none absolute top-xs z-10", RAIL_ELBOW)} style={{ left: `calc(${center} - var(--size-hairline) / 2)`, width: `calc(${inset} - ${center} - var(--spacing-xxs))`, height: guideEnd === null ? 0 : `calc(${guideEnd}px + var(--size-lineage-elbow-y) - var(--spacing-xs))`, visibility: guideEnd === null ? "hidden" : undefined }} />}
       {group.line ? <div data-sidebar-tab-line={tab!.id!} className="group/row relative rounded-sm hover:bg-accent" style={{ height: TAB_LINE }}>
           <Hint label={label} reveals>
             <RowOverlayButton hover={false} data-sidebar-tab={tab!.id!} disabled={removing} aria-label={label} className="rounded-sm" onClick={open} />

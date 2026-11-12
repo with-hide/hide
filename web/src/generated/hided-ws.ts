@@ -865,7 +865,7 @@ export interface DesktopNoticesPayload {
   needs_you?: boolean;
 }
 /**
- * Desktop-only desktop_activity event, never dispatched to the core. The main host reports system use once on connection and only on transitions; disconnect withdraws it. hided rests phone pushes only while any desktop reports in_use and at least one wants Needs You notifications.
+ * Desktop-only desktop_activity event, never dispatched to the core. The main host reports system use on connection, use transitions and input resumed after a five-second pause; disconnect withdraws it. A true report counts as computer input. hided rests phone pushes only while any desktop reports in_use, at least one wants Needs You notifications and no later accepted phone action has taken over.
  */
 export interface DesktopActivityPayload {
   in_use: boolean;
