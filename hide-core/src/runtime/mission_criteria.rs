@@ -97,14 +97,20 @@ const NOT_YOURS: &str = "mission_criterion_not_yours";
 /// with no registration of its pane's session at all learns which of the
 /// ways it has none (`coordination::here`); one with a registration that is
 /// not the line's owner learns that the line is not its own.
-fn record_refused(caller: &Caller<'_>, missions: &[&Mission], node: &str, key: &str) -> String {
+fn record_refused(
+    caller: &Caller<'_>,
+    missions: &[&Mission],
+    node: &str,
+    key: &str,
+    now: u64,
+) -> String {
     let conductor = missions
         .iter()
         .any(|mission| mission.conductor.actor.same_identity(caller.actor));
     let reason = match caller.ledger {
         _ if conductor => NOT_YOURS,
         None => "ledger_unavailable",
-        Some(ledger) => match crate::coordination::here(ledger, caller.actor) {
+        Some(ledger) => match crate::coordination::here(ledger, caller.actor, now) {
             Err(reason) if caller.registrations.is_empty() => reason,
             _ => NOT_YOURS,
         },
@@ -588,7 +594,7 @@ impl Runtime {
                     Some(mission) => vec![mission],
                     None => self.open_missions_holding(node),
                 };
-                return Err(record_refused(&caller, &held, node, key));
+                return Err(record_refused(&caller, &held, node, key, now));
             }
             Err(reason) => return Err(reason),
         };
@@ -628,7 +634,7 @@ impl Runtime {
                     .iter()
                     .position(|checker| caller.owns(checker.agent_id.as_deref()))
                 else {
-                    return Err(record_refused(&caller, &[mission], node, key));
+                    return Err(record_refused(&caller, &[mission], node, key, now));
                 };
                 let agent_id = line.checkers[slot].agent_id.clone();
                 // The head an answer is for is the one the checker names: a
@@ -669,7 +675,7 @@ impl Runtime {
                 } else if conductor && never_worked {
                     by(Role::Conductor, mission.conductor.agent_id.clone())
                 } else {
-                    return Err(record_refused(&caller, &[mission], node, key));
+                    return Err(record_refused(&caller, &[mission], node, key, now));
                 };
                 if line.kind == CriterionKind::Check {
                     // The check is the folder it ran in, on the machine the

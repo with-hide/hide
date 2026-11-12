@@ -3540,6 +3540,9 @@ pub fn next_action(code: &str) -> &'static str {
         "participant_session_changed" => {
             "Your pane's registration belongs to an earlier agent session than the one running in it now, so this session cannot record the line: tell your Conductor, who starts a new agent for the line with hide agent spawn and a new intent and binds the id it answers"
         }
+        "participant_registering" => {
+            "The spawn that started you is still registering you: run the same record again in a few seconds"
+        }
         "participant_unavailable" => {
             "Your pane has no registration: tell your Conductor, who starts the line's agent with hide agent spawn until it answers an agent id and binds that one"
         }

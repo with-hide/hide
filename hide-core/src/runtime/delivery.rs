@@ -1609,7 +1609,7 @@ impl Runtime {
             && target == crate::coordination::PARENT
         {
             let ledger = self.delivery_state()?;
-            *target = crate::coordination::here(&ledger, &actor)?
+            *target = crate::coordination::here(&ledger, &actor, unix_milliseconds())?
                 .parent
                 .clone()
                 .ok_or("no_parent")?;
@@ -3744,6 +3744,133 @@ pub(crate) mod tests {
             Some("no_parent")
         );
         drop(worker);
+    }
+
+    /// A child its spawn started and has not registered yet writes to
+    /// `parent` (with-hide/hide#2482). While the spawn is younger than the
+    /// time its caller waits for its answer, the child is told its
+    /// registration is under way, a refusal that passes; a spawn that old
+    /// with no child bound is not going to answer, so the child is no one,
+    /// as before. Neither records a letter.
+    #[test]
+    fn a_letter_to_parent_from_a_child_its_spawn_is_still_registering_is_refused_until_the_spawns_answer_time()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, target, path) = fixture(root.path());
+        // The parent in `sender` started the agent in `recipient`, which the
+        // engine lists under the spawn's name, with a spawn reserved at
+        // `reserved_at`, its pane placed and its start typed, nothing bound.
+        let started = |reserved_at: u64| {
+            use crate::coordination::{AgentRecord, Mutation, apply};
+            let mut guard = runtime.lock().unwrap();
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
+                 "lineage_session":crate::engine::tokens::session_digest("sender-session")},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
+                 "lineage_session":crate::engine::tokens::session_digest("recipient-session")},
+            ]}))
+            .unwrap();
+            guard.observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &payload,
+                Some("fixture-scope"),
+                None,
+            );
+            let parent = guard.delivery_observations["sender"].actor.clone();
+            let mut ledger = crate::delivery::ledger::Ledger::default();
+            ledger.agents.push(AgentRecord {
+                id: "agent-1".into(),
+                name: Some("lead".into()),
+                machine: crate::node::TEST_NODE.into(),
+                host_scope: "fixture-scope".into(),
+                native_machine: "fixture-machine".into(),
+                session: "sender-session".into(),
+                instance: "terminal-sender".into(),
+                pane: "sender".into(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor: parent.clone(),
+                ended: false,
+                terminal_id: None,
+                forked: false,
+            });
+            ledger.next_id = 2;
+            let reserve = Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: crate::coordination::Command::Spawn {
+                    pick: None,
+                    mission: None,
+                    plan_node: None,
+                    plan: None,
+                    parent: Some("agent-1".into()),
+                    machine: None,
+                    name: "recipient".into(),
+                    intent: "task-1".into(),
+                    kind: "codex".into(),
+                    repo: "/checkouts/fixture".into(),
+                    branch: "topic".into(),
+                    path: None,
+                    args: Vec::new(),
+                    launch: Default::default(),
+                    task: None,
+                    brief: Some("write to your parent first".into()),
+                    beside: false,
+                    profile: None,
+                },
+            };
+            let spawn = apply(&mut ledger, &parent, &reserve, reserved_at).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            for step in [
+                Mutation::Place {
+                    id: spawn.clone(),
+                    pane: "recipient".into(),
+                },
+                Mutation::Typed {
+                    id: spawn,
+                    profile: None,
+                },
+            ] {
+                apply(&mut ledger, &parent, &step, reserved_at).unwrap();
+            }
+            ledger.validate().unwrap();
+            crate::delivery::ledger::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+        };
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        runtime.lock().unwrap().install_delivery_client(client);
+        let context = authority(&target.actor).context;
+        let send = || {
+            let prepared = runtime.lock().unwrap().prepare_delivery(
+                crate::node::TEST_NODE,
+                "recipient",
+                &context,
+                None,
+                report_to("parent", "plan"),
+            )?;
+            prepared.run(Duration::from_secs(5))
+        };
+        let answer_time = crate::coordination::SPAWN_ANSWER_WAIT.as_millis() as u64;
+        let now = unix_milliseconds();
+        started(now - answer_time + 10_000);
+        assert_eq!(send().err().as_deref(), Some("participant_registering"));
+        started(now - answer_time - 1);
+        assert_eq!(send().err().as_deref(), Some("participant_unavailable"));
+        drop(worker);
+        assert!(
+            crate::delivery::ledger::load(&path)
+                .unwrap()
+                .letters
+                .is_empty(),
+            "a refusal records nothing"
+        );
     }
 
     /// `hide agent show` names an agent as a letter names its recipient, by
