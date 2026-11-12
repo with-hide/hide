@@ -547,6 +547,8 @@ const cardOf = (container: HTMLElement, key: string) => {
     // What the line says, in its order; the destination's arrow and person are marks.
     text: line?.textContent ?? null,
     to: foot?.querySelector("[data-line-to]")?.textContent ?? null,
+    // The mark of the pull request a stacked step goes into, as the PR list draws it by its state.
+    toMark: foot?.querySelector("[data-line-to-mark]")?.getAttribute("data-line-to-mark") ?? null,
     bold: foot?.querySelector("[data-line-elsewhere]") != null,
     person: line?.getAttribute("data-line-person") ?? null,
     yours: card.querySelector("[data-node-turn]") != null,
@@ -587,8 +589,10 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     expect(cardOf(container, "api")).toMatchObject({ band: "Yours to merge", mark: "mergeable", person: "due", yours: true, tag: null });
     expect(cardOf(container, "api").name).toContain("Where it goes: #34 → feat/login · Mergeable · You merge it · Yours to merge");
     expect(container.querySelector('[data-mission-node="api"] [data-phone-node-reason]')).toBeNull();
-    // Stacked on another pull request it ends bold in that pull request; a direct change is in once landed, with `No PR` at its end.
-    expect(cardOf(container, "stack")).toMatchObject({ mark: "failed", to: "→#31", bold: true });
+    // Stacked on another pull request it ends in that pull request's mark, lit by the state of the step that holds it, and a grey
+    // number, so its own number stays the lead (D-57); a direct change is in once landed, with `No PR` at its end.
+    expect(cardOf(container, "stack")).toMatchObject({ mark: "failed", to: "→31", toMark: "mergeable", bold: false });
+    expect(cardOf(container, "stack").name).toContain("Where it goes: #35 → PR 31");
     expect(cardOf(container, "docs")).toMatchObject({ mark: "merged", text: "→feat/login· No PR" });
     // An outside pull request ends bold in its own base; an outside branch names the branch it watches, which the frame carries.
     expect(cardOf(container, "sdk")).toMatchObject({ worker: null, mark: "mergeable", text: "↗#77→main", bold: true });
@@ -611,6 +615,7 @@ it("names no branch or destination it was not sent, and tags no mission whose st
       node("docs", "working", { delivery: "direct" }),
       node("sdk", "working", { kind: "external", delivery: null, pr: 77 }),
       node("ext", "working", { kind: "external", delivery: null }),
+      node("top", "working", { pr: 40, pr_state: "pending", base_pr: 39 }),
     ] }),
     mission("m-look", { destination: "feat/login", nodes: [node("look", "working", { kind: "research", delivery: null }), node("check", "planned", { kind: "verify", delivery: null })] }),
   ]);
@@ -625,6 +630,8 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     expect(cardOf(container, "sdk")).toMatchObject({ text: "↗#77", to: null });
     // One sent with nothing it watches has no line at all, rather than a mark that names nothing.
     expect(cardOf(container, "ext")).toMatchObject({ line: null, hairline: false });
+    // A pull request it is stacked on that no step holds is drawn grey: the frame says nothing of its state.
+    expect(cardOf(container, "top")).toMatchObject({ text: "#40→39", toMark: "unknown" });
     await click('[data-phone-back="missions"]');
     await click('[data-phone-mission="m-look"]');
     expect(container.querySelector("[data-phone-mission-map]")).not.toBeNull();

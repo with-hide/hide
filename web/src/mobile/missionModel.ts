@@ -46,14 +46,18 @@ export function workerOf(node: PhoneMissionNode): WorkerEscalation | null {
  * frame carries no branch, conclusion or verdict, so the line names none. A
  * field a Mac before destinations does not send stays absent and the line
  * names nothing for it (B60); an outside step from such a Mac still names the
- * pull request it watches, the one the frame carries as its own.
+ * pull request it watches, the one the frame carries as its own. The pull
+ * request a stacked step goes into takes its state from the step whose current
+ * pull request it is; the frame carries no older ones, so another stays grey
+ * (D-57).
  */
-export function phoneLineNode(node: PhoneMissionNode): LineNode {
+export function phoneLineNode(node: PhoneMissionNode, nodes: readonly Pick<PhoneMissionNode, "pr" | "pr_state">[] = []): LineNode {
   const external = node.external_pr != null ? { pr: node.external_pr }
     : node.external_branch != null ? { branch: node.external_branch }
       : node.kind === "external" && node.pr != null ? { pr: node.pr } : null;
   const outside = node.external_base != null || node.external_state != null ? { base: node.external_base, state: node.external_state } : null;
-  return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0 };
+  const base = node.base_pr == null ? null : nodes.find((one) => one.pr === node.base_pr);
+  return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0, base_state: base?.pr_state ?? null };
 }
 
 /** The progress words and counts of the head: `n / m` of the steps in the plan. */
