@@ -334,7 +334,7 @@ describe("in Korean", () => {
       "여기서 프로젝트 1개의 등록을 지우고, 열린 파일 탭 1개도 닫아요.",
       "저장하지 않은 초안 2개는 이 브라우저에 남아요. 저장하지 않은 초안 목록에서 내보내거나 버릴 수 있어요.",
     ]);
-    expect(SLEEP_AFTER_CHOICES.map((choice) => sleepAfterLabel(choice, korean))).toEqual(["잠들지 않음", "12시간", "24시간", "2일", "3일"]);
+    expect(SLEEP_AFTER_CHOICES.map((choice) => sleepAfterLabel(choice, korean))).toEqual(["잠들지 않음", "1시간", "2시간", "4시간", "12시간", "24시간"]);
     expect(shownIn(undefined, korean)).toBe("사용할 수 없음");
     expect(shownIn("/state", korean)).toBe("/state");
     expect(kitPartLineIn({ state: "installed" }, korean).text).toBe("설치됨");

@@ -2382,7 +2382,7 @@ mod tests {
         "terminal_font_size",
         "terminal_font_family",
         "editor_text_scale",
-        "agent_sleep_after_hours",
+        "agent_sleep_hours",
         "issue_settings",
         "conductor_settings",
         "agent_start",

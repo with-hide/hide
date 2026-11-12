@@ -5064,8 +5064,8 @@ pub struct UiStateSnapshot {
     #[serde(default, skip_serializing)]
     pub request_verbs: BTreeMap<String, crate::request_view::VerbRecord>,
     /// How long an agent may go untouched before Hide ends its process and
-    /// keeps its conversation to resume: 12, 24 (the default), 48 or 72
-    /// hours, or `None` for Off (PRD D-10).
+    /// keeps its conversation to resume: 1, 2, 4, 12 (the default) or 24
+    /// hours, or `None` for Off.
     #[serde(default = "default_sleep_after_hours")]
     pub agent_sleep_after_hours: Option<u32>,
     /// Each local project's chosen issue source, `github` or `local`, by the
