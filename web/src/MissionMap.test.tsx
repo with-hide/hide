@@ -704,6 +704,7 @@ it("shows on a card's hover its title row and one row per fact under a grey labe
     // Where it goes is the card's branch line with no name cut; the pull request's state is the PR list's word beside its mark.
     expect([part("into").querySelector("[data-line-pr]")?.textContent, part("into").querySelector<HTMLElement>("[data-line-branch]")?.dataset.lineBranch, part("into").querySelector("[data-line-to]")?.textContent]).toEqual(["#41 +1", "feat/core-split", "→release/1.2"]);
     expect(part("into").querySelector(".truncate, [title]")).toBeNull();
+    expect(part("into").querySelector('[aria-hidden="true"] [data-line-pr], [data-line-pr][aria-hidden="true"]')).toBeNull();
     expect(part("pr").textContent).toBe("CI running or review pending");
     // Who merges, Settings' owner and the plan's reason when the plan moved it, and how to change it under a hairline.
     expect([part("merge").querySelector("[data-node-hover-merge]")?.textContent, part("merge").querySelector("[data-node-hover-override]")?.textContent]).toEqual(["You", "Settings: Conductor · DB change"]);

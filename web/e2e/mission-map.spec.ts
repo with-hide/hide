@@ -334,6 +334,8 @@ test("at the largest Interface text a working change's branch line stays inside 
       const book = JSON.parse(fs.readFileSync(file, "utf8"));
       const node = book.missions[0].nodes.find((one: { key: string }) => one.key === "marked");
       const now = Date.now();
+      // A line without a number with 내 차례: the mark stays whole at the line's right end and the path gives way.
+      Object.assign(book.missions[0].nodes.find((one: { key: string }) => one.key === "draft"), { attention: { reason: "conductor_failed", key: 1, since_unix_ms: now } });
       Object.assign(node, {
         worked_at_unix_ms: now - 7_200_000,
         pushed_at_unix_ms: now - 7_200_000,
@@ -384,7 +386,7 @@ test("at the largest Interface text a working change's branch line stays inside 
               edge: at(card.querySelector("[data-node-head]")!.getBoundingClientRect().left) && at(head.left) && (!wrapped || at(branch.left)),
               oneRow: [to, direct ?? to].every((one) => Math.abs(branch.top + branch.height / 2 - (one.top + one.height / 2)) < 1),
               direct: part("[data-line-to] [data-line-direct]")?.textContent ?? null,
-              marks: end ? { firstRow: Math.abs(end.top + end.height / 2 - (head.top + head.height / 2)) < 1, inside: end.right <= foot.right + 0.5 && end.left >= head.right, number: part("[data-line-pr]")?.textContent ?? null, warning: card.querySelector("[data-node-foot] [data-node-warning]") !== null, turn: card.querySelector("[data-node-foot] [data-node-attention-tag]")?.textContent ?? null } : null,
+              marks: end ? { firstRow: Math.abs(end.top + end.height / 2 - (head.top + head.height / 2)) < 1, inside: end.right <= foot.right + 0.5 && end.left >= head.right, edge: Math.abs(end.right - foot.right) < 1, whole: [...card.querySelectorAll<HTMLElement>("[data-node-foot] [data-node-attention-tag] > *")].every((word) => word.scrollWidth <= word.clientWidth), number: part("[data-line-pr]")?.textContent ?? null, warning: card.querySelector("[data-node-foot] [data-node-warning]") !== null, turn: card.querySelector("[data-node-foot] [data-node-attention-tag]")?.textContent ?? null } : null,
               wider: wrapped || !number ? null : branch.left - number.right > number.left - icon.right + 0.5,
               half: branch.width >= foot.width * 0.4 && to.width >= foot.width * 0.4,
               numberCut: part("[data-line-pr]") ? cut(part("[data-line-pr]")!) : null,
