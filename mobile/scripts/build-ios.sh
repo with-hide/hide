@@ -4,7 +4,7 @@
 # Usage: build-ios.sh [build | release | status <delivery id> | uploads | run | allow | push | store-shots | clean]
 #   release  everything `build` does, then on the mini: archive, sign with the App Store Connect API key, check the
 #          signed app against mobile/release-expect.json, validate and upload it to TestFlight; the build number is the
-#          UTC time of the run, the version the repository's own (mobile/scripts/release-version.mjs). The key never
+#          UTC time of the run, the version the app's own (`version` in mobile/package.json, read by mobile/scripts/release-version.mjs). The key never
 #          leaves the mini (~/.config/hide-ios, mobile/release-env.json); a missing secret stops the command naming it
 #          A commit that already has an upload record is not uploaded again unless HIDE_IOS_RELEASE_AGAIN=1;
 #          HIDE_IOS_NO_UPLOAD=1 stops after Apple's validation, before anything is sent; HIDE_IOS_SKIP_PHONE_BUILD is refused

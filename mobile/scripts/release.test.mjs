@@ -6,17 +6,17 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256 } from '../../scripts/phone-release.mjs';
 import { ADDED_BY_CAPACITOR, buildManifest } from './bundle-manifest.mjs';
-import { buildNumber, marketingVersion } from './release-version.mjs';
+import { appVersion, buildNumber } from './release-version.mjs';
 
 const mobile = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (path) => readFileSync(join(mobile, path), 'utf8');
 
 describe('the version and build number of a release', () => {
-  it('takes the numbers of the repository version, whatever follows them', () => {
-    expect(marketingVersion('1.2.5')).toBe('1.2.5');
-    expect(marketingVersion('0.4.0-rc.1')).toBe('0.4.0');
-    expect(marketingVersion('1.2.5-main.6d229801.dirty')).toBe('1.2.5');
-    expect(() => marketingVersion('main')).toThrow(/three numbers/);
+  it('is the app\'s own version, three numbers, and nothing the desktop release carries', () => {
+    expect(appVersion({ version: '1.0.0' })).toBe('1.0.0');
+    expect(() => appVersion({ version: '1.2.5-main.6d229801' })).toThrow(/three numbers/);
+    expect(() => appVersion({})).toThrow(/three numbers/);
+    expect(appVersion(JSON.parse(read('package.json')))).toMatch(/^[0-9]+\.[0-9]+\.[0-9]+$/);
   });
 
   it('is the UTC time of the run, which rises from one run to the next', () => {
