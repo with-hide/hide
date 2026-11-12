@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use super::*;
 use crate::agent_sleep::{
-    DECISION_INTERVAL_MS, SLEEP_RETRY_BACKOFF_MS, Settled, SleepMachine, SleepPhase, SleepRecord,
-    SleepScope, WakeMode, valid_after_hours,
+    DECISION_INTERVAL_MS, SLEEP_RETRY_BACKOFF_MS, Settled, SleepCause, SleepMachine, SleepPhase,
+    SleepRecord, SleepScope, WakeMode, valid_after_hours,
 };
 use crate::agent_sleep_engine::{self, SleepTarget, WakeOutcome, WakeRequest};
 use crate::model::AgentActionRefusal;
@@ -19,6 +19,7 @@ mod command;
 mod dormant;
 pub(in crate::runtime) mod letters;
 pub(in crate::runtime) mod missions;
+use dormant::SleepRefusal;
 pub(in crate::runtime) use dormant::Takeover;
 
 /// Ends in flight at once. A first enable over a long day's panes would
@@ -40,6 +41,18 @@ fn ends_left(store: &crate::agent_sleep::AgentSleepStore) -> usize {
             .filter(|record| record.phase.in_flight())
             .count();
     MAX_ENDS_IN_FLIGHT.saturating_sub(in_flight)
+}
+
+/// What asking for one agent's end did.
+enum SleepStart {
+    /// The end is under way, or ended at once with a failure its record
+    /// tells; `changed`: the snapshot moved with it.
+    Begun { changed: bool },
+    /// Nothing to start on this pane now, for the reason named: it is moving
+    /// or reopening, closing already, unreachable or gone.
+    Skipped(&'static str),
+    /// A sleep that closes the pane refused to start.
+    Refused(SleepRefusal),
 }
 
 /// A pane whose agent would not end: left alone until `until`, unless its
@@ -203,13 +216,128 @@ impl Runtime {
             &backoff_until,
             now_unix_ms,
         );
-        for pane_id in due.into_iter().take(ends_left(store)) {
-            changed |= self.begin_agent_sleep(&pane_id, "idle", now_unix_ms);
+        for pane_id in due.iter().take(ends_left(store)) {
+            changed |= self.begin_agent_sleep(pane_id, "idle", None, now_unix_ms);
         }
+        changed |= self.sleep_one_under_pressure(
+            device,
+            machine,
+            &on_screen,
+            &backoff_until,
+            &due,
+            now_unix_ms,
+        );
         if seen && !changed {
             self.persist_ui_state();
         }
         changed
+    }
+
+    /// Memory pressure's part of the minute decision: while the machine
+    /// reports warning or critical, the one agent there that has rested
+    /// longest, half an hour at least, sleeps, by the same end and within the
+    /// same cap as every other sleep; the hours rule's own picks (`taken`)
+    /// are not counted twice. The level is the last answer the machine's
+    /// coordinator read off the lock; a failed or stale one sleeps nothing.
+    /// A candidate whose end does not start (a close it refuses, a pane
+    /// moving or reopening) leaves the minute's sleep to the next oldest, and
+    /// is logged only: nothing here was asked for by the operator.
+    fn sleep_one_under_pressure(
+        &mut self,
+        device: Option<&str>,
+        machine: SleepMachine,
+        on_screen: &HashSet<String>,
+        backoff_until: &HashMap<String, u64>,
+        taken: &[String],
+        now_unix_ms: u64,
+    ) -> bool {
+        // Never turns this rule off with the hours.
+        if self.snapshot.ui_state.agent_sleep_after_hours.is_none() {
+            return false;
+        }
+        let machine_id = device.unwrap_or(self.node.as_str());
+        let Some(answer) = self
+            .memory_pressure
+            .get(machine_id)
+            .and_then(|reading| reading.pressing(now_unix_ms))
+        else {
+            return false;
+        };
+        let machine_id = machine_id.to_owned();
+        let store = &self.snapshot.ui_state.agent_sleep;
+        if ends_left(store) == 0 {
+            return false;
+        }
+        let candidates = store.pressure_candidates(
+            self.sleep_agents(device),
+            machine,
+            on_screen,
+            backoff_until,
+            taken,
+            now_unix_ms,
+        );
+        for (pane_id, idle_since) in candidates {
+            let reason = match self.start_agent_sleep(
+                &pane_id,
+                "memory_pressure",
+                Some(SleepCause::MemoryPressure),
+                now_unix_ms,
+            ) {
+                SleepStart::Begun { changed } => {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "agent_sleep",
+                        "kind": "agent_sleep.pressure",
+                        "machine": machine_id,
+                        "level": answer.level.code(),
+                        "source": answer.source.code(),
+                        "pane_id": pane_id,
+                        "idle_minutes": now_unix_ms.saturating_sub(idle_since) / 60_000,
+                    }));
+                    return changed;
+                }
+                SleepStart::Skipped(reason) => reason,
+                SleepStart::Refused(refusal) => refusal.code,
+            };
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_sleep",
+                "kind": "agent_sleep.pressure_skipped",
+                "machine": machine_id,
+                "pane_id": pane_id,
+                "reason": reason,
+            }));
+        }
+        false
+    }
+
+    /// A machine's memory pressure, as its coordinator read it off the lock
+    /// (`crate::memory_pressure`); `device` is `None` for this core's own.
+    /// Nothing on screen changes and no idle clock moves; a failed read is
+    /// logged when it first fails, or fails anew. An answer that lands after
+    /// its device was removed is dropped, as its stored one went with it
+    /// (`forget_device_sleep`).
+    pub(crate) fn ingest_memory_pressure(
+        &mut self,
+        device: Option<&str>,
+        reading: crate::memory_pressure::PressureReading,
+    ) {
+        if device.is_some_and(|device| !self.device_registration_exists(device)) {
+            return;
+        }
+        let machine = device.unwrap_or(self.node.as_str()).to_owned();
+        if let Err(error) = &reading.answer
+            && self
+                .memory_pressure
+                .get(&machine)
+                .is_none_or(|last| last.answer.as_ref().err() != Some(error))
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_sleep",
+                "kind": "agent_sleep.pressure_unread",
+                "machine": machine,
+                "message": error,
+            }));
+        }
+        self.memory_pressure.insert(machine, reading);
     }
 
     /// Reconciles the records with a fresh local session before it is
@@ -451,7 +579,7 @@ impl Runtime {
         if !reachable {
             return Err(SleepRefused::Unreachable);
         }
-        Ok(self.begin_agent_sleep(pane_id, trigger, unix_milliseconds()))
+        Ok(self.begin_agent_sleep(pane_id, trigger, None, unix_milliseconds()))
     }
 
     /// Wake agent, Retry, and Start new session (B12-B14). A wake asked for
@@ -646,9 +774,36 @@ impl Runtime {
         }
     }
 
-    fn begin_agent_sleep(&mut self, pane_id: &str, trigger: &str, now_unix_ms: u64) -> bool {
+    /// Starts the end of the agent in `pane_id`, the one path every sleep
+    /// takes; `cause` is kept where its row says why it sleeps.
+    /// Starts `pane_id`'s end, and says whether something on screen moved;
+    /// a close that refuses to start is told on the snapshot.
+    fn begin_agent_sleep(
+        &mut self,
+        pane_id: &str,
+        trigger: &str,
+        cause: Option<SleepCause>,
+        now_unix_ms: u64,
+    ) -> bool {
+        match self.start_agent_sleep(pane_id, trigger, cause, now_unix_ms) {
+            SleepStart::Begun { changed } => changed,
+            SleepStart::Skipped(_) => false,
+            SleepStart::Refused(refusal) => {
+                self.set_error(refusal.code, refusal.message, refusal.retryable);
+                true
+            }
+        }
+    }
+
+    fn start_agent_sleep(
+        &mut self,
+        pane_id: &str,
+        trigger: &str,
+        cause: Option<SleepCause>,
+        now_unix_ms: u64,
+    ) -> SleepStart {
         if self.pane_move_holds_pane(pane_id) {
-            return false;
+            return SleepStart::Skipped("pane_moving");
         }
         // A reopen's worker ends and starts the pane's agent itself, through
         // the sleep's own input; the pane sleeps once it is done, as a reopen
@@ -657,31 +812,36 @@ impl Runtime {
             self.pane_reopens.get(pane_id),
             Some(crate::model::PaneReopenSnapshot::Pending)
         ) {
-            return false;
+            return SleepStart::Skipped("reopen_pending");
         }
         let Some(context) = self.sleep_target(pane_id) else {
-            return false;
+            return SleepStart::Skipped("unreachable");
         };
         let Some(agent) = self
             .sleep_agents(crate::address::pane_device(pane_id))
             .iter()
             .find(|agent| agent.pane_id == pane_id)
         else {
-            return false;
+            return SleepStart::Skipped("not_listed");
         };
         // Only the core's own machine gets here with one (`sleep_refusal`).
         if crate::agent_sleep::closes_pane_when_sleeping(&agent.agent_kind) {
-            return self.begin_dormant_sleep(pane_id, now_unix_ms);
+            return match self.admit_dormant_sleep(pane_id, cause, now_unix_ms) {
+                Ok(true) => SleepStart::Begun { changed: true },
+                Ok(false) => SleepStart::Skipped("closing"),
+                Err(refusal) => SleepStart::Refused(refusal),
+            };
         }
         let cwd = self.agent_sleep_pane_cwd(pane_id);
         let Some(mut record) = SleepRecord::ending(agent, cwd, now_unix_ms) else {
-            return false;
+            return SleepStart::Skipped("no_session");
         };
         record.server_mark = record.server_mark.or_else(|| {
             self.read_mark(crate::address::pane_device(pane_id).unwrap_or(self.node.as_str()))
         });
         record.launch = self.launch_choice_of(agent);
         record.profile = self.launch_profile_of(agent);
+        record.cause = cause;
         let kind = record.kind.clone();
         crate::diagnostic!(serde_json::json!({
             "component": "agent_sleep",
@@ -699,11 +859,13 @@ impl Runtime {
         // land behind the end, and the worker waits for those already writing.
         self.sync_terminal_intents();
         if let Err(message) = agent_sleep_engine::spawn_end(context, pane_id.to_owned(), kind) {
-            return self.ingest_agent_sleep_end(pane_id, Err(message));
+            return SleepStart::Begun {
+                changed: self.ingest_agent_sleep_end(pane_id, Err(message)),
+            };
         }
         self.persist_ui_state();
         // The pane is still awake and drawn so until the end lands (B8).
-        false
+        SleepStart::Begun { changed: false }
     }
 
     fn begin_agent_wake(&mut self, pane_id: &str, mode: WakeMode, trigger: &str) -> bool {
@@ -1129,6 +1291,7 @@ impl Runtime {
             .retain(|pane_id, _| !crate::address::is_pane_of(pane_id, device));
         self.node_sleep_next_decision_unix_ms.remove(device);
         self.node_sleep_shown_tabs.remove(device);
+        self.memory_pressure.remove(device);
     }
 
     fn agent_sleep_tab_panes(&self, tab_id: &str) -> Vec<String> {

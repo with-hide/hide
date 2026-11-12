@@ -133,6 +133,8 @@ pub(super) mod pane_move;
 #[path = "tests/phone_viewing.rs"]
 mod phone_viewing;
 mod plans;
+#[path = "tests/pressure_sleep.rs"]
+mod pressure_sleep;
 #[path = "tests/product_active.rs"]
 mod product_active;
 #[path = "tests/project_open.rs"]

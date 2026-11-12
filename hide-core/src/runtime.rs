@@ -140,6 +140,7 @@ mod worktree_retire;
 pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use hosts::device_links;
+pub(crate) use inbound::InboundLink;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead};
 pub use snapshot_delta::serialize_snapshot_delta;
 
@@ -1908,6 +1909,10 @@ pub struct Runtime {
     node_sleep_shown_tabs: HashMap<String, Vec<String>>,
     /// Panes whose agent would not end, and until when they are left alone (B8).
     agent_sleep_backoff: HashMap<String, agent_sleep::Backoff>,
+    /// Each machine's last memory pressure answer, by device id (the core's
+    /// own under its node id), which each machine's coordinator reads off
+    /// the lock and the minute decision acts on: one entry per machine.
+    memory_pressure: HashMap<String, crate::memory_pressure::PressureReading>,
     /// When the engine took each wake's start, for the panes still waking: one
     /// whose agent has not appeared by the start's deadline failed.
     agent_wake_started: HashMap<String, u64>,
@@ -2681,6 +2686,7 @@ impl Runtime {
             node_sleep_next_decision_unix_ms: HashMap::new(),
             node_sleep_shown_tabs: HashMap::new(),
             agent_sleep_backoff: HashMap::new(),
+            memory_pressure: HashMap::new(),
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
             spent_bells: Default::default(),

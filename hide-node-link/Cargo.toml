@@ -12,8 +12,9 @@ publish = false
 # here for their types only, as are the hook diagnosis of `hide-agent-hooks`
 # and the provider answers of `hide-ai`.
 # `hide-holder-protocol` is here for the named keys a holder encodes.
-# `hide-platform` is here for path spelling between machines and the
-# process types the link carries.
+# `hide-platform` is here for path spelling between machines, the
+# process types the link carries, and the memory pressure level a node
+# answers (`memory::MemoryPressure` converts from its reading).
 
 [dependencies]
 hide-agent-adapter = { path = "../hide-agent-adapter" }

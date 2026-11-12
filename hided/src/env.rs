@@ -67,6 +67,9 @@ pub const FIXTURE_HOME_MARKER: &str = hide_kit::layout::FIXTURE_HOME_MARKER;
 /// its account's, so a candidate on a shared device keeps its state, sessions
 /// and pane holders apart from the account's own Hide there.
 pub const HIDE_DEV_DEVICE_HOME: &str = hide_node::ssh::DEVICE_HOME_VARIABLE;
+/// Test-only: a file holding the memory pressure this machine's node
+/// answers in place of the system's (`hide_host::memory`).
+pub const HIDE_TEST_MEMORY_PRESSURE_FILE: &str = hide_host::memory::TEST_PRESSURE_FILE;
 
 pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
@@ -230,6 +233,12 @@ pub const REGISTRY: &[EnvKey] = &[
         required: false,
         format: "`~/` and a path below the device account's home, or an absolute path on the device (`C:/...` on Windows), with no empty, `.` or `..` name; development only",
         absent_behavior: "Each SSH device's node runs with its account's own home (HOME, or USERPROFILE on Windows); isolated verification sets it, beside HIDE_HOST_HELPER_ROOT, so a candidate's state, sessions and pane holders on a shared device never meet the account's own Hide there",
+    },
+    EnvKey {
+        key: HIDE_TEST_MEMORY_PRESSURE_FILE,
+        required: false,
+        format: "absolute path of a file holding `normal`, `warning` or `critical`, read at each answer; test-only, set by a runtime test or an isolated candidate",
+        absent_behavior: "This machine's node answers the memory pressure its operating system reports (`hide_platform::memory::pressure`), which agent sleep reads to put the longest-idle agent to sleep under pressure",
     },
     EnvKey {
         key: HOME,
@@ -462,6 +471,12 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
     {
         errors.push(EnvError {
             key: HIDE_DEV_DEVICE_HOME,
+            kind: "invalid",
+        });
+    }
+    if read(HIDE_TEST_MEMORY_PRESSURE_FILE).is_some_and(|value| !Path::new(&value).is_absolute()) {
+        errors.push(EnvError {
+            key: HIDE_TEST_MEMORY_PRESSURE_FILE,
             kind: "invalid",
         });
     }

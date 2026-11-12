@@ -109,6 +109,19 @@ fn run_coordinator(
         ),
         SessionSyncTarget::Local { .. } => None,
     };
+    // Memory pressure is its machine's too, asked of that machine's own node
+    // on a worker for agent sleep: this core's, or the device's, whichever
+    // way its link was made.
+    let mut pressure_reader = match &context.target {
+        SessionSyncTarget::Local { .. } => context
+            .node()
+            .map(|node| crate::memory_pressure::PressureReader::new(Arc::clone(node))),
+        SessionSyncTarget::Remote { target_id, .. } => {
+            Some(crate::memory_pressure::PressureReader::new(
+                crate::runtime::InboundLink::for_device(target_id, context.runtime.clone()),
+            ))
+        }
+    };
     // A listening port is its machine's: the local coordinator looks at this
     // machine's, and a node that dials this core is asked for its own.
     let mut ports_reader = context
@@ -306,6 +319,15 @@ fn run_coordinator(
             && let Some(reader) = device_agents_reader.as_mut()
             && let Some(Some(diagnosis)) = reader.read_if_due()
             && !publish_device_agents(&context, diagnosis)
+        {
+            return;
+        }
+        // Sleep decides with no window attached, so its pressure is read then
+        // too.
+        if connected
+            && let Some(reader) = pressure_reader.as_mut()
+            && let Some(reading) = reader.read_if_due()
+            && !publish_memory_pressure(&context, reading)
         {
             return;
         }
@@ -1681,6 +1703,20 @@ fn publish_ports(
     if changed {
         context.notifier.notify();
     }
+    true
+}
+
+fn publish_memory_pressure(
+    context: &SessionSyncContext,
+    reading: crate::memory_pressure::PressureReading,
+) -> bool {
+    let Some(runtime) = context.runtime.upgrade() else {
+        return false;
+    };
+    let Ok(mut guard) = runtime.lock() else {
+        return false;
+    };
+    guard.ingest_memory_pressure(context.read_target(), reading);
     true
 }
 

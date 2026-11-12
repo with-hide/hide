@@ -4747,6 +4747,7 @@ fn a_sleeping_project_stays_open_until_it_wakes() {
         group: "idle",
         wake_available: true,
         checking: false,
+        cause: None,
     };
     runtime.snapshot.navigator.sleeping_sessions = vec![sleeper.clone()];
     runtime.refresh_inactive_groups();

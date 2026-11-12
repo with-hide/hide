@@ -12,12 +12,13 @@ const WAKE_UNAVAILABLE: &str = "This session's reader, checkout or connection is
 
 /// Why a dormant sleep was not admitted: the words and code `set_error`
 /// shows the operator who asked, and whether asking again later can succeed.
+#[derive(Debug)]
 pub(in crate::runtime) struct SleepRefusal {
     pub(in crate::runtime) code: &'static str,
     pub(in crate::runtime) message: &'static str,
     /// The agent is working or the transition budget is spent: the same ask
     /// succeeds once that passes.
-    retryable: bool,
+    pub(in crate::runtime) retryable: bool,
 }
 
 impl SleepRefusal {
@@ -49,21 +50,12 @@ pub(in crate::runtime) struct WakeRefusal {
 }
 
 impl Runtime {
-    pub(in crate::runtime) fn begin_dormant_sleep(&mut self, pane_id: &str, now: u64) -> bool {
-        match self.admit_dormant_sleep(pane_id, now) {
-            Ok(admitted) => admitted,
-            Err(refusal) => {
-                self.set_error(refusal.code, refusal.message, refusal.retryable);
-                true
-            }
-        }
-    }
-
     /// Saves the intent to close `pane_id` and keep its conversation. `Ok(false)`
     /// when this execution already has one; the close itself follows the save.
     pub(in crate::runtime) fn admit_dormant_sleep(
         &mut self,
         pane_id: &str,
+        cause: Option<crate::agent_sleep::SleepCause>,
         now: u64,
     ) -> Result<bool, SleepRefusal> {
         let Some(agent) = self
@@ -176,6 +168,7 @@ impl Runtime {
             launch,
             owner: Some(owner),
             profile,
+            cause,
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
             return Err(SleepRefusal::new(

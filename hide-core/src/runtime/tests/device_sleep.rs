@@ -382,3 +382,102 @@ fn a_disconnected_devices_agent_neither_sleeps_nor_wakes_and_nothing_waits() {
     assert!(runtime.dispatch_json(&event("agent_wake", json!({"pane_id": PANE}))));
     assert_eq!(phase(&runtime), Some(SleepPhase::Waking));
 }
+
+/// An agent on a device sleeps by that device's memory pressure, read by the
+/// device's own node off the runtime lock, never by this machine's. A node
+/// that cannot answer the call, as a helper from before it could not, is a
+/// failed read there and sleeps nothing; the minute decision itself asks no
+/// node.
+#[test]
+fn a_devices_agent_sleeps_by_that_devices_pressure_read_by_its_own_node() {
+    use crate::agent_sleep::SleepCause;
+    use crate::memory_pressure::{PressureReader, PressureReading};
+    use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
+
+    const MINUTE: u64 = 60 * 1000;
+    let reading = |level, read_at_unix_ms| PressureReading {
+        answer: Ok(PressureAnswer {
+            level,
+            source: PressureSource::System,
+        }),
+        read_at_unix_ms,
+    };
+    let device = dialed_device();
+    let start = unix_milliseconds();
+    let asked_for_pressure = |node: &Node| {
+        node.asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call == "MemoryPressure")
+    };
+    {
+        let mut runtime = device.shared.lock().unwrap();
+        runtime.dispatch_json(&event("agent_sleep_set", json!({"after_hours": 12})));
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .stamps
+            .get_mut(PANE)
+            .expect("the device agent's stamp")
+            .changed_at_unix_ms = start - 40 * MINUTE;
+        runtime.ingest_memory_pressure(None, reading(MemoryPressure::Critical, start));
+        runtime.ingest_memory_pressure(Some(DEVICE), reading(MemoryPressure::Normal, start));
+        runtime.tick_node_agent_sleep(DEVICE, start);
+        assert_eq!(
+            phase(&runtime),
+            None,
+            "this machine's pressure is not the device's"
+        );
+    }
+    assert!(
+        !asked_for_pressure(&device.node),
+        "the decision asked no node"
+    );
+
+    // The device's coordinator reads through the device's link, outside the
+    // lock; this node knows no such call.
+    let reader = Mutex::new(PressureReader::new(
+        crate::runtime::InboundLink::for_device(DEVICE, device.shared.weak()),
+    ));
+    let answer = Mutex::new(None);
+    wait_for("the device's node answered", || {
+        if let Some(reading) = reader.lock().unwrap().read_if_due() {
+            *answer.lock().unwrap() = Some(reading);
+        }
+        answer.lock().unwrap().is_some()
+    });
+    assert!(asked_for_pressure(&device.node), "its own node was asked");
+    let unread = answer.into_inner().unwrap().unwrap();
+    assert!(unread.answer.is_err(), "{unread:?}");
+
+    let mut runtime = device.shared.lock().unwrap();
+    runtime.ingest_memory_pressure(Some(DEVICE), unread);
+    runtime.tick_node_agent_sleep(DEVICE, start + MINUTE);
+    assert_eq!(phase(&runtime), None, "a failed read sleeps nothing");
+
+    runtime.ingest_memory_pressure(
+        Some(DEVICE),
+        reading(MemoryPressure::Warning, start + 2 * MINUTE),
+    );
+    runtime.tick_node_agent_sleep(DEVICE, start + 2 * MINUTE);
+    assert_eq!(phase(&runtime), Some(SleepPhase::Ending));
+    assert_eq!(
+        runtime.snapshot.ui_state.agent_sleep.records[PANE].cause,
+        Some(SleepCause::MemoryPressure)
+    );
+    // Removed, the device's answer goes with it, and one that lands after
+    // is dropped.
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .retain(|registered| registered.id != DEVICE);
+    runtime.forget_device_sleep(DEVICE);
+    runtime.ingest_memory_pressure(
+        Some(DEVICE),
+        reading(MemoryPressure::Warning, start + 3 * MINUTE),
+    );
+    assert!(!runtime.memory_pressure.contains_key(DEVICE));
+}

@@ -5,7 +5,12 @@ import { createInterfaceI18n } from "./i18n/instance";
 import { paneMenuItems } from "./PaneRelations";
 import { SLEEP_AFTER_CHOICES, sleepAfterChoice, sleepAfterLabel, sleepingCount } from "./settings";
 import { sleepCaption, wakeFailureReason, wakingLine } from "./sleep";
-import type { AgentRow, PaneRow } from "./snapshot";
+import type { AgentRow, PaneRow, SleepCause } from "./snapshot";
+import { markWords } from "./agentRow";
+import { sleepingCaption } from "./sleeping-session";
+import { INTERFACE_LANGUAGES } from "./i18n/locale";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const HOUR = 60 * 60 * 1000;
 const now = 100 * HOUR;
@@ -84,5 +89,25 @@ describe("the Sleep idle agents setting and the pane menu", () => {
     expect(sleepItem(pane({ available: false, reason: "working" }))).toMatchObject({ unavailable: "This agent is working" });
     expect(sleepItem(pane({ available: false, reason: "a_newer_reason" as never }))).toMatchObject({ unavailable: "This agent cannot sleep now" });
     expect(sleepItem(pane())).toBeUndefined();
+  });
+});
+
+describe("an agent Hide slept for memory", () => {
+  // Every cause the core can send has its own words in every language.
+  const causes: SleepCause[] = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8")).sleep_cause;
+
+  it("says memory was low on its moon's hover, and on a closed-pane sleeper's", async () => {
+    expect(causes).toEqual(["memory_pressure"]);
+    expect(markWords(t, { mark: "asleep", status_code: "sleeping", sleep: { cause: "memory_pressure" } })).toBe("Sleeping · memory was low · wakes when opened");
+    expect(t(sleepingCaption({ phase: "sleeping", checking: false, cause: "memory_pressure" }))).toBe("Sleeping · memory was low · wakes when opened");
+    expect(t(sleepingCaption({ phase: "sleeping", checking: false }))).toBe("Sleeping · wakes when opened");
+    for (const language of INTERFACE_LANGUAGES) {
+      const words = (await createInterfaceI18n(language)).t;
+      for (const cause of causes) {
+        const text = markWords(words, { mark: "asleep", status_code: "sleeping", sleep: { cause } });
+        expect(text, `${language} ${cause}`).not.toBe(markWords(words, { mark: "asleep", status_code: "sleeping" }));
+        expect(text, `${language} ${cause}`).not.toContain("agents.sleepCause");
+      }
+    }
   });
 });
