@@ -267,9 +267,9 @@ pub enum AttentionReason {
     /// The node could start, nothing holds it, and it was not started
     /// (`mission_health::stall_acts`).
     NotStarted,
-    /// A warning its Conductor was sent stood with nothing moving
-    /// (`mission_health::stall_acts`): raised to the Conductor as every
-    /// other stall is.
+    /// A no-push or stopped warning its Conductor was sent stood with
+    /// nothing moving (`mission_health::stall_acts`, `WarningKind::stalls`):
+    /// raised to the Conductor as every other stall is.
     WarningStood,
     /// The node's pull request waited on CI, a review or the merge for longer
     /// than any of those takes (`mission_health::stall_acts`).
@@ -448,6 +448,17 @@ impl WarningKind {
             Self::NoPush => "no_push",
             Self::Stopped => "stopped",
         }
+    }
+
+    /// Whether the warning, still standing after its letter, is raised as a
+    /// stall (`warning_stood`): the one rule raising and keeping that stall
+    /// read. A warning the worker's own move takes off (a push, the stopped
+    /// worker at work again) stands only while no move came. A failed review
+    /// goes only once a review passes, which a worker fixing the findings
+    /// does not reach for a whole round, so standing says nothing of a move:
+    /// it stays the Conductor's warning and never reaches the operator.
+    pub fn stalls(self) -> bool {
+        !matches!(self, Self::ReviewFails)
     }
 }
 
