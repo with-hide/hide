@@ -84,6 +84,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_node_held"
             | "mission_node_started"
             | "mission_preset_invalid"
+            | "mission_needs_git"
             | "mission_gate_operator_only"
             | "mission_gate_none"
             | "mission_gate_not_open"
@@ -202,8 +203,15 @@ pub enum Command {
         name: String,
         intent: String,
         kind: String,
-        repo: String,
-        branch: String,
+        /// The Git repository the child works in a worktree of, on `branch`;
+        /// with no `branch`, the plain-folder project it works in, itself
+        /// (with-hide/hide#2479). None asks for the caller's own checkout,
+        /// which only a plain folder's agent may (`Runtime::spawn_place`);
+        /// the core names it before the spawn is reserved.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
         path: Option<String>,
         /// The agent's own arguments for this start only.
         args: Vec<String>,
@@ -687,7 +695,15 @@ pub struct SpawnRecord {
     pub name: String,
     pub kind: String,
     pub repo: String,
+    /// The branch of `repo` the child's worktree has out; `branch()` reads
+    /// it. A folder spawn has none and repeats `repo` here, so a build
+    /// before folder spawns, which needs a branch on every record, still
+    /// reads the ledger; it never starts that record again.
     pub branch: String,
+    /// The child works in the plain folder `repo` itself, on no branch
+    /// (with-hide/hide#2479).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folder: bool,
     pub requested_path: Option<String>,
     pub args: Vec<String>,
     /// Part of the intent like `args`; a record written before it existed
@@ -833,6 +849,12 @@ impl BriefPhase {
 }
 
 impl SpawnRecord {
+    /// The branch the child's worktree has out; none when the child works
+    /// in a plain folder.
+    pub(crate) fn branch(&self) -> Option<&str> {
+        (!self.folder).then_some(self.branch.as_str())
+    }
+
     /// What became of the spawn's brief ([`BriefPhase`]).
     pub(crate) fn brief_phase(&self) -> BriefPhase {
         use crate::delivery::typed::SendRoute;
@@ -1765,6 +1787,11 @@ pub(crate) fn apply_with(
             else {
                 return Err("invalid_spawn".into());
             };
+            // The core names the place before it reserves one: the caller's
+            // own folder too (`Runtime::spawn_place`).
+            let Some(repo) = repo else {
+                return Err("invalid_spawn".into());
+            };
             // The core makes a plan step's intent; one asked under another
             // was not admitted by it.
             if plan
@@ -1845,7 +1872,7 @@ pub(crate) fn apply_with(
                     || hide_agent_adapter::canonical_kind(&record.kind)
                         != hide_agent_adapter::canonical_kind(kind)
                     || record.repo != *repo
-                    || record.branch != *branch
+                    || record.branch() != branch.as_deref()
                     || record.requested_path != *path
                     || record.mode != mode
                     || record.args != *args
@@ -1884,7 +1911,8 @@ pub(crate) fn apply_with(
                 name: name.clone(),
                 kind: kind.clone(),
                 repo: repo.clone(),
-                branch: branch.clone(),
+                branch: branch.clone().unwrap_or_else(|| repo.clone()),
+                folder: branch.is_none(),
                 requested_path: path.clone(),
                 args: args.clone(),
                 launch: launch.clone(),
@@ -2968,8 +2996,8 @@ mod tests {
             name: "worker".into(),
             intent: intent.into(),
             kind: "codex".into(),
-            repo: "/fixture".into(),
-            branch: "topic".into(),
+            repo: Some("/fixture".into()),
+            branch: Some("topic".into()),
             path: None,
             args: vec!["--model".into(), "fixture model".into()],
             launch: Default::default(),

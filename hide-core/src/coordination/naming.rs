@@ -52,7 +52,8 @@ pub(crate) struct Work {
     pane: String,
     terminal: String,
     tab_name: String,
-    branch: String,
+    /// The branch the child's worktree has out; none in a plain folder.
+    branch: Option<String>,
     names: Names,
     seed_tab: Option<SeedTab>,
 }
@@ -68,7 +69,7 @@ impl Work {
             pane: record.pane.clone()?,
             terminal: record.terminal.clone()?,
             tab_name: record.name.clone(),
-            branch: record.branch.clone(),
+            branch: record.branch().map(str::to_owned),
             names,
             seed_tab: record.seed_tab.clone(),
         })
@@ -102,14 +103,19 @@ fn target(state: &ProjectionState, work: &Work, workspace: bool) -> Option<(Stri
     let [owner] = owners.as_slice() else {
         return None;
     };
-    let checkout = owner.worktree.as_ref()?;
-    if checkout.checkout_path != work.path {
-        return None;
-    }
+    // A plain folder's owner is bound to no checkout and keeps the name it
+    // was opened with; the pane and terminal above prove the tab is the
+    // spawn's.
+    let checkout = match (&owner.worktree, &work.branch) {
+        (Some(checkout), Some(_)) if checkout.checkout_path == work.path => Some(checkout),
+        (None, None) => None,
+        _ => return None,
+    };
     let marker = format!("hide:{}", work.id);
     if workspace {
+        let checkout = checkout?;
         let name = if checkout.is_linked_worktree {
-            work.branch.clone()
+            work.branch.clone()?
         } else {
             checkout.repo_name.clone()
         };
@@ -259,7 +265,7 @@ mod tests {
             pane: "w1:p1".into(),
             terminal: "original".into(),
             tab_name: "검토 작업".into(),
-            branch: "task-branch".into(),
+            branch: Some("task-branch".into()),
             names: Names::default(),
             seed_tab: None,
         }
@@ -337,6 +343,44 @@ mod tests {
             }
         );
         assert_eq!(&fake.methods()[calls..], &["session", "session"]);
+    }
+
+    /// A child in a plain folder (with-hide/hide#2479) opens its tab in the
+    /// folder's owner, which no checkout is bound to: the tab takes the
+    /// agent's name and the owner keeps its own.
+    #[test]
+    fn a_folder_childs_tab_is_named_and_its_folder_owner_keeps_its_name() {
+        let mut state = state();
+        state["workspaces"][0]["label"] = json!("films");
+        state["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("worktree");
+        let fake = FakeEngine::start(move |method, args| match method {
+            "session" => reply(session(state.clone())),
+            "rename_tab" => {
+                state["tabs"][0]["label"] = args["label"].clone();
+                reply(())
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let mut work = work();
+        work.path = "/fixture/films".into();
+        work.branch = None;
+        assert_eq!(
+            run(fake.engine().as_ref(), &work),
+            Names {
+                workspace: Outcome::Preserved,
+                tab: Outcome::Applied
+            }
+        );
+        let observed = snapshot(fake.engine().as_ref()).unwrap();
+        assert_eq!(observed.workspaces[0].label, "films");
+        assert_eq!(observed.tabs[0].label, "검토 작업");
+        // A worktree child found in an owner with no checkout is left alone.
+        let mut git = work.clone();
+        git.branch = Some("task-branch".into());
+        assert_eq!(run(fake.engine().as_ref(), &git).tab, Outcome::Preserved);
     }
 
     #[test]

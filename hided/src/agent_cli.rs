@@ -3,8 +3,8 @@
 use crate::env::Env;
 use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list [--live]\nhide agent show <id|name|pane|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent profile list|add|edit|default|remove|reinstall … (hide agent profile --help)\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list [--live]\nhide agent show <id|name|pane|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent profile list|add|edit|default|remove|reinstall … (hide agent profile --help)\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
@@ -30,6 +30,13 @@ Hand a step of your own plan to the agent with --parent here --plan-node <key> i
   returns the same agent while it works; after it sent block or its pane closed, the same command hands the
   step to a new agent. An agent a plan or a mission started cannot start agents. See hide task help.
 
+Choose where the agent works with --repo and --branch:
+  In a Git project the agent works in its own worktree: --repo names the repository and --branch the branch
+  it has out there (a new branch makes a new worktree, at --path when given). They are required there.
+  In a project that is a plain folder, not a Git repository, the agent works in the folder itself, on no branch:
+  leave out both to start it in your own folder, or give --repo alone to name a plain-folder project
+  (of the --machine device too). A Git project asked without them is refused with spawn_repo_required.
+
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.
     The child belongs to you, appears below you, and starts an automatic watch.
@@ -40,7 +47,8 @@ Choose where the agent opens:
   Without --beside it opens in a tab of its own.
   With --beside it opens in your tab, in the right half of your pane, and stays there.
     It is the operator's to watch, so it takes no --parent: one that asks for both is refused.
-    Only for your own checkout: --repo and --branch (and --path) must name the checkout you work in.
+    Only for your own checkout: --repo and --branch (and --path) must name the checkout you work in,
+    or, in a plain folder, both are left out.
     A spawn that would work in another worktree or branch, or on another device, is refused before
     anything is created; run it again without --beside to open it in a new tab.
 Neither changes the current screen or keyboard focus.
@@ -213,8 +221,16 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                 (None, None) => return Err("--intent is required".into()),
             };
             let kind = take("--kind")?;
-            let repo = take("--repo")?;
-            let branch = take("--branch")?;
+            // A plain folder's agent works in the folder, on no branch: both
+            // left out name the caller's own (with-hide/hide#2479).
+            let repo = take("--repo").ok();
+            let branch = take("--branch").ok();
+            if branch.is_some() && repo.is_none() {
+                return Err("--branch names a branch of the repository --repo names; give --repo too".into());
+            }
+            if branch.is_none() && flags.contains_key("--path") {
+                return Err("--path names the folder of a new worktree on --branch; give --repo and --branch too".into());
+            }
             let brief = flags.remove("--brief");
             let brief_file = flags.remove("--brief-file");
             if brief.is_some() && brief_file.is_some() {
@@ -514,6 +530,45 @@ mod tests {
             assert!(line(&["spawn", flag, "value"]).is_err());
         }
     }
+    /// with-hide/hide#2479: a plain folder's agent works in the folder, so
+    /// `--repo` and `--branch` may be left out together, or `--branch` alone;
+    /// a branch needs its repository and a worktree folder its branch.
+    #[test]
+    fn a_spawn_may_leave_out_repo_and_branch_for_a_plain_folder() {
+        let place = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn", "--name", "worker", "--intent", "one", "--kind", "codex",
+            ];
+            args.extend_from_slice(extra);
+            match line(&args)? {
+                Delivery::Agents {
+                    command: Command::Spawn { repo, branch, .. },
+                } => Ok::<_, String>((repo, branch)),
+                _ => panic!("spawn"),
+            }
+        };
+        assert_eq!(place(&[]), Ok((None, None)));
+        assert_eq!(
+            place(&["--repo", "/films"]),
+            Ok((Some("/films".to_owned()), None))
+        );
+        assert_eq!(
+            place(&["--repo", "/repo", "--branch", "topic"]),
+            Ok((Some("/repo".to_owned()), Some("topic".to_owned())))
+        );
+        assert!(
+            place(&["--branch", "topic"])
+                .unwrap_err()
+                .contains("give --repo too")
+        );
+        assert!(
+            place(&["--repo", "/repo", "--path", "/repo.worktrees/topic"])
+                .unwrap_err()
+                .contains("give --repo and --branch too")
+        );
+        assert!(SPAWN_HELP.contains("spawn_repo_required"));
+    }
+
     #[test]
     fn beside_is_a_switch_and_its_help_names_the_folder_and_parent_rules() {
         let beside_of = |extra: &[&str]| {

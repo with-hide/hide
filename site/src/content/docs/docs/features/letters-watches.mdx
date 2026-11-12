@@ -83,7 +83,7 @@ Agents run these in their own pane, on every system:
 | Acknowledge, cancel or read one | `hide request ack <id>`, `hide request cancel <id>`, `hide request show <id>` |
 | Read your letters | `hide inbox` |
 | Start, hand over, stop or list watches | `hide watch start <target>`, `hide watch assign <watch-or-target-id> --observer <id>`, `hide watch stop <id>`, `hide watch list` |
-| Start a helper that the parent watches | `hide agent spawn --parent here --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch>` |
+| Start a helper that the parent watches | `hide agent spawn --parent here --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch>`, or without `--repo` and `--branch` in a project folder that is not a Git repository, where the helper works in the folder itself |
 | Read or type into another agent's pane | `hide pane read <pane>`, `hide agent read <agent>`, `hide pane send <pane> <text>` (input, not a letter) |
 | Declare a step only a person can take | `hide agent ask-human auth\|permission <where>` |
 

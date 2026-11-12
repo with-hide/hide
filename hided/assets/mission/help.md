@@ -49,8 +49,11 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
   A model is named as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
   Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
-- Git is the floor: every node's result is a git branch, and a GitHub remote with a `gh` sign-in adds pull requests and CI on top.
-  Run `git remote -v`; with no GitHub remote, or with `gh auth status` not signed in, ask nothing about GitHub and plan with branches: leave `github` out, give every change node `delivery: direct`, and say `GitHub 없음 · 브랜치로 전달` (in the operator's language) in the plan.
+- Git is the floor for code: a code node's result is a git branch, and a GitHub remote with a `gh` sign-in adds pull requests and CI on top.
+  A project that is a plain folder, not a Git repository, runs a mission of general nodes only: their workers work in the folder itself and leave their results there (documents, images), and a node finishes by its own lines, its checkers and a gate, with no branch, pull request or merge.
+  A plan there with a code or a waiting node, or a destination, is refused (`mission_needs_git`); code work needs the project to be a Git repository first, so ask the operator.
+  Workers there write into one shared folder and can overwrite each other's files: order two that write the same files with `depends_on`, or give each its own output folder in its brief.
+  Run `git remote -v` (in a plain folder it fails: plan without GitHub, branches or a destination, and skip the destination steps below); with no GitHub remote, or with `gh auth status` not signed in, ask nothing about GitHub and plan with branches: leave `github` out, give every change node `delivery: direct`, and say `GitHub 없음 · 브랜치로 전달` (in the operator's language) in the plan.
 - With a GitHub remote, run `gh auth status` and note the account; the plan names it (`GitHub: <account> (gh)`), and approving the plan approves that account.
   Check the account can do what the scope needs: push and open pull requests for `pr`, and merge as well for `merge`; `gh api repos/<owner>/<repo> --jq .permissions` answers it (`push` for `pr`, `push` and `maintain` or `admin`, or a merge the branch rules allow, for `merge`).
   If the account lacks a permission, ask the operator now and do no GitHub work.
@@ -234,6 +237,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
 - Start nothing before the operator approves the plan; then run `hide mission start`.
   Hide refuses a worker before that (`mission_not_started`).
 - Start each worker with `hide agent spawn --parent here --intent <mission-id>:<node-key> --brief-file <path> …`, a `change` node in its own worktree (`--branch` a new branch, `--path` beside the project), a `general` node in the project's checkout.
+  In a plain-folder project leave out `--repo` and `--branch`: the worker starts in the folder itself, where you are.
   The brief is the worker's first prompt: Hide submits it once the agent takes input and keeps it as a delivered letter under the node's intent, so the worker starts on it without anyone typing and a wake later finds it.
   Hide keeps the brief with the node when you bind the worker, and the node's panel shows it folded under 지시 원문 for as long as the node is on the map, so write it as the one place the worker's instructions live.
   A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.

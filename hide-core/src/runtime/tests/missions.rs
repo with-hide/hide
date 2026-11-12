@@ -92,8 +92,8 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
             name: "worker".into(),
             intent: intent.into(),
             kind: "codex".into(),
-            repo: PROJECT.into(),
-            branch: "cause".into(),
+            repo: Some(PROJECT.into()),
+            branch: Some("cause".into()),
             path: None,
             args: Vec::new(),
             launch: Default::default(),
@@ -2087,6 +2087,160 @@ fn a_mission_asked_for_before_the_projects_are_read_says_so_rather_than_unknown(
     assert_eq!(
         command(&mut guard, &fixture.conductor.pane_id, create).unwrap_err(),
         "mission_project_unknown"
+    );
+}
+
+/// A project row that is not Git is a plain folder only on its machine's
+/// own answer: a checkout whose Project its node could not read (a `.git`
+/// link to a missing repository) or has not answered for yet is refused as
+/// before, never made a plain-folder mission (review of #2494).
+#[test]
+fn a_checkout_its_machine_could_not_read_makes_no_plain_folder_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.worktree_catalog.projects.clear();
+    runtime.snapshot.git_worktrees_loading = false;
+    let create = json!({"op": "create", "title": "Broken"});
+    for read in [None, Some(path_read(PROJECT, None))] {
+        runtime.catalog_paths = read.unwrap_or_default();
+        assert_eq!(
+            command(&mut runtime, "sender", create.clone()).unwrap_err(),
+            "mission_project_unknown"
+        );
+    }
+    runtime.snapshot.git_worktrees_loading = true;
+    assert_eq!(
+        command(&mut runtime, "sender", create).unwrap_err(),
+        "mission_projects_loading"
+    );
+    assert!(runtime.missions.book.get("mission-1").is_none());
+}
+
+/// with-hide/hide#2478: a registered project that is a plain folder, not a
+/// Git repository, is a mission's project: a mission of general nodes,
+/// every preset, is created, planned, started, recorded and closed there,
+/// finished by its lines, its checkers and a gate with no branch, pull
+/// request or commit; a code or waiting node, or a destination, is refused
+/// as needing Git, and the mission is listed as this project's.
+#[test]
+fn a_plain_folder_project_runs_a_mission_of_general_nodes_and_refuses_code_nodes() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    // The fixture's project row is a folder its machine read and found
+    // outside every Git repository, so no worktree catalog holds it.
+    runtime.worktree_catalog.projects.clear();
+    runtime.catalog_paths = path_read(PROJECT, Some(hide_project::ProjectKind::Folder));
+    let (created, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "단편 영화 사전 제작"}),
+    )
+    .unwrap();
+    assert_eq!(created["mission"]["project"], PROJECT);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.plain_folder);
+    assert_eq!(mission.destination, None);
+    let (listed, _) = command(&mut runtime, "sender", json!({"op": "list"})).unwrap();
+    assert_eq!(listed["items"][0]["project"], PROJECT);
+
+    for (node, key) in [
+        (
+            json!({"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct", "criteria": ["it works"]}),
+            "fix",
+        ),
+        (
+            json!({"key": "wait", "title": "Wait", "kind": "external", "external": {"pr": 7}}),
+            "wait",
+        ),
+    ] {
+        let refused = command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [node]}}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            crate::coordination::split_refusal(&refused),
+            ("mission_needs_git", Some(key))
+        );
+    }
+    let general = |key: &str, preset: Value, extra: Value| {
+        let mut node = json!({"key": key, "title": key, "kind": "general",
+            "criteria": [format!("{key} is in the folder")]});
+        if !preset.is_null() {
+            node["preset"] = preset;
+        }
+        for (field, value) in extra.as_object().unwrap() {
+            node[field] = value.clone();
+        }
+        node
+    };
+    let plan = json!({"op": "plan", "plan": {"nodes": [
+        general("script", json!("research"), json!({})),
+        general("storyboard", Value::Null, json!({"depends_on": ["script"],
+            "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}],
+            "gate": "the storyboard"})),
+        general("check", json!("verify"), json!({"depends_on": ["storyboard"]})),
+        general("share", json!("deploy"), json!({"depends_on": ["check"], "gate": null})),
+    ]}});
+    let mut aimed = plan.clone();
+    aimed["plan"]["destination"] = json!("main");
+    assert_eq!(
+        command(&mut runtime, "sender", aimed).unwrap_err(),
+        "mission_needs_git"
+    );
+    assert!(crate::missions::next_action("mission_needs_git").contains("general nodes"));
+    command(&mut runtime, "sender", plan).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    for key in ["script", "storyboard", "check", "share"] {
+        let mut patch = json!({"status": "working", "agent_id": "agent-2"});
+        if key == "storyboard" {
+            patch["reviewer"] = json!("agent-3");
+        }
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": key, "patch": patch}),
+        )
+        .unwrap();
+        command(&mut runtime, "recipient", record_of(key, "c1", json!({}))).unwrap();
+        if key == "storyboard" {
+            command(
+                &mut runtime,
+                "reviewer",
+                record_of(key, "review", json!({})),
+            )
+            .unwrap();
+            runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+            command(
+                &mut runtime,
+                "sender",
+                json!({"op": "gate", "node": key, "pass": true, "said": "좋아요"}),
+            )
+            .unwrap();
+        }
+        let mut done = json!({"status": "done"});
+        if key == "check" {
+            done["verdict"] = json!("pass");
+            done["checks"] = json!({"passed": 1, "total": 1});
+        }
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": key, "patch": done}),
+        )
+        .unwrap_or_else(|refused| panic!("{key} done: {refused}"));
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "대본, 콘티, 점검과 공유를 폴더에 남겼어요."}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.missions.book.get("mission-1").unwrap().status,
+        MissionStatus::Done
     );
 }
 

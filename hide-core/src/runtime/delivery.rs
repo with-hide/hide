@@ -1383,6 +1383,42 @@ impl Runtime {
         self.composer_checks_store = Some(store);
     }
 
+    /// Where a spawn's child works, named before anything is reserved
+    /// (with-hide/hide#2479): with `branch`, a worktree of the repository
+    /// `repo` names, as asked; without one, a plain-folder project itself,
+    /// the one `repo` names on the child's machine or, with no `repo`, the
+    /// caller's own checkout. A Git project keeps both required, since its
+    /// agent works in a worktree of its own. A machine the caller cannot
+    /// start on is refused as such before any folder there is judged.
+    fn spawn_place(
+        &mut self,
+        caller: &Context,
+        machine: Option<&str>,
+        repo: Option<String>,
+        branch: Option<&str>,
+    ) -> Result<String, String> {
+        use super::projects::CheckoutKind;
+        if branch.is_some() {
+            return repo.ok_or_else(|| "invalid_spawn".to_owned());
+        }
+        let device = machine.unwrap_or(caller.device_id.as_str());
+        if device != caller.device_id {
+            self.spawn_target(&caller.device_id, device)?;
+        }
+        let folder = match repo {
+            Some(repo) => repo,
+            // The caller's checkout is on its own machine.
+            None if device == caller.device_id => caller.checkout_path.clone(),
+            None => return Err("spawn_repo_required".into()),
+        };
+        match self.checkout_kind(device, &folder) {
+            Some(CheckoutKind::Folder) => Ok(folder),
+            Some(CheckoutKind::Unread) => Err("spawn_project_loading".into()),
+            Some(CheckoutKind::Unreadable) => Err("spawn_folder_unreadable".into()),
+            Some(CheckoutKind::Git) | None => Err("spawn_repo_required".into()),
+        }
+    }
+
     pub(crate) fn prepare_delivery(
         &mut self,
         device: &str,
@@ -1471,6 +1507,7 @@ impl Runtime {
                     mission,
                     kind,
                     repo,
+                    branch,
                     launch,
                     profile,
                     intent,
@@ -1498,9 +1535,27 @@ impl Runtime {
                 *intent = crate::coordination::plan_intent(&admission.link);
             }
             let ledger = self.delivery_state()?;
-            let finished =
-                crate::coordination::earlier_spawn(&ledger, &actor, parent.as_deref(), intent)
-                    .is_some_and(|record| record.completed);
+            let earlier =
+                crate::coordination::earlier_spawn(&ledger, &actor, parent.as_deref(), intent);
+            let finished = earlier.is_some_and(|record| record.completed);
+            // A folder spawn asked again is the spawn it was: its folder was
+            // judged when it was admitted, so one that became a Git
+            // repository or lost its row since still answers its agent
+            // (engineering 11).
+            let admitted = earlier
+                .filter(|record| {
+                    record.folder
+                        && branch.is_none()
+                        && repo.as_ref().is_none_or(|repo| *repo == record.repo)
+                })
+                .map(|record| record.repo.clone());
+            let place = match admitted {
+                Some(folder) => folder,
+                None => {
+                    self.spawn_place(&context, machine.as_deref(), repo.take(), branch.as_deref())?
+                }
+            };
+            let repo: &str = repo.insert(place);
             let worker = crate::runtime::missions::SpawnWorker {
                 machine: machine.as_deref(),
                 kind,
@@ -3808,8 +3863,8 @@ pub(crate) mod tests {
                     name: "recipient".into(),
                     intent: "task-1".into(),
                     kind: "codex".into(),
-                    repo: "/checkouts/fixture".into(),
-                    branch: "topic".into(),
+                    repo: Some("/checkouts/fixture".into()),
+                    branch: Some("topic".into()),
                     path: None,
                     args: Vec::new(),
                     launch: Default::default(),

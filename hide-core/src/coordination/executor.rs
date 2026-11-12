@@ -1164,6 +1164,16 @@ fn spawn(
     else {
         return Err("invalid_spawn".into());
     };
+    // The core names the place before it hands a spawn here
+    // (`Runtime::spawn_place`). With no branch the child works in the plain
+    // folder `repo` itself, which takes no worktree path of its own.
+    let Some(repo) = repo else {
+        return Err("invalid_spawn".into());
+    };
+    let branch = branch.as_ref();
+    if branch.is_none() && path.is_some() {
+        return Err("invalid_spawn".into());
+    }
     // A plan step's spawn runs only as the core admitted it.
     if plan_node.is_some() != plan.is_some() {
         return Err("invalid_spawn".into());
@@ -1182,8 +1192,9 @@ fn spawn(
     }
     if parent.as_ref().is_some_and(|parent| !super::key(parent))
         || machine.as_ref().is_some_and(|machine| !super::key(machine))
-        || ![name, intent, kind, repo, branch]
+        || ![name, intent, kind, repo]
             .into_iter()
+            .chain(branch)
             .all(|s| super::key(s))
         || args.len() > 128
         || args.iter().map(String::len).sum::<usize>() > 8192
@@ -1232,7 +1243,7 @@ fn spawn(
             authority,
             actor,
             machine.as_deref(),
-            (!placed).then_some((repo.as_str(), branch.as_str(), path.as_deref())),
+            (!placed).then_some((repo.as_str(), branch.map(String::as_str), path.as_deref())),
             intent,
         )?)
     } else {
@@ -1266,7 +1277,9 @@ fn spawn(
                 intent,
                 // A retry whose pane exists needs the device only to be
                 // reachable: the repository and the agent were already used.
-                (!started).then_some(repo.as_str()),
+                // A plain folder is no repository; the core found it among
+                // the device's projects (`Runtime::spawn_place`).
+                (!started && branch.is_some()).then_some(repo.as_str()),
                 !started,
             )?;
         }
@@ -1414,9 +1427,12 @@ fn spawn(
             // Reconcile a worktree whose creation reply was interrupted. The
             // existing local/device engine and checkout owner are shared with
             // the product's worktree/start path; no spawn-specific SSH exists.
-            let existing = engine
-                .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
-                .map_err(String::from)?;
+            let existing = match branch {
+                Some(branch) => engine
+                    .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
+                    .map_err(String::from)?,
+                None => Some(repo.clone()),
+            };
             // `made`: this spawn made the worktree, now or in an attempt whose
             // reply was lost; only such a worktree is trusted for an agent
             // that asks (agy), as for a task's worktree. A worktree that was
@@ -1425,18 +1441,35 @@ fn spawn(
                 if path.as_ref().is_some_and(|path| path != &existing) {
                     return Err("checkout_path_conflict".into());
                 }
-                let owner = crate::checkout_owner::OwnerOpen::Worktree {
-                    path: existing.clone(),
-                    repository_root: repo.clone(),
-                    label: if existing == *repo {
-                        repo.trim_end_matches('/')
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(repo)
-                            .to_owned()
-                    } else {
-                        branch.clone()
+                let folder_name = || {
+                    repo.trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(repo)
+                        .to_owned()
+                };
+                let owner = match branch {
+                    Some(branch) => crate::checkout_owner::OwnerOpen::Worktree {
+                        path: existing.clone(),
+                        repository_root: repo.clone(),
+                        label: if existing == *repo {
+                            folder_name()
+                        } else {
+                            branch.clone()
+                        },
                     },
+                    // A plain folder's owner: the workspace carrying its
+                    // mark, else one made at the folder.
+                    None => {
+                        let owner = crate::checkout_owner::OwnerOpen::for_checkout(
+                            &child_device,
+                            repo,
+                            repo,
+                            false,
+                            &folder_name(),
+                        );
+                        if on_node { owner.on_node() } else { owner }
+                    }
                 };
                 // The persistent unique tab label makes an interrupted tab-create
                 // discoverable before a retry could create another child pane.
@@ -1551,6 +1584,8 @@ fn spawn(
                 // now; a spawn beside never makes one.
                 return Err("beside_other_checkout".into());
             } else {
+                // A folder spawn's place is the folder, found above.
+                let branch = branch.ok_or("invalid_spawn")?;
                 // A mission's worktree starts from its destination's newest
                 // commit (PRD mission-destination D-04); any other from the
                 // branch the repository's own folder has out. A device whose
@@ -2101,13 +2136,14 @@ impl crate::engine::Placement for SpawnPlacement {
 /// device or in another checkout than the caller's (a new worktree, another
 /// branch or another folder), or when the caller is no agent pane Hide knows.
 /// `target` is the repository, branch and folder asked for, compared with
-/// the engine's worktrees; none for a retry whose pane exists already.
+/// the engine's worktrees, or with no branch the plain folder itself; none
+/// for a retry whose pane exists already.
 fn beside_target(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
     machine: Option<&str>,
-    target: Option<(&str, &str, Option<&str>)>,
+    target: Option<(&str, Option<&str>, Option<&str>)>,
     intent: &str,
 ) -> Result<String, String> {
     let refused = |reason: &str| {
@@ -2130,10 +2166,15 @@ fn beside_target(
     let Some((repo, branch, path)) = target else {
         return Ok(pane);
     };
-    let CoordinationContext { engine, .. } = context(client, &actor.device_id)?;
-    let existing = engine
-        .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
-        .map_err(String::from)?;
+    let existing = match branch {
+        Some(branch) => {
+            let CoordinationContext { engine, .. } = context(client, &actor.device_id)?;
+            engine
+                .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
+                .map_err(String::from)?
+        }
+        None => Some(repo.to_owned()),
+    };
     let same = |other: &str| other.trim_end_matches('/') == checkout;
     if !existing.as_deref().is_some_and(same) || path.is_some_and(|path| !same(path)) {
         return Err(refused("beside_other_checkout"));
@@ -3037,8 +3078,8 @@ mod tests {
                         name: name.into(),
                         intent: intent.into(),
                         kind: "claude".into(),
-                        repo: "/fixture".into(),
-                        branch: "factory/801".into(),
+                        repo: Some("/fixture".into()),
+                        branch: Some("factory/801".into()),
                         path: None,
                         args: Vec::new(),
                         launch: Default::default(),
@@ -3288,8 +3329,8 @@ mod tests {
                 name: "recipient".into(),
                 intent: "one-child".into(),
                 kind: "codex".into(),
-                repo: "/fixture".into(),
-                branch: "topic".into(),
+                repo: Some("/fixture".into()),
+                branch: Some("topic".into()),
                 path: None,
                 args: Vec::new(),
                 launch: Default::default(),

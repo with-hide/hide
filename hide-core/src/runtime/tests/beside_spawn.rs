@@ -3,6 +3,11 @@
 //! checkout on the caller's own device, and nothing is created for a spawn
 //! that cannot be placed there.
 //!
+//! The same callers work in a plain folder (their project rows read no
+//! Git repository), so a spawn with neither `--repo` nor `--branch` starts
+//! its child in that folder itself (with-hide/hide#2479), in a tab of the
+//! folder's owner or beside its caller.
+//!
 //! The caller is an agent on a connected device, so the spawn runs every
 //! step against that device's engine (B13); this machine has none, so a
 //! step that reached the wrong machine fails the spawn instead of passing.
@@ -10,6 +15,7 @@
 use super::*;
 use crate::coordination::{AgentRecord, Command};
 use crate::delivery::{Actor, ledger, worker::Worker};
+use crate::device_catalog::Fact;
 use crate::handle::ChangeNotifier;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
 use hide_node_link::protocol::Call;
@@ -74,6 +80,10 @@ struct Device {
     worktree_gone: bool,
     /// How many more terminal reads fail, as a reply lost on the way.
     lost_reads: usize,
+    /// The workspaces carrying an owner mark, as the engine lists them.
+    owners: Vec<(String, Option<String>)>,
+    /// Each tab the engine launched: its workspace and folder.
+    launched: Vec<(String, String)>,
     /// What the engine says of the started agent each time it is asked
     /// whether it takes input (`delivery_agent`), in turn, the last one
     /// standing; with none, [`child_row`], ready.
@@ -121,6 +131,11 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
                 already_open: true,
             }),
             "launch_tab" | "create_tab" => {
+                if method == "launch_tab" {
+                    let workspace = params["workspace"].as_str().unwrap().to_owned();
+                    let cwd = params["cwd"].as_str().unwrap().to_owned();
+                    device.launched.push((workspace, cwd));
+                }
                 device.panes.push(("w2:p1".into(), None));
                 reply(("w2:t2".to_owned(), "w2:p1".to_owned()))
             }
@@ -155,6 +170,7 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
                 reply(fake::delivery_agent(&row.unwrap_or_else(child_row)))
             }
             "report_pane_tokens" => reply(()),
+            "workspace_tokens" => reply(device.owners.clone()),
             "close_pane" => {
                 device.panes.retain(|(pane, _)| *pane != params["pane"]);
                 reply(())
@@ -415,8 +431,8 @@ impl Spawner {
                 name: "worker".into(),
                 intent: intent.into(),
                 kind: "codex".into(),
-                repo: "/srv/repo".into(),
-                branch: ask.branch.into(),
+                repo: Some("/srv/repo".into()),
+                branch: Some(ask.branch.into()),
                 path: ask.path.map(str::to_owned),
                 args: Vec::new(),
                 launch: Default::default(),
@@ -744,4 +760,337 @@ fn a_split_that_cannot_be_labelled_is_closed() {
     assert_eq!(spawner.count("close_pane"), 1);
     assert_eq!(spawner.device.lock().unwrap().panes.len(), 1);
     assert_eq!(spawner.count("start_agent"), 0);
+}
+
+impl Spawner {
+    /// A child asked for as the CLI asks with neither `--repo` nor
+    /// `--branch`, or with `repo` alone, admitted by the core under its lock
+    /// and run off it as hided runs it.
+    fn spawn_in_folder(
+        &self,
+        intent: &str,
+        beside: bool,
+        machine: Option<&str>,
+        repo: Option<&str>,
+    ) -> Result<Value, String> {
+        let prepared = {
+            let mut runtime = self.runtime.lock().unwrap();
+            runtime.install_delivery_client(self.client.clone());
+            let context = runtime
+                .workspace_control_query(
+                    &self.actor.device_id,
+                    &self.actor.pane_id,
+                    crate::workspace_control::Query::Info,
+                )
+                .expect("the caller's checkout")
+                .context;
+            runtime.prepare_delivery(
+                &self.actor.device_id,
+                &self.actor.pane_id,
+                &context,
+                None,
+                crate::delivery::Command::Agents {
+                    command: Command::Spawn {
+                        pick: None,
+                        mission: None,
+                        plan_node: None,
+                        plan: None,
+                        parent: (!beside).then(|| "here".to_owned()),
+                        machine: machine.map(str::to_owned),
+                        name: "worker".into(),
+                        intent: intent.into(),
+                        kind: "codex".into(),
+                        repo: repo.map(str::to_owned),
+                        branch: None,
+                        path: None,
+                        args: Vec::new(),
+                        launch: Default::default(),
+                        task: None,
+                        brief: None,
+                        beside,
+                        profile: None,
+                    },
+                },
+            )?
+        };
+        prepared.run(Duration::from_secs(30))
+    }
+}
+
+/// with-hide/hide#2479: an agent in a connected device's plain-folder
+/// project asks for a child with neither `--repo` nor `--branch`, and once
+/// the device's helper has read the folder the child starts in that folder
+/// on that device, in a new tab of the folder's owner, with no worktree
+/// asked for or made; the record says it works in the folder, and the same
+/// command again answers the same agent.
+#[test]
+fn a_spawn_without_repo_or_branch_starts_the_child_in_the_callers_folder() {
+    let spawner = spawner();
+    let mark = crate::checkout_owner::owner_mark(DEVICE, CHECKOUT);
+    spawner.device.lock().unwrap().owners = vec![("w2".into(), Some(mark))];
+    // Before the device's helper read the folder, it may still be Git.
+    assert_eq!(
+        spawner.spawn_in_folder("folder", false, None, None),
+        Err("spawn_project_loading".to_owned())
+    );
+    // A folder the helper could not read stays so until it changes.
+    device_read(&spawner, Fact::Refused("No such file or directory".into()));
+    assert_eq!(
+        spawner.spawn_in_folder("folder", false, None, None),
+        Err("spawn_folder_unreadable".to_owned())
+    );
+    device_read(
+        &spawner,
+        Fact::Known(project(hide_project::ProjectKind::Folder)),
+    );
+    let child = spawner
+        .spawn_in_folder("folder", false, None, None)
+        .unwrap();
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(child["project"], CHECKOUT);
+    assert_eq!(
+        spawner.device.lock().unwrap().launched,
+        [("w2".to_owned(), CHECKOUT.to_owned())],
+        "one tab, in the folder's owner, in the folder"
+    );
+    for method in ["worktree_path", "create_worktree", "create_workspace"] {
+        assert_eq!(spawner.count(method), 0, "{method}");
+    }
+    let record = &spawner.ledger().spawns[0];
+    assert!(record.folder);
+    assert_eq!(record.branch(), None);
+    assert_eq!(
+        (record.repo.as_str(), record.path.as_deref()),
+        (CHECKOUT, Some(CHECKOUT))
+    );
+    assert_eq!(
+        spawner
+            .spawn_in_folder("folder", false, None, None)
+            .unwrap()["id"],
+        child["id"]
+    );
+    assert_eq!(spawner.device.lock().unwrap().launched.len(), 1);
+    // Naming the folder with `--repo` alone is the same spawn.
+    assert_eq!(
+        spawner
+            .spawn_in_folder("folder", false, None, Some(CHECKOUT))
+            .unwrap()["id"],
+        child["id"]
+    );
+    // Once the folder became a Git repository, the spawn it admitted is
+    // still its own, while a new one there needs a branch.
+    device_read(
+        &spawner,
+        Fact::Known(project(hide_project::ProjectKind::Git)),
+    );
+    assert_eq!(
+        spawner
+            .spawn_in_folder("folder", false, None, None)
+            .unwrap()["id"],
+        child["id"]
+    );
+    assert_eq!(
+        spawner.spawn_in_folder("another", false, None, None),
+        Err("spawn_repo_required".to_owned())
+    );
+    assert_eq!(spawner.device.lock().unwrap().launched.len(), 1);
+}
+
+/// `CHECKOUT` as a device's helper reads it: a Project of `kind`.
+fn project(kind: hide_project::ProjectKind) -> hide_project::ProjectFacts {
+    hide_project::ProjectFacts {
+        root: CHECKOUT.into(),
+        checkout_root: CHECKOUT.into(),
+        kind,
+        branch: None,
+        linked_worktree: false,
+    }
+}
+
+/// The device's helper answers `fact` for `CHECKOUT`, and its catalog
+/// follows.
+fn device_read(spawner: &Spawner, fact: Fact) {
+    let mut runtime = spawner.runtime.lock().unwrap();
+    let facts = runtime.device_facts.entry(DEVICE.into()).or_default();
+    facts.facts.insert(CHECKOUT.into(), fact);
+    runtime.refresh_device_catalog(DEVICE);
+}
+
+/// A caller on this machine, beside the connected device of `spawner()`:
+/// the same fixture with this machine's `sender` registered and speaking.
+fn caller_here_with_device() -> Spawner {
+    let mut spawner = spawner();
+    let actor = Actor {
+        pane_id: "sender".into(),
+        name: "sender".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest("native-parent"),
+    };
+    let payload: crate::sidebar::SessionSnapshotPayload =
+        serde_json::from_value(json!({"agents": [{
+            "id": "sender", "pane_id": "sender", "agent": "codex", "agent_status": "working",
+            "state_change_seq": 1, "lineage_session": actor.session,
+        }]}))
+        .unwrap();
+    let mut state = spawner.ledger();
+    crate::coordination::apply(
+        &mut state,
+        &actor,
+        &crate::coordination::Mutation::Register {
+            record: AgentRecord {
+                id: String::new(),
+                name: Some("sender".into()),
+                machine: crate::node::TEST_NODE.into(),
+                host_scope: "fixture".into(),
+                native_machine: "machine-local".into(),
+                session: "native-parent".into(),
+                instance: "sender".into(),
+                pane: "sender".into(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor: actor.clone(),
+                ended: false,
+                terminal_id: None,
+                forked: false,
+            },
+            check: false,
+        },
+        2,
+    )
+    .unwrap();
+    ledger::save(&spawner.path, &state).unwrap();
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+        runtime.publish_delivery(Arc::new(ledger::load(&spawner.path).unwrap()), false);
+    }
+    spawner.actor = actor;
+    spawner.checkout = LOCAL_CHECKOUT;
+    spawner
+}
+
+/// A caller on this machine starts a child in a connected device's
+/// plain-folder project with `--machine` and `--repo` alone (review of
+/// #2494): a machine it cannot start on is refused as such before any
+/// folder is judged, and once the device's helper read the folder as one,
+/// the child starts in it there, in the folder's owner, with no worktree.
+#[test]
+fn a_caller_here_starts_a_child_in_a_devices_plain_folder() {
+    let spawner = caller_here_with_device();
+    let mark = crate::checkout_owner::owner_mark(DEVICE, CHECKOUT);
+    spawner.device.lock().unwrap().owners = vec![("w2".into(), Some(mark))];
+    let unknown = spawner
+        .spawn_in_folder("there", false, Some("nowhere"), Some(CHECKOUT))
+        .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&unknown).0,
+        "machine_unknown"
+    );
+    assert_eq!(
+        spawner.spawn_in_folder("there", false, Some(DEVICE), Some(CHECKOUT)),
+        Err("spawn_project_loading".to_owned())
+    );
+    device_read(
+        &spawner,
+        Fact::Known(project(hide_project::ProjectKind::Folder)),
+    );
+    let child = spawner
+        .spawn_in_folder("there", false, Some(DEVICE), Some(CHECKOUT))
+        .unwrap();
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(
+        spawner.device.lock().unwrap().launched,
+        [("w2".to_owned(), CHECKOUT.to_owned())]
+    );
+    for method in ["worktree_path", "create_worktree", "create_workspace"] {
+        assert_eq!(spawner.count(method), 0, "{method}");
+    }
+    let record = spawner
+        .ledger()
+        .spawns
+        .into_iter()
+        .find(|record| record.intent.ends_with("there"))
+        .expect("the spawn's record");
+    assert!(record.folder);
+    assert_eq!(record.repo, CHECKOUT);
+}
+
+/// A plain folder's agent opened beside its caller splits the caller's
+/// pane in the folder, as in a worktree, without asking about worktrees.
+#[test]
+fn a_folder_spawn_beside_its_caller_splits_in_the_folder() {
+    let spawner = local_spawner();
+    spawner.runtime.lock().unwrap().catalog_paths =
+        path_read(LOCAL_CHECKOUT, Some(hide_project::ProjectKind::Folder));
+    let child = spawner.spawn_in_folder("beside", true, None, None).unwrap();
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(spawner.count("split_beside"), 1);
+    assert_eq!(spawner.count("worktree_path"), 0);
+    assert!(spawner.ledger().spawns[0].folder);
+}
+
+/// with-hide/hide#2479: in a Git project `--repo` and `--branch` stay
+/// required, and a folder its machine has not read yet, one it could not
+/// read (a `.git` link to a missing repository, or gone), or one no project
+/// row holds, is refused before anything is reserved or made; a row that is
+/// not Git is a plain folder only on the node's own answer.
+#[test]
+fn a_git_project_keeps_repo_and_branch_required() {
+    let spawner = local_spawner();
+    fn row(runtime: &mut Runtime) -> &mut crate::model::WorkspaceSnapshot {
+        &mut runtime.snapshot.navigator.workspaces[0]
+    }
+    row(&mut spawner.runtime.lock().unwrap()).is_git = true;
+    assert_eq!(
+        spawner.spawn_in_folder("git", false, None, None),
+        Err("spawn_repo_required".to_owned())
+    );
+    assert_eq!(
+        spawner.spawn_in_folder("git", false, None, Some(LOCAL_CHECKOUT)),
+        Err("spawn_repo_required".to_owned())
+    );
+    row(&mut spawner.runtime.lock().unwrap()).is_git = false;
+    assert_eq!(
+        spawner.spawn_in_folder("unread", false, None, None),
+        Err("spawn_project_loading".to_owned())
+    );
+    spawner.runtime.lock().unwrap().catalog_paths = path_read(LOCAL_CHECKOUT, None);
+    assert_eq!(
+        spawner.spawn_in_folder("unreadable", false, None, None),
+        Err("spawn_folder_unreadable".to_owned())
+    );
+    let mut gone = hide_node_link::catalog::PathFacts::default();
+    gone.paths.insert(
+        LOCAL_CHECKOUT.into(),
+        hide_node_link::catalog::PathFact {
+            comparison: LOCAL_CHECKOUT.into(),
+            exists: false,
+            project: None,
+            project_unread: None,
+            repository: None,
+        },
+    );
+    spawner.runtime.lock().unwrap().catalog_paths =
+        Arc::new(crate::workspace::PathIndex::new(gone));
+    assert_eq!(
+        spawner.spawn_in_folder("gone", false, None, None),
+        Err("spawn_folder_unreadable".to_owned())
+    );
+    spawner.runtime.lock().unwrap().catalog_paths =
+        path_read(LOCAL_CHECKOUT, Some(hide_project::ProjectKind::Folder));
+    assert_eq!(
+        spawner.spawn_in_folder("unknown", false, None, Some("/somewhere/else")),
+        Err("spawn_repo_required".to_owned())
+    );
+    assert!(spawner.ledger().spawns.is_empty());
+    for method in [
+        "worktree_path",
+        "create_worktree",
+        "launch_tab",
+        "start_agent",
+    ] {
+        assert_eq!(spawner.count(method), 0, "{method}");
+    }
 }

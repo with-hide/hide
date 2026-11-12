@@ -658,7 +658,8 @@ impl Runtime {
                             .as_ref()
                             .is_some_and(|link| link.parent_session == *session)
                     })
-                    .map(|spawn| spawn.branch.clone())
+                    // A child in a plain folder works on no branch.
+                    .filter_map(|spawn| spawn.branch().map(str::to_owned))
                     .collect()
             })
             .unwrap_or_default();

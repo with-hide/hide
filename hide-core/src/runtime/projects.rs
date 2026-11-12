@@ -3805,6 +3805,52 @@ impl Runtime {
         }
     }
 
+    /// What the checkout at `path` on `device`, held by one of the machine's
+    /// project rows, is (with-hide/hide#2478, #2479); none when no row holds
+    /// it. A row that is not Git says only that no repository was listed for
+    /// it, so a plain folder counts only on its machine's own answer: this
+    /// machine's path read (`Call::PathFacts`), or a device's helper, said
+    /// the folder is a Project of kind Folder. A path that answer found gone,
+    /// or whose Project it could not read (a `.git` link to a missing
+    /// repository, say), is unreadable, and one it has not answered for yet
+    /// is unread.
+    pub(super) fn checkout_kind(&self, device: &str, path: &str) -> Option<CheckoutKind> {
+        let workspace = self
+            .catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .find(|workspace| {
+                workspace
+                    .checkouts
+                    .iter()
+                    .any(|checkout| checkout.path == path)
+            })?;
+        if workspace.is_git {
+            return Some(CheckoutKind::Git);
+        }
+        let of = |project: &hide_project::ProjectFacts| match project.kind {
+            hide_project::ProjectKind::Git => CheckoutKind::Git,
+            hide_project::ProjectKind::Folder => CheckoutKind::Folder,
+        };
+        Some(if device == self.node.as_str() {
+            match self.catalog_paths.project(path) {
+                Some(project) => of(project),
+                None if self.catalog_paths.knows(path) => CheckoutKind::Unreadable,
+                None => CheckoutKind::Unread,
+            }
+        } else {
+            use crate::device_catalog::Fact;
+            match self
+                .device_facts
+                .get(device)
+                .and_then(|facts| facts.facts.get(path))
+            {
+                Some(Fact::Known(project)) => of(project),
+                Some(Fact::Refused(_)) => CheckoutKind::Unreadable,
+                None => CheckoutKind::Unread,
+            }
+        })
+    }
+
     /// Asks the pull requests of `root` on `device` again once its last
     /// read is `older_than` old: this machine's through the look rule, a
     /// node's, read with this machine's login, through its next read.
@@ -5555,6 +5601,23 @@ impl Runtime {
         }
         true
     }
+}
+
+/// What a project's checkout is, as `Runtime::checkout_kind` reads its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CheckoutKind {
+    /// A Git repository's checkout: an agent there works in a worktree of
+    /// its own, and a mission there may run code nodes.
+    Git,
+    /// A plain folder its machine read and found outside every Git
+    /// repository: an agent works in the folder itself, and a mission there
+    /// runs general nodes only.
+    Folder,
+    /// Not read by its machine yet, so either.
+    Unread,
+    /// Read, and found gone or with a Project its machine could not read:
+    /// neither, until the folder changes.
+    Unreadable,
 }
 
 /// Why a row the engine shows without a registration is being registered.
