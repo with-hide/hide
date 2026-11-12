@@ -64,6 +64,7 @@ hide request send child-name --intent task-stop-1 --body 'Stop and report what y
 
 A `request` or `block` letter waits for an answer; a `progress` letter is an interim report, such as a plan or a checkpoint, and a `report` letter says the work is finished.
 Only a `report` ends the parent's watch on its sender ([Watch activity and completion](#watch-activity-and-completion)), so a child that has more to do after what it writes sends `progress`.
+A `report` to its parent also puts the child to sleep once it rests off the operator's screen, without waiting for the idle hours, and its next letter to its parent of another kind, or a letter to it that would wake it asleep (a `request`, a `block` or the operator's Done on its person's turn), takes that back before it sleeps; a child whose pull request's checks still run sleeps once they end; a `request` or `block` wakes it with its conversation afterwards ([ARCHITECTURE.md: Sleep by mission, letter and command](ARCHITECTURE.md#sleep-by-mission-letter-and-command)).
 `hide guide` tells an agent to send `progress` at a plan, a change of direction or before a long wait, not at every step, since its recipient reads only its newest three in full ([One bundle per handover](#one-bundle-per-handover)).
 
 The recipient can acknowledge or reply; the sender can cancel.

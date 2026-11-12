@@ -57,8 +57,8 @@ export const settingsEnglish = {
   "settings.idleAgents": "Idle agents",
   "settings.sleepAfter": "Sleep after",
   "settings.sleep.never": "Never",
-  "settings.sleep.hours": "{{hours}} hours",
-  "settings.sleep.days": "{{days}} days",
+  "settings.sleep.hours_one": "{{count}} hour",
+  "settings.sleep.hours_other": "{{count}} hours",
   "settings.notRead": "Not read yet.",
   "settings.notChecked": "Not checked yet.",
   "onboarding.devices": "Connected devices get the same choice, each by what is installed there.",
@@ -121,8 +121,8 @@ export const settingsEnglish = {
   "settings.update.prereleaseNote": "Get versions before their stable release. Turning this off won't roll you back to an older version; you'll stay on the one you have until the next stable release.",
   "settings.details": "Details",
   "settings.startingWork": "Starting work",
-  "settings.sleepingNow_one": "{{count}} sleeping now. Working, unread and on-screen agents never sleep.",
-  "settings.sleepingNow_other": "{{count}} sleeping now. Working, unread and on-screen agents never sleep.",
+  "settings.sleepingNow_one": "{{count}} sleeping now. A child agent sleeps as soon as it reports to its parent. Working and on-screen agents never sleep, and unread ones wait until you read them.",
+  "settings.sleepingNow_other": "{{count}} sleeping now. A child agent sleeps as soon as it reports to its parent. Working and on-screen agents never sleep, and unread ones wait until you read them.",
 } as const;
 
 const ko = {
@@ -182,8 +182,8 @@ const ko = {
   "settings.idleAgents": "쉬고 있는 에이전트",
   "settings.sleepAfter": "잠들기까지 대기",
   "settings.sleep.never": "잠들지 않음",
-  "settings.sleep.hours": "{{hours}}시간",
-  "settings.sleep.days": "{{days}}일",
+  "settings.sleep.hours_one": "{{count}}시간",
+  "settings.sleep.hours_other": "{{count}}시간",
   "settings.notRead": "아직 읽지 않았어요.",
   "settings.notChecked": "아직 확인하지 않았어요.",
   "onboarding.devices": "연결된 기기에도 같은 선택이 적용돼요. 기기마다 설치된 에이전트를 기준으로 해요.",
@@ -246,8 +246,8 @@ const ko = {
   "settings.update.prereleaseNote": "정식 출시 전 버전을 먼저 받아요. 끄면 낮은 버전으로 되돌리지 않고, 다음 정식 버전까지 기다려요.",
   "settings.details": "세부 정보",
   "settings.startingWork": "작업 시작",
-  "settings.sleepingNow_one": "지금 {{count}}개가 잠들어 있어요. 작업 중이거나 읽지 않았거나 화면에 보이는 에이전트는 잠들지 않아요.",
-  "settings.sleepingNow_other": "지금 {{count}}개가 잠들어 있어요. 작업 중이거나 읽지 않았거나 화면에 보이는 에이전트는 잠들지 않아요.",
+  "settings.sleepingNow_one": "지금 {{count}}개가 잠들어 있어요. 자식 에이전트는 부모에게 보고하면 바로 잠들어요. 작업 중이거나 화면에 보이는 에이전트는 잠들지 않고, 읽지 않은 에이전트는 읽을 때까지 기다려요.",
+  "settings.sleepingNow_other": "지금 {{count}}개가 잠들어 있어요. 자식 에이전트는 부모에게 보고하면 바로 잠들어요. 작업 중이거나 화면에 보이는 에이전트는 잠들지 않고, 읽지 않은 에이전트는 읽을 때까지 기다려요.",
 } satisfies Catalog<typeof settingsEnglish>;
 
 const ja = {
@@ -307,8 +307,8 @@ const ja = {
   "settings.idleAgents": "アイドル中のエージェント",
   "settings.sleepAfter": "休止までの時間",
   "settings.sleep.never": "休止しない",
-  "settings.sleep.hours": "{{hours}}時間",
-  "settings.sleep.days": "{{days}}日",
+  "settings.sleep.hours_one": "{{count}}時間",
+  "settings.sleep.hours_other": "{{count}}時間",
   "settings.notRead": "まだ読み込まれていません。",
   "settings.notChecked": "まだ確認されていません。",
   "onboarding.devices": "接続中のデバイスにも同じ選択が適用され、各デバイスにインストールされているものだけが対象です。",
@@ -371,8 +371,8 @@ const ja = {
   "settings.update.prereleaseNote": "正式リリース前のバージョンを先に受け取ります。オフにしても低いバージョンには戻さず、次の正式版まで待ちます。",
   "settings.details": "詳細",
   "settings.startingWork": "作業の開始",
-  "settings.sleepingNow_one": "現在{{count}}件が休止中です。作業中、未読、画面に表示中のエージェントは休止しません。",
-  "settings.sleepingNow_other": "現在{{count}}件が休止中です。作業中、未読、画面に表示中のエージェントは休止しません。",
+  "settings.sleepingNow_one": "現在{{count}}件が休止中です。子エージェントは親に報告するとすぐに休止します。作業中や画面に表示中のエージェントは休止せず、未読のエージェントは読むまで待ちます。",
+  "settings.sleepingNow_other": "現在{{count}}件が休止中です。子エージェントは親に報告するとすぐに休止します。作業中や画面に表示中のエージェントは休止せず、未読のエージェントは読むまで待ちます。",
 } satisfies Catalog<typeof settingsEnglish>;
 
 const zhCN = {
@@ -432,8 +432,8 @@ const zhCN = {
   "settings.idleAgents": "空闲智能体",
   "settings.sleepAfter": "休眠前等待",
   "settings.sleep.never": "从不休眠",
-  "settings.sleep.hours": "{{hours}} 小时",
-  "settings.sleep.days": "{{days}} 天",
+  "settings.sleep.hours_one": "{{count}} 小时",
+  "settings.sleep.hours_other": "{{count}} 小时",
   "settings.notRead": "尚未读取。",
   "settings.notChecked": "尚未检查。",
   "onboarding.devices": "已连接的设备也会得到同样的选择，以各设备上已安装的为准。",
@@ -496,8 +496,8 @@ const zhCN = {
   "settings.update.prereleaseNote": "在正式发布前先获取新版本。关闭后不会退回到更低的版本，而是等待下一个正式版。",
   "settings.details": "详细信息",
   "settings.startingWork": "开始工作",
-  "settings.sleepingNow_one": "当前有 {{count}} 个在休眠。工作中、未读和屏幕上显示的智能体不会休眠。",
-  "settings.sleepingNow_other": "当前有 {{count}} 个在休眠。工作中、未读和屏幕上显示的智能体不会休眠。",
+  "settings.sleepingNow_one": "当前有 {{count}} 个在休眠。子智能体向父智能体汇报后会立即休眠。工作中和屏幕上显示的智能体不会休眠，未读的智能体会等你读过后再休眠。",
+  "settings.sleepingNow_other": "当前有 {{count}} 个在休眠。子智能体向父智能体汇报后会立即休眠。工作中和屏幕上显示的智能体不会休眠，未读的智能体会等你读过后再休眠。",
 } satisfies Catalog<typeof settingsEnglish>;
 
 export const settingsCatalogs = { en: settingsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof settingsEnglish>;

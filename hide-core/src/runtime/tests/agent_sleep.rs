@@ -1642,7 +1642,8 @@ fn an_expired_dormant_operation_publishes_its_status_action_once() {
 }
 
 /// B2: the setting is one event, survives a restart, and a shared UI-state
-/// save does not reset it; a value outside the choices is refused.
+/// save does not reset it; a value outside the choices is refused. A 24
+/// chosen now stays 24, though an earlier build's 24 was its default.
 #[test]
 fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     let mut runtime = runtime();
@@ -1652,11 +1653,11 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     let _state = hold_dirs(&mut runtime);
     assert!(runtime.dispatch_json(&event(
         "agent_sleep_set",
-        serde_json::json!({"after_hours": 48})
+        serde_json::json!({"after_hours": 24})
     )));
     assert_eq!(
         serde_json::to_value(runtime.snapshot()).unwrap()["ui_state"]["agent_sleep_after_hours"],
-        48
+        24
     );
     assert!(runtime.dispatch_json(&event(
         "ui_state_update",
@@ -1664,32 +1665,34 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     )));
     assert_eq!(
         runtime.snapshot().ui_state.agent_sleep_after_hours,
-        Some(48)
+        Some(24)
     );
 
-    runtime.dispatch_json(&event(
-        "agent_sleep_set",
-        serde_json::json!({"after_hours": 5}),
-    ));
-    assert_eq!(
-        runtime
-            .snapshot()
-            .status
-            .last_error
-            .as_ref()
-            .map(|error| error.kind.as_str()),
-        Some("agent_sleep.invalid_setting")
-    );
+    for refused in [5, 48] {
+        runtime.dispatch_json(&event(
+            "agent_sleep_set",
+            serde_json::json!({"after_hours": refused}),
+        ));
+        assert_eq!(
+            runtime
+                .snapshot()
+                .status
+                .last_error
+                .as_ref()
+                .map(|error| error.kind.as_str()),
+            Some("agent_sleep.invalid_setting")
+        );
+    }
     assert_eq!(
         runtime.snapshot().ui_state.agent_sleep_after_hours,
-        Some(48)
+        Some(24)
     );
     drop(runtime);
 
     let mut restarted = restarted_on(&path);
     assert_eq!(
         restarted.snapshot().ui_state.agent_sleep_after_hours,
-        Some(48)
+        Some(24)
     );
     assert!(restarted.dispatch_json(&event(
         "agent_sleep_set",
@@ -1707,42 +1710,46 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     );
 }
 
-/// A new store sleeps idle agents after 24 hours, and so does one written
-/// while Off was the default, whose null could not tell that default from
-/// an Off the operator chose; an Off chosen since is written as 0, which a
-/// build from before the default reads as Off too (it loads a value that is
-/// not one of its choices as Off).
+/// A new store sleeps idle agents after 12 hours. A store an earlier build
+/// wrote moves its choice once: no value and its 24-hour default become 12,
+/// the 48 and 72 hours that are gone become 24, 12 stays, and its Off (0)
+/// stays Off. A choice is written under its own key, Off as 0, and the
+/// earlier key is not written again.
 #[test]
-fn sleep_defaults_to_24_hours_and_a_chosen_off_is_written_as_zero() {
+fn sleep_defaults_to_12_hours_and_an_earlier_stores_choice_moves_once() {
     let mut runtime = runtime();
     let path = runtime.state_path.clone();
     let _state = hold_dirs(&mut runtime);
     assert_eq!(
         runtime.snapshot().ui_state.agent_sleep_after_hours,
-        Some(24)
+        Some(12)
     );
-    let stored = |path: &std::path::Path| -> serde_json::Value {
-        let state: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        state["agent_sleep_after_hours"].clone()
-    };
     assert!(runtime.dispatch_json(&event(
         "agent_sleep_set",
         serde_json::json!({"after_hours": null})
     )));
     drop(runtime);
-    assert_eq!(stored(&path), 0);
+    let state: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(state["agent_sleep_hours"], 0);
+    assert!(state.get("agent_sleep_after_hours").is_none());
 
-    // The store an earlier build wrote with its default.
-    let mut state: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    state["agent_sleep_after_hours"] = serde_json::Value::Null;
-    std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
-    let restarted = restarted_on(&path);
-    assert_eq!(
-        restarted.snapshot().ui_state.agent_sleep_after_hours,
-        Some(24)
-    );
+    // The store an earlier build wrote, with each value it could hold.
+    let earlier = |value: serde_json::Value| {
+        let mut state = state.clone();
+        state.as_object_mut().unwrap().remove("agent_sleep_hours");
+        state["agent_sleep_after_hours"] = value;
+        std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        restarted_on(&path)
+            .snapshot()
+            .ui_state
+            .agent_sleep_after_hours
+    };
+    assert_eq!(earlier(serde_json::Value::Null), Some(12));
+    assert_eq!(earlier(24.into()), Some(12));
+    assert_eq!(earlier(12.into()), Some(12));
+    assert_eq!(earlier(48.into()), Some(24));
+    assert_eq!(earlier(72.into()), Some(24));
+    assert_eq!(earlier(0.into()), None);
 }
 
 /// A runtime started again on the state file at `path`, as a relaunch does.
@@ -2249,6 +2256,10 @@ fn the_minute_decision_sleeps_only_an_off_screen_agent_past_the_chosen_hours() {
             .collect::<Vec<_>>()
     };
 
+    runtime.dispatch_json(&event(
+        "agent_sleep_set",
+        serde_json::json!({"after_hours": null}),
+    ));
     assert!(!runtime.tick_agent_sleep(later));
     assert!(ending(&runtime).is_empty(), "Never sleeps nothing");
 

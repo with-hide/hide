@@ -875,10 +875,12 @@ fn a_handed_step_done_or_taken_back_asks_its_child_to_sleep() {
             .missions
             .sleep_marks
             .iter()
-            .map(|mark| mark.agent_id.clone())
+            .map(|mark| (mark.agent_id.clone(), mark.origin.trigger()))
             .collect::<Vec<_>>()
     };
-    assert!(marks(&runtime).is_empty());
+    // The child's report to its parent asks it to sleep already; the step's
+    // done keeps the one mark, now the plan's.
+    assert_eq!(marks(&runtime), [("agent-2".to_owned(), "report")]);
     let (done, changed) = command(
         &mut runtime,
         &sender,
@@ -887,7 +889,7 @@ fn a_handed_step_done_or_taken_back_asks_its_child_to_sleep() {
     .unwrap();
     assert!(changed);
     assert_eq!(done["plan"]["steps"][1]["delegation"]["name"], "web");
-    assert_eq!(marks(&runtime), ["agent-2"]);
+    assert_eq!(marks(&runtime), [("agent-2".to_owned(), "plan")]);
 
     // Another plan whose step the main takes back from its blocked child.
     runtime.missions.sleep_marks.clear();
@@ -902,7 +904,7 @@ fn a_handed_step_done_or_taken_back_asks_its_child_to_sleep() {
     )
     .unwrap();
     assert!(mine["plan"]["steps"][1]["delegation"].is_null());
-    assert_eq!(marks(&runtime), ["agent-2"]);
+    assert_eq!(marks(&runtime), [("agent-2".to_owned(), "plan")]);
     // Done by the main itself needs no report now.
     command(
         &mut runtime,

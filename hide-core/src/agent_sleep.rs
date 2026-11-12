@@ -31,15 +31,15 @@ pub use dormant::{
     SleepingSessionSnapshot,
 };
 
-/// The Settings choices besides Off, in hours (PRD D-10).
-pub const SLEEP_AFTER_CHOICES_HOURS: [u32; 4] = [12, 24, 48, 72];
-/// The choice of a store that has none: a new one, or one written while
-/// Off was the default, which could not tell the default from an Off the
+/// The Settings choices besides Off, in hours.
+pub const SLEEP_AFTER_CHOICES_HOURS: [u32; 5] = [1, 2, 4, 12, 24];
+/// The choice of a store that has none, and of one written while 24 hours
+/// was the default, which could not tell that default from a 24 the
 /// operator chose.
-pub const DEFAULT_SLEEP_AFTER_HOURS: u32 = 24;
-/// How `core-state.json` writes an Off the operator chose. A build from
-/// before the 24-hour default reads it as Off too: zero is no choice it
-/// knows, and it loads such a value as Off.
+pub const DEFAULT_SLEEP_AFTER_HOURS: u32 = 12;
+/// How `core-state.json` writes an Off the operator chose, under
+/// `agent_sleep_hours`. No earlier build reads that key, so one run after a
+/// downgrade sleeps after its own default, 24 hours, in place of Off.
 const STORED_OFF: u32 = 0;
 /// The decision runs at most this often; the coordinator tick is 250 ms.
 pub const DECISION_INTERVAL_MS: u64 = 60_000;
@@ -89,18 +89,24 @@ pub fn valid_after_hours(hours: Option<u32>) -> bool {
     hours.is_none_or(|hours| SLEEP_AFTER_CHOICES_HOURS.contains(&hours))
 }
 
-/// The choice as `core-state.json` stores it, `None` (Off) as zero.
+/// The choice as `core-state.json` stores it under `agent_sleep_hours`,
+/// `None` (Off) as zero.
 pub(crate) fn stored_after_hours(hours: Option<u32>) -> u32 {
     hours.unwrap_or(STORED_OFF)
 }
 
-/// The choice a stored value loads as: zero is Off, a choice is itself, and
-/// no value (a store from before a choice was stored) or one this build
-/// does not offer is the default.
-pub(crate) fn loaded_after_hours(stored: Option<u32>) -> Option<u32> {
-    match stored {
-        Some(STORED_OFF) => None,
-        Some(hours) if valid_after_hours(Some(hours)) => Some(hours),
+/// The choice a store loads as. `stored` is `agent_sleep_hours`, written
+/// since the choices became 1 to 24 hours: zero is Off, a choice is itself,
+/// and a value this build does not offer is the default. A store without it
+/// moves `earlier`, the `agent_sleep_after_hours` an earlier build wrote,
+/// once: zero stays Off, 48 and 72 hours, which are gone, become 24, and no
+/// value, 12 or 24 (that build's default, which nobody had to choose) load
+/// as the default.
+pub(crate) fn loaded_after_hours(stored: Option<u32>, earlier: Option<u32>) -> Option<u32> {
+    match (stored, earlier) {
+        (Some(STORED_OFF), _) | (None, Some(STORED_OFF)) => None,
+        (Some(hours), _) if valid_after_hours(Some(hours)) => Some(hours),
+        (None, Some(48 | 72)) => Some(24),
         _ => Some(DEFAULT_SLEEP_AFTER_HOURS),
     }
 }
@@ -883,6 +889,46 @@ mod tests {
         let mut record = SleepRecord::ending(agent, Some("/tmp".into()), 5).unwrap();
         record.phase = SleepPhase::Sleeping;
         store.records.insert(agent.pane_id.clone(), record);
+    }
+
+    /// The stored choice loads as itself under its own key, and a store
+    /// without it moves an earlier build's value once.
+    #[test]
+    fn a_stored_choice_loads_as_itself_and_an_earlier_one_moves_once() {
+        for hours in SLEEP_AFTER_CHOICES_HOURS {
+            assert_eq!(loaded_after_hours(Some(hours), Some(72)), Some(hours));
+            assert_eq!(
+                loaded_after_hours(Some(stored_after_hours(Some(hours))), None),
+                Some(hours)
+            );
+        }
+        assert_eq!(
+            loaded_after_hours(Some(stored_after_hours(None)), Some(24)),
+            None
+        );
+        assert_eq!(loaded_after_hours(Some(48), None), Some(12), "not a choice");
+        let earlier = [
+            None,
+            Some(24),
+            Some(12),
+            Some(48),
+            Some(72),
+            Some(0),
+            Some(5),
+        ]
+        .map(|earlier| loaded_after_hours(None, earlier));
+        assert_eq!(
+            earlier,
+            [
+                Some(12),
+                Some(12),
+                Some(12),
+                Some(24),
+                Some(24),
+                None,
+                Some(12)
+            ]
+        );
     }
 
     #[test]

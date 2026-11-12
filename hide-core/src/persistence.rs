@@ -233,10 +233,15 @@ struct StoredUiState {
     #[serde(default)]
     pane_terminal_sizes: BTreeMap<String, (u16, u16)>,
     /// The hours, or 0 for an Off the operator chose
-    /// (`agent_sleep::stored_after_hours`). Absent or null in a store written
-    /// before the 24-hour default, when null was both the default and Off,
-    /// and loads as the default, as a value that is not a choice does.
+    /// (`agent_sleep::stored_after_hours`). Absent in a store written before
+    /// the choices became 1 to 24 hours, which moves `agent_sleep_after_hours`
+    /// once (`agent_sleep::loaded_after_hours`).
     #[serde(default)]
+    agent_sleep_hours: Option<u32>,
+    /// The choice as builds before the 1 to 24 hours choices wrote it, read
+    /// only to move it and never written: there 24 was the default as well
+    /// as a choice, so a key of its own is what lets a 24 chosen since stay.
+    #[serde(default, skip_serializing)]
     agent_sleep_after_hours: Option<u32>,
     /// Absent in a store written before issue sources could be chosen, which
     /// loads every project at its default source.
@@ -789,6 +794,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             pane_launches: stored.pane_launches,
             request_verbs: stored.request_verbs,
             agent_sleep_after_hours: crate::agent_sleep::loaded_after_hours(
+                stored.agent_sleep_hours,
                 stored.agent_sleep_after_hours,
             ),
             project_issue_sources: stored
@@ -988,9 +994,10 @@ pub fn save(
         pane_launches: state.pane_launches.clone(),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
-        agent_sleep_after_hours: Some(crate::agent_sleep::stored_after_hours(
+        agent_sleep_hours: Some(crate::agent_sleep::stored_after_hours(
             state.agent_sleep_after_hours,
         )),
+        agent_sleep_after_hours: None,
         project_issue_sources: state.project_issue_sources.clone(),
         issue_settings: StoredIssueSettings {
             settings: state.issue_settings.clone(),

@@ -724,27 +724,24 @@ impl Runtime {
             let Some(agent) = delegation.agent_id.as_deref() else {
                 continue;
             };
-            if !pick(step, delegation)
-                || self
-                    .missions
-                    .sleep_marks
-                    .iter()
-                    .any(|mark| mark.agent_id == agent)
-            {
+            if !pick(step, delegation) {
                 continue;
             }
-            crate::diagnostic!(json!({
-                "component": "plans", "kind": "plans.child_sleep_asked",
-                "plan": plan.id(), "step": step.key, "attempt": delegation.attempt,
-                "agent_id": agent,
-            }));
-            self.missions
-                .sleep_marks
-                .push(super::agent_sleep::missions::SleepMark::plan(
-                    agent,
-                    &plan.id(),
-                    &step.key,
-                ));
+            let origin = super::agent_sleep::missions::Origin::Plan {
+                plan: plan.id(),
+                step: step.key.clone(),
+            };
+            if super::agent_sleep::missions::SleepMark::ask(
+                &mut self.missions.sleep_marks,
+                agent,
+                origin,
+            ) {
+                crate::diagnostic!(json!({
+                    "component": "plans", "kind": "plans.child_sleep_asked",
+                    "plan": plan.id(), "step": step.key, "attempt": delegation.attempt,
+                    "agent_id": agent,
+                }));
+            }
         }
     }
 

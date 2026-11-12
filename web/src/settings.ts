@@ -29,21 +29,21 @@ export const SETTINGS_GROUPS: readonly { id: "app" | "machine"; tabs: readonly S
 ];
 
 /**
- * The Sleep idle agents choices (PRD agent-sleep D-10), in the hours the core
- * accepts; 24 hours is the default, and Never sends null. `unit` is how the
- * choice reads.
+ * The Sleep idle agents choices, in the hours the core accepts; 12 hours is
+ * the default, and Never sends null.
  */
-export const SLEEP_AFTER_CHOICES: readonly { id: string; hours: number | null; unit: "hours" | "days" }[] = [
-  { id: "never", hours: null, unit: "hours" },
-  { id: "12", hours: 12, unit: "hours" },
-  { id: "24", hours: 24, unit: "hours" },
-  { id: "48", hours: 48, unit: "days" },
-  { id: "72", hours: 72, unit: "days" },
+export const SLEEP_AFTER_CHOICES: readonly { id: string; hours: number | null }[] = [
+  { id: "never", hours: null },
+  { id: "1", hours: 1 },
+  { id: "2", hours: 2 },
+  { id: "4", hours: 4 },
+  { id: "12", hours: 12 },
+  { id: "24", hours: 24 },
 ];
 
 export function sleepAfterLabel(choice: (typeof SLEEP_AFTER_CHOICES)[number], t: Translate): string {
   if (choice.hours === null) return t("settings.sleep.never");
-  return choice.unit === "days" ? t("settings.sleep.days", { days: choice.hours / 24 }) : t("settings.sleep.hours", { hours: choice.hours });
+  return t("settings.sleep.hours", { count: choice.hours });
 }
 
 /** The chosen Sleep idle agents choice; a value this build does not offer reads as Never. */

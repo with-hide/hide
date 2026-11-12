@@ -2093,6 +2093,9 @@ impl Runtime {
         // registration moved to another pane, lays the rows again (PRD
         // ask-human).
         let human_moved = self.read_human_turns(&ledger);
+        // A child's report to its parent asks it to sleep at its next rest.
+        let previous = self.delivery_ledger.as_ref().ok().map(Arc::clone);
+        self.note_reports(previous.as_deref(), &ledger);
         self.delivery_ledger = Ok(ledger);
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();

@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
 import { createInterfaceI18n } from "./i18n/instance";
 import { paneMenuItems } from "./PaneRelations";
-import { sleepAfterChoice, sleepingCount } from "./settings";
+import { SLEEP_AFTER_CHOICES, sleepAfterChoice, sleepAfterLabel, sleepingCount } from "./settings";
 import { sleepCaption, wakeFailureReason, wakingLine } from "./sleep";
 import type { AgentRow, PaneRow } from "./snapshot";
 
@@ -56,7 +56,18 @@ describe("a sleeping pane's words", () => {
 
 describe("the Sleep idle agents setting and the pane menu", () => {
   it("reads a stored choice and reads anything it does not offer as Never", () => {
-    expect([null, undefined, 12, 24, 48, 72, 5, "24"].map(sleepAfterChoice)).toEqual(["never", "never", "12", "24", "48", "72", "never", "never"]);
+    expect([null, undefined, 1, 2, 4, 12, 24, 48, 72, 5, "24"].map(sleepAfterChoice)).toEqual(["never", "never", "1", "2", "4", "12", "24", "never", "never", "never", "never"]);
+  });
+
+  it("offers 1, 2, 4, 12 and 24 hours and Never, each in hours", () => {
+    expect(SLEEP_AFTER_CHOICES.map((choice) => [choice.hours, sleepAfterLabel(choice, t)])).toEqual([
+      [null, "Never"],
+      [1, "1 hour"],
+      [2, "2 hours"],
+      [4, "4 hours"],
+      [12, "12 hours"],
+      [24, "24 hours"],
+    ]);
   });
 
   it("counts only this machine's sleeping agents", () => {
