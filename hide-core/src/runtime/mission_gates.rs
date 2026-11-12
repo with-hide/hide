@@ -87,6 +87,17 @@ pub struct GateView {
     pub said: Option<String>,
 }
 
+/// Whether `node` has a gate the operator has not passed, on a node that
+/// works in a mission that runs: whether it is reached yet or not.
+fn gate_unpassed(mission: &Mission, node: &MissionNode) -> bool {
+    matches!(
+        mission.status,
+        MissionStatus::Running | MissionStatus::MergeWait
+    ) && node.status == NodeStatus::Working
+        && crate::mission_criteria::gate(&node.criteria)
+            .is_some_and(|line| line.state != CriterionState::Pass)
+}
+
 /// The two fixed choices of a gate's decision, in the interface language;
 /// `직접 답하기` is the card's written answer, which every decision has.
 fn gate_options(language: InterfaceLanguage) -> Vec<String> {
@@ -124,12 +135,7 @@ impl Runtime {
     /// Whether `node`'s gate waits on the operator now: reached, or asked by
     /// the open decision, in a mission that runs.
     pub(super) fn gate_open(&self, mission: &Mission, node: &MissionNode) -> bool {
-        matches!(
-            mission.status,
-            MissionStatus::Running | MissionStatus::MergeWait
-        ) && node.status == NodeStatus::Working
-            && crate::mission_criteria::gate(&node.criteria)
-                .is_some_and(|line| line.state != CriterionState::Pass)
+        gate_unpassed(mission, node)
             && (asks(mission.question.as_ref(), node) || self.gate_reached(mission, node))
     }
 
@@ -183,10 +189,11 @@ impl Runtime {
     /// and sends the words to the node's worker as a defect, so the node
     /// works again and its gate is raised anew once its lines are met;
     /// `Past`, the operator's `끝으로` on a raise, passes it as `Pass` does
-    /// whether or not it waits yet. The gate's decision and its raise go
-    /// with any of them, and the Conductor is told. A gate not waiting on
-    /// the operator, or an answer with no words, is refused with its reason
-    /// and passes nothing.
+    /// whether or not it waits yet, and so does the Conductor relaying the
+    /// operator's `Pass` from its pane before the gate asks. The gate's
+    /// decision and its raise go with any of them, and the Conductor is
+    /// told. Any other answer to a gate not waiting on the operator, or an
+    /// answer with no words, is refused with its reason and passes nothing.
     pub(super) fn settle_gate(
         &mut self,
         id: &str,
@@ -222,7 +229,16 @@ impl Runtime {
                 GateAnswer::Fix => Err(crate::coordination::refusal("mission_gate_not_open", key)),
             };
         }
-        if answer != GateAnswer::Past && !self.gate_open(mission, node) {
+        // The operator's OK the Conductor relays may come before the gate
+        // asks: they looked at the screens shown while the node still works,
+        // and its other lines still hold the node until they are met. A fix
+        // before that is the Conductor's letter to the worker, not a defect.
+        let answerable = match answer {
+            GateAnswer::Past => true,
+            GateAnswer::Pass if via == GateVia::Pane => gate_unpassed(mission, node),
+            GateAnswer::Pass | GateAnswer::Fix => self.gate_open(mission, node),
+        };
+        if !answerable {
             return Err(crate::coordination::refusal("mission_gate_not_open", key));
         }
         let asked = asks(mission.question.as_ref(), node)
