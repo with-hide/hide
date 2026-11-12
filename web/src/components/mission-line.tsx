@@ -9,9 +9,12 @@
 // line without a number stays one row. Where the branch and the destination
 // do not both fit, they share the row equally, each keeping its whole name
 // when it needs less than half, and a cut one ends in `…` with its whole name
-// on hover. The card's accessible name says these words; the line itself is
-// for the eye.
+// on hover. A numbered line with marks at its right end (`⚠`, 내 차례, `!`)
+// keeps the number and the marks on the first row, the marks taking only the
+// width left, and puts `branch → destination` on the second. The card's
+// accessible name says these words; the line itself is for the eye.
 
+import type { ReactNode } from "react";
 import { ChevronRightIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
@@ -33,7 +36,8 @@ function markLook(mark: LineMark): { icon: LucideIcon; tone: string } {
 /** The person before the destination (D-53): faint orange ahead, yellow when the merge is the operator's now, grey after. */
 const PERSON_TONE = { ahead: "text-mission-hold/70", due: "text-mission-hold", merged: "text-muted-foreground" } as const;
 
-export function BranchLineView({ line, className }: { line: BranchLine; className?: string }) {
+/** `end` is the foot's right-end marks, drawn on the line's first row. */
+export function BranchLineView({ line, end, className }: { line: BranchLine; end?: ReactNode; className?: string }) {
   const { t } = useInterfaceTranslation();
   const { icon: Icon, tone } = markLook(line.mark);
   const due = line.person === "due";
@@ -46,7 +50,7 @@ export function BranchLineView({ line, className }: { line: BranchLine; classNam
   const path = (
     // Where the branch and the destination do not both fit, a grid of auto columns grows them from zero alike, each frozen
     // at its whole width, so a name shorter than half the row stays whole and two long ones share it.
-    <span className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", line.pr ? "inline-grid h-lh align-top" : "grid")} data-line-path="true">
+    <span aria-hidden="true" className={cn("min-w-0 max-w-full auto-cols-[minmax(0,auto)] grid-flow-col items-center justify-start gap-x-xxs", line.pr && !end ? "inline-grid h-lh align-top" : "grid", line.pr && end && "col-span-2 justify-self-start")} data-line-path="true">
       {from ? (
         <span className="flex min-w-0 items-center gap-xxs" data-line-from="true">
           {plan ? <span className="min-w-0 truncate" data-line-plan={line.plan}>{plan}</span> : null}
@@ -70,20 +74,35 @@ export function BranchLineView({ line, className }: { line: BranchLine; classNam
     </span>
   );
   const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined };
-  // A numbered line runs inline, so the path wraps whole to a second row under the number and that row, below the foot's
-  // right-end marks, takes the card's whole width; a line without a number is one flex row that never wraps.
+  const number = line.pr ? <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span> : null;
+  // A numbered line with marks: the number and the marks on the first row, the number never giving way, and the path on
+  // the second. Without marks it runs inline, so the path wraps whole under the number to a row of the card's whole
+  // width. A line without a number is one flex row that never wraps, the marks at its end.
+  if (line.pr && end) {
+    return (
+      <span className={cn("grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-xs text-caption text-muted-foreground", className)} {...data}>
+        <span aria-hidden="true" className="flex h-lh items-center gap-xxs" data-line-head="true">
+          {icon}
+          {number}
+        </span>
+        {end}
+        {path}
+      </span>
+    );
+  }
   return line.pr ? (
-    <span aria-hidden="true" className={cn("block min-w-0 text-caption text-muted-foreground", className)} {...data}>
-      <span className="mr-xs inline-flex h-lh items-center gap-xxs align-top" data-line-head="true">
+    <span className={cn("block min-w-0 text-caption text-muted-foreground", className)} {...data}>
+      <span aria-hidden="true" className="mr-xs inline-flex h-lh items-center gap-xxs align-top" data-line-head="true">
         {icon}
-        <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span>
+        {number}
       </span>
       {path}
     </span>
   ) : (
-    <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-x-xxs text-caption text-muted-foreground", className)} {...data}>
-      <span className="flex h-lh shrink-0 items-center" data-line-head="true">{icon}</span>
+    <span className={cn("flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground", className)} {...data}>
+      <span aria-hidden="true" className="flex h-lh shrink-0 items-center" data-line-head="true">{icon}</span>
       {path}
+      {end}
     </span>
   );
 }

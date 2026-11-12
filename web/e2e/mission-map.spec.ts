@@ -292,7 +292,7 @@ test("a narrow window keeps every card's words inside it, a long title ending in
 /** A release branch longer than a card's bottom line has room for at the largest text, which the mission's pull requests go to. */
 const LONG_DESTINATION = "release/2026-11-weekly-hotfix-train-for-the-store-builds";
 
-/** Working changes: one into the destination and one stacked on it, each on a branch too long for its card, a short one stacked too, a long one before its pull request, and a direct one. */
+/** Working changes: one into the destination and one stacked on it, each on a branch too long for its card, a short one stacked too, a long one before its pull request, a direct one, and one with two pull requests and two marks. */
 const LINES = {
   scope: "pr",
   check: "true",
@@ -302,10 +302,11 @@ const LINES = {
     { key: "short", title: "오타", kind: "change", delivery: "pr", criteria: ["오타가 없다"] },
     { key: "draft", title: "환불 알림", kind: "change", delivery: "pr", criteria: ["알림이 간다"] },
     { key: "hotfix", title: "환불 반올림", kind: "change", delivery: "direct", criteria: ["금액이 맞다"] },
+    { key: "marked", title: "환불 재시도", kind: "change", delivery: "pr", criteria: ["재시도가 된다"] },
   ],
 };
 
-test("at the largest Interface text a working change's branch line stays inside its card: a long one leaves its number alone on the first row and puts `branch → destination` on a second row from the card's left edge, sharing it when both are long, a short one keeps one row a step further from its number, and one without a number never wraps, a direct one keeping `PR 없이` after its destination (PRD mission-destination D-51, D-56, B55)", async ({ page }) => {
+test("at the largest Interface text a working change's branch line stays inside its card: a long one leaves its number alone on the first row and puts `branch → destination` on a second row from the card's left edge, sharing it when both are long, a short one keeps one row a step further from its number, and one without a number never wraps, a direct one keeping `PR 없이` after its destination, and one with `+N` and two marks keeping its number and the marks on its first row (PRD mission-destination D-51, D-56, B55)", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -325,6 +326,26 @@ test("at the largest Interface text a working change's branch line stays inside 
     await mission(conductor, ["mission", "node", "short", "--status", "working", "--pr", "7", "--base-pr", "3114", "--branch", "fix/typo"]);
     await mission(conductor, ["mission", "node", "draft", "--status", "working", "--branch", "feat/refund-notice-mail-for-the-store-builds"]);
     await mission(conductor, ["mission", "node", "hotfix", "--status", "working", "--branch", "fix/refund-rounding-in-the-store-builds"]);
+    await mission(conductor, ["mission", "node", "marked", "--status", "working", "--pr", "3110", "--branch", "feat/refund-retry-queue-for-the-store-builds"]);
+    await mission(conductor, ["mission", "node", "marked", "--pr", "3116"]);
+    // Two marks at the line's right end, as the core keeps them: no push for two hours (⚠) and a reason raised to the operator (내 차례), with the operator's merge before the destination.
+    daemon = await daemon!.restart((state) => {
+      const file = fs.readdirSync(path.join(state, "missions")).filter((name) => name.endsWith(".json")).map((name) => path.join(state, "missions", name)).find((one) => fs.readFileSync(one, "utf8").includes('"marked"'))!;
+      const book = JSON.parse(fs.readFileSync(file, "utf8"));
+      const node = book.missions[0].nodes.find((one: { key: string }) => one.key === "marked");
+      const now = Date.now();
+      Object.assign(node, {
+        worked_at_unix_ms: now - 7_200_000,
+        pushed_at_unix_ms: now - 7_200_000,
+        warnings: [{ kind: "no_push", from_unix_ms: now - 7_200_000, since_unix_ms: now, told_unix_ms: now }],
+        attention: { reason: "conductor_failed", key: 1, since_unix_ms: now },
+        operator_merge: "전체 이름 확인",
+      });
+      fs.writeFileSync(file, JSON.stringify(book));
+    });
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
     // The largest Interface text (17 px), as Settings sets it.
     await page.keyboard.press(chord("settings"));
     await page.locator('[data-settings-tab="general"]').click();
@@ -343,6 +364,7 @@ test("at the largest Interface text a working change's branch line stays inside 
     // a destination shorter than half the row stays whole (`#3114`), and two long names share the row, each cut at its own
     // end with its whole name on hover. A line that fits keeps one row, its number a step further from the branch than the
     // icon from the number; a line without a number stays on one row however long, a direct one's `PR 없이` after its destination.
+    // A numbered line with marks keeps `#n +N` whole and the marks on its first row, inside the card, and the path on the second.
     const lines = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       Object.fromEntries(
         cards.filter((card) => card.querySelector("[data-node-line='branch']")).map((card) => {
@@ -351,7 +373,7 @@ test("at the largest Interface text a working change's branch line stays inside 
           const part = (selector: string) => card.querySelector<HTMLElement>(`[data-node-line='branch'] ${selector}`);
           const box = (selector: string) => part(selector)?.getBoundingClientRect() ?? null;
           const cut = (element: HTMLElement) => element.scrollWidth > element.clientWidth;
-          const [icon, number, head, branch, to, name, direct] = [box("[data-line-icon]")!, box("[data-line-pr]"), box("[data-line-head]")!, box("[data-line-branch]")!, box("[data-line-to]")!, part("[data-line-to] [title]")!, box("[data-line-direct]")];
+          const [icon, number, head, branch, to, name, direct, end] = [box("[data-line-icon]")!, box("[data-line-pr]"), box("[data-line-head]")!, box("[data-line-branch]")!, box("[data-line-to]")!, part("[data-line-to] [title]")!, box("[data-line-direct]"), card.querySelector("[data-node-foot] [data-node-foot-end]")?.getBoundingClientRect() ?? null];
           const at = (x: number) => Math.abs(x - foot.left) < 1;
           const wrapped = branch.top >= head.bottom - 1;
           return [
@@ -362,6 +384,7 @@ test("at the largest Interface text a working change's branch line stays inside 
               edge: at(card.querySelector("[data-node-head]")!.getBoundingClientRect().left) && at(head.left) && (!wrapped || at(branch.left)),
               oneRow: [to, direct ?? to].every((one) => Math.abs(branch.top + branch.height / 2 - (one.top + one.height / 2)) < 1),
               direct: part("[data-line-to] [data-line-direct]")?.textContent ?? null,
+              marks: end ? { firstRow: Math.abs(end.top + end.height / 2 - (head.top + head.height / 2)) < 1, inside: end.right <= foot.right + 0.5 && end.left >= head.right, number: part("[data-line-pr]")?.textContent ?? null, warning: card.querySelector("[data-node-foot] [data-node-warning]") !== null, turn: card.querySelector("[data-node-foot] [data-node-attention-tag]")?.textContent ?? null } : null,
               wider: wrapped || !number ? null : branch.left - number.right > number.left - icon.right + 0.5,
               half: branch.width >= foot.width * 0.4 && to.width >= foot.width * 0.4,
               numberCut: part("[data-line-pr]") ? cut(part("[data-line-pr]")!) : null,
@@ -375,16 +398,17 @@ test("at the largest Interface text a working change's branch line stays inside 
       ),
     );
     expect(lines).toEqual({
-      api: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, wider: null, half: true, numberCut: false, branch: "feat/refund-db-state-columns-and-index", branchCut: true, to: LONG_DESTINATION, toCut: true },
-      screen: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, wider: null, half: false, numberCut: false, branch: "feat/refund-screen-that-reads-the-api", branchCut: true, to: "#3114", toCut: false },
-      short: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, wider: true, half: false, numberCut: false, branch: "fix/typo", branchCut: false, to: "#3114", toCut: false },
-      draft: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, wider: null, half: true, numberCut: null, branch: "feat/refund-notice-mail-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
-      hotfix: { inside: true, wrapped: false, edge: true, oneRow: true, direct: "· No PR", wider: null, half: true, numberCut: null, branch: "fix/refund-rounding-in-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      api: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-db-state-columns-and-index", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      screen: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: false, numberCut: false, branch: "feat/refund-screen-that-reads-the-api", branchCut: true, to: "#3114", toCut: false },
+      short: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: true, half: false, numberCut: false, branch: "fix/typo", branchCut: false, to: "#3114", toCut: false },
+      draft: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: null, branch: "feat/refund-notice-mail-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      marked: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, number: "#3116 +1", warning: true, turn: "Needs you" }, wider: null, half: true, numberCut: false, branch: "feat/refund-retry-queue-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      hotfix: { inside: true, wrapped: false, edge: true, oneRow: true, direct: "· No PR", marks: null, wider: null, half: true, numberCut: null, branch: "fix/refund-rounding-in-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
     });
     // The taller cards still stand apart on the map.
-    const boxes = await placedBoxes(map, ...["api", "screen", "short", "draft", "hotfix"].map((key) => `[data-mission-node="${key}"]`));
+    const boxes = await placedBoxes(map, ...["api", "screen", "short", "draft", "hotfix", "marked"].map((key) => `[data-mission-node="${key}"]`));
     const apart = (a: (typeof boxes)[number], b: (typeof boxes)[number]) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
-    expect(boxes.flatMap((a, i) => boxes.slice(i + 1).map((b) => apart(a, b)))).toEqual(Array(10).fill(true));
+    expect(boxes.flatMap((a, i) => boxes.slice(i + 1).map((b) => apart(a, b)))).toEqual(Array(15).fill(true));
     // The whole destination stays in the card's name, as in its hover.
     await expect(map.locator('[data-mission-node="api"]')).toHaveAttribute("aria-label", new RegExp(`→ ${LONG_DESTINATION}`));
     await screenshot(page, "mission-map-line-largest");
