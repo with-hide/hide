@@ -234,7 +234,7 @@ test("the mission's card closes and opens again from the sidebar, the screen kee
   }
 });
 
-test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis before the worker, and each change's stations to the branch the mission goes to (PRD mission-node-simple B30; PRD mission-destination B24, B28, B30, B48, B53)", async ({ page }) => {
+test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis, and each planned card's five rows: its plan to the branch the mission goes to, the operator's merge before it, or its kind (PRD mission-node-simple B30; PRD mission-destination B48, B53, B54, B55, B57, B58)", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -247,11 +247,11 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     const map = page.locator('aside[data-detail="mission"]');
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
-    // Nothing of a card, its title, its worker or a station's word, reaches past its right edge.
+    // Nothing of a card, its title, its worker or its bottom line, reaches past its right edge.
     const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       cards.flatMap((card) => {
         const right = card.getBoundingClientRect().right + 1;
-        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-station]")];
+        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-node-line], [data-node-line] > *")];
         const out = card.scrollWidth > card.clientWidth + 1 || parts.some((part) => part.getBoundingClientRect().right > right);
         return out ? [card.getAttribute("data-mission-node")] : [];
       }),
@@ -261,14 +261,21 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     const cause = map.locator('[data-mission-node="cause"]');
     expect(await cause.locator("[data-node-title]").evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
     expect(await cause.getAttribute("aria-label")).toContain(PLAN.nodes[0]!.title);
-    // Research changes no code: no stations. Each change runs from its work to the branch its checkout was on, and the planned worker sits on the title line.
-    await expect(cause.locator("[data-node-stations]")).toHaveCount(0);
+    // Research changes no code: it ends in its kind until it is done. Each change says its plan, a pull request to the branch its checkout was on.
+    await expect(cause.locator("[data-node-foot] [data-node-line]")).toHaveAttribute("data-node-line", "result");
+    await expect(cause.locator("[data-node-line]")).toHaveAttribute("data-line-shows", "kind");
     for (const key of ["api", "screen"]) {
       const card = map.locator(`[data-mission-node="${key}"]`);
-      // The scope `pr` mission leaves the merge to the operator: the last station is theirs, ahead.
-      await expect(card.locator("[data-node-stations]")).toHaveAttribute("data-node-stations", "work:todo pr:todo approve:todo land:ahead");
-      await expect(card.locator('[data-station="land"] [data-station-label]')).toHaveText("main");
-      await expect(card).toHaveAttribute("aria-label", /(Where it goes|어디로 들어가나): (Work|작업) → PR → (Approval|승인) → main/);
+      const line = card.locator("[data-node-foot] [data-node-line]");
+      // The scope `pr` mission leaves the merge to the operator: a faint person before the destination, never the operator's turn yet.
+      await expect(line).toHaveAttribute("data-line-mark", "plan_pr");
+      await expect(line).toHaveAttribute("data-line-person", "ahead");
+      await expect(line.locator("[data-line-to]")).toHaveText("→main");
+      await expect(card.locator("[data-node-merge-turn], [data-node-turn]")).toHaveCount(0);
+      await expect(card).toHaveAttribute("aria-label", /(Where it goes|어디로 들어가나): PR → main · (You merge it|머지는 내가)/);
+      // A planned card: dashed, its worker marked planned on its own row, and no time.
+      await expect(card).toHaveAttribute("data-node-look", "waiting");
+      await expect(card.locator("[data-node-took]")).toHaveCount(0);
     }
     await expect(map.locator('[data-mission-node="api"] [data-node-run] [data-node-model]')).toHaveText("opus");
     // The head names the branch and, merge first, what the mission applies; the scope `pr` mission leaves the merges to the operator.
