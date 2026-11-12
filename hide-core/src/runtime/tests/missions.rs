@@ -11376,6 +11376,146 @@ fn a_gate_with_no_conductor_is_raised_to_the_operator_until_one_comes_back() {
 
 /// `criteria_plan` with a gate on both nodes, `fix`'s and `docs`'s as given
 /// (`null` takes it away).
+/// PRD node-presets D-06, D-09, B3: a deploy node's start gate waits ahead
+/// while the node it depends on works and asks the operator once it is
+/// done, through the gate's decision card, with the node waiting on that
+/// decision; until the operator passes it no worker is bound or spawned
+/// under the node (`mission_gate_before_start`), a fix answer keeps it
+/// asking with the words waiting for the worker, and the pass lets the
+/// Conductor start the node.
+#[test]
+fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed() {
+    use crate::mission_criteria::{CriterionKind, GateVia};
+    use crate::missions::{GateWhen, WaitingOn};
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Ship the site"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"]},
+            {"key": "ship", "title": "Deploy", "kind": "general", "preset": "deploy",
+             "depends_on": ["fix"], "criteria": ["the site serves the fix"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    let bind = |runtime: &mut Runtime| {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": "ship", "patch": {"agent_id": "agent-2", "status": "working"}}),
+        )
+        .map(|_| ())
+        .map_err(|refused| crate::coordination::split_refusal(&refused).0.to_owned())
+    };
+    let gate = |runtime: &Runtime| {
+        let view = node_view(runtime, "ship");
+        let gate = view.gate.unwrap();
+        (gate.state, gate.when, view.waiting_on)
+    };
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        gate(&runtime),
+        (
+            GateState::Ahead,
+            GateWhen::Start,
+            Some(WaitingOn::Nodes {
+                keys: vec!["fix".into()]
+            })
+        )
+    );
+    assert_eq!(asked_gate(&runtime), None);
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status = NodeStatus::Done;
+    runtime.missions.book_edit += 1;
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let (line, asked) = asked_gate(&runtime).expect("a start gate reached asks");
+    assert!(line.contains("배포해도 될지"), "{line}");
+    assert_eq!(asked.as_deref(), Some("ship"));
+    assert_eq!(
+        gate(&runtime),
+        (GateState::Open, GateWhen::Start, Some(WaitingOn::Decision))
+    );
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    let refused = runtime
+        .mission_intent_refusal("mission-1", "mission-1:ship")
+        .unwrap();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_gate_before_start", Some("ship"))
+    );
+    // The operator's fix keeps the node planned and the gate asking, the
+    // words a line for the worker it gets.
+    let key = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert!(runtime.mission_answer_event_from(
+        "mission-1",
+        key,
+        (None, Some("버전 번호를 1.2.8로".into()), false),
+        GateVia::Card,
+    ));
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let ship = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("ship")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (ship.status, ship.reopened, ship.agent_id.as_deref()),
+        (NodeStatus::Planned, 0, None)
+    );
+    let defect = ship.criteria.last().unwrap();
+    assert_eq!(
+        (defect.kind, defect.text.as_deref()),
+        (CriterionKind::Defect, Some("버전 번호를 1.2.8로"))
+    );
+    assert!(asked_gate(&runtime).is_some(), "the start gate asks again");
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    // The pass lets the Conductor start it.
+    let key = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert!(runtime.mission_answer_event_from(
+        "mission-1",
+        key,
+        (Some(1), None, false),
+        GateVia::Card
+    ));
+    assert_eq!(gate(&runtime).0, GateState::Passed);
+    assert_eq!(
+        runtime.mission_intent_refusal("mission-1", "mission-1:ship"),
+        None
+    );
+    assert_eq!(bind(&mut runtime), Ok(()));
+    assert_eq!(asked_gate(&runtime), None);
+}
+
 fn two_gates(fix: Value, docs: Value) -> Value {
     let mut plan = criteria_plan();
     plan["plan"]["nodes"][0]["gate"] = fix;
@@ -11879,8 +12019,16 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
     .unwrap_err();
     assert!(refused.contains("mission_node_held"), "{refused}");
     // The same rule stops it again where its place is reserved.
-    assert!(runtime.mission_intent_held("mission-1", "mission-1:docs"));
-    assert!(!runtime.mission_intent_held("mission-1", "mission-1:fix"));
+    assert!(
+        runtime
+            .mission_intent_refusal("mission-1", "mission-1:docs")
+            .is_some()
+    );
+    assert!(
+        runtime
+            .mission_intent_refusal("mission-1", "mission-1:fix")
+            .is_none()
+    );
     command(&mut runtime, "sender", json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
         {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
          "criteria": ["the parser keeps v1 files"],
@@ -14243,6 +14391,7 @@ fn published(mission: &Value) -> Value {
             for name in [
                 "key",
                 "kind",
+                "preset",
                 "delivery",
                 "status",
                 "depends_on",
@@ -14332,7 +14481,32 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
         let report = folder.parent().unwrap().join(format!("{tag}.json"));
         let report: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
         // A folder made before the release's own view was kept names none.
-        let expected = by_id(report["missions"].as_array().cloned().unwrap_or_default());
+        // A release before general nodes published a research or verify
+        // node's kind as such: this build reads it as a general node with
+        // that preset (PRD node-presets D-05, B7), and every other node with
+        // none.
+        let expected = by_id(
+            report["missions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|mut mission| {
+                    for node in mission["nodes"].as_array_mut().into_iter().flatten() {
+                        let preset = match node["kind"].as_str() {
+                            Some(old @ ("research" | "verify")) => {
+                                let old = json!(old);
+                                node["kind"] = json!("general");
+                                old
+                            }
+                            _ => node.get("preset").cloned().unwrap_or(Value::Null),
+                        };
+                        node["preset"] = preset;
+                    }
+                    mission
+                })
+                .collect(),
+        );
         let now = read(&runtime);
         if !expected.is_empty() {
             assert_eq!(now, expected, "{tag}");

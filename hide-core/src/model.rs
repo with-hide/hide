@@ -10025,22 +10025,46 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_strength", &strengths);
             checked.insert("mission_strength");
-            let kinds = [
-                NodeKind::Change,
-                NodeKind::Research,
-                NodeKind::Verify,
-                NodeKind::External,
-            ];
+            let kinds = [NodeKind::Change, NodeKind::General, NodeKind::External];
             for variant in kinds {
                 match variant {
-                    NodeKind::Change
-                    | NodeKind::Research
-                    | NodeKind::Verify
-                    | NodeKind::External => {}
+                    NodeKind::Change | NodeKind::General | NodeKind::External => {}
                 }
             }
             assert_wire(&contract, "mission_node_kind", &kinds);
             checked.insert("mission_node_kind");
+            use crate::missions::{GateWhen, PRESETS, Preset};
+            let presets = [Preset::Research, Preset::Verify, Preset::Deploy];
+            for variant in presets {
+                match variant {
+                    Preset::Research | Preset::Verify | Preset::Deploy => {}
+                }
+            }
+            assert_wire(&contract, "mission_node_preset", &presets);
+            checked.insert("mission_node_preset");
+            // The table's name keys are the wire's names, and a general node
+            // with no preset has its own row.
+            let keys: Vec<&str> = PRESETS.iter().map(|row| row.key).collect();
+            let named: Vec<String> = presets
+                .iter()
+                .map(|preset| {
+                    serde_json::to_value(preset)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .chain(["general".to_owned()])
+                .collect();
+            assert_eq!(keys, named);
+            let whens = [GateWhen::Start, GateWhen::End];
+            for variant in whens {
+                match variant {
+                    GateWhen::Start | GateWhen::End => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_when", &whens);
+            checked.insert("mission_gate_when");
             let deliveries = [Delivery::Pr, Delivery::Direct];
             for variant in deliveries {
                 match variant {

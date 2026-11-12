@@ -146,12 +146,12 @@ export function landingMission(nowMs: number, agents: AgentRow[]): Mission {
   const done = (started: number, length: number) => ({ status: "done" as const, started_at_unix_ms: ago(started), finished_at_unix_ms: ago(started - length) });
   const working = (started: number) => ({ status: "working" as const, started_at_unix_ms: ago(started) });
   const nodes = [
-    node("read", "Read how exports work today", { kind: "research", delivery: null, worker: opus, ...done(66, 8), line: "Findings in the plan" }),
+    node("read", "Read how exports work today", { kind: "general", preset: "research", delivery: null, worker: opus, ...done(66, 8), line: "Findings in the plan" }),
     node("csv", "Export invoices as CSV", { depends_on: ["read"], worker: codex, pane_id: "a1c1", ...done(52, 30), pr: 431, pr_state: "mergeable", landing: { state: "left", action: "merge" }, stage: 3, pr_url: pullUrl(431) }),
     node("sort", "Sort the export by date", { depends_on: ["read"], worker: codex, pane_id: "a1c3", ...working(40), pr: 432, pr_state: "pending", stage: 2, pr_url: pullUrl(432) }),
     node("button", "Add the export button", { depends_on: ["csv"], worker: codex, pane_id: "a1c6", ...done(30, 18), pr: 436, pr_state: "mergeable", landing: { state: "left", action: "merge" }, stage: 3, pr_url: pullUrl(436) }),
     node("empty", "Handle an empty invoice list", { depends_on: ["csv"], worker: codex, pane_id: "a1c7", ...working(12), pr: 435, pr_state: "pending", stage: 2, pr_url: pullUrl(435) }),
-    node("together", `Check ${ref(431)} and ${ref(436)} together`, { kind: "verify", delivery: null, depends_on: ["csv", "button"], worker: { agent: "codex", model: "GPT-5.6-Sol", effort: "low", effort_auto: false }, pane_id: "a3", ...done(18, 10), line: "38 passed" }),
+    node("together", `Check ${ref(431)} and ${ref(436)} together`, { kind: "general", preset: "verify", delivery: null, depends_on: ["csv", "button"], worker: { agent: "codex", model: "GPT-5.6-Sol", effort: "low", effort_auto: false }, pane_id: "a3", ...done(18, 10), line: "38 passed" }),
   ];
   return {
     id: "mission-export", title: "Invoice export", workspace_id: PROJECT, project: "/work/billing-app", checkout_path: "/work/billing-app", device_id: "local",

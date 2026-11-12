@@ -88,7 +88,7 @@ describe("the numbers and words", () => {
   });
 
   it("reads a node's kind while it waits on an earlier node, since the edge says what it waits for, and its line once it has one", () => {
-    const nodes = [node("cause", { title: "Find the cause", kind: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
+    const nodes = [node("cause", { title: "Find the cause", kind: "general", preset: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
     expect(nodeLine(nodes[1]!, t)).toBe("Change");
     expect(nodeLine({ ...nodes[1]!, line: "CI failed" }, t)).toBe("CI failed");
     expect(nodeLine(node("n", { blocked: "upstream_dropped" }), t)).toMatch(/^Waiting · earlier node/);
@@ -219,7 +219,7 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
   });
 
   it("draws the mission page's head cells as its cards: finished work one green whether or not it reached main, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
-    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
+    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "general", preset: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
     expect(missionHeadCells(m)).toEqual(["done", "done", "external", "done"]);
     // A node someone has to look at is the decision colour's cell whatever its shape (PRD mission-node-simple B5).
     expect(missionHeadCells(mission("m", { nodes: [node("a", { status: "done", attention: raised("conductor", "close_refused") }), node("b", { status: "working" })] }))).toEqual(["attention", "working"]);
@@ -247,7 +247,7 @@ describe("what a running mission's pane says (PRD mission-plan-visibility B9, B1
   });
 
   it("names where each node's work is: a change node's step of four, else its kind", () => {
-    const names = [node("a"), node("b", { stage: 2 }), node("c", { stage: 3 }), node("d", { stage: 4 }), node("e", { delivery: "direct", stage: 2 }), node("f", { delivery: "direct", stage: 4 }), node("g", { kind: "research" }), node("h", { kind: "verify" })].map((one) => t(stageWord(one)));
+    const names = [node("a"), node("b", { stage: 2 }), node("c", { stage: 3 }), node("d", { stage: 4 }), node("e", { delivery: "direct", stage: 2 }), node("f", { delivery: "direct", stage: 4 }), node("g", { kind: "general", preset: "research" }), node("h", { kind: "general", preset: "verify" })].map((one) => t(stageWord(one)));
     expect(names).toEqual(["Code", "PR", "Review", "Merge", "Checks", "main", "Research", "Verify"]);
   });
 });
@@ -256,15 +256,15 @@ describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
   it("is its pull request, a direct change's branch, a research conclusion or a verify line, and nothing the record does not hold", () => {
     expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, state: "merged" });
     expect(nodeResult(node("b", { delivery: "direct", branch: "fix/x" }))).toEqual({ kind: "branch", branch: "fix/x" });
-    expect(nodeResult(node("c", { kind: "research", status: "done", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
-    expect(nodeResult(node("d", { kind: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
+    expect(nodeResult(node("c", { kind: "general", preset: "research", status: "done", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
+    expect(nodeResult(node("d", { kind: "general", preset: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
     // A running node's line is its progress, not what it left.
-    expect([nodeResult(node("r", { kind: "research", status: "working", line: "reading logs" })), nodeResult(node("v", { kind: "verify", status: "working", line: "3 of 6 so far" }))]).toEqual([null, null]);
-    expect([nodeResult(node("e")), nodeResult(node("f", { kind: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);
+    expect([nodeResult(node("r", { kind: "general", preset: "research", status: "working", line: "reading logs" })), nodeResult(node("v", { kind: "general", preset: "verify", status: "working", line: "3 of 6 so far" }))]).toEqual([null, null]);
+    expect([nodeResult(node("e")), nodeResult(node("f", { kind: "general", preset: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);
   });
 
   it("lists only the done nodes that left something, in order", () => {
-    const m = mission("m", { nodes: [node("b", { status: "done", pr: 8, depends_on: ["a"] }), node("a", { status: "done", kind: "research", line: "why" }), node("c", { status: "working", pr: 9 }), node("d", { status: "done" })] });
+    const m = mission("m", { nodes: [node("b", { status: "done", pr: 8, depends_on: ["a"] }), node("a", { status: "done", kind: "general", preset: "research", line: "why" }), node("c", { status: "working", pr: 9 }), node("d", { status: "done" })] });
     expect(missionResults(m).map(({ node: one }) => one.key)).toEqual(["a", "b"]);
   });
 });
@@ -300,7 +300,7 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
     expect(nodeLook(m, node("n", { status: "working", attention: raised("operator", "merged_unproven", 3) }))).toBe("working");
     expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "merged" }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toBe("done");
-    expect(nodeLook(m, node("n", { status: "done", kind: "research", delivery: null }))).toBe("done");
+    expect(nodeLook(m, node("n", { status: "done", kind: "general", preset: "research", delivery: null }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "mergeable" }))).toBe("done");
     const outside = (status: MissionNode["status"]) => node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status });
     expect([nodeLook(m, outside("planned")), nodeLook(m, outside("done")), nodeLook(m, { ...outside("working"), attention: raised("conductor", "pr_closed", 1232) })]).toEqual(["external", "done", "external"]);
@@ -333,7 +333,7 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
     expect(landingLeft(node("b", { status: "done", delivery: "direct", branch: "feat/b", landing: { state: "left", action: "join" } }))).toBe("join");
     expect(landingLeft(node("c", { status: "done", delivery: "direct", branch: "feat/c", unread: true, landing: { state: "unread", action: "join" } }))).toBeNull();
     expect(landingLeft(node("d", { status: "done", pr: 5, landing: { state: "landed", proof: { by: "merged" } } }))).toBeNull();
-    expect(landingLeft(node("e", { status: "done", kind: "research", delivery: null }))).toBeNull();
+    expect(landingLeft(node("e", { status: "done", kind: "general", preset: "research", delivery: null }))).toBeNull();
   });
 
   it("draws a branch's commit Hide found in main as → main, before one recorded by hand, and the node is in main with nothing left to join (B17)", () => {
@@ -415,7 +415,7 @@ describe("picking a card and the edges back (PRD mission-map-git-criteria B21, B
 
   it("draws a defect back from the node that found it while its line is open or failing", () => {
     const defect = (state: MissionCriterion["state"], found_by = "verify") => line("d1", "defect", { text: "the filter resets", found_by, state });
-    const m = (state: MissionCriterion["state"], found_by?: string) => mission("m", { nodes: [node("api", { criteria: [defect(state, found_by)] }), node("verify", { kind: "verify", delivery: null, depends_on: ["api"] })] });
+    const m = (state: MissionCriterion["state"], found_by?: string) => mission("m", { nodes: [node("api", { criteria: [defect(state, found_by)] }), node("verify", { kind: "general", preset: "verify", delivery: null, depends_on: ["api"] })] });
     expect(defectEdges(m("open"))).toEqual([{ from: "verify", to: "api" }]);
     expect(defectEdges(m("fail"))).toEqual([{ from: "verify", to: "api" }]);
     expect(defectEdges(m("pass"))).toEqual([]);
@@ -536,7 +536,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
         node("a", { status: "done", agent_id: "w1", pr: 1, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, criteria: [pass("c1"), { key: "c2", kind: "own", state: "skipped" }, checked("pass", "r1")], criteria_met: 3, criteria_skipped: 1 }),
         node("b", { status: "done", agent_id: "w2", pr: 2, pr_state: "mergeable", landing: { state: "left", action: "merge" }, criteria: [pass("c1"), { key: "ci", kind: "ci", state: "fail" }], criteria_met: 1, criteria_skipped: 0 }),
         node("c", { status: "done", agent_id: "w3", delivery: "direct", branch: "c", landing: { state: "landed", proof: { by: "in_main", commit: "abc1234" } } }),
-        node("check", { kind: "verify", delivery: null, status: "done", agent_id: "w4" }),
+        node("check", { kind: "general", preset: "verify", delivery: null, status: "done", agent_id: "w4" }),
         // An outside pull request and a dropped node are not the mission's results.
         node("out", { kind: "external", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
         node("gone", { status: "dropped", agent_id: "w5", pr: 3, pr_state: "closed" }),
@@ -544,7 +544,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
     });
     expect(missionResultCounts(done)).toEqual({ merged: { merged: 1, total: 2 }, criteria: { passed: 3, total: 5, skipped: 1 }, agents: { workers: 4, checkers: 1 }, landed: { landed: 2, total: 3 } });
     // No pull request state read, no finish lines, no agent bound, no change: no tile.
-    const bare = mission("m", { status: "done", exempt: true, nodes: [node("r", { kind: "research", delivery: null, status: "done", pr: null, criteria: [pass("c1")], criteria_met: 1 }), node("p", { kind: "verify", delivery: null, status: "done", pr: 4, pr_state: null })] });
+    const bare = mission("m", { status: "done", exempt: true, nodes: [node("r", { kind: "general", preset: "research", delivery: null, status: "done", pr: null, criteria: [pass("c1")], criteria_met: 1 }), node("p", { kind: "general", preset: "verify", delivery: null, status: "done", pr: 4, pr_state: null })] });
     expect(missionResultCounts(bare)).toEqual({ merged: null, criteria: null, agents: null, landed: null });
   });
 
