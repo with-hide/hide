@@ -13,7 +13,7 @@ import { AgentMark } from "../AgentMark";
 import { agentProductName } from "../agentAdapters";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { mergeOverridden, stationWords, type Station } from "../missionStations";
+import { branchLineWords, type BranchLine } from "../missionLine";
 import { planCount } from "../plans";
 import type { Mission, MissionNode } from "../snapshot";
 import { useElapsed } from "./elapsed";
@@ -24,7 +24,8 @@ export type NodeHoverFacts = {
   worker: { agent: string | null; words: string; device: string | null } | null;
   /** The step being worked, when a worker's plan has one. */
   now: string | null;
-  stations: readonly Station[] | null;
+  /** Where its result goes, for a node that changes code. */
+  branch: BranchLine | null;
 };
 
 export function MissionNodeHover({ mission, node, facts, children }: { mission: Mission; node: MissionNode; facts: NodeHoverFacts; children: ReactNode }) {
@@ -54,7 +55,8 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
   const plan = node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : null;
   const now = [plan, facts.now, pushed ? t("mission.popover.pushed", { ago: pushed }) : null].filter(Boolean).join(" · ");
   const merge = mergeBy(mission, node);
-  const override = mergeOverridden(mission.scope, node);
+  // The plan gave the operator a merge Settings give the Conductor (D-10): the core keeps its reason only then.
+  const override = mission.scope === "merge" && node.merge?.by === "operator";
   return (
     <div className="flex min-w-0 flex-col gap-sm text-caption">
       <div className="flex min-w-0 flex-col gap-xxs">
@@ -70,9 +72,9 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
         </Part>
       ) : null}
       {now ? <Part label={t("mission.steps.now")} data="now"><span className="break-words">{now}</span></Part> : null}
-      {facts.stations ? (
-        <Part label={t("mission.station.line")} data="where">
-          <span className="break-words font-medium text-foreground" data-node-hover-path="true">{stationWords(facts.stations, t)}</span>
+      {facts.branch ? (
+        <Part label={t("mission.foot.where")} data="where">
+          <span className="break-words font-medium text-foreground" data-node-hover-path="true">{branchLineWords(facts.branch, t)}</span>
           {node.prs.length > 1 ? <span className="break-words font-mono" data-node-hover-prs="true">{t("mission.popover.prs")} {node.prs.map((pr) => `#${pr.number}`).join(", ")}</span> : null}
           {merge ? <span data-node-hover-merge={merge}>{t(`mission.popover.mergeBy.${merge}`)}</span> : null}
           {override ? (

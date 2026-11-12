@@ -105,7 +105,7 @@ export function useNodeTimes(mission: Mission, node: MissionNode, events: Missio
   const language = requireInterfaceLanguage(i18n.language);
   const times = events ? nodeTimes(node, events, end) : null;
   if (!times || (times.running && mission.stale)) return null;
-  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null };
+  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null, running: times.running };
 }
 
 const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed", running: "text-mission-working", waiting: "text-muted-foreground" } as const;

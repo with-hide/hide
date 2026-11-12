@@ -110,11 +110,11 @@ export type PhoneMissionNode = MissionNodeBrief & {
   base_pr: number | null;
   /** The branch its current pull request merges into, as GitHub last answered; absent until it answered and from a Mac before it. */
   pr_base?: string;
-  /** How many pull requests it holds besides its current one, the `+N` of its PR station; absent at zero and from a Mac before it. */
+  /** How many pull requests it holds besides its current one, the `+N` beside its pull request's number; absent at zero and from a Mac before it. */
   pr_more?: number;
   /** The pull request an outside step watches; absent for one that watches a branch and from a Mac before it. */
   external_pr?: number;
-  /** The branch an outside step watches, its first station; absent otherwise and from a Mac before it. */
+  /** The branch an outside step watches, which its line names; absent otherwise and from a Mac before it. */
   external_branch?: string;
   /** Where an outside step's work goes, its pull request's base or the default branch its branch is judged against; absent until read and from a Mac before it. */
   external_base?: string;
