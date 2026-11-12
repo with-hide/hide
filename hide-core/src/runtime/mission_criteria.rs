@@ -87,6 +87,67 @@ impl<'a> Caller<'a> {
     }
 }
 
+const NOT_YOURS: &str = "mission_criterion_not_yours";
+
+/// Why `caller` may not record line `key` of `node` in `missions`, logged
+/// with what the judgment read (with-hide/hide#2433): a caller with no
+/// registration of its pane's session at all learns which of the ways it
+/// has none (`coordination::here`), one with a registration that is not
+/// the line's owner learns that the line is not its own. The Conductor
+/// answers by its identity, not a registration, so it is never asked for one.
+fn record_refused(
+    caller: &Caller<'_>,
+    ledger: &crate::delivery::ledger::Ledger,
+    missions: &[&Mission],
+    node: &str,
+    key: &str,
+) -> String {
+    let conductor = missions
+        .iter()
+        .any(|mission| mission.conductor.actor.same_identity(caller.actor));
+    let reason = match crate::coordination::here(ledger, caller.actor) {
+        Err(reason) if caller.registrations.is_empty() && !conductor => reason,
+        _ => NOT_YOURS,
+    };
+    log_record_refused(reason, caller, missions, node, key);
+    reason.into()
+}
+
+/// One diagnostic line for a refused record: the mission, node and line,
+/// the caller's pane and registrations, and the agents bound to that line
+/// in each mission that holds it. Ids only, never the evidence or summary.
+fn log_record_refused(
+    reason: &str,
+    caller: &Caller<'_>,
+    missions: &[&Mission],
+    node: &str,
+    key: &str,
+) {
+    let bound: Vec<Value> = missions
+        .iter()
+        .map(|mission| {
+            let row = mission.node(node);
+            let checkers: Vec<Option<&str>> = row
+                .and_then(|row| row.criteria.iter().find(|line| line.key == key))
+                .into_iter()
+                .flat_map(|line| &line.checkers)
+                .map(|checker| checker.agent_id.as_deref())
+                .collect();
+            json!({
+                "mission": mission.id,
+                "worker": row.and_then(|row| row.agent_id.as_deref()),
+                "checkers": checkers,
+            })
+        })
+        .collect();
+    crate::diagnostic!(json!({
+        "component": "missions", "kind": "mission.record_refused",
+        "reason": reason, "node": node, "line": key,
+        "pane": caller.actor.pane_id, "device": caller.actor.device_id,
+        "registrations": caller.registrations, "bound": bound,
+    }));
+}
+
 /// Whether `pull` is merged, so its head is the work that reached main.
 fn merged(pull: &PullRequestSnapshot) -> bool {
     pull.badge == PullRequestBadge::Merged
@@ -431,6 +492,17 @@ impl Runtime {
         Ok(self.missions.book.conducted(caller.actor))
     }
 
+    /// The open missions with a node `node`, which a refused record that
+    /// found none of the caller's names in its diagnostic.
+    fn open_missions_holding(&self, node: &str) -> Vec<&Mission> {
+        self.missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status.open() && mission.node(node).is_some())
+            .collect()
+    }
+
     /// The mission a line command from `caller` acts on (B5): the one it
     /// names, or the one it means (`mission_meant`), where it conducts the
     /// mission or works or checks its node `node`.
@@ -488,9 +560,21 @@ impl Runtime {
         }
         let evidence = Some(evidence);
         let summary = crate::missions::summary_line(summary)?;
-        let ledger = self.delivery_state().ok();
-        let caller = Caller::of(actor, ledger.as_deref(), &self.missions.book.missions);
-        let id = self.line_mission(&caller, named, node)?;
+        // An unreadable ledger is its own refusal: read as no registrations
+        // it would say the line is someone else's (with-hide/hide#2433).
+        let ledger = self.delivery_state()?;
+        let caller = Caller::of(actor, Some(&ledger), &self.missions.book.missions);
+        let id = match self.line_mission(&caller, named, node) {
+            Ok(id) => id,
+            Err(reason) if reason == NOT_YOURS => {
+                let held = match named.and_then(|id| self.missions.book.get(id)) {
+                    Some(mission) => vec![mission],
+                    None => self.open_missions_holding(node),
+                };
+                return Err(record_refused(&caller, &ledger, &held, node, key));
+            }
+            Err(reason) => return Err(reason),
+        };
         let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         let index = mission
             .nodes
@@ -522,11 +606,13 @@ impl Runtime {
         let mut next = row.clone();
         let effect = match line.kind {
             CriterionKind::Review | CriterionKind::Verify => {
-                let slot = line
+                let Some(slot) = line
                     .checkers
                     .iter()
                     .position(|checker| caller.owns(checker.agent_id.as_deref()))
-                    .ok_or("mission_criterion_not_yours")?;
+                else {
+                    return Err(record_refused(&caller, &ledger, &[mission], node, key));
+                };
                 let agent_id = line.checkers[slot].agent_id.clone();
                 // The head an answer is for is the one the checker names: a
                 // guess from the pull request's head when it is recorded would
@@ -553,7 +639,11 @@ impl Runtime {
                     spent: false,
                 }
             }
-            CriterionKind::Ci => return Err("mission_criterion_not_yours".into()),
+            // Hide records the CI, whoever asks.
+            CriterionKind::Ci => {
+                log_record_refused(NOT_YOURS, &caller, &[mission], node, key);
+                return Err(NOT_YOURS.into());
+            }
             // Only the operator's answer passes a gate (PRD mission-human-gate D-12).
             CriterionKind::Human => return Err("mission_gate_operator_only".into()),
             CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect => {
@@ -562,7 +652,7 @@ impl Runtime {
                 } else if conductor && never_worked {
                     by(Role::Conductor, mission.conductor.agent_id.clone())
                 } else {
-                    return Err("mission_criterion_not_yours".into());
+                    return Err(record_refused(&caller, &ledger, &[mission], node, key));
                 };
                 if line.kind == CriterionKind::Check {
                     // The check is the folder it ran in, on the machine the
