@@ -191,7 +191,7 @@ export function TreeRails({ place }: { place: TreePlace }) {
  * children, and while it is open a rail leaving it down to the children.
  * A row with none keeps the lane, crossed by its elbow when it hangs from a parent.
  */
-export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = false, popup = false, masked = false, ...data }: { name: string; open: boolean | null; onToggle?: () => void; hangs: boolean; chain?: TreeChain; disabled?: boolean; popup?: boolean; /** Hung on a sidebar row rail: drawn in a patch of the row fill. */ masked?: boolean } & Record<`data-${string}`, string>) {
+export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = false, popup = false, ...data }: { name: string; open: boolean | null; onToggle?: () => void; hangs: boolean; chain?: TreeChain; disabled?: boolean; popup?: boolean } & Record<`data-${string}`, string>) {
   // The lane spans the row; its chevron sits on line one, below the row's top padding.
   const { t } = useInterfaceTranslation();
   if (open === null || !onToggle) {
@@ -226,16 +226,8 @@ export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = fal
         className="relative z-10 mt-xs flex h-(--size-sidebar-line) w-full items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         {...data}
       >
-        {hangs && masked ? <span className={HUNG_CHEVRON}>{open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}</span>
-          : open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+        {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
       </button>
     </span>
   );
 }
-
-/**
- * A chevron hung on a parent's rail sits in a small patch of the row's own
- * fill, so the rail and its elbow stop at the chevron instead of running
- * through it: it reads as a knot on the line, not two marks drawn over each other.
- */
-export const HUNG_CHEVRON = "flex items-center justify-center rounded-xs bg-sidebar p-xxs group-hover/row:bg-accent group-data-[row-selected=true]/row:bg-secondary";
