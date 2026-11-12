@@ -1006,6 +1006,10 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                     "The operator looked at your node {} of mission {} \"{}\" and asked for a fix: \"{words}\".\nIt is line {defect} of your node: fix it, record it with `hide mission record {} {defect} --pass --evidence <what shows it>`, and report to your Conductor as before.",
                     wake.node, mission.id, mission.title, wake.node
                 ),
+                None if node.is_some_and(MissionNode::waits_to_start) => format!(
+                    "The operator answered the start gate on node {} of mission {} \"{}\" with a fix: \"{words}\".\nHide added it as line {defect}; the node has not started, so make the fix and record it with `hide mission record {} {defect} --pass --evidence <what shows it>`, and the start gate asks again.",
+                    wake.node, mission.id, mission.title, wake.node
+                ),
                 None => format!(
                     "The operator answered the gate on node {} of mission {} \"{}\" with a fix: \"{words}\".\nHide added it as line {defect}, set the node to work and sent the words to its worker; the gate asks again once its lines are met. Read `hide mission show {} --mission {}`, and brief a worker if the node has none.",
                     wake.node, mission.id, mission.title, wake.node, mission.id
@@ -1013,7 +1017,18 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             }
         }
         WakeEvent::Attention => {
-            let (what, act) = attention_words(wake.reason, &pr);
+            // A node that could start but waits on the fix its start gate
+            // asked for owes that fix, not a start (PRD node-presets D-14).
+            let owed = node
+                .and_then(super::mission_gates::start_fix_owed)
+                .filter(|_| wake.reason == Some(crate::missions::AttentionReason::NotStarted));
+            let (what, act) = match owed {
+                Some(line) => (
+                    format!("its start gate waits on the fix the operator asked for, line {line}"),
+                    "make the fix and record its line with `hide mission record`, and the start gate asks the operator again; the operator is told in ten minutes",
+                ),
+                None => attention_words(wake.reason, &pr),
+            };
             news(format!("Node {} needs you to look: {what}", wake.node), act)
         }
         WakeEvent::Resolved => {

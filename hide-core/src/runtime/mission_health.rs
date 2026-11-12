@@ -1604,6 +1604,12 @@ impl Runtime {
                 }
             }
             OperatorAction::Resume => {
+                // The operator setting to work a node not at work goes past
+                // its start gate as their own word, as done goes past an end
+                // gate (PRD node-presets D-06).
+                if !next.at_work() && next.waits_to_start() {
+                    gated.push(next.key.clone());
+                }
                 next.status = NodeStatus::Working;
                 next.finished_at_unix_ms = None;
                 next.in_main = None;

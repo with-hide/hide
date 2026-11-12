@@ -132,9 +132,11 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Hide adds it as the node's `human` line, which only the operator's answer passes; it asks once the node's other lines are met (below).
   A start gate, `"gate": {"look": "<what to look at>", "when": "start"}`, asks before the node starts instead: once every node it depends on is done, and until the operator passes it its worker cannot be bound (`hide mission node <key> --agent-id` or `--status working`, and a spawn under its intent, are refused `mission_gate_before_start`); start the worker after their pass.
   A plan cannot put a start gate on a node that already started (`mission_gate_node_started`).
+  A dropped node's start gate cannot ask, so `--status working` on it is refused too: plan its work again as a new node with a new key, whose start gate asks, or, on the operator's word only, give the dropped node `"gate": null`; the operator setting it to work from the map goes past the gate as their own answer.
   A `deploy` node is planned with the start gate `배포해도 될지` when the plan names none; give it your own words in `gate` to change it, or `"gate": null` to take it away, only when the operator says so, and say the change in one line with the plan (`배포 · 시작 전 확인 없음 (운영자)`).
   Propose one only for what a person must see with their own eyes (a screen) or a large step that cannot be undone; never for the merge, which the mission's scope already decides, and never for routine work.
   When the operator says where they want to check ("여기는 내가 확인하고 싶어"), put a gate on those nodes, and take one away the same way; a later plan that leaves `gate` out keeps it, and `"gate": null` takes it away.
+  A plan that leaves `gate` out on a new node, or on one whose kind or preset it changes, gives it the new preset's gate, none included: moved off `deploy` a node loses its start gate, moved onto it a node gains one in place of its end gate, so name `gate` in that plan to keep a gate the operator asked for.
   A gate you change or take away while it asks takes its question off the map with it, and the next gate asks.
   A done node keeps the gate it has (`mission_gate_node_done`), a waiting node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
 - `"operator_merge": "<why in one line>"` gives the operator a node's merge in a mission whose scope is `merge`: when the operator wants to merge one pull request themselves ("DB는 내가 머지할게"), put it on that `change` node delivered by `pr`, with why in at most 80 characters (`mission_operator_merge_invalid` on any other node, a longer or multi-line reason, or with scope `pr`, where every pull request is the operator's already).
@@ -285,7 +287,8 @@ Every worker's brief, code or general, says in its first line what the node is, 
 - A gate asks by itself: once its node's other lines are met, Hide puts its question on the map as your decision (`<what to look at> 확인하고 알려 주세요`, with `계속 진행` and `고칠 점 있음`, naming the node), with the Views you and the node's worker opened.
   While a question of yours holds the decision, the gate waits for it; your next `decide --line` replaces the gate's question and the gate asks again once the decision is free, and `decide --clear` cannot take it off (`mission_gate_operator_only`).
   `계속 진행` passes it and the node may finish; `고칠 점 있음` or the operator's own words keep it open and go to the node's worker as a defect line, the node works again, and the gate asks anew once that line is met. Either way Hide tells you in a letter, and nothing passes the gate on its own.
-  A start gate asks the same way once its node could start, with nothing linked from a worker it does not have yet: `계속 진행` lets you start the worker; `고칠 점 있음` or their words keep it asking and wait as a line for the worker you start once they pass it, so settle what they asked (a replan, a brief) and tell them.
+  A start gate asks the same way once its node could start, with nothing linked from a worker it does not have yet: `계속 진행` lets you start the worker; `고칠 점 있음` or their words become a defect line and free the decision, and the gate asks again only once that line is met, as an end gate does.
+  The node has no worker yet, so make the fix yourself (a replan, a brief, the change they asked for) and record the line with `hide mission record <node> <line> --pass --evidence <what shows it>`, which you may on a node that never had a worker.
   When the operator answers in your conversation instead ("ㄱㄱ", "고쳐서 다시"), relay it with their words quoted: `hide mission gate <node> --pass --said "ㄱㄱ"` or `--fix --said "<their words>"`; it settles the gate exactly as the card does, and records that the answer came from your pane.
   Without their words it is refused (`mission_gate_words_missing`), and so is a gate not asking yet (`mission_gate_not_open`), so never relay your own judgment.
   A check you meet by chance while the mission runs stays an ordinary `decide`, with no gate behind it.
@@ -354,7 +357,7 @@ Every node not finished is someone's move, and a move that does not come is rais
 
 | Whose move | Raised to you |
 | --- | --- |
-| Yours: start a node whose dependencies are all done | 20 minutes after it could start |
+| Yours: start a node whose dependencies are all done, or, behind a start gate answered with a fix, make the fix and record its line | 20 minutes after it could start |
 | The worker's, after a warning above | 30 minutes after the warning's letter, if it still stands |
 | Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push |
 

@@ -1371,6 +1371,12 @@ impl MissionNode {
             || self.branch.is_some()
     }
 
+    /// Whether the node is at work: started, and not dropped, so a dropped
+    /// node taken back to work starts again (PRD node-presets D-06).
+    pub(crate) fn at_work(&self) -> bool {
+        self.started() && self.status != NodeStatus::Dropped
+    }
+
     /// Why no worker may start on the node now: it is held, or its start
     /// gate waits on the operator (PRD node-presets D-06).
     pub(crate) fn start_refusal(&self) -> Option<String> {
@@ -2657,9 +2663,9 @@ pub struct NodeInput {
     /// with `when: start`, before it starts (PRD node-presets D-06): one
     /// text, `{"look": …, "when": …}`, or a list a node may hold one of.
     /// Left out, a replan keeps the gate the node has, and a new node, or one
-    /// whose preset changes, takes its preset's (`PresetRow::gate`); `null`
-    /// or an empty list takes it away, so a gate left out is never written
-    /// as `null`.
+    /// whose preset changes, takes its new preset's (`PresetRow::gate`), none
+    /// included; `null` or an empty list takes it away, so a gate left out is
+    /// never written as `null`.
     #[serde(
         default,
         deserialize_with = "gate_input",
@@ -3105,12 +3111,9 @@ pub(crate) fn apply_plan(
                 hold: None,
                 operator_merge: None,
             });
-            // A node's preset gate, worked out before the node takes the
-            // plan's kind and preset, which it is judged against.
-            let gate = input
-                .gate
-                .clone()
-                .or_else(|| preset_gate(mission, input).map(|gate| vec![gate]));
+            // The node's gate, worked out before the node takes the plan's
+            // kind and preset, which it is judged against.
+            let gate = planned_gate(mission, input);
             node.title.clone_from(&input.title);
             node.kind = input.kind();
             node.preset = input.preset();
@@ -3238,15 +3241,13 @@ fn valid_steps(steps: &[String]) -> bool {
 fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
     let refused = |code: &str| Err(crate::coordination::refusal(code, &node.key));
     let before = mission.node(&node.key);
-    let gate = match &node.gate {
-        Some(gate) => {
-            if gate.len() > 1 {
-                return refused("mission_gate_too_many");
-            }
-            gate.first()
-        }
-        None => return check_preset_gate(mission, node),
+    let Some(gate) = planned_gate(mission, node) else {
+        return Ok(());
     };
+    if gate.len() > 1 {
+        return refused("mission_gate_too_many");
+    }
+    let gate = gate.first();
     let text = gate.map(|gate| gate.look.trim());
     if let Some(text) = text {
         if text.is_empty() || text.chars().any(char::is_control) {
@@ -3276,35 +3277,35 @@ fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
     Ok(())
 }
 
-/// The gate a plan that names none gives `node`: its preset's, for a node
-/// new to the plan or one whose preset changes (PRD node-presets D-06,
-/// D-07); otherwise the one it has, judged as named.
-fn preset_gate(mission: &Mission, node: &NodeInput) -> Option<GateInput> {
-    let before = mission.node(&node.key);
-    let preset = node.preset();
-    if node.kind() != NodeKind::General
-        || mission.exempt
-        || before.is_some_and(|before| before.kind == NodeKind::General && before.preset == preset)
+/// The gate a plan gives `node`, or none to keep the one it has: the gate it
+/// names; left out, its preset's (`PresetRow::gate`, none included) for a
+/// node new to the plan or one whose preset changes (PRD node-presets D-06,
+/// D-07), so a node moved off `deploy` loses its start gate and one moved
+/// onto it gains one. A node's preset is its general node's preset, so a
+/// move between a general node and another kind changes it.
+fn planned_gate(mission: &Mission, node: &NodeInput) -> Option<Vec<GateInput>> {
+    if node.gate.is_some() {
+        return node.gate.clone();
+    }
+    let preset =
+        |kind: NodeKind, preset: Option<Preset>| (kind == NodeKind::General).then_some(preset);
+    let next = preset(node.kind(), node.preset());
+    if mission.exempt
+        || mission
+            .node(&node.key)
+            .is_some_and(|before| preset(before.kind, before.preset) == next)
     {
         return None;
     }
-    preset_row(preset).gate.map(|(look, when)| GateInput {
-        look: look.to_owned(),
-        when,
-    })
-}
-
-/// A preset's gate on a node that already started would ask after its
-/// worker was bound: refused as a named one is.
-fn check_preset_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
-    let started = mission.node(&node.key).is_some_and(MissionNode::started);
-    match preset_gate(mission, node) {
-        Some(gate) if gate.when == GateWhen::Start && started => Err(crate::coordination::refusal(
-            "mission_gate_node_started",
-            &node.key,
-        )),
-        _ => Ok(()),
-    }
+    let gate = next.and_then(|preset| preset_row(preset).gate);
+    Some(
+        gate.into_iter()
+            .map(|(look, when)| GateInput {
+                look: look.to_owned(),
+                when,
+            })
+            .collect(),
+    )
 }
 
 /// Who merges a node as the plan leaves it (PRD mission-destination D-10):
@@ -3561,15 +3562,13 @@ pub(crate) fn apply_patch(
         next.done_head = None;
     }
     // A held node starts only once its hold is lifted, and one behind a
-    // start gate once the operator passed it (PRD node-presets D-06).
+    // start gate once the operator passed it (PRD node-presets D-06): judged
+    // as the patch leaves it, so a dropped node taken back to work starts
+    // again, while a node already at work is not stopped.
     if next.hold.is_some() && next.started() {
         return Err(crate::coordination::refusal("mission_node_held", &node.key));
     }
-    if !node.started()
-        && next.started()
-        && next.status != NodeStatus::Dropped
-        && node.waits_to_start()
-    {
+    if !node.at_work() && next.at_work() && next.waits_to_start() {
         return Err(crate::coordination::refusal(
             "mission_gate_before_start",
             &node.key,
@@ -3792,7 +3791,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Give a preset only to a general node (\"kind\": \"general\", \"preset\": \"research\", \"verify\" or \"deploy\"); an old kind name (\"research\", \"verify\") stands for its own preset"
         }
         "mission_gate_before_start" => {
-            "The node's start gate waits on the operator: start its worker once they pass it on the map, or relay their go with hide mission gate <node> --pass --said <their words>"
+            "The node's start gate waits on the operator: start its worker once they pass it on the map, or relay their go with hide mission gate <node> --pass --said <their words>; after a fix they asked for, make it and record its line, and the gate asks again; a dropped node's gate cannot ask, so plan its work again as a new node with a new key, whose start gate asks, or, on the operator's word only, give the dropped node \"gate\": null"
         }
         "mission_gate_node_started" => {
             "A start gate asks before the node's worker is bound, and this node already started: give it an end gate, or none with \"gate\": null"
@@ -5240,7 +5239,8 @@ pub(crate) mod tests {
 
     /// PRD node-presets D-06, D-07, B3, B4: a deploy node is planned with
     /// its preset's start gate when the plan names none, which a replan
-    /// keeps and `null` takes away; a start gate is written with its `when`
+    /// keeps, `null` takes away and a change of preset replaces with the new
+    /// preset's, none included; a start gate is written with its `when`
     /// and an end gate as before; and no start gate, named or brought by a
     /// preset, goes on a node that already started.
     #[test]
@@ -5275,6 +5275,29 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(gate_of(&off), None);
         assert!(!off.nodes[0].waits_to_start());
+        // Its preset changed and its gate left out, a node takes the new
+        // preset's: none off `deploy`, the start gate again back onto it.
+        let research = apply_plan(&planned, &general(Some("research"), None), 3).unwrap();
+        assert_eq!(gate_of(&research), None);
+        let again = apply_plan(&research, &general(Some("deploy"), None), 4).unwrap();
+        assert_eq!(
+            gate_of(&again),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        // A gate the plan names stays across the change.
+        let named = apply_plan(
+            &planned,
+            &general(
+                Some("research"),
+                Some(serde_json::json!({"look": "배포해도 될지", "when": "start"})),
+            ),
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&named),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
         // A gate of one's own words, at the start or at the end.
         let own = apply_plan(
             &mission(),
@@ -5340,8 +5363,10 @@ pub(crate) mod tests {
 
     /// PRD node-presets D-04, D-06, B2, B3: a verdict is recorded on every
     /// general node and on no code node; a node behind a start gate takes
-    /// no worker and no start until the operator passed it, and may still
-    /// be dropped.
+    /// no worker and no start until the operator passed it, judged as the
+    /// change leaves it: it may be dropped, and dropped it goes back to work
+    /// only once a replan took its gate away, while a node already at work
+    /// is not stopped.
     #[test]
     fn every_general_node_records_a_verdict_and_a_start_gate_holds_its_worker() {
         let verdict = NodePatch {
@@ -5372,7 +5397,7 @@ pub(crate) mod tests {
         ship["preset"] = serde_json::json!("deploy");
         let gated = apply_plan(
             &mission(),
-            &plan(vec![serde_json::from_value(ship).unwrap()]),
+            &plan(vec![serde_json::from_value(ship.clone()).unwrap()]),
             2,
         )
         .unwrap();
@@ -5396,14 +5421,44 @@ pub(crate) mod tests {
             }),
             "mission_gate_before_start"
         );
+        let dropped = apply_patch(
+            node,
+            &NodePatch {
+                status: Some(NodeStatus::Dropped),
+                ..NodePatch::default()
+            },
+            3,
+        )
+        .unwrap();
+        let back = NodePatch {
+            agent_id: Some(Some("agent-1".into())),
+            status: Some(NodeStatus::Working),
+            ..NodePatch::default()
+        };
+        assert_eq!(
+            crate::coordination::split_refusal(&apply_patch(&dropped, &back, 4).unwrap_err()).0,
+            "mission_gate_before_start"
+        );
+        let mut was_dropped = gated.clone();
+        was_dropped.nodes[0] = dropped;
+        ship["gate"] = serde_json::Value::Null;
+        let ungated = apply_plan(
+            &was_dropped,
+            &plan(vec![serde_json::from_value(ship).unwrap()]),
+            5,
+        )
+        .unwrap();
+        assert!(apply_patch(&ungated.nodes[0], &back, 6).is_ok());
+        let mut at_work = node.clone();
+        at_work.status = NodeStatus::Working;
         assert!(
             apply_patch(
-                node,
+                &at_work,
                 &NodePatch {
-                    status: Some(NodeStatus::Dropped),
+                    agent_id: Some(Some("agent-1".into())),
                     ..NodePatch::default()
                 },
-                3
+                4
             )
             .is_ok()
         );

@@ -117,8 +117,9 @@ impl Runtime {
     /// Whether `node`'s gate is reached now (D-10): an end gate once the
     /// node works and every other line is met, the CI GitHub has not
     /// reported included, as the done refusal judges them; a start gate
-    /// (PRD node-presets D-06) once the node could start: not started and
-    /// every node it depends on done.
+    /// (PRD node-presets D-06) once the node could start, not started and
+    /// every node it depends on done, with no fix the operator asked for
+    /// still open, as an end gate waits for its other lines.
     pub(super) fn gate_reached(&self, mission: &Mission, node: &MissionNode) -> bool {
         let Some(line) = crate::mission_criteria::gate(&node.criteria)
             .filter(|line| line.state != CriterionState::Pass)
@@ -129,7 +130,9 @@ impl Runtime {
             GateWhen::End => {
                 node.status == NodeStatus::Working && self.node_unmet(mission, node) == [GATE_KEY]
             }
-            GateWhen::Start => crate::mission_health::could_start(mission, node),
+            GateWhen::Start => {
+                crate::mission_health::could_start(mission, node) && open_fix(node).is_none()
+            }
         }
     }
 
@@ -289,8 +292,10 @@ impl Runtime {
                     line.asked = None;
                 }
                 // Before its start the node has no work to send back: the
-                // words wait as a line for its worker, and the gate asks
-                // again (PRD node-presets D-06).
+                // words wait as a line, and the gate asks again once the
+                // Conductor made the fix and recorded that line, holding no
+                // decision meanwhile, as an end gate does (PRD node-presets
+                // D-06).
                 if line.when == GateWhen::Start {
                     Some(defect)
                 } else {
@@ -644,6 +649,29 @@ impl Runtime {
         let words = words.ok_or("mission_answer_invalid")?;
         self.settle_gate(id, node, answer, via, &words, now)
     }
+}
+
+/// The first defect line of `node` not yet met (neither passed nor skipped,
+/// as the done refusal judges it), by its key: before a start gate's node
+/// starts, the fix the Conductor owes before the gate asks again (PRD
+/// node-presets D-06, D-14).
+pub(super) fn open_fix(node: &MissionNode) -> Option<&str> {
+    node.criteria
+        .iter()
+        .find(|line| {
+            line.kind == CriterionKind::Defect
+                && !matches!(line.state, CriterionState::Pass | CriterionState::Skipped)
+        })
+        .map(|line| line.key.as_str())
+}
+
+/// Whether `node` waits, before its start, on a fix the Conductor owes: its
+/// start gate is not passed and a defect line is open.
+pub(super) fn start_fix_owed(node: &MissionNode) -> Option<&str> {
+    node.waits_to_start()
+        .then(|| open_fix(node))
+        .flatten()
+        .filter(|_| !node.at_work())
 }
 
 /// The newest defect the operator's answer to `node`'s gate wrote, with its

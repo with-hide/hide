@@ -494,6 +494,7 @@ Keep the old file if a downgrade may be needed; removing the index alone is not 
 The older `missions.v1.json`, `missions.v2.json` and `missions.v3.json` copies retain their existing schema-conversion role.
 A mission node of kind `research` or `verify`, from a build before general nodes, reads as a general node with that preset and is written so at its mission's next save; the schema stays 4, so there is no copy for it.
 A build before general nodes cannot read a mission file holding one: it leaves the file as it is and does not show that mission, which the newer build reads again with every change; it reads a start gate on a code node as a gate at the node's end (with-hide/hide-private `docs/missions.md`, Finish lines).
+A phone app built before general nodes draws a research or verify step as before, and a working general step with the deploy preset or none as `Code`, since the frame keeps the old kind names only for research and verify.
 
 Every folder Hide makes there is private to your account (0700; on Windows an access list naming only your account).
 When a build has product statistics configured, the state folder also holds `product-analytics-id`, a private random installation UUID unrelated to account or hardware identity.

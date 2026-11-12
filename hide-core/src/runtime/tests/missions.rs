@@ -11380,8 +11380,9 @@ fn a_gate_with_no_conductor_is_raised_to_the_operator_until_one_comes_back() {
 /// while the node it depends on works and asks the operator once it is
 /// done, through the gate's decision card, with the node waiting on that
 /// decision; until the operator passes it no worker is bound or spawned
-/// under the node (`mission_gate_before_start`), a fix answer keeps it
-/// asking with the words waiting for the worker, and the pass lets the
+/// under the node (`mission_gate_before_start`), a fix answer leaves the
+/// node planned with the words a line and no decision held, the gate asking
+/// again once the Conductor recorded that line, and the pass lets the
 /// Conductor start the node.
 #[test]
 fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed() {
@@ -11454,8 +11455,8 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
         crate::coordination::split_refusal(&refused),
         ("mission_gate_before_start", Some("ship"))
     );
-    // The operator's fix keeps the node planned and the gate asking, the
-    // words a line for the worker it gets.
+    // The operator's fix keeps the node planned, the words a line, and the
+    // gate quiet until the Conductor made the fix and recorded it.
     let key = runtime
         .missions
         .book
@@ -11489,7 +11490,19 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
         (defect.kind, defect.text.as_deref()),
         (CriterionKind::Defect, Some("버전 번호를 1.2.8로"))
     );
+    assert_eq!(asked_gate(&runtime), None, "no decision held for the fix");
+    assert_ne!(gate(&runtime).0, GateState::Open);
+    assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
+    let defect = defect.key.clone();
+    command(
+        &mut runtime,
+        "sender",
+        record_of("ship", &defect, json!({})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
     assert!(asked_gate(&runtime).is_some(), "the start gate asks again");
+    assert_eq!(gate(&runtime).0, GateState::Open);
     assert_eq!(bind(&mut runtime), Err("mission_gate_before_start".into()));
     // The pass lets the Conductor start it.
     let key = runtime
@@ -11514,6 +11527,73 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
     );
     assert_eq!(bind(&mut runtime), Ok(()));
     assert_eq!(asked_gate(&runtime), None);
+}
+
+/// PRD node-presets D-06 (review F1): a dropped node behind a start gate
+/// goes back to work only past that gate: the Conductor's set is refused,
+/// and the operator's own Resume goes past it as their word, so no node
+/// works behind a start gate that can no longer ask.
+#[test]
+fn a_dropped_node_behind_a_start_gate_works_again_only_past_it() {
+    use crate::missions::OperatorAction;
+    use crate::runtime::mission_gates::GateState;
+    use crate::runtime::mission_health::MissionAttentionPayload;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Ship the site"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"]},
+            {"key": "ship", "title": "Deploy", "kind": "general", "preset": "deploy",
+             "criteria": ["the site serves the fix"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "ship", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "ship", "patch": {"status": "working"}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused).0,
+        "mission_gate_before_start"
+    );
+    assert!(runtime.mission_attention_event(MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "ship".into(),
+        action: OperatorAction::Resume,
+        since_unix_ms: None,
+    }));
+    let ship = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("ship")
+        .unwrap()
+        .clone();
+    assert_eq!(ship.status, NodeStatus::Working);
+    assert!(!ship.waits_to_start());
+    assert_eq!(
+        node_view(&runtime, "ship").gate.unwrap().state,
+        GateState::Passed
+    );
 }
 
 fn two_gates(fix: Value, docs: Value) -> Value {

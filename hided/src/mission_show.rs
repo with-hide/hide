@@ -412,6 +412,11 @@ fn recorded_words(by: &Value, at: &Value, now: u64) -> String {
 
 fn draw_line(out: &mut String, line: &Value, now: u64) {
     let mut words = format!("  {} {}", text(line, "key"), line_word(&line["state"]));
+    // A start gate asks before the node's worker is bound (PRD node-presets
+    // D-06); an end gate, the one before, carries no `when`.
+    if line["when"] == "start" {
+        words.push_str(" · 시작 전");
+    }
     if let Some(said) = line["text"].as_str() {
         let _ = write!(words, " · {said}");
     }
@@ -975,6 +980,31 @@ mod tests {
         assert_eq!(said(json!({"preset": "deploy"})), "일반 · 배포·출시");
         assert_eq!(said(json!({"preset": null})), "일반");
         assert_eq!(said(json!({"kind": "external", "preset": null})), "기다림");
+    }
+
+    /// PRD node-presets D-06: a start gate's line says it asks before the
+    /// start; an end gate's reads as before.
+    #[test]
+    fn a_start_gate_line_says_it_asks_before_the_start() {
+        let gate_line = |gate: Value| {
+            let mut node = mission()["mission"]["nodes"][3].clone();
+            node["criteria"] = json!([gate]);
+            let text = draw(
+                &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                NOW,
+            )
+            .unwrap();
+            text.lines()
+                .find(|line| line.starts_with("  gate "))
+                .unwrap()
+                .to_owned()
+        };
+        let start = gate_line(json!({"key": "gate", "kind": "human", "state": "open",
+            "text": "배포해도 될지", "when": "start"}));
+        assert!(start.contains("시작 전 · 배포해도 될지"), "{start}");
+        let end = gate_line(json!({"key": "gate", "kind": "human", "state": "open",
+            "text": "배포된 화면"}));
+        assert!(!end.contains("시작 전"), "{end}");
     }
 
     /// PRD mission-destination B1, B15: a mission that records where its
