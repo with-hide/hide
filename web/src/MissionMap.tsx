@@ -435,24 +435,28 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54); the line takes the row and its branch truncates first; `⚠` and `!` keep their place at the right end. */}
-      <span className="flex min-w-0 items-center gap-x-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
-        {branch ? <BranchLineView line={branch} className="flex-1" /> : result ? <ResultLineView line={result} className="flex-1" /> : null}
-        {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
-        {gate?.state === "open" && !attention ? (
-          <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">
-            {t("agents.mark.turn")}
-            {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): every node kind has one, the branch line for a change or an outside node and the result line for research and verify (D-52, D-54). `⚠`, 내 차례 and `!` float at the right end of its first row, so a branch line that wraps under its number gives its second row the card's whole width (D-56); the foot holds the float. */}
+      <span className="flow-root min-w-0 border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true">
+        {warning || gate?.state === "open" || attention ? (
+          <span className="float-right ml-xs flex h-lh items-center gap-x-xs" data-node-foot-end="true">
+            {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
+            {gate?.state === "open" && !attention ? (
+              <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">
+                {t("agents.mark.turn")}
+                {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+              </span>
+            ) : null}
+            {attention ? (
+              <Hint label={attention.why}>
+                <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
+                  {yours ? t("agents.mark.turn") : attention.who}
+                  {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+                </span>
+              </Hint>
+            ) : null}
           </span>
         ) : null}
-        {attention ? (
-          <Hint label={attention.why}>
-            <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
-              {yours ? t("agents.mark.turn") : attention.who}
-              {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
-            </span>
-          </Hint>
-        ) : null}
+        {branch ? <BranchLineView line={branch} /> : result ? <ResultLineView line={result} /> : null}
       </span>
     </MissionGraphCard>
   );
