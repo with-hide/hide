@@ -16,9 +16,9 @@
 # passed; it opens an issue for an agent whose latest release misses what its
 # pin does not, comments on it when a later release still fails, and closes it
 # when one passes, and keeps one issue against Hide for what the pins miss too
-# (scripts/agent-canary-record.py). These issues live in
-# with-hide/hide-private with the development issues, read and written with
-# that App's token (docs/TESTING.md). A fix moves the pin in its own pull
+# (scripts/agent-canary-record.py). These issues live in this repository
+# with the development issues, read and written with that App's token
+# (docs/TESTING.md). A fix moves the pin in its own pull
 # request, whose CI proves it on that version.
 name: agent canary
 
@@ -80,7 +80,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide-private
+          repositories: hide
       - name: Whether a version moved since the record's last run
         id: decide
         timeout-minutes: 2
@@ -189,7 +189,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide-private
+          repositories: hide
       - name: Rewrite the support record and each failing agent's issue
         timeout-minutes: 2
         env:

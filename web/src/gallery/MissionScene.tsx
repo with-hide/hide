@@ -12,6 +12,7 @@
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // the engine confirming it), stack (the merge order), no-conductor, stale, failed
 // (the record unreadable), wide (a row wider than the slot, shrunk to fit),
+// human-turn (running, its screen worker waiting on a step only a person can take, in 내 차례 with Done),
 // done, cancelled, no-pr (a finished mission with no pull request), exempt
 // (a finished mission from before finish lines, its old sentence on each
 // card beside the worker), settings.
@@ -416,6 +417,8 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   if (shown === "delay" || shown === "stall" || shown === "hold") return stalledOrHeld(missionFixture("running", now), now, shown);
   // `decided`: nothing is the operator's turn and the Conductor's own skips are listed; `net`: one cause on five nodes behind one safety net card.
   if (shown === "decided" || shown === "net") return decidedOrNet(missionFixture("running", now), now, shown);
+  // `human-turn`: the running mission whose screen worker declared a step only a person can take; the scene gives its row.
+  if (shown === "human-turn") return missionFixture("running", now);
   // An answer sent from the banner draws the decision with that answer on it.
   const held = shown.startsWith("decision-hold-") ? (shown.slice("decision-hold-".length) as MissionAnswerHold) : undefined;
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed" || held !== undefined;
@@ -646,10 +649,12 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     // The decision state's fix worker is one the core raised: its own line says why it stopped.
     const raised = { pane_id: FIX_PANE, device_id: "local", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: Date.now() - 3 * MINUTE, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: Date.now() - 3 * MINUTE, line: "로그인이 만료되어 테스트를 못 돌림", end: "blocked", request: null, later_by: null, pull_requests: [] } };
+    // The human-turn state's screen worker declared a step only a person can take (`hide agent ask-human permission`).
+    const declared = { pane_id: SCREEN_PANE, device_id: "local", escalation: { cause: "human_turn", letter_id: null, since_unix_ms: Date.now() - 4 * MINUTE, human_notice: true }, human_turn: { id: "agent-screen.1", kind: "permission", place: "https://console.firebase.google.com/project/hide-app/settings/terms", pane_id: SCREEN_PANE, title: "API 쓰는 화면", since_unix_ms: Date.now() - 4 * MINUTE, own: true } };
     // The Conductor's own row: at work while its mission runs, asleep once it closed, none when no Conductor holds it.
     const closed = ["done", "cancelled", "no-pr", "exempt"].includes(state);
     const conductor = { pane_id: CONDUCTOR_PANE, device_id: "local", mark: closed ? "asleep" : state === "decision" ? "quiet" : "going" };
-    const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : [conductor]) as unknown as AgentRow[];
+    const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : state === "human-turn" ? [conductor, declared] : [conductor]) as unknown as AgentRow[];
     // The mission screen shows the mission, so its head wears the kind mark and the `?` as the app's does.
     const rest = withMapFlow(fixture.rest, flow);
     useShellStore.setState({ rest, agents, connection: "live" });
