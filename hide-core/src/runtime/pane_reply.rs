@@ -378,7 +378,7 @@ mod tests {
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
         observe(&mut runtime, "t1");
-        let before = runtime.delivery_observations["w1:p1"].last_submit_at_unix_ms;
+        let before = runtime.delivery_observations["w1:p1"].input_generation;
 
         assert!(runtime.send_pane_reply(reply("w1:p1", REPLY, "네, 그렇게 해 주세요")));
 
@@ -394,7 +394,9 @@ mod tests {
             answer(&runtime, "w1:p1"),
             Some((REPLY.to_owned(), ThreadInputState::Sent, None))
         );
-        assert!(runtime.delivery_observations["w1:p1"].last_submit_at_unix_ms > before);
+        // A key noted before the write and the reply's key and submit after it,
+        // counted rather than timed: both can land in the same millisecond.
+        assert_eq!(runtime.delivery_observations["w1:p1"].input_generation, before + 2);
     }
 
     /// A reply that cannot reach the pane types nothing, or nothing more,
