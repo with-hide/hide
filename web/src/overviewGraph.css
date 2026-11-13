@@ -26,7 +26,7 @@
 .og-waiting-alone { padding: 0 var(--spacing-lg); }
 
 /* The operator at the center of the map. */
-.og-operator { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
+.og-operator { position: relative; display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
 
 /* A project is a soft light of its color behind its sessions, with its name above them as the
    project's drag handle. Nothing but the name takes the pointer, so the canvas pans everywhere else. */
@@ -36,10 +36,10 @@
 .og-project[data-current="true"] { opacity: 1; }
 /* Pointed at, or holding the chosen session, the project's name and glow stand out (PRD D-17, B21). */
 .og-project[data-emphasized="true"] { opacity: 1; text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }
-/* The in-map start and fold buttons are quiet until the name is pointed at (PRD D-19, B25; issue 2514). */
+/* The in-map fold button, and a folded project's start button, are quiet until the name is pointed at (PRD D-19, B25; issue 2514). */
 .og-project-fold, .og-project-start { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 1.2em; height: 1.2em; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--og-accent); opacity: var(--opacity-dimmed); cursor: pointer; }
 .og-project-fold svg, .og-project-start svg { width: 85%; height: 85%; }
-.og-project:hover .og-project-fold, .og-project-fold:focus-visible, .og-project:hover .og-project-start, .og-cluster:hover .og-project-start, .og-project-start:focus-visible { opacity: 1; }
+.og-project:hover .og-project-fold, .og-project-fold:focus-visible, .og-cluster:hover .og-project-start, .og-project-start:focus-visible { opacity: 1; }
 .og-project-fold:hover, .og-project-start:hover { background: var(--accent); color: var(--og-accent); }
 .og-project-fold:focus-visible { outline: var(--size-hairline) solid var(--ring); }
 .og-project-drag:active, .og-cluster-drag:active { cursor: grabbing; }
@@ -198,3 +198,18 @@
 .og-found > button > small { flex-shrink: 0; color: var(--muted-foreground); }
 .og-no-match { margin: var(--spacing-sm) 0 0; color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-found h3 span { font-variant-numeric: tabular-nums; }
+
+/* Issue 2514. The operator's `+` sits on its circle's rim; the circle itself stays a picture the pointer passes through. */
+.og-operator-start { position: absolute; right: calc(var(--spacing-xxs) * -1); bottom: calc(var(--spacing-xxs) * -1); width: var(--size-icon); height: var(--size-icon); padding: 0; border-radius: 50%; color: var(--subtle-foreground); pointer-events: auto; }
+.og-operator-start svg { width: 75%; height: 75%; }
+.og-operator-start:hover { color: var(--foreground); }
+/* Where a project's next session would stand: a root circle's size, dashed and faint, with no words and no line, so it never reads as a session. */
+.og-start-slot { display: flex; width: 100%; height: 100%; }
+/* React Flow lets the pointer pass through a node that neither drags nor selects, so each of these buttons takes it back. */
+.og-start-slot-orb { width: 100%; height: 100%; padding: 0; pointer-events: auto; border: var(--size-hairline) dashed color-mix(in srgb, var(--og-accent) 55%, transparent); border-radius: 50%; background: transparent; color: var(--og-accent); opacity: var(--opacity-dimmed); }
+.og-start-slot-orb svg { width: 40%; height: 40%; }
+.og-start-slot-orb:hover, .og-start-slot-orb:focus-visible { opacity: 1; border-style: solid; background: color-mix(in srgb, var(--og-accent) 12%, transparent); color: var(--og-accent); }
+.og-start-slot[data-muted="true"] { opacity: var(--opacity-dimmed); }
+/* The map's Add project place: a dashed, rounded box in free space, quieter than any project. */
+.og-add-project { width: 100%; height: 100%; gap: var(--spacing-xs); pointer-events: auto; border: var(--size-hairline) dashed var(--border); border-radius: var(--radius-xl); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
+.og-add-project:hover, .og-add-project:focus-visible { border-style: solid; color: var(--foreground); }

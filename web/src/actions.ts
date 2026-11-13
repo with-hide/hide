@@ -1767,7 +1767,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
       resumeSessionId?: string;
       resumeSessionPath?: string;
-      /** False keeps the screen in front instead of bringing the started pane's Workspace forward (`StartPreset.stay`). */
+      /** False keeps the screen in front instead of bringing the started pane's Workspace forward (the start panel's `stay`). */
       present?: boolean;
     }) {
       if (request.present !== false && !request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
@@ -1804,7 +1804,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openStartPanel(projectId?: string, options?: { stay?: boolean }) {
       const overSettings = ui().overlay === "settings";
       if (overSettings) ui().closeOverlay("settings");
-      useStartPanel.getState().open(overSettings, projectId ? { projectId, ...(options?.stay ? { stay: true } : {}) } : null);
+      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null, options?.stay === true);
     },
 
     /**

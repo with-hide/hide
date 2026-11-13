@@ -29,11 +29,15 @@ function useRevealNode(id: string) {
   };
 }
 
-export type OperatorNode = Node<{ label: string }, "operator">;
+/** `start` opens the start panel on no project, as ⌘K's Start an agent does (issue 2514). */
+export type OperatorNode = Node<{ label: string; startLabel: string; start: () => void }, "operator">;
+/** The dashed circle where a project's next session would stand; pressing it starts one there (issue 2514). */
+export type StartSlotNode = Node<{ workspaceId: string; label: string; accent: ProjectAccent; muted: boolean; start: (workspaceId: string) => void }, "start">;
+/** The map's Add project place, in free space among the projects (issue 2514). */
+export type AddProjectNode = Node<{ label: string; add: () => void }, "addProject">;
 /** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
 /** `muted`: the side column's search found nothing of this project. */
-/** `start` opens the start panel on the project (its workspace id), leaving the Overview in front. */
-export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void; start: (workspaceId: string) => void }, "project">;
+export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
 /** The soft light behind a project's sessions, fading to nothing at its edge. */
 export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
 /** A folded project: one circle with its name and counts. */
@@ -76,11 +80,26 @@ export function GraphLine({ agent, className }: { agent: AgentRow; className?: s
 }
 
 export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
-  return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
+  // The circle is a picture; only its `+` badge on the rim is pressed.
+  return <div className="og-operator"><Ports /><span role="img" aria-label={data.label}><span aria-hidden="true">{data.label}</span></span>
+    <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag nopan" aria-label={data.startLabel} data-graph-operator-start="true" onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint>
+  </div>;
 }
 
-/** A project's `+` on the map, as the sidebar's project row has it: the start panel on that project.
- * It sits beside the name, never on it, because the name is the project's drag handle. */
+/** Same size as a root session's circle, dashed and faint, so it never reads as a session; no line ties it to anyone. */
+export function StartSlotGraphNode({ data }: NodeProps<StartSlotNode>) {
+  return <div className="og-start-slot" data-accent={data.accent} data-muted={data.muted}>
+    <Hint label={data.label}><Button variant="ghost" size="inline" className="og-start-slot-orb nodrag nopan" aria-label={data.label} data-graph-start-slot={data.workspaceId} onClick={() => data.start(data.workspaceId)}><PlusIcon aria-hidden="true" /></Button></Hint>
+  </div>;
+}
+
+/** A dashed, rounded place with its words; pressing it is the sidebar's Add project. */
+export function AddProjectGraphNode({ data }: NodeProps<AddProjectNode>) {
+  return <Button variant="ghost" size="inline" className="og-add-project nodrag nopan" data-graph-add-project="true" onClick={data.add}><PlusIcon aria-hidden="true" />{data.label}</Button>;
+}
+
+/** A folded project's `+` beside its name, as the sidebar's project row has it: the start panel on that project.
+ * It sits beside the name, never on it, so it starts no drag. */
 function ProjectStartButton({ workspaceId, label, start }: { workspaceId: string; label: string; start: (workspaceId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const name = t("sidebar.startAgentIn", { name: label });
@@ -93,11 +112,10 @@ export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
   const { t } = useInterfaceTranslation();
   const label = data.group.project.workspace.label;
   const id = data.group.id;
-  // The name drags the project; the start and fold buttons beside it are not part of the drag handle. Folding
+  // The name drags the project; the fold button beside it is not part of the drag handle. Folding
   // replaces this node under the pointer, so no pointer leave arrives and the emphasis ends with the fold.
   return <div className="og-project" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-emphasized={data.emphasized} data-muted={data.muted} data-accent={data.accent} onPointerEnter={() => data.point(id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(id)} onBlur={() => data.point(null)}>
     <span className="og-project-name og-project-drag" title={t("overviewGraph.dragProject", { project: label })}>{label}</span>
-    <ProjectStartButton workspaceId={data.group.project.workspace.id} label={label} start={data.start} />
     <button type="button" className="og-project-fold nodrag nopan" aria-label={t("overviewGraph.foldProject", { project: label })} title={t("overviewGraph.foldProject", { project: label })} onClick={() => { data.point(null); data.fold(id); }}><ChevronsDownUpIcon aria-hidden="true" /></button>
   </div>;
 }

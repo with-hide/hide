@@ -294,7 +294,7 @@ it("keeps the Overview in front when an Overview project's + opened the panel, a
     await render(profileSnapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, { blog: "default" }), "docs");
     await act(async () => {
       useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: true, opening: null });
-      useStartPanel.getState().open(false, { projectId: "docs", stay: true });
+      useStartPanel.getState().open(false, { projectId: "docs" }, true);
     });
     expect(q("[data-start-target]")?.getAttribute("data-start-target")).toBe(checkoutKey("core-machine", "/local/docs"));
     await act(async () => q("[data-start-submit]")!.click());

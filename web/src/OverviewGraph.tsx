@@ -24,9 +24,9 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { frontDeviceId } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
-import { checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, graphSessionMatches, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
+import { ADD_PROJECT, checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, graphSessionMatches, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
 import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
-import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, launchWords, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
+import { AddProjectGraphNode, ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, launchWords, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, StartSlotGraphNode, TeamGraphNode, type AddProjectNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type StartSlotNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
 import { sessionOfAgent } from "./sessionWork";
 import type { GraphScope, OverviewGraphChoices, WorkSession } from "./snapshot";
@@ -37,7 +37,7 @@ import "./overviewGraph.css";
 import { composingKey } from "./keys";
 
 type Props = { projects: BoardProject[]; deviceId: string; actions: Actions; onOpenRecord?: (session: WorkSession) => void };
-const NODE_TYPES: NodeTypes = { operator: OperatorGraphNode, project: ProjectGraphNode, glow: GlowGraphNode, cluster: ClusterGraphNode, team: TeamGraphNode, session: SessionGraphNode };
+const NODE_TYPES: NodeTypes = { operator: OperatorGraphNode, project: ProjectGraphNode, glow: GlowGraphNode, cluster: ClusterGraphNode, team: TeamGraphNode, session: SessionGraphNode, start: StartSlotGraphNode, addProject: AddProjectGraphNode };
 const EDGE_TYPES: EdgeTypes = { line: LineGraphEdge };
 const PAGE_SIZE = 50;
 /** The side column lists this many found sessions; more words narrow the rest. */
@@ -151,6 +151,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const toggleTeam = useCallback((root: string) => { const session = sessionKeyOf(root); if (session) actions.changeOverviewGraph({ kind: "team_folded", session, folded: !teamFolded(root) }); }, [actions, sessionKeyOf, teamFolded]);
   // A project's `+` opens the start panel on it; the start keeps the Overview in front, where the new session joins the map.
   const startInProject = useCallback((workspaceId: string) => actions.openStartPanel(workspaceId, { stay: true }), [actions]);
+  // The operator's own `+` names no project: the panel picks its target as ⌘K's Start an agent does.
+  const startAnywhere = useCallback(() => actions.openStartPanel(undefined, { stay: true }), [actions]);
   const toggleFoldProject = useCallback((id: string) => { const project = projectKeyOf(id); if (project) actions.changeOverviewGraph({ kind: "project_folded", project, folded: !foldedProjects.has(id) }); }, [actions, projectKeyOf, foldedProjects]);
   const foldAll = () => actions.changeOverviewGraph({ kind: "fold_all", projects: model.projects.map((group) => graphProjectKey(group.project.workspace)) });
   const revealing = useRef<string | null>(null);
@@ -268,7 +270,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const visibleByProject = new Map<string, GraphAgent[]>();
   for (const row of model.visible) visibleByProject.set(row.projectId, [...(visibleByProject.get(row.projectId) ?? []), row]);
   if (size && layout.phase === "ready") {
-    nodes.push({ id: OPERATOR, type: "operator", position: { x: -size.operator / 2, y: -size.operator / 2 }, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator") }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 3 } satisfies OperatorNode);
+    nodes.push({ id: OPERATOR, type: "operator", position: { x: -size.operator / 2, y: -size.operator / 2 }, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator"), startLabel: t("overviewGraph.newAgent"), start: startAnywhere }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 3 } satisfies OperatorNode);
     orbs.set(OPERATOR, { x: 0, y: 0, r: size.operator / 2 });
     // A project stands out while its name or row is pointed at, or one of its sessions is chosen and its
     // details are open (PRD D-17); the current pane's highlight at entry is not a choice and lights nothing.
@@ -280,7 +282,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
       const members = (visibleByProject.get(group.id) ?? []).filter((row) => pointOf(row.id));
       if (!members.length) continue;
       const accent = projectAccent(group.id);
-      const middle = cloud(members.map((row) => pointOf(row.id)!), size.root.width / 2);
+      const middle = cloud([...members.map((row) => pointOf(row.id)!), ...(!foldedProjects.has(group.id) && points.get(group.startSlot) ? [points.get(group.startSlot)!] : [])], size.root.width / 2);
       // Folded or not, the project keeps its glow, so its circle reads as the same project (PRD D-19).
       const glow = middle.r * 2;
       nodes.push({ id: `glow:${group.id}`, type: "glow", position: { x: middle.x - middle.r, y: middle.y - middle.r }, width: glow, height: glow, measured: { width: glow, height: glow }, data: { accent, emphasized: emphasizedProject(group.id) }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 0 } satisfies GlowNode);
@@ -296,8 +298,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
         clusterProject.set(cluster(group.id), group.id);
         continue;
       }
-      const top = Math.min(...members.map((row) => pointOf(row.id)!.y)) - size.root.orb / 2 - size.gap * 2 - size.label.height;
-      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, emphasized: emphasizedProject(group.id), muted: missed(members), fold: toggleFoldProject, point: setPointedProject, start: startInProject }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
+      // The start circle stands among the sessions, so the name and the glow take it in.
+      const slot = points.get(group.startSlot);
+      const top = Math.min(...members.map((row) => pointOf(row.id)!.y), ...(slot ? [slot.y] : [])) - size.root.orb / 2 - size.gap * 2 - size.label.height;
+      if (slot) nodes.push({ id: group.startSlot, type: "start", position: { x: slot.x - size.root.orb / 2, y: slot.y - size.root.orb / 2 }, width: size.root.orb, height: size.root.orb, measured: { width: size.root.orb, height: size.root.orb }, data: { workspaceId: group.project.workspace.id, label: t("sidebar.startAgentIn", { name: group.project.workspace.label }), accent, muted: missed(members), start: startInProject }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies StartSlotNode);
+      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, emphasized: emphasizedProject(group.id), muted: missed(members), fold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
       const drawnHere = new Set(members.map((row) => row.id));
       for (const row of members) {
         const point = pointOf(row.id)!;
@@ -317,6 +322,12 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
         const measured = { width: shape.width, height: shape.height };
         sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, root, branch: checkoutChip(row, agentsById.get(model.parents.get(row.id) ?? "")), context: model.context.has(row.id), muted: selection !== null ? !related : missed(team?.folded ? [row, ...descendants] : [row]), highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
       }
+    }
+    // The map's Add project place, where the physics left room for it.
+    const adding = points.get(ADD_PROJECT.slot);
+    if (adding) {
+      const box = { width: size.root.width, height: size.root.orb };
+      nodes.push({ id: ADD_PROJECT.slot, type: "addProject", position: { x: adding.x - box.width / 2, y: adding.y - box.height / 2 }, ...box, measured: box, data: { label: t("overviewGraph.addProject"), add: () => actions.openAddProject() }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies AddProjectNode);
     }
     // The chosen team's dashed outline goes round its circles and words.
     if (chosenTeam) {

@@ -19,12 +19,7 @@ import type { AgentStartTarget } from "./agentLayout";
  * project row's `+` (PRD sidebar-titlebar-refresh D-04), and the agent kind
  * when the surface chose one, else the remembered one.
  */
-/**
- * `stay` keeps the screen in front when the start goes: an Overview's project
- * `+` (issue 2514) leaves the operator on the Overview, where the new session
- * joins the map, instead of bringing its Workspace forward.
- */
-export type StartPreset = { projectId: string; kind?: ProviderKind; stay?: boolean };
+export type StartPreset = { projectId: string; kind?: ProviderKind };
 
 /**
  * Why a start did not go: the core's own sentence, shown as sent, or a catalog
@@ -73,10 +68,16 @@ type StartPanelState = {
   overSettings: boolean;
   /** The project and agent this open starts on; null reads what is in front and the remembered agent. */
   preset: StartPreset | null;
+  /**
+   * This open keeps the screen in front when its start goes: one from the
+   * Overview's work map (issue 2514) leaves the operator on the Overview, where
+   * the new session joins the map, instead of bringing its Workspace forward.
+   */
+  stay: boolean;
   /** The id of the request whose answer the panel waits for. */
   request: string | null;
   requestKind: "agent_start" | "worktree_create";
-  /** Whether the request in flight brings its pane forward; false for an open that asked to stay (`StartPreset.stay`). */
+  /** Whether the request in flight brings its pane forward; false for one sent from an open that asked to `stay`. */
   present: boolean;
   /** Why the last start did not go, shown inside the panel. */
   failure: StartFailure | null;
@@ -84,7 +85,7 @@ type StartPanelState = {
   sent: string;
   /** A start whose tab is open but whose agent has not answered yet, with its text. */
   spent: { taskId: number; text: string } | null;
-  open: (overSettings: boolean, preset?: StartPreset | null) => void;
+  open: (overSettings: boolean, preset?: StartPreset | null, stay?: boolean) => void;
   close: () => void;
   setText: (text: string) => void;
   setTarget: (key: string) => void;
@@ -104,6 +105,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   target: null,
   overSettings: false,
   preset: null,
+  stay: false,
   request: null,
   requestKind: "agent_start",
   present: true,
@@ -111,7 +113,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   sent: "",
   spent: null,
   // A reason the last start did not go stays with its text until the text changes.
-  open: (overSettings, preset = null) => set({ isOpen: true, target: null, overSettings, preset }),
+  open: (overSettings, preset = null, stay = false) => set({ isOpen: true, target: null, overSettings, preset, stay }),
   close: () => set({ isOpen: false }),
   setText: (text) => set({ text, failure: null }),
   setTarget: (target) => set({ target }),
