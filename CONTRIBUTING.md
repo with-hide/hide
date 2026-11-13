@@ -29,7 +29,7 @@ Say which one you used and that you read and ran every line, in the `AI use` sec
 | Open pull requests at once | 3, and a fourth is closed | no limit | no limit |
 | A pull request with no commit or comment for 14 days | gets a comment and is closed | left open | left open |
 | The template | checked | checked | not checked |
-| CI | runs by itself once one of your pull requests has merged; the first run waits for a maintainer | runs by itself | runs by itself |
+| CI | waits for a maintainer to approve each run | runs by itself: the gate approves it | runs by itself |
 
 - A pull request that misses the title or a template section gets the label `needs-template` and one comment naming what is missing.
   Fix it by editing the description; the label goes away on its own, and a pull request still missing it after 3 days is closed.

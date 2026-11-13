@@ -3,7 +3,7 @@ name: contribution gate
 # Applies CONTRIBUTING.md, Pull requests are open, to a pull request: the
 # template, the number open at once, the label for a young account, and the
 # strike rule on opening, and a daily sweep that closes what sat idle or stayed
-# without its template, and applies the same template rule to an issue (a form's
+# without its template, approves CI for a person on the approved list, and applies the same template rule to an issue (a form's
 # headings), which it closes only after a week. It also closes an issue that runs
 # past its length limit.
 # A maintainer is never gated, and one who reopens an item keeps it open.
@@ -14,7 +14,7 @@ name: contribution gate
 
 on:
   pull_request_target:
-    types: [opened, reopened, edited]
+    types: [opened, reopened, edited, synchronize]
   issues:
     types: [opened, reopened, edited]
   schedule:
@@ -34,6 +34,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/github-script@v9
         with:
@@ -144,12 +145,28 @@ jobs:
               return problems;
             }
 
+            // CI of a fork's pull request waits for a maintainer ("all external contributors" in the repository's
+            // settings); for a person on the approved list the gate is that approval. The runs appear a moment
+            // after the event, so it looks a few times, and it approves only runs of this pull request's head commit.
+            async function approveRuns(pull, attempts) {
+              for (let attempt = 0; attempt < attempts; attempt++) {
+                const { data } = await github.rest.actions.listWorkflowRunsForRepo({ owner, repo, head_sha: pull.head.sha, status: 'action_required', per_page: 50 });
+                const runs = data.workflow_runs.filter(run => run.pull_requests.some(p => p.number === pull.number) || run.head_repository?.full_name === pull.head.repo?.full_name);
+                for (const run of runs) await github.rest.actions.approveWorkflowRun({ owner, repo, run_id: run.id });
+                if (runs.length) return core.info(`approved ${runs.length} run(s) for ${pull.user.login}`);
+                if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, 10000));
+              }
+              core.info('no run is waiting for approval');
+            }
+
             async function gatePull(pull, action, sender) {
               if (pull.state !== 'open') return core.info('pull request is closed');
               const author = pull.user.login;
               if (BOTS.has(author) || await isMaintainer(author)) return core.info(`${author} is not gated`);
               if (action === 'reopened' && await isMaintainer(sender)) return core.info(`reopened by maintainer ${sender}`);
               const isApprovedAuthor = await isApproved(author);
+              if (isApprovedAuthor) await approveRuns(pull, action === 'edited' ? 1 : 6);
+              if (action === 'synchronize') return core.info('a push needs no other check');
 
               if (action === 'opened' || action === 'reopened') {
                 if (!isApprovedAuthor) {
