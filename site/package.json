@@ -10,7 +10,7 @@
     "prebuild": "node ../scripts/docs/check-features.mjs src/content/docs/docs --write src/generated/used-in.json",
     "build": "astro build && node scripts/add-embed.mjs",
     "preview": "astro preview",
-    "test": "node --test tests/"
+    "test": "node --test \"tests/*.test.mjs\""
   },
   "dependencies": {
     "@astrojs/starlight": "0.34.8",

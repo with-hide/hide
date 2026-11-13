@@ -6,6 +6,8 @@
 //      cannot throw, loop or stop repairing);
 //   1. the guides and feature pages hold each other (check-features.mjs), and writes each feature's
 //      "Used in guides" list from the guides' `features:` headers;
+//   1b. the site's own tests (`site/tests`: the landing's download policy, the privacy and support pages' claims held
+//      to the code and the deploy files), through `verify-web.sh site test`; they read files and need no install;
 //   2. the CLI reference is generated from the help of the one `hide` named below and contracts/hide-cli.json, and fails
 //      on a command with no note and on a note for a gone command (cli-reference.mjs);
 //   2b. the Keyboard shortcuts page is generated from web/src/shortcuts.ts, imported as it stands, and fails when a
@@ -60,6 +62,8 @@ run("the CLI reference reader finds every command of the real usage strings", "n
 mkdirSync(generated, { recursive: true });
 mkdirSync(join(content, "reference"), { recursive: true });
 run("guides and features hold each other", "node", ["scripts/docs/check-features.mjs", content, "--write", join(generated, "used-in.json")]);
+
+run("the site's own tests: the download policy and the legal pages", "bash", ["scripts/verify-web.sh", "site", "test"]);
 
 const cli = run("CLI reference from hide --help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
 const front = ["---", "title: CLI", "description: Every hide command, with one line and an example each.", "sidebar:", "  order: 1", "---", "", ""].join("\n");

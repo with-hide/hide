@@ -38,12 +38,12 @@ The site is pinned to pnpm 10.34.9 (`packageManager` in `package.json`, and the 
 
 `check-all` is the docs lane's command (`docs/TESTING.md`, The user docs): it checks that guides and features name each other, generates the CLI reference from the `--help` of one `hide` binary and `contracts/hide-cli.json` (failing on a command with no note, and on a note for a gone command), builds the live parts and builds the site into `site/dist/`.
 `--hide <path>` (or `HIDE_BIN`) names the one `hide` whose `--help` owns which commands exist; the default is `target/debug/hide`, a build of this checkout (`bash scripts/verify-cargo.sh build -p hided --bin hide`). An installed app's `hide`, such as `/Applications/hide.app/Contents/Resources/hide`, is accepted but may be older than this commit, so `check-all` says so: a local pass with it is a limited check, and CI, which builds `hide` from the commit and passes it with `--ci`, is the gate.
-`--checks-only` runs the first two steps for a quick loop.
+`--checks-only` runs the checks before the builds (the guides, the site's tests and the generated pages) for a quick loop.
 For writing pages with a reload, run `check-all` once (it writes the generated files and builds the live parts), then `cd site && pnpm dev`; the live frames load only from the built site, so check them with the preview below.
-The download-policy tests and the checks on the privacy and support pages stay a plain `node` run:
+The download-policy tests and the checks on the privacy and support pages need no install, and the docs lane runs them inside `check-all`:
 
 ```sh
-node --test site/tests/downloads.test.mjs site/tests/legal.test.mjs
+bash scripts/verify-web.sh site test
 ```
 
 `privacy.html` and `support.html` are the two pages the App Store listing points at
