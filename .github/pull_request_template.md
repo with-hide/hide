@@ -51,6 +51,10 @@ No screen change: no screenshot. Optionally one short code block with the change
 
 </details>
 
+## AI use
+
+<!-- Required from a contributor outside the maintainers: the agent or model you used, or `none`, and that you read and ran every line. Maintainers delete this section. -->
+
 ## Breaking change
 
 <!--

@@ -1,20 +1,28 @@
 name: contribution gate
 
-# Closes a pull request whose author is neither a maintainer (write access) nor
-# listed in .github/APPROVED_CONTRIBUTORS, and an issue that runs past its length
-# limit. A maintainer who reopens either
-# keeps it open. CONTRIBUTING.md owns the policy and its reasons.
+# Applies CONTRIBUTING.md, Pull requests are open, to a pull request: the
+# template, the number open at once, the label for a young account, and the
+# strike rule on opening, and a daily sweep that closes what sat idle or stayed
+# without its template. It also closes an issue that runs past its length limit.
+# A maintainer is never gated, and one who reopens an item keeps it open.
+# CONTRIBUTING.md owns the policy and its reasons.
 #
 # pull_request_target runs this file from main with a write token, so it must
 # never check out or run the pull request's code; it reads only the API.
 
 on:
   pull_request_target:
-    types: [opened, reopened]
+    types: [opened, reopened, edited]
   issues:
     types: [opened, reopened]
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions: {}
+
+concurrency:
+  group: contribution-gate-${{ github.event.pull_request.number || github.event.issue.number || 'sweep' }}
+  cancel-in-progress: false
 
 jobs:
   gate:
@@ -29,13 +37,27 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const pull = context.payload.pull_request;
-            const item = pull ?? context.payload.issue;
-            const author = item.user.login;
-            const MARKER = '<!-- hide:contribution-gate -->';
             const ISSUE_LIMIT = 8000;
-            // Dependency updates come from these apps, and only they.
+            const OPEN_LIMIT = 3;
+            const STRIKE_LIMIT = 3;
+            const YOUNG_ACCOUNT_DAYS = 30;
+            const IDLE_DAYS = 14;
+            const TEMPLATE_GRACE_DAYS = 3;
+            const DAY = 24 * 60 * 60 * 1000;
+            const TYPES = ['feat', 'fix', 'perf', 'refactor', 'test', 'docs', 'build', 'ci', 'chore', 'revert'];
+            const SECTIONS = ['Summary', 'Evidence', 'Review', 'AI use'];
             const BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
+            const MARKERS = { template: '<!-- hide:gate-template -->', closed: '<!-- hide:gate-closed -->', stale: '<!-- hide:gate-stale -->' };
+            const LABELS = {
+              'needs-triage': ['fbca04', 'A maintainer should look at the account'],
+              'needs-template': ['d93f0b', 'The title or a template section is missing'],
+              'needs-issue': ['5319e7', 'A maintainer asked for an issue or a Discussion first'],
+              'stale': ['cfd3d7', 'No activity; closed by the gate'],
+              'closed-by-gate': ['cfd3d7', 'Closed by the contribution gate, not counted against its author'],
+            };
+            const policy = `https://github.com/${owner}/${repo}/blob/main/CONTRIBUTING.md#pull-requests-are-open-and-a-maintainer-reads-every-one`;
+            const templateUrl = `https://github.com/${owner}/${repo}/blob/main/.github/pull_request_template.md`;
+            const discussions = `https://github.com/${owner}/${repo}/discussions`;
 
             async function isMaintainer(login) {
               try {
@@ -47,57 +69,158 @@ jobs:
               }
             }
 
-            async function approvedContributors() {
-              const { data } = await github.rest.repos.getContent({
-                owner, repo, path: '.github/APPROVED_CONTRIBUTORS', ref: context.payload.repository.default_branch,
-              });
-              return new Set(Buffer.from(data.content, 'base64').toString('utf8')
-                .split('\n')
-                .map(line => line.trim().toLowerCase())
-                .filter(line => line && !line.startsWith('#')));
+            let approved;
+            async function isApproved(login) {
+              if (!approved) {
+                const { data } = await github.rest.repos.getContent({ owner, repo, path: '.github/APPROVED_CONTRIBUTORS', ref: context.payload.repository?.default_branch ?? 'main' });
+                approved = new Set(Buffer.from(data.content, 'base64').toString('utf8')
+                  .split('\n').map(line => line.trim().toLowerCase()).filter(line => line && !line.startsWith('#')));
+              }
+              return approved.has(login.toLowerCase());
             }
 
-            if (BOTS.has(author)) return core.info(`${author} is a dependency bot`);
-            if (await isMaintainer(author)) return core.info(`${author} is a maintainer`);
-            if ((await approvedContributors()).has(author.toLowerCase())) return core.info(`${author} is an approved contributor`);
-            if (context.payload.action === 'reopened' && await isMaintainer(context.payload.sender.login)) {
-              return core.info(`reopened by maintainer ${context.payload.sender.login}`);
+            async function ensureLabel(name) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                const [color, description] = LABELS[name];
+                await github.rest.issues.createLabel({ owner, repo, name, color, description });
+              }
+            }
+            async function addLabel(number, name) {
+              await ensureLabel(name);
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [name] });
+            }
+            async function removeLabel(number, name) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
+            async function comments(number) {
+              return github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
+            }
+            // One comment per marker: written once, and rewritten in place when its text changes.
+            async function say(number, marker, lines) {
+              const body = [marker, ...lines].join('\n');
+              const mine = (await comments(number)).find(c => c.user?.login === 'github-actions[bot]' && c.body?.includes(marker));
+              if (!mine) await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+              else if (mine.body !== body) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            }
+            async function closePull(number) {
+              await addLabel(number, 'closed-by-gate');
+              await github.rest.pulls.update({ owner, repo, pull_number: number, state: 'closed' });
+            }
+            const search = async (q) => (await github.rest.search.issuesAndPullRequests({ q, per_page: 1 })).data.total_count;
+
+            // What the title and the body of a pull request still lack, as a list of plain sentences.
+            function templateProblems(pull) {
+              const problems = [];
+              const title = pull.title ?? '';
+              if (!new RegExp(`^(${TYPES.join('|')})(\\([^)]+\\))?!?: \\S`).test(title)) {
+                problems.push(`The title is \`<type>: <sentence>\` with a type from ${TYPES.map(t => `\`${t}\``).join(', ')}.`);
+              }
+              const body = (pull.body ?? '').replace(/<!--[\s\S]*?-->/g, '');
+              const parts = body.split(/^##\s+/m).slice(1);
+              for (const section of SECTIONS) {
+                const part = parts.find(p => p.split('\n')[0].trim().toLowerCase() === section.toLowerCase());
+                // The folded `<details>` block of the template is not the section's own answer.
+                const text = (part ?? '').split('\n').slice(1)
+                  .join('\n').split('<details')[0].split('\n')
+                  .filter(line => !/^\s*[-*]\s*\*\*[^*]+\*\*:?\s*$/.test(line))
+                  .join('').replace(/\s/g, '');
+                if (text.length < 10) problems.push(`The \`## ${section}\` section is missing or empty.`);
+              }
+              return problems;
             }
 
-            const policy = `https://github.com/${owner}/${repo}/blob/${context.payload.repository.default_branch}/CONTRIBUTING.md`;
-            const discussions = `https://github.com/${owner}/${repo}/discussions`;
-            let reason;
-            if (pull) {
-              reason = [
-                'hide does not accept pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS`, so this one was closed automatically.',
-                '',
-                'Report a bug or ask for a feature with the issue forms; an issue does not reserve the work or permit a pull request.',
-                `Ideas, behavior changes and proposals belong in [Discussions](${discussions}).`,
-              ];
-            } else {
-              const body = item.body ?? '';
-              if (body.length <= ISSUE_LIMIT) return core.info('issue is within its length limit');
-              reason = [
-                `This issue is longer than ${ISSUE_LIMIT} characters, so it was closed automatically. Keep it to one screen in your own words, using the bug or feature request form.`,
-              ];
-            }
-            const message = [
-              MARKER,
-              `Hi @${author}, thanks for your interest in hide.`,
-              '',
-              ...reason,
-              '',
-              'A maintainer can reopen this if they want it; a reopen by anyone else is closed again.',
-              '',
-              `The contribution policy: ${policy}`,
-            ].join('\n');
+            async function gatePull(pull, action, sender) {
+              if (pull.state !== 'open') return core.info('pull request is closed');
+              const author = pull.user.login;
+              if (BOTS.has(author) || await isMaintainer(author)) return core.info(`${author} is not gated`);
+              if (action === 'reopened' && await isMaintainer(sender)) return core.info(`reopened by maintainer ${sender}`);
+              const isApprovedAuthor = await isApproved(author);
 
-            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: item.number, per_page: 100 });
-            if (!comments.some(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.includes(MARKER))) {
-              await github.rest.issues.createComment({ owner, repo, issue_number: item.number, body: message });
+              if (action === 'opened' || action === 'reopened') {
+                if (!isApprovedAuthor) {
+                  const strikes = await search(`repo:${owner}/${repo} is:pr is:closed is:unmerged author:${author} -label:closed-by-gate`);
+                  if (strikes >= STRIKE_LIMIT) {
+                    await say(pull.number, MARKERS.closed, [
+                      `Hi @${author}, thanks for your interest in hide.`, '',
+                      `${STRIKE_LIMIT} of your earlier pull requests were closed by a maintainer without merging, so this one was closed automatically.`,
+                      'A maintainer can reopen it if they want it.', '', `The policy: ${policy}`]);
+                    return await closePull(pull.number);
+                  }
+                  const open = await search(`repo:${owner}/${repo} is:pr is:open author:${author}`);
+                  if (open > OPEN_LIMIT) {
+                    await say(pull.number, MARKERS.closed, [
+                      `Hi @${author}, thanks for your interest in hide.`, '',
+                      `You already have ${OPEN_LIMIT} pull requests open, so this one was closed automatically. Open it again when one of them is merged or closed.`, '',
+                      `The policy: ${policy}`]);
+                    return await closePull(pull.number);
+                  }
+                  const user = (await github.rest.users.getByUsername({ username: author })).data;
+                  if (Date.now() - Date.parse(user.created_at) < YOUNG_ACCOUNT_DAYS * DAY) await addLabel(pull.number, 'needs-triage');
+                }
+              }
+
+              const problems = templateProblems(pull);
+              const labelled = pull.labels?.some(l => l.name === 'needs-template');
+              if (problems.length) {
+                await say(pull.number, MARKERS.template, [
+                  `Hi @${author}, thanks for the pull request. It does not follow [the template](${templateUrl}) yet:`, '',
+                  ...problems.map(p => `- ${p}`), '',
+                  `Edit the description to fix it; this label goes away on its own. A pull request still missing it after ${TEMPLATE_GRACE_DAYS} days is closed.`, '',
+                  `The policy: ${policy}`]);
+                if (!labelled) await addLabel(pull.number, 'needs-template');
+              } else if (labelled) {
+                await removeLabel(pull.number, 'needs-template');
+                await say(pull.number, MARKERS.template, ['The description now follows the template. Thank you.']);
+              }
             }
-            if (pull) {
-              await github.rest.pulls.update({ owner, repo, pull_number: item.number, state: 'closed' });
-            } else {
-              await github.rest.issues.update({ owner, repo, issue_number: item.number, state: 'closed', state_reason: 'not_planned' });
+
+            async function gateIssue(issue) {
+              if ((issue.body ?? '').length <= ISSUE_LIMIT) return core.info('issue is within its length limit');
+              const author = issue.user.login;
+              if (BOTS.has(author) || await isMaintainer(author)) return core.info(`${author} is not gated`);
+              await say(issue.number, MARKERS.closed, [
+                `Hi @${author}, thanks for your interest in hide.`, '',
+                `This issue is longer than ${ISSUE_LIMIT} characters, so it was closed automatically. Keep it to one screen in your own words, using the bug or feature request form.`, '',
+                'A maintainer can reopen this if they want it.', '', `The policy: ${policy}`]);
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'not_planned' });
             }
+
+            // The daily sweep: a pull request that stayed without its template, or without any commit or comment.
+            async function sweep() {
+              const pulls = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
+              for (const pull of pulls) {
+                const author = pull.user.login;
+                if (BOTS.has(author) || await isMaintainer(author)) continue;
+                if (pull.labels.some(l => l.name === 'needs-template')) {
+                  const events = await github.paginate(github.rest.issues.listEvents, { owner, repo, issue_number: pull.number, per_page: 100 });
+                  const since = events.filter(e => e.event === 'labeled' && e.label?.name === 'needs-template').map(e => Date.parse(e.created_at)).pop();
+                  if (since && Date.now() - since > TEMPLATE_GRACE_DAYS * DAY) {
+                    await say(pull.number, MARKERS.closed, [
+                      `Closing this pull request: it still does not follow [the template](${templateUrl}) after ${TEMPLATE_GRACE_DAYS} days.`,
+                      'A maintainer can reopen it, or you can open it again once the description is complete.', '', `The policy: ${policy}`]);
+                    await closePull(pull.number);
+                    continue;
+                  }
+                }
+                if (await isApproved(author)) continue;
+                // `updated_at` moves on a commit, a comment or a label, which is the activity CONTRIBUTING.md counts.
+                if (Date.now() - Date.parse(pull.updated_at) > IDLE_DAYS * DAY) {
+                  await addLabel(pull.number, 'stale');
+                  await say(pull.number, MARKERS.stale, [
+                    `Closing this pull request: nothing has happened on it for ${IDLE_DAYS} days.`,
+                    'Push a commit or write a comment and open it again if you still want it reviewed.', '', `The policy: ${policy}`]);
+                  await closePull(pull.number);
+                }
+              }
+            }
+
+            if (context.eventName === 'schedule') await sweep();
+            else if (context.payload.pull_request) await gatePull(context.payload.pull_request, context.payload.action, context.payload.sender.login);
+            else await gateIssue(context.payload.issue);

@@ -325,7 +325,7 @@ The method, the distributions and every limit are kept in `docs/performance-resu
 
 hide is built in the open.
 Report a bug you reproduced with the [bug form](https://github.com/with-hide/hide/issues/new?template=bug.yml), ask for a feature with the [feature request form](https://github.com/with-hide/hide/issues/new?template=feature_request.yml), and bring open-ended ideas to [Discussions](https://github.com/with-hide/hide/discussions/categories/ideas).
-Pull requests are open only to maintainers and the people in [`.github/APPROVED_CONTRIBUTORS`](.github/APPROVED_CONTRIBUTORS); others are closed automatically.
+Pull requests are open to anyone who follows the [template](.github/pull_request_template.md); a maintainer reads every one.
 [CONTRIBUTING.md](CONTRIBUTING.md) owns that policy and lists the `verify` gates and their local commands, and [AGENTS.md](AGENTS.md) holds the rules every change follows.
 
 ```sh
