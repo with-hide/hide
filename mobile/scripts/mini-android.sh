@@ -243,19 +243,25 @@ case "$command" in
         display_changed=1
         adb -s "$serial" shell wm size 1080x1920 > /dev/null
         adb -s "$serial" shell wm density 420 > /dev/null
-        # The system bar, as Android's own demo mode draws it: 9:41, a full battery and a full signal, no notification icons.
+        # The system bar, as Android's own demo mode draws it: 9:41, a full battery and the Wi-Fi signal, no notification icons.
+        # A broadcast reaches System UI only once it listens, which is later than the boot's end, so every shot sends them
+        # again before it starts (they set the same values again).
         adb -s "$serial" shell settings put global sysui_demo_allowed 1
         demo() { adb -s "$serial" shell am broadcast -a com.android.systemui.demo -e command "$@" > /dev/null; }
-        demo enter
-        demo clock -e hhmm "$(printf '%s' "$HIDE_STORE_CLOCK" | sed -E 's/^[0-9-]+T([0-9]{2}):([0-9]{2}).*/\1\2/')"
-        demo battery -e level 100 -e plugged false
-        demo network -e wifi show -e level 4 -e fully true
-        demo network -e mobile show -e datatype hide -e level 4 -e fully true
-        demo notifications -e visible false
+        status_bar() {
+            demo enter
+            demo clock -e hhmm "$(printf '%s' "$HIDE_STORE_CLOCK" | sed -E 's/^[0-9-]+T([0-9]{2}):([0-9]{2}).*/\1\2/')"
+            demo battery -e level 100 -e plugged false
+            demo network -e wifi show -e level 4 -e fully true
+            demo network -e mobile hide
+            demo notifications -e visible false
+        }
+        pause 10
         rm -rf "$shots/store"
         mkdir -p "$shots/store"
         while IFS=$'\t' read -r lang file settle tag steps; do
             [[ -n "$lang" ]] || continue
+            status_bar
             adb -s "$serial" shell cmd locale set-app-locales "$package" --locales "$tag" > /dev/null
             adb -s "$serial" shell am force-stop "$package"
             adb -s "$serial" shell run-as "$package" rm -f cache/hide-debug-taps || true
