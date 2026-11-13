@@ -839,7 +839,7 @@ test("browser: Open in default browser hands a web page's address to the system 
   expect(await openFromCli(address, ["--wait"])).toMatchObject({ status: 0, ok: true });
   await viewOf(address);
   const button = page.locator("[data-browser-open-default]");
-  await expect(button).toBeVisible({ timeout: 20_000 });
+  await expect(button).toBeVisible();
   await expect(button).toHaveAttribute("aria-label", "Open in default browser");
   await button.click();
   await expect.poll(handed).toEqual([address]);
@@ -854,7 +854,7 @@ test("browser: Open in default browser hands a web page's address to the system 
   const file = await openFromCli(local, ["--wait"]);
   expect(file).toMatchObject({ status: 0, ok: true });
   const toolbar = page.locator(`[data-browser-toolbar="${(file.result as { view_id: string }).view_id}"]`);
-  await expect(toolbar).toBeVisible({ timeout: 20_000 });
+  await expect(toolbar).toBeVisible();
   await expect(toolbar.locator("[data-browser-open-default]")).toHaveCount(0);
   expect(await handed()).toEqual([address]);
 });
