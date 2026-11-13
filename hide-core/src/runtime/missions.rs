@@ -2225,8 +2225,9 @@ impl Runtime {
                     }
                 }
                 // The Conductor moving the node settles what waited on it
-                // (B17); a cause it settles is not raised again.
-                if patch.status.is_some() {
+                // (B17), a start by naming its worker included; a cause it
+                // settles is not raised again.
+                if patch.status.is_some() || next.status != current.nodes[index].status {
                     super::mission_health::settle(&id, &mut next, "conductor");
                 }
                 // Taken back to work from a finish, it is not finished again
