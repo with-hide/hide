@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { downloadView, heroOffer, phoneOf, validateRelease } from "../public/downloads.js";
+import { APP_STORE_URL, heroOffer, phoneOf, platformCards, validateRelease } from "../public/downloads.js";
 
 // The installers a release carries (PRD auto-update D-35), each with its checksum.
 const base = "https://github.com/with-hide/hide/releases";
@@ -33,7 +33,7 @@ test("one complete stable release returns every installer and checksum at its ow
     format: formats[index], name, url: `${base}/download/v1.2.3/${name}`, checksumUrl: `${base}/download/v1.2.3/${name}.sha256`,
   }));
   assert.deepEqual(result.downloads["macos-arm64"].files, offered([filenames[0]], ["dmg"]));
-  assert.deepEqual(result.downloads["windows-x64"].files, offered([filenames[1]], ["installer"]));
+  assert.deepEqual(result.downloads["windows-x64"].files, offered([filenames[1]], ["exe"]));
   assert.deepEqual(result.downloads["linux-x64"].files, offered(filenames.slice(2), ["deb", "rpm"]));
   assert.equal(result.downloads["macos-x64"], undefined);
   assert.equal(result.downloads["windows-arm64"], undefined);
@@ -141,39 +141,62 @@ test("the hero offers the one macOS or Windows installer with what opening it sh
   }
 });
 
-test("the download section leads with the visitor's system and its file at once, with no processor to choose", () => {
+const card = (view, id) => view.groups.flatMap(group => group.cards).find(item => item.id === id);
+const primaries = view => view.groups.flatMap(group => group.cards).flatMap(item => item.actions).filter(action => action.primary);
+
+test("every platform is a card, computers then phones, and the visitor's own carries the one primary button", () => {
   const ready = validateRelease(publicRelease());
-  const mac = downloadView(ready, "macos", "");
+  const mac = platformCards(ready, { os: "macos" });
   assert.equal(mac.tag, "v1.2.3");
-  assert.equal(mac.lead.os, "macos");
-  assert.equal(mac.lead.requirement, "Apple Silicon · macOS 14 or later");
-  assert.equal(mac.lead.excluded, null);
-  assert.deepEqual(mac.lead.files.map(file => [file.url, file.checksumUrl, file.command]),
-    [[`${base}/download/v1.2.3/${filenames[0]}`, `${base}/download/v1.2.3/${filenames[0]}.sha256`, null]]);
-  assert.equal(mac.lead.guide, "/docs/start/install-macos/");
-  assert.deepEqual(mac.others.map(system => system.os), ["windows", "linux"]);
+  assert.deepEqual(mac.groups.map(group => [group.id, group.cards.map(item => item.id)]),
+    [["desktop", ["macos", "windows", "linux"]], ["phone", ["ios", "android"]]]);
+  assert.equal(card(mac, "macos").mine, true);
+  assert.deepEqual(primaries(mac), [{ label: "Download .dmg", href: `${base}/download/v1.2.3/${filenames[0]}`, primary: true }]);
+  assert.deepEqual(card(mac, "macos").checksums, [{ label: "SHA-256", href: `${base}/download/v1.2.3/${filenames[0]}.sha256` }]);
+  assert.equal(card(mac, "macos").guide, "/docs/start/install-macos/");
+  assert.equal(card(mac, "windows").mine, false);
   // Linux has one processor and two packages: both files at once, each with the command that installs it.
-  const linux = downloadView(ready, "linux", "");
-  assert.deepEqual(linux.lead.files.map(file => [file.format, file.command]), [
-    ["deb", `sudo apt install ./${filenames[2]}`], ["rpm", `sudo dnf install ./${filenames[3]}`],
-  ]);
-  assert.deepEqual(linux.others.map(system => system.os), ["macos", "windows"]);
+  const linux = card(platformCards(ready, { os: "linux" }), "linux");
+  assert.deepEqual(linux.actions.map(action => action.label), ["Download .deb", "Download .rpm"]);
+  assert.deepEqual(linux.commands, [`sudo apt install ./${filenames[2]}`, `sudo dnf install ./${filenames[3]}`]);
+  // With no system suggested nothing is the visitor's, so no button is primary.
+  assert.deepEqual(primaries(platformCards(ready)), []);
 });
 
-test("a processor the one build excludes reads one line instead of a file, and no system suggested lists every system", () => {
-  const ready = validateRelease(publicRelease());
-  const intel = downloadView(ready, "macos", "x86");
-  assert.deepEqual(intel.lead.files, []);
-  assert.match(intel.lead.excluded, /Intel processor\. hide runs on Apple Silicon Macs only/);
-  assert.equal(intel.others[0].files.length, 1, "the other systems keep their files");
-  assert.match(downloadView(ready, "windows", "arm").lead.excluded, /ARM processor/);
-  assert.equal(downloadView(ready, "macos", "arm").lead.excluded, null);
-  const none = downloadView(ready, "", "");
-  assert.equal(none.lead, null);
-  assert.deepEqual(none.others.map(system => system.os), ["macos", "windows", "linux"]);
-  for (const state of [{ status: "loading" }, { status: "error" }, { status: "unavailable" }]) {
-    assert.equal(downloadView(state, "macos", ""), null);
+test("when GitHub does not answer, every computer card still opens the latest release and the phone cards are unchanged", () => {
+  for (const state of [{ status: "loading" }, { status: "error" }, { status: "unavailable" }, validateRelease({ ...publicRelease(), draft: true })]) {
+    const view = platformCards(state, { os: "windows" });
+    assert.equal(view.tag, null);
+    for (const id of ["macos", "windows", "linux"]) {
+      assert.deepEqual(card(view, id).actions.map(action => action.href), [`${base}/latest`]);
+      assert.deepEqual(card(view, id).checksums, []);
+    }
+    assert.equal(card(view, "windows").actions[0].primary, true);
+    assert.deepEqual(card(view, "ios").actions.map(action => action.href), [APP_STORE_URL]);
   }
+});
+
+test("a processor the one build excludes reads one line and is not the visitor's", () => {
+  const ready = validateRelease(publicRelease());
+  const intel = card(platformCards(ready, { os: "macos", arch: "x86" }), "macos");
+  assert.match(intel.excluded, /Intel processor\. hide runs on Apple Silicon Macs only/);
+  assert.equal(intel.mine, false);
+  assert.equal(intel.sees, null);
+  assert.match(card(platformCards(ready, { os: "windows", arch: "arm" }), "windows").excluded, /ARM processor/);
+  assert.equal(card(platformCards(ready, { os: "macos", arch: "arm" }), "macos").excluded, null);
+});
+
+test("on a phone the phones come first; the iPhone leads with the App Store and Android has no store to link yet", () => {
+  const ready = validateRelease(publicRelease());
+  const ios = platformCards(ready, { os: "macos", phone: "ios" });
+  assert.deepEqual(ios.groups.map(group => group.id), ["phone", "desktop"]);
+  assert.deepEqual(primaries(ios), [{ label: "App Store", href: APP_STORE_URL, primary: true }]);
+  assert.equal(card(ios, "macos").mine, false, "a phone suggests no computer");
+  const android = card(platformCards(ready, { phone: "android" }), "android");
+  assert.equal(android.mine, true);
+  assert.equal(android.soon, true);
+  assert.deepEqual(android.actions, []);
+  assert.equal(android.requirement, "Coming to Google Play");
 });
 
 test("only an iPhone or an Android phone counts as a phone", () => {

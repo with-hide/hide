@@ -1,31 +1,36 @@
+import { markElement } from "./platform-marks.js";
+
 const RELEASES_URL = "https://github.com/with-hide/hide/releases";
 const LATEST_API = "https://api.github.com/repos/with-hide/hide/releases/latest";
+// The installers' names carry the version, so without the API the one stable link is the latest release's page.
+const LATEST_RELEASE_PAGE = `${RELEASES_URL}/latest`;
 export const APP_STORE_URL = "https://apps.apple.com/app/hide-remote-coding-agents/id6832780181";
+const PHONE_GUIDE = "/docs/reference/faq/#how-do-i-connect-my-phone";
 // The installers a person downloads (PRD auto-update D-35); Linux offers both packages.
 const PLATFORMS = Object.freeze({
   "macos-arm64": { label: "macOS · Apple Silicon (ARM64)", files: [{ suffix: "macos-arm64.dmg", format: "dmg" }] },
-  "windows-x64": { label: "Windows · Intel or AMD (x64)", files: [{ suffix: "windows-x64-setup.exe", format: "installer" }] },
+  "windows-x64": { label: "Windows · Intel or AMD (x64)", files: [{ suffix: "windows-x64-setup.exe", format: "exe" }] },
   "linux-x64": { label: "Linux · Intel or AMD (x64)", files: [{ suffix: "linux-x64.deb", format: "deb" }, { suffix: "linux-x64.rpm", format: "rpm" }] },
 });
 
-// Each system has exactly one supported processor, so the page never asks for one: it names the processor in the
-// system's requirement and says what the person sees when they open the file (docs/INSTALL.md owns both facts).
+// Each computer system has exactly one supported processor, so the page never asks for one: the card names it in the
+// requirement and says what the person sees when they open the file (docs/INSTALL.md owns both facts).
 const SYSTEMS = Object.freeze({
   macos: {
-    name: "macOS", setup: "macos-arm64", requirement: "Apple Silicon · macOS 14 or later",
-    firstLaunch: "Opens with no warning: drag hide into Applications",
+    name: "macOS", mark: "apple", setup: "macos-arm64", requirement: "Apple Silicon · macOS 14 or later",
+    sees: "Opens with no warning: drag hide into Applications",
     excluded: "This Mac has an Intel processor. hide runs on Apple Silicon Macs only.",
     guide: "/docs/start/install-macos/",
   },
   windows: {
-    name: "Windows", setup: "windows-x64", requirement: "x64 PC · not Windows on ARM",
-    firstLaunch: "Unsigned: at SmartScreen choose More info, then Run anyway",
+    name: "Windows", mark: "windows", setup: "windows-x64", requirement: "x64 PC · not Windows on ARM",
+    sees: "Unsigned: at SmartScreen choose More info, then Run anyway",
     excluded: "This PC has an ARM processor. hide runs on x64 Windows only.",
     guide: "/docs/start/install-windows/",
   },
   linux: {
-    name: "Linux", setup: "linux-x64", requirement: "x64 · Debian, Ubuntu or Fedora",
-    firstLaunch: "Install it with your package manager",
+    name: "Linux", mark: "linux", setup: "linux-x64", requirement: "x64 · Debian, Ubuntu or Fedora",
+    sees: "Install the .deb with apt or the .rpm with dnf",
     guide: "/docs/start/install-linux/",
   },
 });
@@ -75,6 +80,10 @@ export function phoneOf(userAgent, mobileHint = false) {
   return "";
 }
 
+function excludes(os, arch) {
+  return (os === "macos" && arch === "x86") || (os === "windows" && arch === "arm");
+}
+
 /**
  * The hero's one-click download: a validated release's installer for an OS that has exactly one, offered only while the
  * processor the browser reports (Chromium's architecture hint; `""` when it gives none) is not one that installer
@@ -88,7 +97,7 @@ export function heroOffer(state, os, arch) {
   return {
     label: `Download for ${system.name}`,
     detail: system.requirement,
-    firstLaunch: system.firstLaunch,
+    firstLaunch: system.sees,
     others: Object.keys(SYSTEMS).filter(other => other !== os).map(other => SYSTEMS[other].name),
     url: file.url,
     checksumUrl: file.checksumUrl,
@@ -97,35 +106,50 @@ export function heroOffer(state, os, arch) {
   };
 }
 
-function excludes(os, arch) {
-  return (os === "macos" && arch === "x86") || (os === "windows" && arch === "arm");
-}
-
 /**
- * The download section for a validated release: the visitor's system first, its file and checksum at once, and the
- * other systems after it. With no system suggested every system is listed alike (`lead` is null). A processor the
- * browser reports that the system's one build excludes replaces that system's files with one line saying so.
+ * Every platform as a card, in two rows: the computers, then the phones (the phones first on a phone). Every card has a
+ * working way in whatever GitHub answers: a validated release gives each computer its files and checksums, and anything
+ * else (loading, a spent rate limit, an incomplete release) gives the latest release's page. The visitor's own platform
+ * is marked `mine` and carries the page's one primary button; a processor its one build excludes reads one line instead.
  */
-export function downloadView(state, os, arch) {
-  if (state.status !== "ready") return null;
-  const view = key => {
+export function platformCards(state, { os = "", arch = "", phone = "" } = {}) {
+  const ready = state.status === "ready";
+  const computer = key => {
     const system = SYSTEMS[key];
-    const blocked = key === os && excludes(os, arch);
+    const blocked = !phone && key === os && excludes(os, arch);
+    const mine = !phone && key === os && !blocked;
+    const files = ready ? state.downloads[system.setup].files : [];
     return {
-      os: key,
-      name: system.name,
-      requirement: system.requirement,
-      firstLaunch: system.firstLaunch,
-      guide: system.guide,
+      id: key, name: system.name, mark: system.mark, requirement: system.requirement, guide: system.guide, mine,
+      soon: false,
+      sees: blocked ? null : system.sees,
       excluded: blocked ? system.excluded : null,
-      files: blocked ? [] : state.downloads[system.setup].files.map(file => ({
-        ...file, command: INSTALL_COMMAND[file.format] ? `${INSTALL_COMMAND[file.format]}${file.name}` : null,
-      })),
+      actions: ready
+        ? files.map((file, index) => ({ label: `Download .${file.format}`, href: file.url, primary: mine && index === 0 }))
+        : [{ label: "Download from GitHub", href: LATEST_RELEASE_PAGE, primary: mine }],
+      commands: files.filter(file => INSTALL_COMMAND[file.format]).map(file => `${INSTALL_COMMAND[file.format]}${file.name}`),
+      checksums: files.map(file => ({ label: files.length > 1 ? `.${file.format}` : "SHA-256", href: file.checksumUrl })),
     };
   };
-  const lead = SYSTEMS[os] ? view(os) : null;
-  const others = Object.keys(SYSTEMS).filter(key => key !== os).map(view);
-  return { tag: state.tag, releaseUrl: state.releaseUrl, lead, others };
+  const phones = [
+    {
+      id: "ios", name: "iPhone", mark: "apple", requirement: "iOS 15 or later", guide: PHONE_GUIDE, mine: phone === "ios",
+      soon: false, sees: "Pair it with one QR scan from Settings > Mobile in hide", excluded: null,
+      actions: [{ label: "App Store", href: APP_STORE_URL, primary: phone === "ios" }], commands: [], checksums: [],
+    },
+    {
+      id: "android", name: "Android", mark: "android", requirement: "Coming to Google Play", guide: PHONE_GUIDE,
+      mine: phone === "android", soon: true,
+      sees: "Today, scan the QR with the camera and pair in the phone's browser", excluded: null,
+      actions: [], commands: [], checksums: [],
+    },
+  ];
+  const groups = [
+    { id: "desktop", title: "Desktop", cards: Object.keys(SYSTEMS).map(computer) },
+    { id: "phone", title: "Phone", cards: phones },
+  ];
+  if (phone) groups.reverse();
+  return { status: state.status, tag: ready ? state.tag : null, releaseUrl: ready ? state.releaseUrl : LATEST_RELEASE_PAGE, groups };
 }
 
 const el = (tag, props = {}, ...children) => {
@@ -135,62 +159,56 @@ const el = (tag, props = {}, ...children) => {
 };
 const arrow = glyph => el("span", { ariaHidden: "true", textContent: glyph });
 
-// One system: its name and requirement, its files, what opening one shows, then the optional checksum and the guide.
-function systemBlock(system, lead) {
-  const head = el("div", { className: "system-head" },
-    el(lead ? "h4" : "h5", { className: "system-name", textContent: system.name }),
-    el("span", { className: "system-req", textContent: system.requirement }));
-  if (system.excluded) {
-    return el("div", { className: "system" }, head, el("p", { className: "system-excluded", textContent: system.excluded }),
-      el("p", { className: "system-links" }, el("a", { href: system.guide, textContent: "Install guide" })));
-  }
-  const multiple = system.files.length > 1;
-  const buttons = el("div", { className: "actions system-files" }, ...system.files.map((file, index) => {
-    const text = multiple ? `Download .${file.format} ` : `Download for ${system.name} `;
-    const kind = lead && index === 0 ? "primary" : "secondary";
-    return el("a", { className: `button ${kind}`, href: file.url }, text, arrow("↗"));
-  }));
-  const commands = system.files.filter(file => file.command);
-  const sees = commands.length
-    ? el("div", { className: "system-sees" }, el("p", { textContent: `${system.firstLaunch}:` }),
-      ...commands.map(file => el("code", { className: "system-command", textContent: file.command })))
-    : el("p", { className: "system-sees", textContent: `${system.firstLaunch}.` });
-  const checksums = system.files.flatMap((file, index) => [
-    index ? " · " : "", el("a", { href: file.checksumUrl, textContent: multiple ? `.${file.format}` : "SHA-256" }),
-  ]);
-  const links = el("p", { className: "system-links" },
-    multiple ? "Optional SHA-256 check: " : "Optional: ", ...checksums, " · ",
-    el("a", { href: system.guide, textContent: "Install guide" }));
-  return el("div", { className: "system" }, head, buttons, sees, links);
+function cardElement(card) {
+  const head = el("div", { className: "card-head" }, markElement(card.mark),
+    el("h4", { className: "card-name", textContent: card.name }),
+    card.mine ? el("span", { className: "card-mine", textContent: "Your system" }) : null);
+  const actions = card.actions.length
+    ? el("div", { className: "card-actions" }, ...card.actions.map(action =>
+      el("a", { className: `button ${action.primary ? "primary" : "secondary"}`, href: action.href }, `${action.label} `, arrow("↗"))))
+    : null;
+  const commands = card.commands.length
+    ? el("div", { className: "card-commands" }, ...card.commands.map(command => el("code", { textContent: command })))
+    : null;
+  const phoneCard = card.id === "ios" || card.id === "android";
+  const links = el("p", { className: "card-links" },
+    ...(card.checksums.length
+      ? [card.checksums.length > 1 ? "Optional SHA-256: " : "Optional: ",
+        ...card.checksums.flatMap((sum, index) => [index ? " · " : "", el("a", { href: sum.href, textContent: sum.label })]), " · "]
+      : []),
+    el("a", { href: card.guide, textContent: phoneCard ? "How to connect" : "Install guide" }));
+  const article = el("article", { className: `card${card.mine ? " mine" : ""}${card.soon ? " soon" : ""}` },
+    head,
+    el("p", { className: "card-req", textContent: card.requirement }),
+    actions,
+    card.excluded ? el("p", { className: "card-excluded", textContent: card.excluded }) : null,
+    card.sees ? el("p", { className: "card-sees", textContent: `${card.sees}.` }) : null,
+    commands,
+    links);
+  article.setAttribute("aria-label", card.name);
+  return article;
 }
 
-function renderSystems(container, view, { fold }) {
-  const version = el("p", { className: "release-version" }, `${view.tag} · `,
-    el("a", { href: view.releaseUrl }, "Release notes ", arrow("↗")));
-  if (!view.lead || !fold) {
-    const all = view.lead ? [view.lead, ...view.others] : view.others;
-    container.replaceChildren(version, ...all.map(system => systemBlock(system, system === view.lead)));
-    return;
-  }
-  const also = el("details", { className: "also", id: "also-for" },
-    el("summary", { textContent: `Also for ${view.others.map(system => system.name).join(" · ")}` }),
-    ...view.others.map(system => systemBlock(system, false)));
-  container.replaceChildren(version, systemBlock(view.lead, true), also);
+function renderCards(container, view) {
+  container.replaceChildren(...view.groups.map(group => {
+    const section = el("section", { className: `card-group ${group.id}` },
+      el("p", { className: "card-group-title", textContent: group.title }),
+      el("div", { className: "card-grid" }, ...group.cards.map(cardElement)));
+    section.setAttribute("aria-label", group.title);
+    return section;
+  }));
 }
 
 function mountDownloads() {
-  const systems = document.getElementById("downloads");
-  if (!systems) return;
+  const cards = document.getElementById("downloads");
+  if (!cards) return;
   const title = document.getElementById("release-title");
-  const detail = document.getElementById("release-detail");
-  const region = document.getElementById("release-status");
   const retry = document.getElementById("retry-release");
   const heroButton = document.getElementById("hero-download");
   const heroSecond = document.getElementById("hero-second");
   const heroReq = document.getElementById("hero-req");
   const heroNote = document.getElementById("hero-note");
   const heroReqDefault = heroReq ? [...heroReq.childNodes].map(node => node.cloneNode(true)) : [];
-  const fold = systems.dataset.fold !== "none";
   let state = { status: "loading" };
   let arch = "";
   let request = null;
@@ -242,29 +260,20 @@ function mountDownloads() {
     heroNote.hidden = false;
   }
 
+  // The status line only refines the cards: the version when GitHub answered, otherwise why each button opens the
+  // release page, with a way to ask again.
   function render() {
     renderHero();
-    retry.hidden = state.status === "loading";
+    const view = platformCards(state, { os: osHint, arch, phone });
+    renderCards(cards, view);
+    retry.hidden = state.status === "loading" || state.status === "ready";
     retry.disabled = state.status === "loading";
-    region.setAttribute("aria-busy", String(state.status === "loading"));
-    const view = downloadView(state, osHint, arch);
-    region.hidden = Boolean(view);
-    systems.hidden = !view;
-    if (view) {
-      renderSystems(systems, view, { fold });
-      retry.hidden = true;
-      return;
-    }
-    systems.replaceChildren();
-    if (state.status === "loading") {
+    if (state.status === "ready") {
+      title.replaceChildren(`${view.tag} · `, link(view.releaseUrl, "Release notes ", arrow("↗")));
+    } else if (state.status === "loading") {
       title.textContent = "Checking the latest release…";
-      detail.textContent = "Looking for a complete stable release on GitHub. You can also use Releases or build from source.";
-    } else if (state.status === "error") {
-      title.textContent = "Couldn't check downloads.";
-      detail.textContent = "Try again, browse GitHub Releases, or follow the source-install guide.";
     } else {
-      title.textContent = "No complete stable download is available.";
-      detail.textContent = "Check GitHub Releases for updates, or build from source with the installation guide.";
+      title.textContent = "Couldn't read the latest version from GitHub, so each button opens the latest release there.";
     }
   }
 
@@ -299,13 +308,6 @@ function mountDownloads() {
     }
   }
 
-  // The hero's "Also for" opens the other systems where it lands.
-  heroNote?.addEventListener("click", event => {
-    if (event.target.closest('a[href="#download"]')) {
-      const also = document.getElementById("also-for");
-      if (also) also.open = true;
-    }
-  });
   retry.addEventListener("click", load);
   window.addEventListener("pagehide", () => request?.abort());
   load();
