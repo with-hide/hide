@@ -19,7 +19,9 @@
 #          commit that already has an upload record (HIDE_ANDROID_RELEASE_AGAIN=1 uploads it again on purpose),
 #          HIDE_ANDROID_SKIP_PHONE_BUILD and HIDE_ANDROID_RELAY_PORT. HIDE_ANDROID_NO_UPLOAD=1 stops after the release
 #          checks, before anything is sent to Play, and may run from a branch, so a change to the command is proven
-#          before it merges. The secrets never leave the mini (~/.config/hide-android, mobile/android-release-env.json).
+#          before it merges; HIDE_ANDROID_BUNDLE_OUT=<file.aab> then copies the signed, checked bundle back here, for
+#          Play's first upload, which is by hand. The secrets never leave the mini (~/.config/hide-android,
+#          mobile/android-release-env.json).
 #   uploads  the mini's Android upload record, every branch: when, which commit, version, version code, state and branch
 #   clean  delete this branch's whole folder on the mini
 #
@@ -148,6 +150,10 @@ if [[ "$command" == release ]]; then
         bash -s -- release "$slug" "$version" "$code" "$(git rev-parse HEAD)" "$([[ "${HIDE_ANDROID_RELEASE_AGAIN:-}" == 1 ]] && echo 1 || echo 0)" < mobile/scripts/mini-android-release.sh || status=$?
     if (( status == 255 )); then
         printf 'the connection to %s ended during the release: it may still be running there or have uploaded; read `%s uploads` before running again\n' "$host" "$0" >&2
+    fi
+    if (( status == 0 )) && [[ "${HIDE_ANDROID_NO_UPLOAD:-}" == 1 && -n "${HIDE_ANDROID_BUNDLE_OUT:-}" ]]; then
+        scp -q "$host:$remote/signed.aab" "$HIDE_ANDROID_BUNDLE_OUT"
+        printf 'signed bundle: %s\n' "$HIDE_ANDROID_BUNDLE_OUT"
     fi
     exit "$status"
 fi

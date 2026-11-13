@@ -34,7 +34,7 @@ inputs=$base/release-inputs
 project=$base/repo/mobile/android
 registry=$inputs/android-release-env.json
 expect=$inputs/android-release-expect.json
-play_api=${HIDE_ANDROID_PLAY_API:-https://androidpublisher.googleapis.com}
+play_api=https://androidpublisher.googleapis.com
 # A run's work folder holds two copies of the bundle (about 35 MB each) and Gradle's release outputs about 100 MB more;
 # the floor only keeps a run from filling the disk under the machine's other work.
 min_free_gb=3
@@ -294,8 +294,9 @@ play_sign_in() {
 #   the Play call      (play_job): a curl still running is ended
 #   a Play edit        (edit): an edit this run opened and did not commit is deleted, so nothing it uploaded reaches a
 #                      track; the record says so
-# What stays is not the run's: release.log (redacted and searched), the machine's uploads.log, the empty lock file, and
-# Gradle's release outputs in the branch's project (an unsigned bundle, which the next build replaces).
+# What stays is not the run's: release.log (redacted and searched), the machine's uploads.log, the empty lock file,
+# Gradle's release outputs in the branch's project (an unsigned bundle, which the next build replaces), and after a
+# HIDE_ANDROID_NO_UPLOAD=1 run that passed, the checked bundle as signed.aab, for an upload by hand.
 owns_lock=0 owns_work=0 finished=0 upload_started=0 upload_ended=0
 work= log= edit=
 cleanup() {
@@ -368,7 +369,7 @@ load_secrets
 work=$base/release
 log=$base/release.log
 # A folder a killed run of this branch left is this run's to remove: no other release can be running.
-rm -rf "$work"
+rm -rf "$work" "$base/signed.aab"
 mkdir -p "$work/tmp"
 owns_work=1
 : > "$log"
@@ -413,7 +414,10 @@ python3 -I "$inputs/check-release-aab.py" "$work/aab" "$work/signers.txt" "$expe
 sha256=$(shasum -a 256 "$work/app.aab" | cut -d' ' -f1)
 
 if [[ "$upload" == 0 ]]; then
-    printf 'signed and checked %s (%s), sha256 %s, and stopped before the upload (HIDE_ANDROID_NO_UPLOAD=1); nothing was sent to Play\n' "$version" "$code_number" "$sha256"
+    # The checked bundle is kept for an upload by hand (Play's first upload of a new app is one): it is what Play gets
+    # and holds no secret. The next run of the branch replaces it and `clean` removes it.
+    mv "$work/app.aab" "$base/signed.aab"
+    printf 'signed and checked %s (%s), sha256 %s, and stopped before the upload (HIDE_ANDROID_NO_UPLOAD=1); nothing was sent to Play. Bundle: %s\n' "$version" "$code_number" "$sha256" "$base/signed.aab"
     finished=1
     exit 0
 fi

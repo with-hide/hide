@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256 } from '../../scripts/phone-release.mjs';
 import { ADDED_BY_CAPACITOR, buildManifest } from './bundle-manifest.mjs';
-import { appVersion, buildNumber } from './release-version.mjs';
+import { appVersion, buildNumber, versionCode } from './release-version.mjs';
 
 const mobile = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (path) => readFileSync(join(mobile, path), 'utf8');
@@ -25,6 +25,39 @@ describe('the version and build number of a release', () => {
     expect(first).toBe('20261110090503');
     expect(Number(second)).toBeGreaterThan(Number(first));
     expect(Number(buildNumber(new Date('2027-01-01T00:00:00Z')))).toBeGreaterThan(Number(buildNumber(new Date('2026-12-31T23:59:59Z'))));
+  });
+});
+
+describe('the version code of an Android release', () => {
+  it('is the Unix minute of the run: it rises every minute and stays a number Play takes', () => {
+    expect(versionCode(new Date('2026-11-13T07:27:59.999Z'))).toBe('29909247');
+    expect(Number(versionCode(new Date('2026-11-13T07:28:00Z')))).toBe(29909248);
+    expect(Number(versionCode(new Date('2100-01-01T00:00:00Z')))).toBeLessThan(2100000000);
+    expect(appVersion(JSON.parse(read('android/version.json')))).toMatch(/^[0-9]+\.[0-9]+\.[0-9]+$/);
+  });
+});
+
+describe('the secrets the Android release command reads', () => {
+  const registry = JSON.parse(read('android-release-env.json'));
+
+  it('are the keys of the example file, and no others', () => {
+    const example = read('android-release.env.example').split('\n').filter((line) => /^[A-Z_]+=/.test(line)).map((line) => line.split('=')[0]);
+    expect(example.sort()).toEqual(Object.keys(registry.keys).sort());
+  });
+
+  it('are the only names of their kind anywhere the release reads one', () => {
+    const files = ['scripts/mini-android-release.sh', 'scripts/build-android.sh', 'android-release.env.example'];
+    const used = new Set(files.flatMap((file) => read(file).match(/HIDE_ANDROID_(UPLOAD|PLAY)_[A-Z_]+/g) ?? []));
+    expect([...used].filter((name) => !(name in registry.keys))).toEqual([]);
+  });
+
+  it('give every key a note and a shape, and ask for the service account only to upload', () => {
+    for (const [name, key] of Object.entries(registry.keys)) {
+      expect(['required', 'upload'], name).toContain(key.requirement);
+      expect(key.note.length, name).toBeGreaterThan(40);
+      expect(() => new RegExp(key.shape), name).not.toThrow();
+    }
+    expect(registry.keys.HIDE_ANDROID_PLAY_SERVICE_ACCOUNT.requirement).toBe('upload');
   });
 });
 

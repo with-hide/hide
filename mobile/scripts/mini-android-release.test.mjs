@@ -245,6 +245,10 @@ esac`);
       expect(result.stdout).toContain(`signed and checked 1.0.0 (${CODE}), sha256 ${SHA}`);
       expect(result.stdout).toContain('nothing was sent to Play');
       expect(read('signers-seen')).toBe('12:F9:F3:EF\n');
+      // The checked bundle stays for an upload by hand, and the next run starts without it.
+      expect(readFileSync(join(base(), 'signed.aab'), 'utf8')).toBe(BUNDLE);
+      expect(run({ STUB_GRADLE_FAILS: '1' }).status).toBe(1);
+      expect(existsSync(join(base(), 'signed.aab'))).toBe(false);
       expect(read('play.log')).toBe('');
       expect(records()).toEqual([]);
       leftNothing();
