@@ -24,13 +24,18 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(16);
 /// Push relay budgets (`docs/RELAY_PROTOCOL.md`, Push relay). Each room and
 /// the whole relay are capped, and every request that reaches the cap check is
 /// counted, a refused one included, so a room cannot spend the relay's CPU
-/// without a ceiling of its own.
+/// without a ceiling of its own. One set of counters counts Apple's
+/// `push_request` and Google's `fcm_request` together: a room's budget is the
+/// same whichever service its phones use.
 pub const PUSHES_PER_ROOM_PER_MINUTE: usize = 20;
 pub const PUSHES_PER_ROOM_PER_DAY: usize = 1_000;
 pub const PUSHES_PER_SECOND: usize = 50;
 pub const PUSH_MINUTE: Duration = Duration::from_secs(60);
-/// Streams one HTTP/2 connection may carry at once.
+/// Requests in flight to Apple and Google together, each a stream of one of
+/// the two HTTP/2 connections.
 pub const MAX_CONCURRENT_PUSHES: usize = 32;
+/// One request to Apple or Google, its answer, its body and its one retry,
+/// an access token fetch included.
 pub const PUSH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// One shared provider token, replaced at this age: inside Apple's hour, and
 /// past its 20-minute floor (TooManyProviderTokenUpdates).
@@ -38,6 +43,12 @@ pub const PROVIDER_TOKEN_REFRESH: Duration = Duration::from_secs(50 * 60);
 /// The youngest token the relay replaces when Apple calls it expired; a
 /// younger one is answered `unavailable` instead of re-signed.
 pub const PROVIDER_TOKEN_MIN_AGE: Duration = Duration::from_secs(20 * 60);
+/// Google's access token is fetched again once it has this little left, so a
+/// send never carries one that expires on the way.
+pub const FCM_ACCESS_TOKEN_MARGIN: Duration = Duration::from_secs(5 * 60);
+/// The longest the relay keeps an access token, whatever lifetime the
+/// metadata server names; it issues one-hour tokens.
+pub const FCM_ACCESS_TOKEN_MAX_LIFETIME: Duration = Duration::from_secs(60 * 60);
 
 /// A push budget set lower than production for a test; an embedding may
 /// lower these, never remove or raise them.

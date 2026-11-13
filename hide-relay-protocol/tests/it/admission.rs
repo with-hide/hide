@@ -250,7 +250,10 @@ fn an_older_side_reads_the_new_registered_and_an_older_relay_reads_the_old_shape
         both.encode().unwrap(),
         r#"{"type":"registered","push":true,"fcm":true}"#
     );
-    assert_eq!(ServerMessage::decode(&both.encode().unwrap()).unwrap(), both);
+    assert_eq!(
+        ServerMessage::decode(&both.encode().unwrap()).unwrap(),
+        both
+    );
     // A new message an older relay does not know is refused by it rather
     // than misread; the deploy order keeps that from happening
     // (RELAY_PROTOCOL.md, Deploy order).
@@ -291,10 +294,16 @@ fn a_released_device_refuses_an_unknown_registered_field_so_fcm_waits_for_the_he
     );
     // The header a device sends to say it reads the field.
     for value in ["fcm", " fcm ", "other, fcm", "fcm,other"] {
-        assert!(registered_fields_name(value, REGISTERED_FIELD_FCM), "{value}");
+        assert!(
+            registered_fields_name(value, REGISTERED_FIELD_FCM),
+            "{value}"
+        );
     }
     for value in ["", "fcmx", "FCM", "other", "f cm"] {
-        assert!(!registered_fields_name(value, REGISTERED_FIELD_FCM), "{value}");
+        assert!(
+            !registered_fields_name(value, REGISTERED_FIELD_FCM),
+            "{value}"
+        );
     }
 }
 

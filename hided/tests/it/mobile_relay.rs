@@ -109,7 +109,12 @@ async fn control(device: &mut Device, message: ServerMessage) {
 async fn accept(listener: &TcpListener) -> Device {
     accept_answering(
         listener,
-        ServerMessage::Registered { push: false }.encode().unwrap(),
+        ServerMessage::Registered {
+            push: false,
+            fcm: false,
+        }
+        .encode()
+        .unwrap(),
     )
     .await
 }
@@ -617,7 +622,12 @@ async fn an_app_phone_is_notified_through_the_relay_and_a_gone_token_is_dropped(
     event(&mut shell, "mobile_enable", json!({"enabled":true})).await;
     let mut device = accept_answering(
         &listener,
-        ServerMessage::Registered { push: true }.encode().unwrap(),
+        ServerMessage::Registered {
+            push: true,
+            fcm: false,
+        }
+        .encode()
+        .unwrap(),
     )
     .await;
     state(&mut shell, |s| s["relay"]["state"] == "connected").await;
@@ -850,7 +860,12 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
         .unwrap();
     let mut device = accept_answering(
         &listener,
-        ServerMessage::Registered { push: true }.encode().unwrap(),
+        ServerMessage::Registered {
+            push: true,
+            fcm: false,
+        }
+        .encode()
+        .unwrap(),
     )
     .await;
     // The delivery pass starts a minute after the daemon; pings are answered
@@ -955,7 +970,12 @@ async fn notices_that_found_no_relay_link_are_sent_once_when_it_comes_up() {
 
     let mut device = accept_answering(
         &listener,
-        ServerMessage::Registered { push: true }.encode().unwrap(),
+        ServerMessage::Registered {
+            push: true,
+            fcm: false,
+        }
+        .encode()
+        .unwrap(),
     )
     .await;
     let mut requests = Vec::new();

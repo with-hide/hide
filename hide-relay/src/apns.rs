@@ -22,7 +22,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// The production hosts. Apple's own names are never taken from a request.
 const PRODUCTION_HOST: &str = "https://api.push.apple.com";
@@ -198,7 +197,6 @@ pub struct Apns {
     /// One token for every request, replaced on one schedule rather than
     /// minted per request (`PROVIDER_TOKEN_REFRESH`).
     token: Mutex<Option<SharedToken>>,
-    concurrent: Arc<Semaphore>,
     timeout: Duration,
     clock: Clock,
 }
@@ -208,10 +206,12 @@ struct SharedToken {
     issued: Duration,
 }
 
-/// What one send produced, before the relay turns it into a result.
+/// What one send produced, to Apple or to Google, before the relay turns it
+/// into a result.
 pub struct Sent {
     pub outcome: PushOutcome,
-    /// A fixed reason for the diagnostic: a status class, never Apple's body.
+    /// A fixed reason for the diagnostic: a status class, never the service's
+    /// body.
     pub reason: &'static str,
 }
 
@@ -249,15 +249,9 @@ impl Apns {
             client,
             endpoint,
             token: Mutex::new(None),
-            concurrent: Arc::new(Semaphore::new(limits.concurrent)),
             timeout: limits.request_timeout,
             clock,
         })
-    }
-
-    /// A slot on the one connection, held for a whole request.
-    pub fn slot(&self) -> Option<OwnedSemaphorePermit> {
-        self.concurrent.clone().try_acquire_owned().ok()
     }
 
     /// The provider token now: the shared one, replaced once it is
@@ -327,8 +321,9 @@ impl Apns {
     }
 
     /// One send to Apple, with the one retry Apple's expired token earns,
-    /// all inside the one request deadline: a slot is never held longer.
-    pub async fn send(&self, request: &PushRequest, _slot: OwnedSemaphorePermit) -> Sent {
+    /// all inside the one request deadline: the relay's in-flight slot is
+    /// never held longer.
+    pub async fn send(&self, request: &PushRequest) -> Sent {
         tokio::time::timeout(self.timeout, self.attempt(request))
             .await
             .unwrap_or(Sent {
