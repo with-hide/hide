@@ -4035,22 +4035,15 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     }
     convert_old_kinds(&mut value)?;
     let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
-    for node in stored
+    for line in stored
         .book
         .missions
         .iter_mut()
         .flat_map(|mission| mission.nodes.iter_mut())
+        .flat_map(|node| node.criteria.iter_mut())
     {
-        for line in &mut node.criteria {
-            line.carry_spent_rerun();
-            line.count_tally();
-        }
-        // A node a build before this one left planned with its worker, pull
-        // request or branch named started then, so it reads as at work
-        // (`apply_patch`); when it started was not kept.
-        if node.status == NodeStatus::Planned && node.started() {
-            node.status = NodeStatus::Working;
-        }
+        line.carry_spent_rerun();
+        line.count_tally();
     }
     if stored
         .book
@@ -5551,8 +5544,7 @@ pub(crate) mod tests {
     /// A planned node whose worker, pull request or branch is named has
     /// started, so it is at work without `--status working`: a node bound
     /// with `--agent-id` alone ran a live worker drawn as not started, out
-    /// of every warning's reach. A book an earlier build left that way reads
-    /// it at work too.
+    /// of every warning's reach.
     #[test]
     fn a_planned_node_named_its_worker_pr_or_branch_is_at_work() {
         let planned = apply_plan(
@@ -5591,11 +5583,6 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(noted.status, NodeStatus::Planned);
-
-        let mut kept = planned.clone();
-        kept.nodes[0].agent_id = Some("agent-1".into());
-        let read = decode(&encode_mission(&kept).unwrap()).unwrap();
-        assert_eq!(read.book.missions[0].nodes[0].status, NodeStatus::Working);
     }
 
     /// PRD mission-node-simple D-16, B26: a failed node of a closed
