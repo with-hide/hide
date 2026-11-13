@@ -51,6 +51,9 @@ cleanup() {
     local exit_status=$?
     if [[ -n "$reversed" ]]; then adb -s "$serial" reverse --remove "tcp:$reversed" > /dev/null 2>&1 || true; fi
     if [[ -n "$emulator_pid" ]]; then
+        # `emu kill` ends the emulator without the device's own shutdown: what the device has not written to its disk yet
+        # is lost, and a half-written file (the web view's storage database) loses every later write on each start.
+        adb -s "$serial" shell sync > /dev/null 2>&1 || true
         adb -s "$serial" emu kill > /dev/null 2>&1 || true
         for _ in $(seq 1 30); do kill -0 "$emulator_pid" 2> /dev/null || break; pause 1; done
         end_group "$emulator_pid" "$emulator_started"
