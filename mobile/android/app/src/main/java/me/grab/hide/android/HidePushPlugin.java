@@ -125,9 +125,14 @@ public class HidePushPlugin extends Plugin {
             fail(call, "denied");
             return;
         }
-        // Firebase keeps its token current from now on, as a registration with Apple does; `forget` of the last key ends it.
-        FirebaseMessaging.getInstance().setAutoInitEnabled(true);
-        registration(call, call.getString("room"), true);
+        // On `work`, behind any `forget` asked before it: Firebase is asked for the token only once that forget's delete has
+        // ended, so a switch turned off and on again never gets the token being deleted, and the forget's turning off of
+        // Firebase's own renewal never lands after this turning on.
+        work.execute(() -> {
+            // Firebase keeps its token current from now on, as a registration with Apple does; `forget` of the last key ends it.
+            FirebaseMessaging.getInstance().setAutoInitEnabled(true);
+            registration(call, call.getString("room"), true);
+        });
     }
 
     /**
@@ -199,7 +204,8 @@ public class HidePushPlugin extends Plugin {
      * Deletes a computer's key: its notices open no more. With none left no notice could be opened, so the app gives its
      * token back and Google answers {@code UNREGISTERED} to every computer that still sends one, including one removed
      * while it was off and could not be told, as the iOS app unregisters from Apple. It answers once the token is deleted,
-     * so an {@code enable} right after it gets a new token, never the one being deleted.
+     * and an {@code enable} asked before that waits behind it on {@link #work}, so either gets a new token, never the one
+     * being deleted.
      */
     @PluginMethod
     public void forget(PluginCall call) {
