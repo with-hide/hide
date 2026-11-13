@@ -16,12 +16,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const LINKED_PACKAGES = ['@capacitor/android', '@capacitor/cli', '@capacitor/core', '@capacitor/ios'];
 export const LINKED_SWIFT_PRODUCTS = ['Capacitor', 'Cordova'];
 // What the Android app links (mobile/android/app/build.gradle), beside its tests' own libraries: Capacitor's library,
-// the AndroidX parts the shell calls and Google's code scanner.
+// the AndroidX parts the shell calls, Google's code scanner and Firebase Cloud Messaging for its notifications.
 export const LINKED_ANDROID_LIBRARIES = [
   "project(':capacitor-android')",
   'androidx.appcompat:appcompat',
   'androidx.webkit:webkit',
   'com.google.android.gms:play-services-code-scanner',
+  'com.google.firebase:firebase-messaging',
 ];
 const pin = /capacitor-swift-pm\.git",\s*exact:\s*"([^"]+)"/;
 

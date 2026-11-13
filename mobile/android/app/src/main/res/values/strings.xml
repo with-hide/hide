@@ -4,4 +4,8 @@
     <string name="update_webview_title">Update Android System WebView</string>
     <string name="update_webview_body">Hide needs a newer Android System WebView to keep its connection to your computer safe. Update it in Google Play, then open Hide again.</string>
     <string name="update_webview_open">Open Google Play</string>
+    <!-- The only text a notification this phone cannot open carries: it names nothing (the iOS app's hide-notification). -->
+    <string name="notice_fixed">Hide has news</string>
+    <!-- The notification category's name in the system's settings for the app. -->
+    <string name="notice_channel">Agents</string>
 </resources>

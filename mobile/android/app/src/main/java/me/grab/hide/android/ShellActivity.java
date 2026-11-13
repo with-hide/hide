@@ -49,6 +49,7 @@ public class ShellActivity extends BridgeActivity {
         registerPlugin(HideKeychainPlugin.class);
         registerPlugin(HideScannerPlugin.class);
         registerPlugin(HideAppPlugin.class);
+        registerPlugin(HidePushPlugin.class);
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         // A phone is held upright; a tablet or an unfolded phone turns as it likes (Android 16 ignores the lock there anyway).

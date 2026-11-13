@@ -19,6 +19,7 @@ public class BridgeGateTest {
         assertNull(verdict(true, "https://localhost", null, "HideKeychain"));
         assertNull(verdict(true, "https://localhost", null, "HideScanner"));
         assertNull(verdict(true, "https://localhost", null, "HideApp"));
+        assertNull(verdict(true, "https://localhost", null, "HidePush"));
         assertNull(verdict(true, "https://localhost", "js.error", null));
     }
 
@@ -33,7 +34,7 @@ public class BridgeGateTest {
 
     @Test
     public void refusesCapacitorsOwnPluginsAPluginItDoesNotNameAndCordova() {
-        for (String plugin : new String[] { "WebView", "CapacitorHttp", "CapacitorCookies", "SystemBars", "HidePush", "Console", "hideapp", "" }) {
+        for (String plugin : new String[] { "WebView", "CapacitorHttp", "CapacitorCookies", "SystemBars", "PushNotifications", "Console", "hideapp", "hidepush", "" }) {
             assertEquals(plugin, "plugin_not_exposed", verdict(true, "https://localhost", null, plugin));
         }
         assertEquals("plugin_not_exposed", verdict(true, "https://localhost", null, null));
@@ -43,7 +44,7 @@ public class BridgeGateTest {
     }
 
     @Test
-    public void namesTheAppsThreePluginsAndNoOther() {
-        assertEquals(Set.of("HideKeychain", "HideScanner", "HideApp"), BridgeGate.APP_PLUGINS);
+    public void namesTheAppsFourPluginsAndNoOther() {
+        assertEquals(Set.of("HideKeychain", "HideScanner", "HideApp", "HidePush"), BridgeGate.APP_PLUGINS);
     }
 }

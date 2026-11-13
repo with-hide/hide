@@ -18,9 +18,9 @@ export function appPlatform(): AppPlatform | null {
 export const appHost = () => appPlatform() !== null;
 
 /**
- * The app's own notifications: only an app whose Capacitor reports a `HidePush` plugin, which the iOS app has and the
- * Android app gains with its notifications. The page never calls a plugin the app does not have: the Android app's gate
- * drops such a call unanswered (`BridgeGate`).
+ * The app's own notifications: only an app whose Capacitor reports a `HidePush` plugin, which the iOS and the Android app
+ * have and an Android app built before its notifications does not. The page never calls a plugin the app does not have:
+ * the Android app's gate drops such a call unanswered (`BridgeGate`).
  */
 export const appPushAvailable = () => {
   if (!appHost()) return false;

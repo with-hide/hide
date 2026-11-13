@@ -75,9 +75,12 @@ if [[ "$command" == build ]]; then
     [[ -n "$library" && -f "mobile/android/$library/build.gradle" ]] || { printf 'capacitor.settings.gradle names no Capacitor library\n' >&2; exit 1; }
     library_in_repo=$(cd "mobile/android/$library" && pwd -P)
     library_in_repo=${library_in_repo#"$(pwd -P)/"}
-    ssh "$host" "mkdir -p '$remote/repo/mobile/android' '$remote/repo/$library_in_repo'"
+    # The iOS app's notice words, which the JVM tests hold the Android table equal to (NoticeWordsTest).
+    words=mobile/ios/App/HidePushCore/Sources/HidePushCore
+    ssh "$host" "mkdir -p '$remote/repo/mobile/android' '$remote/repo/$library_in_repo' '$remote/repo/$words'"
     rsync -a --delete --exclude '.gradle' --exclude 'build' --exclude 'local.properties' mobile/android/ "$host:$remote/repo/mobile/android/"
     rsync -a --delete --exclude 'build' "$library_in_repo/" "$host:$remote/repo/$library_in_repo/"
+    rsync -a "$words/NoticeWords.swift" "$host:$remote/repo/$words/"
 fi
 
 remote_status=0

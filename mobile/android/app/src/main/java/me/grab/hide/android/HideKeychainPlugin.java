@@ -22,7 +22,7 @@ public class HideKeychainPlugin extends Plugin {
         store = PairingStore.of(getContext());
     }
 
-    private static void fail(PluginCall call, PairingStore.Failure failure) {
+    private static void fail(PluginCall call, SealedFiles.Failure failure) {
         call.reject(failure.code, failure.code);
     }
 
@@ -31,7 +31,7 @@ public class HideKeychainPlugin extends Plugin {
         try {
             store.save(new PairingStore.Item(call.getString("room", ""), call.getString("noiseKey", ""), call.getString("credential")));
             call.resolve();
-        } catch (PairingStore.Failure failure) {
+        } catch (SealedFiles.Failure failure) {
             fail(call, failure);
         }
     }
@@ -47,7 +47,7 @@ public class HideKeychainPlugin extends Plugin {
                 if (item.credential != null) answer.put("credential", item.credential);
             }
             call.resolve(answer);
-        } catch (PairingStore.Failure failure) {
+        } catch (SealedFiles.Failure failure) {
             fail(call, failure);
         }
     }
@@ -57,7 +57,7 @@ public class HideKeychainPlugin extends Plugin {
         try {
             store.remove(call.getString("room", ""));
             call.resolve();
-        } catch (PairingStore.Failure failure) {
+        } catch (SealedFiles.Failure failure) {
             fail(call, failure);
         }
     }
@@ -68,7 +68,7 @@ public class HideKeychainPlugin extends Plugin {
             JSObject answer = new JSObject();
             answer.put("rooms", new JSArray(store.list()));
             call.resolve(answer);
-        } catch (PairingStore.Failure failure) {
+        } catch (SealedFiles.Failure failure) {
             fail(call, failure);
         }
     }

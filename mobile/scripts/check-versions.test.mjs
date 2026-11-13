@@ -65,10 +65,10 @@ describe('what the app links', () => {
   it('refuses an Android plugin class the gate does not list, and a name the gate lists that no class has', async () => {
     const scanner = 'android/app/src/main/java/me/grab/hide/android/HideScannerPlugin.java';
     await edit(scanner, '@CapacitorPlugin(name = "HideScanner")', '@CapacitorPlugin(name = "HideScanner2")');
-    expect(await check(copy)).toEqual(['BridgeGate.APP_PLUGINS is HideApp, HideKeychain, HideScanner; the plugin classes of the Android app are HideApp, HideKeychain, HideScanner2']);
+    expect(await check(copy)).toEqual(['BridgeGate.APP_PLUGINS is HideApp, HideKeychain, HidePush, HideScanner; the plugin classes of the Android app are HideApp, HideKeychain, HidePush, HideScanner2']);
     await edit(scanner, '@CapacitorPlugin(name = "HideScanner2")', '@CapacitorPlugin(name = "HideScanner")');
-    await edit('android/app/src/main/java/me/grab/hide/android/BridgeGate.java', 'Set.of("HideKeychain", "HideScanner", "HideApp")', 'Set.of("HideKeychain", "HideScanner", "HideApp", "HidePush")');
-    expect(await check(copy)).toEqual([expect.stringContaining('BridgeGate.APP_PLUGINS is HideApp, HideKeychain, HidePush, HideScanner;')]);
+    await edit('android/app/src/main/java/me/grab/hide/android/BridgeGate.java', '"HideApp", "HidePush")', '"HideApp", "HidePush", "HideAnything")');
+    expect(await check(copy)).toEqual([expect.stringContaining('BridgeGate.APP_PLUGINS is HideAnything, HideApp, HideKeychain, HidePush, HideScanner;')]);
   });
 
   it('refuses an npm plugin that cap sync would link into the Android app', async () => {

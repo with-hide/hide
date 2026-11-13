@@ -3,7 +3,8 @@
  * and call shapes on both. Capacitor injects `window.Capacitor` into the app's main frame, so nothing is bundled here and
  * the hosted site carries no part of it; a page that is not the app has no bridge and these are never called
  * (`appHost()`). The native side answers only a call from that main frame, and only for the plugins its gate names
- * (`BridgeGate.appPlugins` on iOS, `BridgeGate.APP_PLUGINS` on Android, which has no `HidePush` yet: `appPushAvailable()`).
+ * (`BridgeGate.appPlugins` on iOS, `BridgeGate.APP_PLUGINS` on Android); an app bundle without `HidePush` is asked nothing
+ * about notifications (`appPushAvailable()`).
  */
 import { appHost } from "./appHost";
 

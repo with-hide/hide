@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Asked only when the person turns notifications on (HidePushPlugin), on Android 13 and later. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- No library may add the advertising id permission: the app shows no ads and tracks no one. -->
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
 
@@ -40,5 +42,25 @@
                 <data android:scheme="https" android:host="app.withhide.dev" android:path="/" />
             </intent-filter>
         </activity>
+
+        <!-- Where a tap on a notification lands: not exported, so only the app's own notifications name an agent. -->
+        <activity
+            android:name=".NoticeOpenActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <!-- The relay's data messages through Firebase Cloud Messaging; Firebase's own receiver checks the sender. -->
+        <service
+            android:name=".HidePushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- No token is made before the person turns notifications on for a computer (HidePushPlugin.enable). -->
+        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
     </application>
 </manifest>
