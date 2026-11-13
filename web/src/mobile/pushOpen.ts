@@ -3,14 +3,14 @@
  * decrypted notice and the page asks for them, once. A notification the phone could not open names none, so a tap on it
  * leaves the app where it was.
  */
-import { appHost } from "./appHost";
+import { appPushAvailable } from "./appHost";
 import { onPushOpen, push } from "./appBridge";
 
 export interface PushOpenTarget { room: string; tag: string }
 
 /** Takes the waiting target now and again whenever the app says one arrived. Returns the way to stop. */
 export function followPushOpens(open: (target: PushOpenTarget) => void, ready: () => void = () => undefined): () => void {
-  if (!appHost()) { ready(); return () => undefined; }
+  if (!appPushAvailable()) { ready(); return () => undefined; }
   let stopped = false;
   const take = async () => {
     try {

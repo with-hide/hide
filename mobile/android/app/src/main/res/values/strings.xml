@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Hide</string>
+    <string name="update_webview_title">Update Android System WebView</string>
+    <string name="update_webview_body">Hide needs a newer Android System WebView to keep its connection to your computer safe. Update it in Google Play, then open Hide again.</string>
+    <string name="update_webview_open">Open Google Play</string>
+</resources>

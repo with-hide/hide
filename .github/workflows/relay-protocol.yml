@@ -62,7 +62,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true

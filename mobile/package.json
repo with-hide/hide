@@ -12,6 +12,7 @@
     "build": "bash scripts/build-ios.sh"
   },
   "dependencies": {
+    "@capacitor/android": "8.6.0",
     "@capacitor/cli": "8.6.0",
     "@capacitor/core": "8.6.0",
     "@capacitor/ios": "8.6.0"

@@ -47,16 +47,18 @@ jobs:
             const IDLE_DAYS = 14;
             const TEMPLATE_GRACE_DAYS = 3;
             const ISSUE_TEMPLATE_GRACE_DAYS = 7;
-            // The headings the two issue forms write (.github/ISSUE_TEMPLATE); an issue needs every heading of one form.
+            // The headings the issue forms write (.github/ISSUE_TEMPLATE); an issue needs every heading of one form.
             const ISSUE_FORMS = [
               ['What happened', 'Steps to reproduce'],
               ['What are you trying to do?', 'What would help'],
+              ['What is wrong', 'Where'],
             ];
             const DAY = 24 * 60 * 60 * 1000;
             const TYPES = ['feat', 'fix', 'perf', 'refactor', 'test', 'docs', 'build', 'ci', 'chore', 'revert'];
             // The sections a contributor must write; how well, and the rest of the template, is the reviewer's to judge.
             const SECTIONS = ['Summary', 'Not verified'];
-            const BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
+            // with-hide-dev-issues files CI's development issues (docs/TESTING.md, Flaky tests).
+            const BOTS = new Set(['dependabot[bot]', 'github-actions[bot]', 'with-hide-dev-issues[bot]']);
             const MARKERS = { template: '<!-- hide:gate-template -->', closed: '<!-- hide:gate-closed -->', stale: '<!-- hide:gate-stale -->' };
             const LABELS = {
               'needs-triage': ['fbca04', 'A maintainer should look at the account'],

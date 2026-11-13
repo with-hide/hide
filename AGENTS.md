@@ -14,7 +14,7 @@ Before writing or changing a test, read `docs/TESTING.md` for which layer to tes
 - `hided/` - the product daemon and `hide` CLI. It links `hide-core` on an owner thread, serves loopback HTTP (`/`, `/assets`, `/health`) and a token-gated WebSocket for dispatch and snapshot deltas.
 - `web/` - the React web shell (Vite, zustand, xterm.js). Build output is `web/dist/` inside this worktree and is gitignored.
 - `desktop/` - the Electron desktop host and the only shipped app: the web shell hided serves, in its own macOS window, attached through `hide connect`. The packaged `hide.app` carries `hided`, `hide`, `hide-agent-hooks`, `hide-holder` and the device helper flat in `Contents/Resources`, ad-hoc signed by `pnpm --dir desktop package` and, for a release, signed with the Developer ID certificate and notarized (`docs/BUILD.md`); quitting the host leaves hided running, while the bundled `hide connect` replaces a healthy daemon of another build in the same state folder and an unbundled `hide` refuses that mismatch. Build output is `desktop/dist/` and the app and archive under `desktop/out/`, all gitignored; see `docs/ARCHITECTURE.md`, The desktop host.
-- `mobile/` - the Capacitor host of the iOS app: the phone web app (`web/src/mobile/`) served from the app's own scheme with every supported protocol bundle inside it, the Swift package that closes the bridge to frames, and the script that builds it on the Mac mini; see `docs/ARCHITECTURE.md`, The iOS app host, and `docs/BUILD.md`, The iOS app.
+- `mobile/` - the Capacitor host of the iOS and the Android app: the phone web app (`web/src/mobile/`) served from the app's own origin with every supported protocol bundle inside it, the Swift package and the Android project (`mobile/android/`) that close the bridge to frames, and the scripts that build them on the Mac mini; see `docs/ARCHITECTURE.md`, The iOS app host and The Android app host, and `docs/BUILD.md`, The iOS app and The Android app.
 - `hide-core/` - platform-neutral Rust runtime, an rlib whose owner-thread handle (`hide-core/src/handle.rs`) `hided` drives. It projects the engine's pane topology and owns Hide's UI state; the shell owns neither.
 - `hide-kit/` - the install kit and `hide_kit::layout`, the one place every hide-owned path under `~/.hide` is named; see `docs/INSTALL.md`, Where Hide keeps its files.
 - `hide-agent-hooks/` - the only code that writes a configuration file the operator owns (each agent runtime's hook file). A separate crate because a `settings.json` write must never sit behind the render lock; see `docs/agent-hooks.md`.
@@ -61,9 +61,9 @@ A documents-only overlap (`*.md`, `*.pen`, `site/`) never stacks; it is resolved
 
 ## Issues
 
-Development issues (flaky tests, nightly failures, the agent canary, follow-ups) live in the private with-hide/hide-private, where CI files its own ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
-The public with-hide/hide takes only user bug reports and feature requests through its issue forms; an agent opens a development issue in with-hide/hide-private (`gh issue create --repo with-hide/hide-private`, and the `issue` skill with that repository as its target).
-A pull request that ends one names it across repositories, `Closes with-hide/hide-private#N`.
+Every issue about Hide's code lives in the public with-hide/hide, so a contributor reads the same issues a maintainer does: user bug reports and feature requests through their forms, and development issues (flaky tests, nightly failures, the agent canary, follow-ups) beside them.
+CI files its own under the `quarantine`, `nightly-failure` and `agent-canary` labels ([docs/TESTING.md](docs/TESTING.md#flaky-tests)); an agent opens one with the Development issue form's headings and the `development` label (`gh issue create --repo with-hide/hide --label development`, or the `issue` skill, which reads that form).
+A pull request that ends one names it, `Closes #N`.
 
 ## Before Opening A Pull Request
 

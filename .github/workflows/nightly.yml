@@ -235,7 +235,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The issue step reads this run with the development issues App's token
-    # and files in with-hide/hide-private (docs/TESTING.md, Nightly failures),
+    # and files in this repository (docs/TESTING.md, Nightly failures),
     # so this job's own token reads only the checkout.
     permissions:
       contents: read
@@ -257,7 +257,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Open, comment on and close the nightly-failure issues
         if: ${{ always() && github.ref == 'refs/heads/main' }}
         env:

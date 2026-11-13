@@ -61,6 +61,7 @@ beforeEach(() => {
     "HidePush.forget": () => ({}),
   };
   vi.stubGlobal("Capacitor", {
+    isPluginAvailable: (name: string) => name === "HidePush",
     nativePromise: async (plugin: string, method: string, options?: Record<string, unknown>) => {
       const call = native[`${plugin}.${method}`];
       if (!call) throw Object.assign(new Error(`${plugin}.${method}`), { code: "unimplemented" });

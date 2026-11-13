@@ -837,7 +837,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 56 jobs.
+A run that plans every lane a pull request can plan starts at most 57 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -856,6 +856,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
 | `repeat changed tests` | 4 | the count of the changed tests, their web specs through `web-e2e.yml`, their Rust modules under nextest and a final verdict requiring actual completed runs; each repeat leg starts only when selected ([The repeat lane](#the-repeat-lane)) |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `Android app` | 1 | the Android app host's JVM unit tests and debug build on Linux, planned for `mobile/android/`; its instrumented tests need an emulator and run on the build machine ([BUILD.md](BUILD.md#the-android-app)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
@@ -931,10 +932,10 @@ A failure on a different SHA is not evidence of flakiness by itself, and the sam
 A flaky test never blocks a pull request's required gate or a merge, and it does not stay: it is isolated as an issue rather than moved out of its lane, and its cause is removed by that issue's deadline.
 CI retries a failed test once, for classification and for the report, and for nothing else.
 
-Every issue CI files lives in the private repository with-hide/hide-private: the flaky `quarantine` issues, the `nightly-failure` issues, and the `agent-canary` record and its failures.
-The public repository with-hide/hide takes only user bug reports and feature requests, through its issue forms.
-`ISSUE_REPOSITORY` in `scripts/ci-flaky-report.py` and `scripts/agent-canary-record.py` names the private repository; the runs, jobs, logs, artifacts and pull requests they read stay the public repository's.
-Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, for both repositories, and that one token reads the run here and writes the issue there.
+Every issue CI files lives in with-hide/hide beside the user bug reports, so a contributor can open each one a test or a comment names: the flaky `quarantine` issues, the `nightly-failure` issues, and the `agent-canary` record and its failures.
+The labels tell them apart from user reports, and an issue a person files about the code itself takes the Development issue form and its `development` label.
+`ISSUE_REPOSITORY` in `scripts/ci-flaky-report.py` and `scripts/agent-canary-record.py` names that repository.
+Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, and that token reads the run and writes the issue; the issues it files come from `with-hide-dev-issues[bot]`, which the contribution gate does not check.
 A reusable workflow receives the key from each caller by name.
 A lane whose run has no key, such as a fork's, files nothing and still passes.
 
@@ -1064,7 +1065,7 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
 - The report fails its job when GitHub does, and when it cannot mint the App's token, so a failure it could not file shows as a red report job rather than a silence.
-  `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide-private.
+  `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide.
 - The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.
   An older gh does not know that flag, so the report reads `gh --version` before the first log and stops with one line naming the minimum, the version it found and the fix (`upgrade gh`) instead of gh's `unknown flag` and usage.
   It decodes whatever bytes the log holds, reads a carriage return as a line break and removes every terminal control before it parses or quotes the text, and every excerpt a lane writes into an annotation or the report quotes into an issue goes through the same removal; on 2026-10-10 and 2026-10-16 the report died on the first log it read and opened no issue.

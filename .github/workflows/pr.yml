@@ -357,8 +357,8 @@ jobs:
           gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
           HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -369,7 +369,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -420,6 +420,37 @@ jobs:
         # The app bundle assembler: its digest and content-policy checks.
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bash scripts/verify-web.sh mobile test
+
+  # The Android app host (`mobile/android`, docs/BUILD.md, The Android app): its JVM unit
+  # tests and a debug build on the runner's own Android SDK. Its instrumented tests need an
+  # emulator and run where the app is built, through `mobile/scripts/build-android.sh build`.
+  android:
+    name: Android app
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'android')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      # Gradle builds Capacitor's Android library from the installed package.
+      - name: Install dependencies
+        run: bash scripts/verify-web.sh install
+      - name: JVM unit tests and debug build
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon --console=plain testDebugUnitTest assembleDebug
 
   # The user docs, which share `site/` with the landing page (docs/TESTING.md, The user
   # docs): the guides and the feature pages hold each other, the CLI reference is read
@@ -774,8 +805,8 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/verify-web.sh desktop test
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -786,7 +817,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -1157,7 +1188,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, docs, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
+    needs: [plan, policy, rust, checks, android, docs, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1177,8 +1208,8 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci-plan.py aggregate
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -1189,7 +1220,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Connect test failures and passes across job reruns
         if: ${{ !cancelled() }}
         continue-on-error: true
