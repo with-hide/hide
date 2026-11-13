@@ -162,3 +162,22 @@ it("gives up a new socket that never says hello after 15 s and tries again", asy
   await vi.advanceTimersByTimeAsync(1_000);
   expect(FakeSocket.all).toHaveLength(2);
 });
+
+it.each(["apns_registration", "fcm_registration"])("marks a computer that refuses the app's %s as outdated and keeps the session", async (request) => {
+  const { socket, usePhone } = await connectedPhone();
+  const { useAppPush } = await import("./appPush");
+  expect(useAppPush.getState().outdated).toBe(false);
+  socket.receive({ type: "refused_request", request, reason: "not_allowed" });
+  expect(useAppPush.getState().outdated).toBe(true);
+  expect(socket.closed).toBe(false);
+  expect(usePhone.getState().connected).toBe(true);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(FakeSocket.all).toHaveLength(1);
+});
+
+it("leaves the app's notifications alone when a computer refuses some other request", async () => {
+  const { socket } = await connectedPhone();
+  const { useAppPush } = await import("./appPush");
+  socket.receive({ type: "refused_request", request: "start_sheet", reason: "not_allowed" });
+  expect(useAppPush.getState().outdated).toBe(false);
+});
