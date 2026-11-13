@@ -78,7 +78,8 @@ impl HelperPackages {
             failed(anyhow::Error::new(error).context("The device cache home is unavailable"))
         })?;
         let base = format!("{RELEASES}/v{}", self.release.version);
-        let files = cache::load(&self.release, os, arch, &home, &base).map_err(failed)?;
+        let files =
+            cache::load(&self.release, os, arch, &home, &base, &cache::RELEASE).map_err(failed)?;
         Ok(Payload {
             files,
             missing: Vec::new(),
