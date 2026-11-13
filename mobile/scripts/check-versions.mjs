@@ -1,17 +1,28 @@
-// Two facts about what is linked into the app, checked without Xcode so every pull request can run them.
+// Two facts about what is linked into the iOS and the Android app, checked without Xcode or Gradle so every pull
+// request can run them.
 //
-// 1. The Capacitor version is written in three places that must agree: this package, the plugin package `cap sync`
-//    manages, and the app's own native package. A mismatch builds two bridges into one app.
-// 2. The app links Capacitor itself and no plugin. A plugin runs with the whole app's rights and is reachable from
-//    every script the app serves, so adding one is a change to this list, made with `BridgeGate.appPlugins` in the
-//    same pull request, never a side effect of an install.
+// 1. The Capacitor version is written in places that must agree: this package, the plugin package `cap sync` manages
+//    and the iOS app's own native package, and the library folder `cap sync android` points Gradle at. A mismatch builds
+//    two bridges into one app.
+// 2. Each app links Capacitor itself and no plugin. A plugin runs with the whole app's rights and is reachable from
+//    every script the app serves, so adding one is a change to this list, made with the app's gate list
+//    (`BridgeGate.appPlugins` on iOS, `BridgeGate.APP_PLUGINS` on Android) in the same pull request, never a side effect
+//    of an install.
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const LINKED_PACKAGES = ['@capacitor/cli', '@capacitor/core', '@capacitor/ios'];
+export const LINKED_PACKAGES = ['@capacitor/android', '@capacitor/cli', '@capacitor/core', '@capacitor/ios'];
 export const LINKED_SWIFT_PRODUCTS = ['Capacitor', 'Cordova'];
+// What the Android app links (mobile/android/app/build.gradle), beside its tests' own libraries: Capacitor's library,
+// the AndroidX parts the shell calls and Google's code scanner.
+export const LINKED_ANDROID_LIBRARIES = [
+  "project(':capacitor-android')",
+  'androidx.appcompat:appcompat',
+  'androidx.webkit:webkit',
+  'com.google.android.gms:play-services-code-scanner',
+];
 const pin = /capacitor-swift-pm\.git",\s*exact:\s*"([^"]+)"/;
 
 /** @returns {Promise<string[]>} what is wrong, empty when nothing is */
@@ -21,12 +32,15 @@ export async function check(root = ROOT) {
   const capApp = await readFile(resolve(root, 'ios/App/CapApp-SPM/Package.swift'), 'utf8');
   const shell = await readFile(resolve(root, 'ios/App/HideShell/Package.swift'), 'utf8');
 
+  const androidSettings = await readFile(resolve(root, 'android/capacitor.settings.gradle'), 'utf8');
   const found = {
+    'package.json @capacitor/android': manifest.dependencies['@capacitor/android'],
     'package.json @capacitor/ios': manifest.dependencies['@capacitor/ios'],
     'package.json @capacitor/core': manifest.dependencies['@capacitor/core'],
     'package.json @capacitor/cli': manifest.dependencies['@capacitor/cli'],
     'CapApp-SPM': capApp.match(pin)?.[1],
     HideShell: shell.match(pin)?.[1],
+    'capacitor.settings.gradle': androidSettings.match(/@capacitor\+android@([0-9][^_/']*)/)?.[1],
   };
   if (new Set(Object.values(found)).size !== 1 || Object.values(found).includes(undefined)) problems.push(`Capacitor versions disagree: ${JSON.stringify(found)}`);
 
@@ -55,6 +69,35 @@ export async function check(root = ROOT) {
     linked.push(...[...(await readFile(resolve(sources, file), 'utf8')).matchAll(/public let jsName = "([^"]+)"/g)].map((match) => match[1]));
   }
   if (JSON.stringify(exposed) !== JSON.stringify(linked.sort())) problems.push(`BridgeGate.appPlugins is ${exposed.join(', ')}; the plugin classes in HideShell are ${linked.join(', ')} (Console is Capacitor's own)`);
+  problems.push(...await checkAndroid(root, androidSettings));
+  return problems;
+}
+
+/**
+ * The Android app: Gradle builds only the app and Capacitor's library (`cap sync` writes an npm plugin's project into
+ * capacitor.settings.gradle and its dependency into app/capacitor.build.gradle, which the app does not apply), the app
+ * links the fixed library list, and the plugins its gate lets the page call are the plugin classes it defines.
+ */
+async function checkAndroid(root, capacitorSettings) {
+  const problems = [];
+  const projects = [...capacitorSettings.matchAll(/include\s+'([^']+)'/g)].map((match) => match[1]);
+  if (JSON.stringify(projects) !== JSON.stringify([':capacitor-android'])) problems.push(`capacitor.settings.gradle includes ${projects.join(', ') || 'nothing'}; the Android app builds only :capacitor-android, no npm plugin`);
+  const settings = await readFile(resolve(root, 'android/settings.gradle'), 'utf8');
+  const included = [...settings.matchAll(/include\s+'([^']+)'/g)].map((match) => match[1]);
+  if (JSON.stringify(included) !== JSON.stringify([':app'])) problems.push(`android/settings.gradle includes ${included.join(', ')}; it includes :app and Capacitor's settings alone`);
+  const app = await readFile(resolve(root, 'android/app/build.gradle'), 'utf8');
+  if (/apply\s+from:\s*['"]capacitor\.build\.gradle['"]/.test(app)) problems.push('android/app/build.gradle applies capacitor.build.gradle, through which `cap sync` links npm plugins');
+  const libraries = [...app.matchAll(/^\s*implementation\s+(project\('[^']+'\)|["']([^:"']+:[^:"']+)[:"'])/gm)].map((match) => match[2] ?? match[1]).sort();
+  if (JSON.stringify(libraries) !== JSON.stringify([...LINKED_ANDROID_LIBRARIES].sort())) problems.push(`android/app/build.gradle links ${libraries.join(', ')}; the Android app links only ${LINKED_ANDROID_LIBRARIES.join(', ')}`);
+
+  const sources = resolve(root, 'android/app/src/main/java/me/grab/hide/android');
+  const gate = await readFile(resolve(sources, 'BridgeGate.java'), 'utf8');
+  const exposed = [...(gate.match(/APP_PLUGINS = Set\.of\(([^)]*)\)/)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((match) => match[1]).sort();
+  const defined = [];
+  for (const file of (await readdir(sources)).filter((name) => name.endsWith('.java'))) {
+    defined.push(...[...(await readFile(resolve(sources, file), 'utf8')).matchAll(/@CapacitorPlugin\(\s*name\s*=\s*"([^"]+)"/g)].map((match) => match[1]));
+  }
+  if (!exposed.length || JSON.stringify(exposed) !== JSON.stringify(defined.sort())) problems.push(`BridgeGate.APP_PLUGINS is ${exposed.join(', ') || 'unreadable'}; the plugin classes of the Android app are ${defined.join(', ')}`);
   return problems;
 }
 

@@ -1,0 +1,54 @@
+import groovy.json.JsonSlurper
+
+apply plugin: 'com.android.application'
+
+// The app's own version, separate from the iOS app's (mobile/package.json): mobile/android/version.json.
+def appVersion = new JsonSlurper().parse(rootProject.file('version.json')).version
+if (!(appVersion ==~ /^[0-9]+\.[0-9]+\.[0-9]+$/)) {
+    throw new GradleException("mobile/android/version.json must hold a version shaped X.Y.Z, not ${appVersion}")
+}
+
+android {
+    namespace = "me.grab.hide.android"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "me.grab.hide.android"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName appVersion
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    androidResources {
+        // Capacitor's pattern: aapt's default without `<dir>_*`, which would drop a bundle folder whose name starts with `_`.
+        ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+    testOptions {
+        unitTests.returnDefaultValues = false
+    }
+}
+
+// The whole list of what the app links: Capacitor's library, the AndroidX parts the shell calls, and Google's code
+// scanner. mobile/scripts/check-versions.mjs holds this list too, so a new dependency is a change to both, and the
+// app does not apply `capacitor.build.gradle`, the file through which `cap sync` would link an npm plugin.
+dependencies {
+    implementation project(':capacitor-android')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.webkit:webkit:$androidxWebkitVersion"
+    implementation "com.google.android.gms:play-services-code-scanner:$codeScannerVersion"
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test:runner:$androidxTestRunnerVersion"
+}

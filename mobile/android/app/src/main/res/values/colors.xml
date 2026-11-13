@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The iOS app's LaunchBackground: the page's background before its first paint, and behind the system bars. -->
+    <color name="launch_background_light">#F6F8F8</color>
+    <color name="launch_background_dark">#0D191B</color>
+    <color name="launch_background">@color/launch_background_light</color>
+    <!-- The icon art's own background, around the art inside the adaptive icon's mask. -->
+    <color name="ic_launcher_background">#B7C9CC</color>
+</resources>
