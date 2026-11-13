@@ -434,7 +434,7 @@ async fn connect(
             // `push` reads as false from a relay that does not know the
             // field, so an older relay is served every phone frame and no
             // push request (`docs/RELAY_PROTOCOL.md`, Push relay, deploying).
-            ServerMessage::Registered { push } => Ok(push),
+            ServerMessage::Registered { push, .. } => Ok(push),
             ServerMessage::Refused { reason } => Err(LinkError::Refused(reason)),
             _ => Err(LinkError::Closed),
         }

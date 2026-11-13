@@ -227,10 +227,13 @@ async fn scenario(discard: Discard) {
     pending.verify(&signature, 1).unwrap();
     relay
         .send(Message::Text(
-            ServerMessage::Registered { push: true }
-                .encode()
-                .unwrap()
-                .into(),
+            ServerMessage::Registered {
+                push: true,
+                fcm: false,
+            }
+            .encode()
+            .unwrap()
+            .into(),
         ))
         .await
         .unwrap();

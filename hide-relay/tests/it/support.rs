@@ -3,16 +3,21 @@ use hide_relay::{
     Relay,
     apns::{Apns, Clock, ProviderKey},
     event::Event,
+    fcm::{Fcm, FcmEndpoints},
     limits::{Limits, PushLimits, SHUTDOWN_TIMEOUT},
 };
 use hide_relay_protocol::{
-    admission::{ClientMessage, DeviceHello, DeviceKey, PushOutcome, ServerMessage},
+    admission::{
+        ClientMessage, DeviceHello, DeviceKey, PushOutcome, REGISTERED_FIELD_FCM,
+        REGISTERED_FIELDS_HEADER, ServerMessage,
+    },
     noise::{NoiseKeypair, Session},
 };
 use http_body_util::Full;
 use hyper::{Response, StatusCode, body::Bytes, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use std::{
+    collections::VecDeque,
     net::SocketAddr,
     sync::{
         Arc, Mutex,
@@ -32,6 +37,8 @@ use tokio_tungstenite::{
 };
 
 pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type MakeApns = Box<dyn FnOnce(Clock) -> Apns>;
+type MakeFcm = Box<dyn FnOnce(Clock) -> Fcm>;
 pub struct Fixture {
     pub address: SocketAddr,
     pub events: Arc<Mutex<Vec<Event>>>,
@@ -50,7 +57,7 @@ impl Fixture {
         Self::with_proxy(limits, address, true).await
     }
     pub async fn with_proxy(limits: Limits, address: SocketAddr, trusted: bool) -> Self {
-        Self::build(limits, PushLimits::default(), address, trusted, None).await
+        Self::build(limits, PushLimits::default(), address, trusted, None, None).await
     }
     /// A relay with a stand-in for Apple's push service, forwarding to it.
     /// Apple's client reads `unix`, which starts at the real time, so a test
@@ -75,6 +82,36 @@ impl Fixture {
             Some(Box::new(move |clock| {
                 Apns::new(origin, endpoint, push, clock).unwrap()
             })),
+            None,
+        )
+        .await
+    }
+    /// A relay with stand-ins for Google's FCM and its metadata server, and
+    /// for Apple too when `apple` is given, so a test can prove the two share
+    /// one set of budgets.
+    pub async fn google(
+        push: PushLimits,
+        google: &Google,
+        apple: Option<(&Apple, &TestKey)>,
+    ) -> Self {
+        let endpoints = FcmEndpoints {
+            send: Some(google.fcm.url()),
+            metadata: Some(google.metadata.url()),
+        };
+        let apns = apple.map(|(apple, key)| {
+            let endpoint = apple.url();
+            let origin = key.provider();
+            Box::new(move |clock| Apns::new(origin, endpoint, push, clock).unwrap()) as MakeApns
+        });
+        Self::build(
+            Limits::default(),
+            push,
+            "127.0.0.1:0".parse().unwrap(),
+            true,
+            apns,
+            Some(Box::new(move |clock| {
+                Fcm::new("hide-android", endpoints, push, clock).unwrap()
+            })),
         )
         .await
     }
@@ -83,7 +120,8 @@ impl Fixture {
         push: PushLimits,
         address: SocketAddr,
         trusted: bool,
-        apns: Option<Box<dyn FnOnce(Clock) -> Apns>>,
+        apns: Option<MakeApns>,
+        fcm: Option<MakeFcm>,
     ) -> Self {
         let listener = TcpListener::bind(address).await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -97,14 +135,12 @@ impl Fixture {
                 .unwrap()
                 .as_millis() as u64,
         ));
-        let apns = {
+        let unix_clock = || -> Clock {
             let time = unix.clone();
-            apns.map(|make| {
-                make(Arc::new(move || {
-                    Duration::from_millis(time.load(Ordering::SeqCst))
-                }))
-            })
+            Arc::new(move || Duration::from_millis(time.load(Ordering::SeqCst)))
         };
+        let apns = apns.map(|make| make(unix_clock()));
+        let fcm = fcm.map(|make| make(unix_clock()));
         let relay = Relay::with_push(
             limits,
             trusted.then_some(address.ip()),
@@ -119,6 +155,10 @@ impl Fixture {
         .unwrap()
         .with_push_limits(push)
         .unwrap();
+        let relay = match fcm {
+            Some(fcm) => relay.with_fcm(fcm).unwrap(),
+            None => relay,
+        };
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(relay.serve(listener, async {
             let _ = stopped.await;
@@ -133,12 +173,25 @@ impl Fixture {
         }
     }
     pub async fn socket(&self, ip: &str) -> Socket {
+        self.socket_naming(ip, None).await
+    }
+    /// A device socket whose upgrade request names `fcm` among the
+    /// `registered` fields it reads, as a device that sends FCM does.
+    pub async fn socket_reading_fcm(&self, ip: &str) -> Socket {
+        self.socket_naming(ip, Some(REGISTERED_FIELD_FCM)).await
+    }
+    pub async fn socket_naming(&self, ip: &str, fields: Option<&str>) -> Socket {
         let mut request = format!("ws://{}/ws", self.address)
             .into_client_request()
             .unwrap();
         request
             .headers_mut()
             .insert("x-real-ip", ip.parse().unwrap());
+        if let Some(fields) = fields {
+            request
+                .headers_mut()
+                .insert(REGISTERED_FIELDS_HEADER, fields.parse().unwrap());
+        }
         timeout(
             Duration::from_secs(15),
             tokio_tungstenite::connect_async(request),
@@ -174,6 +227,13 @@ impl Fixture {
         .unwrap()
         .unwrap();
     }
+    /// Asserts the relay logged the fixed event `name`.
+    pub fn logged(&self, name: &str) {
+        assert!(
+            self.events.lock().unwrap().iter().any(|e| e.event == name),
+            "missing event {name}"
+        );
+    }
     /// How many `cap_exceeded` lines name `cap`.
     pub fn caps(&self, name: &str) -> usize {
         self.events
@@ -205,15 +265,15 @@ impl Drop for Fixture {
     }
 }
 
-/// One request a stand-in Apple received, as the relay sent it.
+/// One request a stand-in received, as the relay sent it.
 #[derive(Clone, Debug)]
-pub struct AppleRequest {
+pub struct Recorded {
     pub path: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 
-impl AppleRequest {
+impl Recorded {
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
@@ -222,17 +282,19 @@ impl AppleRequest {
     }
 }
 
-/// A local HTTP/2 (h2c) stand-in for Apple's push service. Every request is
-/// recorded, and answered with whatever the test set.
-pub struct Apple {
+type Answer = (StatusCode, String);
+
+/// A local HTTP/2 (h2c) stand-in for a push service, Apple's or Google's.
+/// Every request is recorded, and answered with whatever the test set.
+pub struct H2StandIn {
     pub address: SocketAddr,
-    pub requests: Arc<Mutex<Vec<AppleRequest>>>,
-    answer: Arc<Mutex<(StatusCode, String)>>,
-    /// The answer to the next request only, so a test can make Apple refuse
-    /// once and then accept.
-    next: Arc<Mutex<Option<(StatusCode, String)>>>,
-    /// How many TCP connections this Apple accepted, so a test can prove the
-    /// relay keeps one and does not open one per request.
+    pub requests: Arc<Mutex<Vec<Recorded>>>,
+    answer: Arc<Mutex<Answer>>,
+    /// Answers for the next requests only, in order, before the standing
+    /// one, so a test can make the service refuse once and then accept.
+    next: Arc<Mutex<VecDeque<Answer>>>,
+    /// How many TCP connections were accepted, so a test can prove the relay
+    /// keeps one and does not open one per request.
     connections: Arc<AtomicU64>,
     /// Open by default; while closed, each request is recorded and its
     /// answer waits, so a test can hold the relay's sends in flight.
@@ -241,13 +303,13 @@ pub struct Apple {
     task: Option<JoinHandle<()>>,
 }
 
-impl Apple {
+impl H2StandIn {
     pub async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let answer = Arc::new(Mutex::new((StatusCode::OK, String::new())));
-        let next = Arc::new(Mutex::new(None));
+        let next = Arc::new(Mutex::new(VecDeque::new()));
         let connections = Arc::new(AtomicU64::new(0));
         let gate = Arc::new(tokio::sync::watch::Sender::new(true));
         let gated = gate.clone();
@@ -280,17 +342,7 @@ impl Apple {
                             let once = once.clone();
                             let mut gate = gated.subscribe();
                             async move {
-                                let path = request.uri().path().to_owned();
-                                let headers = request
-                                    .headers()
-                                    .iter()
-                                    .map(|(name, value)| {
-                                        (
-                                            name.as_str().to_owned(),
-                                            value.to_str().unwrap_or("").to_owned(),
-                                        )
-                                    })
-                                    .collect();
+                                let (path, headers) = record(&request);
                                 let body =
                                     match http_body_util::BodyExt::collect(request.into_body())
                                         .await
@@ -298,28 +350,25 @@ impl Apple {
                                         Ok(collected) => collected.to_bytes().to_vec(),
                                         Err(_) => Vec::new(),
                                     };
-                                recorded.lock().unwrap().push(AppleRequest {
+                                recorded.lock().unwrap().push(Recorded {
                                     path,
                                     headers,
                                     body,
                                 });
                                 let _ = gate.wait_for(|open| *open).await;
-                                let (status, reason) = once
+                                let (status, body) = once
                                     .lock()
                                     .unwrap()
-                                    .take()
+                                    .pop_front()
                                     .unwrap_or_else(|| answering.lock().unwrap().clone());
-                                let body = if reason.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(r#"{{"reason":"{reason}"}}"#)
-                                };
+                                let mut response = Response::builder().status(status);
+                                // A redirect names a place the relay must
+                                // never go.
+                                if status.is_redirection() {
+                                    response = response.header("location", "http://127.0.0.1:9/");
+                                }
                                 Ok::<_, std::convert::Infallible>(
-                                    Response::builder()
-                                        .status(status)
-                                        .header("apns-id", "00000000-0000-0000-0000-000000000000")
-                                        .body(Full::new(Bytes::from(body)))
-                                        .unwrap(),
+                                    response.body(Full::new(Bytes::from(body))).unwrap(),
                                 )
                             }
                         });
@@ -345,14 +394,18 @@ impl Apple {
         format!("http://{}", self.address)
     }
 
-    /// The answer every request gets from now on.
-    pub fn answer(&self, status: StatusCode, reason: &str) {
-        *self.answer.lock().unwrap() = (status, reason.to_owned());
+    /// The status and body every request gets from now on.
+    pub fn answer_with(&self, status: StatusCode, body: &str) {
+        *self.answer.lock().unwrap() = (status, body.to_owned());
     }
 
-    /// The answer the next request gets, before the standing one.
-    pub fn answer_next(&self, status: StatusCode, reason: &str) {
-        *self.next.lock().unwrap() = Some((status, reason.to_owned()));
+    /// The status and body the next request gets, after any queued before it
+    /// and before the standing one.
+    pub fn answer_next_with(&self, status: StatusCode, body: &str) {
+        self.next
+            .lock()
+            .unwrap()
+            .push_back((status, body.to_owned()));
     }
 
     /// Holds every answer until `release`.
@@ -363,7 +416,7 @@ impl Apple {
         self.gate.send_replace(true);
     }
 
-    pub fn requests(&self) -> Vec<AppleRequest> {
+    pub fn requests(&self) -> Vec<Recorded> {
         self.requests.lock().unwrap().clone()
     }
 
@@ -371,9 +424,9 @@ impl Apple {
         self.connections.load(Ordering::SeqCst)
     }
 
-    /// Waits for the `count`-th request, so a test reads what Apple saw
+    /// Waits for the `count`-th request, so a test reads what the service saw
     /// without polling a fixed number of times.
-    pub async fn wait_for(&self, count: usize) -> Vec<AppleRequest> {
+    pub async fn wait_for(&self, count: usize) -> Vec<Recorded> {
         for _ in 0..3_000 {
             let requests = self.requests();
             if requests.len() >= count {
@@ -382,13 +435,203 @@ impl Apple {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         panic!(
-            "apple received {} of {count} requests",
+            "the stand-in received {} of {count} requests",
             self.requests().len()
         );
     }
 }
 
-impl Drop for Apple {
+impl Drop for H2StandIn {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+fn record(request: &hyper::Request<hyper::body::Incoming>) -> (String, Vec<(String, String)>) {
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|path| path.as_str().to_owned())
+        .unwrap_or_default();
+    let headers = request
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_owned(),
+                value.to_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    (path, headers)
+}
+
+/// Apple's push service: the h2c stand-in, answering Apple's error shape.
+pub struct Apple(H2StandIn);
+
+impl std::ops::Deref for Apple {
+    type Target = H2StandIn;
+    fn deref(&self) -> &H2StandIn {
+        &self.0
+    }
+}
+
+impl Apple {
+    pub async fn start() -> Self {
+        Self(H2StandIn::start().await)
+    }
+
+    fn body(reason: &str) -> String {
+        if reason.is_empty() {
+            String::new()
+        } else {
+            format!(r#"{{"reason":"{reason}"}}"#)
+        }
+    }
+
+    /// The answer every request gets from now on.
+    pub fn answer(&self, status: StatusCode, reason: &str) {
+        self.answer_with(status, &Self::body(reason));
+    }
+
+    /// The answer the next request gets, before the standing one.
+    pub fn answer_next(&self, status: StatusCode, reason: &str) {
+        self.answer_next_with(status, &Self::body(reason));
+    }
+}
+
+/// Google: FCM's HTTP v1 endpoint as an h2c stand-in, and the GCE metadata
+/// server as an HTTP/1 stand-in that issues numbered access tokens.
+pub struct Google {
+    pub fcm: H2StandIn,
+    pub metadata: Metadata,
+}
+
+impl Google {
+    pub async fn start() -> Self {
+        Self {
+            fcm: H2StandIn::start().await,
+            metadata: Metadata::start().await,
+        }
+    }
+
+    /// FCM's error shape: the gRPC status, the FCM error code and, when
+    /// `field` is given, the field Google faults.
+    pub fn error(status: &str, code: &str, field: Option<&str>) -> String {
+        let violations = field
+            .map(|field| {
+                format!(
+                    r#",{{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{{"field":"{field}","description":"Invalid registration token"}}]}}"#
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            r#"{{"error":{{"code":400,"message":"secret-free text","status":"{status}","details":[{{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"{code}"}}{violations}]}}}}"#
+        )
+    }
+}
+
+/// The GCE metadata server: each token request is recorded and answered with
+/// `access-<n>`, the n-th token it issued, valid for `expires_in` seconds.
+pub struct Metadata {
+    pub address: SocketAddr,
+    pub requests: Arc<Mutex<Vec<Recorded>>>,
+    /// The lifetime of each token issued from now on, in seconds.
+    pub expires_in: Arc<AtomicU64>,
+    /// Whether answers carry `Metadata-Flavor: Google`, and their status.
+    answer: Arc<Mutex<(StatusCode, bool)>>,
+    stop: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl Metadata {
+    pub async fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let expires_in = Arc::new(AtomicU64::new(3599));
+        let answer = Arc::new(Mutex::new((StatusCode::OK, true)));
+        let recorded = requests.clone();
+        let lifetime = expires_in.clone();
+        let answering = answer.clone();
+        let (stop, stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut stopped = stopped;
+            loop {
+                let accepted = tokio::select! {
+                    _ = &mut stopped => break,
+                    accepted = listener.accept() => accepted,
+                };
+                let Ok((stream, _)) = accepted else { break };
+                let recorded = recorded.clone();
+                let lifetime = lifetime.clone();
+                let answering = answering.clone();
+                tokio::spawn(async move {
+                    let service = service_fn(
+                        move |request: hyper::Request<hyper::body::Incoming>| {
+                            let (path, headers) = record(&request);
+                            let issued = {
+                                let mut recorded = recorded.lock().unwrap();
+                                recorded.push(Recorded {
+                                    path,
+                                    headers,
+                                    body: Vec::new(),
+                                });
+                                recorded.len()
+                            };
+                            let (status, flavored) = *answering.lock().unwrap();
+                            let body = format!(
+                                r#"{{"access_token":"access-{issued}","expires_in":{},"token_type":"Bearer"}}"#,
+                                lifetime.load(Ordering::SeqCst)
+                            );
+                            let mut response = Response::builder().status(status);
+                            if flavored {
+                                response = response.header("metadata-flavor", "Google");
+                            }
+                            async move {
+                                Ok::<_, std::convert::Infallible>(
+                                    response.body(Full::new(Bytes::from(body))).unwrap(),
+                                )
+                            }
+                        },
+                    );
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        Self {
+            address,
+            requests,
+            expires_in,
+            answer,
+            stop: Some(stop),
+            task: Some(task),
+        }
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+
+    /// Answers every token request with `status`, and without the
+    /// `Metadata-Flavor` header when `flavored` is false.
+    pub fn answer(&self, status: StatusCode, flavored: bool) {
+        *self.answer.lock().unwrap() = (status, flavored);
+    }
+
+    pub fn requests(&self) -> Vec<Recorded> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl Drop for Metadata {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
@@ -415,6 +658,10 @@ pub fn push_message(id: u32, token: &str, collapse: &str, payload: &str) -> Stri
     format!(
         r#"{{"type":"push_request","id":{id},"environment":"sandbox","token":"{token}","collapse":"{collapse}","payload":"{payload}"}}"#
     )
+}
+/// One FCM message as the wire spells it, so a test can make a field wrong.
+pub fn fcm_message(id: u32, token: &str, payload: &str) -> String {
+    format!(r#"{{"type":"fcm_request","id":{id},"token":"{token}","payload":"{payload}"}}"#)
 }
 /// Sends one push message and reads the result that answers it.
 pub async fn answer_push(socket: &mut Socket, message: &str, id: u32) -> PushOutcome {
@@ -470,7 +717,21 @@ pub async fn register_push(socket: &mut Socket, key: &DeviceKey) -> DeviceHello 
     register_answering(socket, key, true).await
 }
 
-async fn register_answering(socket: &mut Socket, key: &DeviceKey, push: bool) -> DeviceHello {
+/// Registers a device that named `fcm` on its upgrade, and checks what the
+/// relay says it forwards.
+pub async fn register_fcm(
+    socket: &mut Socket,
+    key: &DeviceKey,
+    push: bool,
+    fcm: bool,
+) -> DeviceHello {
+    let (hello, registered) = admit(socket, key).await;
+    assert_eq!(registered, ServerMessage::Registered { push, fcm });
+    hello
+}
+
+/// The device's hello and proof, and the `registered` that answers them.
+pub async fn admit(socket: &mut Socket, key: &DeviceKey) -> (DeviceHello, ServerMessage) {
     let hello = DeviceHello::new(&key.public_key(), 7).unwrap();
     send(
         socket,
@@ -489,10 +750,17 @@ async fn register_answering(socket: &mut Socket, key: &DeviceKey, push: bool) ->
         },
     )
     .await;
-    let ServerMessage::Registered { push: advertised } = control(socket).await else {
-        panic!("registered")
-    };
-    assert_eq!(advertised, push, "the relay must say whether it pushes");
+    (hello, control(socket).await)
+}
+
+async fn register_answering(socket: &mut Socket, key: &DeviceKey, push: bool) -> DeviceHello {
+    let (hello, registered) = admit(socket, key).await;
+    // A device that did not name `fcm` never reads it.
+    assert_eq!(
+        registered,
+        ServerMessage::Registered { push, fcm: false },
+        "the relay must say whether it pushes"
+    );
     hello
 }
 

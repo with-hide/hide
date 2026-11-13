@@ -8,8 +8,9 @@ use zeroize::Zeroizing;
 
 pub const WIRE_VERSION: u8 = 1;
 pub const MAX_CONTROL: usize = 2048;
-/// The one control message that carries ciphertext, bounded so that the body
-/// the relay builds around it stays inside APNs' 4,096 bytes
+/// The control messages that carry ciphertext (`push_request` and
+/// `fcm_request`), bounded so that the body the relay builds around it stays
+/// inside APNs' 4,096 bytes and FCM's 4,096 bytes of data
 /// (`docs/RELAY_PROTOCOL.md`, Push relay).
 pub const MAX_PUSH_CONTROL: usize = 6144;
 pub const ADMISSION_TIMEOUT_MS: u64 = 10_000;
@@ -18,6 +19,21 @@ pub const ADMISSION_TIMEOUT_MS: u64 = 10_000;
 pub const MIN_TOKEN: usize = 32;
 pub const MAX_TOKEN: usize = 200;
 pub const MAX_COLLAPSE: usize = 64;
+/// An FCM registration token is opaque to everyone but Google: its observed
+/// form is base64url, a colon and more base64url, about 160 characters. The
+/// bounds leave room for that form to grow and keep the whole `fcm_request`
+/// inside `MAX_PUSH_CONTROL`.
+pub const MIN_FCM_TOKEN: usize = 32;
+pub const MAX_FCM_TOKEN: usize = 1024;
+/// The upgrade request header in which a device names the `registered` fields
+/// past `push` that it reads, comma-separated. A device released before a
+/// field existed refuses a `registered` that carries it (the message denies
+/// unknown fields), so the relay adds a field only for a device that named it
+/// here, and a relay that does not know the header ignores it
+/// (`docs/RELAY_PROTOCOL.md`, Compatibility and deploy order).
+pub const REGISTERED_FIELDS_HEADER: &str = "hide-registered-fields";
+/// The value a device that reads `registered.fcm` sends in that header.
+pub const REGISTERED_FIELD_FCM: &str = "fcm";
 /// The RFC 8291 body the relay forwards, base64url.
 pub const MAX_CIPHERTEXT: usize = 3000;
 const CHALLENGE_DOMAIN: &[u8] = b"hide-relay/device-admission/v1\0";
@@ -171,6 +187,12 @@ pub enum ClientMessage {
     /// key ids itself and keeps nothing (`docs/RELAY_PROTOCOL.md`, Push relay).
     #[serde(rename = "push_request")]
     Push(PushRequest),
+    /// A notification for Google's Firebase Cloud Messaging, carried over the
+    /// admitted device socket only, sent after a `registered` whose `fcm` is
+    /// true. The relay fixes everything Google reads besides the token and the
+    /// ciphertext (`docs/RELAY_PROTOCOL.md`, Push relay).
+    #[serde(rename = "fcm_request")]
+    Fcm(FcmRequest),
 }
 
 /// Which Apple host carries the notification. There is no default: the phone
@@ -224,13 +246,7 @@ impl PushRequest {
         {
             return Err(PushField::Collapse);
         }
-        let payload = URL_SAFE_NO_PAD
-            .decode(&self.payload)
-            .map_err(|_| PushField::Payload)?;
-        if payload.is_empty() || payload.len() > MAX_CIPHERTEXT {
-            return Err(PushField::Payload);
-        }
-        Ok(())
+        payload_valid(&self.payload)
     }
 
     pub fn validate(&self) -> Result<(), Error> {
@@ -245,6 +261,77 @@ pub fn token_valid(token: &str) -> bool {
     (MIN_TOKEN..=MAX_TOKEN).contains(&token.len())
         && token.len().is_multiple_of(2)
         && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A notification for an Android install, to Google's FCM. There is no
+/// environment and no collapse value: FCM has one host, and the relay sends
+/// the data-only message with no collapse key.
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FcmRequest {
+    /// The device's own request id, carried back in the result. Never 0.
+    pub id: u32,
+    /// The FCM registration token (`fcm_token_valid`).
+    pub token: String,
+    /// The RFC 8291 body, base64url: the same body hided builds for APNs.
+    pub payload: String,
+}
+
+/// Printed without the token or the ciphertext, as `PushRequest` is.
+impl std::fmt::Debug for FcmRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FcmRequest")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FcmRequest {
+    /// Which field is wrong, for the relay's content-free diagnostic; `Ok`
+    /// when the whole request may go to Google.
+    pub fn check(&self) -> Result<(), PushField> {
+        if self.id == 0 {
+            return Err(PushField::Shape);
+        }
+        if !fcm_token_valid(&self.token) {
+            return Err(PushField::Token);
+        }
+        payload_valid(&self.payload)
+    }
+
+    pub fn validate(&self) -> Result<(), Error> {
+        self.check().map_err(|_| Error::InvalidMessage)
+    }
+}
+
+/// Whether `token` has the shape of an FCM registration token: base64url
+/// characters and colons, `MIN_FCM_TOKEN` to `MAX_FCM_TOKEN` long. The one
+/// rule the relay and the device that stores a token both apply; it also
+/// keeps the token from needing any JSON escape in the body Google reads.
+pub fn fcm_token_valid(token: &str) -> bool {
+    (MIN_FCM_TOKEN..=MAX_FCM_TOKEN).contains(&token.len())
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':'))
+}
+
+/// The ciphertext both push messages carry: unpadded base64url of 1 to
+/// `MAX_CIPHERTEXT` bytes.
+fn payload_valid(payload: &str) -> Result<(), PushField> {
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| PushField::Payload)?;
+    if payload.is_empty() || payload.len() > MAX_CIPHERTEXT {
+        return Err(PushField::Payload);
+    }
+    Ok(())
+}
+
+/// One push request the relay forwards, to Apple or to Google.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Push {
+    Apns(PushRequest),
+    Fcm(FcmRequest),
 }
 
 /// The first thing the relay finds wrong with a push request. It names a
@@ -280,13 +367,14 @@ pub enum PushAttempt {
     Unaddressable(Error),
     Push {
         id: u32,
-        request: Result<PushRequest, PushField>,
+        request: Result<Push, PushField>,
     },
 }
 
-/// Reads the push message in `text`: its id first, so a request whose fields
-/// are wrong is still answered under it, then the whole message through the
-/// one reader `ClientMessage::decode` uses (serde, then `PushRequest::check`).
+/// Reads the push message in `text` (`push_request` or `fcm_request`): its id
+/// first, so a request whose fields are wrong is still answered under it, then
+/// the whole message through the one reader `ClientMessage::decode` uses
+/// (serde, then the request's `check`).
 pub fn decode_push(text: &str) -> PushAttempt {
     if text.len() > MAX_PUSH_CONTROL {
         return PushAttempt::Unaddressable(Error::SizeLimit);
@@ -294,9 +382,11 @@ pub fn decode_push(text: &str) -> PushAttempt {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return PushAttempt::NotPush;
     };
-    if value.get("type").and_then(serde_json::Value::as_str) != Some("push_request") {
-        return PushAttempt::NotPush;
-    }
+    let fcm = match value.get("type").and_then(serde_json::Value::as_str) {
+        Some("push_request") => false,
+        Some("fcm_request") => true,
+        _ => return PushAttempt::NotPush,
+    };
     let id = value
         .get("id")
         .and_then(serde_json::Value::as_u64)
@@ -305,12 +395,15 @@ pub fn decode_push(text: &str) -> PushAttempt {
     let Some(id) = id else {
         return PushAttempt::Unaddressable(Error::InvalidMessage);
     };
-    let environment_known = matches!(
-        value.get("environment").and_then(serde_json::Value::as_str),
-        Some("sandbox" | "production")
-    );
+    // Only Apple's request names an environment.
+    let environment_known = fcm
+        || matches!(
+            value.get("environment").and_then(serde_json::Value::as_str),
+            Some("sandbox" | "production")
+        );
     let request = match serde_json::from_value::<ClientMessage>(value) {
-        Ok(ClientMessage::Push(request)) => request.check().map(|()| request),
+        Ok(ClientMessage::Push(request)) => request.check().map(|()| Push::Apns(request)),
+        Ok(ClientMessage::Fcm(request)) => request.check().map(|()| Push::Fcm(request)),
         // A missing, extra or mistyped field; the environment is named
         // because the relay records it under its own event.
         _ if !environment_known => Err(PushField::Environment),
@@ -328,15 +421,16 @@ fn collapse_byte(byte: u8) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum PushOutcome {
     Delivered,
-    /// Apple says the token no longer names an install; the sender drops it.
+    /// The push service says the token no longer names an install; the sender drops it.
     TokenGone,
-    /// Apple refuses the token itself (400 `BadDeviceToken`, `DeviceTokenNotForTopic`): malformed, made for the other
-    /// environment or for another app. It does not say the install is gone, so the sender keeps the registration and
-    /// reports it as a configuration problem.
+    /// The push service refuses the token itself (Apple's 400 `BadDeviceToken`, `DeviceTokenNotForTopic`; Google's 400
+    /// `INVALID_ARGUMENT` on the token, 403 `SENDER_ID_MISMATCH`): malformed, made for the other environment or for
+    /// another app. It does not say the install is gone, so the sender keeps the registration and reports it as a
+    /// configuration problem.
     TokenRejected,
     /// A limit refused the request; the socket stays open.
     RateLimited,
-    /// Apple could not be reached or its answer means "try later".
+    /// The push service could not be reached or its answer means "try later".
     Unavailable,
     Failed,
 }
@@ -370,13 +464,17 @@ pub enum ServerMessage {
     Challenge {
         challenge: Challenge,
     },
-    /// Admission is confirmed. `push` says whether this relay forwards push
-    /// requests; a relay that does not know the field sends `{"type":
-    /// "registered"}`, which reads as `false`, so a device never sends a
-    /// request an older relay would refuse (`docs/RELAY_PROTOCOL.md`).
+    /// Admission is confirmed. `push` says whether this relay forwards
+    /// `push_request` to Apple and `fcm` whether it forwards `fcm_request` to
+    /// Google; a relay that does not know a field leaves it out, which reads as
+    /// `false`, so a device never sends a request an older relay would refuse.
+    /// `fcm` is written only when true, and only to a device that named it in
+    /// `REGISTERED_FIELDS_HEADER` (`docs/RELAY_PROTOCOL.md`).
     Registered {
         #[serde(default)]
         push: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        fcm: bool,
     },
     Joined {
         connection: u32,
@@ -394,13 +492,24 @@ pub enum ServerMessage {
     PushResult(PushResult),
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+/// Whether a `REGISTERED_FIELDS_HEADER` value names `field`: comma-separated
+/// names, spaces around each ignored.
+pub fn registered_fields_name(value: &str, field: &str) -> bool {
+    value.split(',').any(|name| name.trim() == field)
+}
+
 fn parse<T: serde::de::DeserializeOwned>(text: &str, limit: usize) -> Result<T, Error> {
     if text.len() > limit {
         return Err(Error::SizeLimit);
     }
     serde_json::from_str(text).map_err(|_| {
-        // Past the control budget, only a push request is a message at all;
-        // anything else that size, well-formed or not, is over the bound.
+        // Past the control budget, only a push request (Apple's or Google's)
+        // is a message at all; anything else that size, well-formed or not,
+        // is over the bound.
         if text.len() > MAX_CONTROL {
             Error::SizeLimit
         } else {
@@ -410,10 +519,10 @@ fn parse<T: serde::de::DeserializeOwned>(text: &str, limit: usize) -> Result<T, 
 }
 impl ClientMessage {
     pub fn decode(text: &str) -> Result<Self, Error> {
-        // Only a push request may carry a body past the control budget; a
+        // Only a push or FCM request may carry a body past the control budget; a
         // message of another kind that large is still refused at it.
         let value: Self = parse(text, MAX_PUSH_CONTROL)?;
-        if text.len() > MAX_CONTROL && !matches!(value, Self::Push(_)) {
+        if text.len() > MAX_CONTROL && !matches!(value, Self::Push(_) | Self::Fcm(_)) {
             return Err(Error::SizeLimit);
         }
         match &value {
@@ -430,6 +539,7 @@ impl ClientMessage {
             Self::Close { connection } if *connection == 0 => return Err(Error::InvalidMessage),
             Self::Close { .. } => {}
             Self::Push(request) => request.validate()?,
+            Self::Fcm(request) => request.validate()?,
         }
         Ok(value)
     }

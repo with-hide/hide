@@ -152,6 +152,8 @@ pub(crate) struct State {
     push: PushLimits,
     /// Whether this relay has Apple's key, and so forwards push requests.
     push_enabled: bool,
+    /// Whether this relay has an FCM project, and so forwards FCM requests.
+    fcm_enabled: bool,
     next_socket: u64,
     peers: HashMap<u64, Peer>,
     rooms: HashMap<String, Room>,
@@ -169,6 +171,7 @@ impl State {
             limits,
             push,
             push_enabled,
+            fcm_enabled: false,
             next_socket: 0,
             peers: HashMap::new(),
             rooms: HashMap::new(),
@@ -233,11 +236,15 @@ impl State {
         Ok(id)
     }
 
+    /// `reads_fcm` is whether the device named `fcm` in its upgrade request
+    /// (`REGISTERED_FIELDS_HEADER`): only then may `registered` carry the
+    /// field, which a device released before it refuses.
     pub fn register(
         &mut self,
         id: u64,
         hello: DeviceHello,
         now: Duration,
+        reads_fcm: bool,
     ) -> Result<(), Rejection> {
         if self.rooms.contains_key(&hello.room) {
             return Err(Rejection::new(Refusal::RoomOccupied, "room_occupied"));
@@ -265,6 +272,7 @@ impl State {
             id,
             ServerMessage::Registered {
                 push: self.push_enabled,
+                fcm: self.fcm_enabled && reads_fcm,
             },
         )
     }
@@ -438,6 +446,10 @@ impl State {
 
     pub fn set_push_limits(&mut self, push: PushLimits) {
         self.push = push;
+    }
+
+    pub fn set_fcm_enabled(&mut self) {
+        self.fcm_enabled = true;
     }
 
     pub fn close_phone(&mut self, id: u64, connection: u32) -> Result<Vec<Event>, Rejection> {
