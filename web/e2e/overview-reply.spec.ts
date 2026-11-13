@@ -11,7 +11,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { openOverview } from "./overview-entry";
 import { enterWorkspace } from "./wire";
 
-test.describe.configure({ timeout: 150_000 });
+test.describe.configure({ timeout: 150_000 }); // wait-ok: the test budget, which starts the engine, the daemon and two stand-ins
 
 /** What the stand-in of pane `index` read after `from` bytes of its input log. */
 function heard(fixture: AgentFixture, index: 0 | 1, from: number): string {
@@ -42,11 +42,11 @@ test("a reply from the Overview's waiting list and from the session detail reach
     await enterWorkspace(page, "fixture");
     await openOverview(page, "work");
     const graph = page.locator("[data-overview-graph]");
-    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 }); // wait-ok: the graph's first layout on a cold page
 
     // The waiting item: its question, the reply field, and 답하러 가기 still there.
     const item = graph.locator(`[data-graph-ask="${asking}"]`);
-    await expect(item).toBeVisible({ timeout: 30_000 });
+    await expect(item).toBeVisible();
     await expect(item.getByRole("button", { name: "Go answer" })).toBeVisible();
     const field = item.locator(`[data-agent-reply="${asking}"]`);
     const input = field.getByRole("textbox");
@@ -57,11 +57,12 @@ test("a reply from the Overview's waiting list and from the session detail reach
     await input.fill("2");
     await capture(graph.locator("[data-graph-projects]"), "waiting-item-typed");
     await input.press("Enter");
-    // The words and Enter reached the agent's own pane, and no session opened.
-    await expect.poll(() => heard(fixture, 0, before), { timeout: 20_000 }).toMatch(/^2[\r\n]+$/);
-    await expect(page.locator("[data-overview-page]")).toBeVisible();
+    // The core's receipt says the engine took the words (the field empties),
+    // they reached the agent's own pane, and no session opened.
     await expect(input).toHaveValue("");
     await expect(field).toHaveAttribute("data-agent-reply-state", "idle");
+    await expect.poll(() => heard(fixture, 0, before)).toMatch(/^2[\r\n]+$/);
+    await expect(page.locator("[data-overview-page]")).toBeVisible();
 
     // The session detail: the same field beside 세션 열기.
     await item.locator(".og-ask-who").click();
@@ -74,8 +75,8 @@ test("a reply from the Overview's waiting list and from the session detail reach
     const again = logLength(fixture, 0);
     await detail.getByRole("textbox").fill("1");
     await detail.getByRole("button", { name: "Send" }).click();
-    await expect.poll(() => heard(fixture, 0, again), { timeout: 20_000 }).toMatch(/^1[\r\n]+$/);
     await expect(detail.getByRole("textbox")).toHaveValue("");
+    await expect.poll(() => heard(fixture, 0, again)).toMatch(/^1[\r\n]+$/);
     await expect(page.locator("[data-overview-page]")).toBeVisible();
   } finally {
     daemon?.stop();
