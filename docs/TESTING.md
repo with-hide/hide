@@ -837,7 +837,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 56 jobs.
+A run that plans every lane a pull request can plan starts at most 57 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -856,6 +856,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
 | `repeat changed tests` | 4 | the count of the changed tests, their web specs through `web-e2e.yml`, their Rust modules under nextest and a final verdict requiring actual completed runs; each repeat leg starts only when selected ([The repeat lane](#the-repeat-lane)) |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `Android app` | 1 | the Android app host's JVM unit tests and debug build on Linux, planned for `mobile/android/`; its instrumented tests need an emulator and run on the build machine ([BUILD.md](BUILD.md#the-android-app)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 

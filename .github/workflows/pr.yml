@@ -421,6 +421,37 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bash scripts/verify-web.sh mobile test
 
+  # The Android app host (`mobile/android`, docs/BUILD.md, The Android app): its JVM unit
+  # tests and a debug build on the runner's own Android SDK. Its instrumented tests need an
+  # emulator and run where the app is built, through `mobile/scripts/build-android.sh build`.
+  android:
+    name: Android app
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'android')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      # Gradle builds Capacitor's Android library from the installed package.
+      - name: Install dependencies
+        run: bash scripts/verify-web.sh install
+      - name: JVM unit tests and debug build
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon --console=plain testDebugUnitTest assembleDebug
+
   # The user docs, which share `site/` with the landing page (docs/TESTING.md, The user
   # docs): the guides and the feature pages hold each other, the CLI reference is read
   # from the `hide` this checkout builds and fails on a command with no note, and the
@@ -1157,7 +1188,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, docs, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
+    needs: [plan, policy, rust, checks, android, docs, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
