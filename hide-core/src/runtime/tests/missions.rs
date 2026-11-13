@@ -10669,6 +10669,159 @@ fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
     );
 }
 
+/// A mission whose one direct node finished on `HEAD` and whose close Hide
+/// then tried and was refused, the folder having moved on with the node's
+/// `check` line open, as with-hide/hide#2518 began.
+fn refused_close(runtime: &mut Runtime, now: u64) {
+    finished_direct_node(runtime);
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].done_head = None;
+    checkout_at(runtime, OTHER_HEAD);
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        node_view(runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(crate::missions::AttentionReason::CloseRefused)
+    );
+}
+
+/// with-hide/hide#2518: the Conductor skips the line Hide's close was
+/// refused on and closes the mission as done itself. The close that passes
+/// answers the refused close, whoever makes it, so nothing of it is left on
+/// the closed mission: no raise on the node, no safety net, no notice to
+/// the operator and no letter still to go to the Conductor.
+#[test]
+fn the_conductors_close_settles_the_close_hide_was_refused() {
+    use crate::missions::WakeEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    refused_close(&mut runtime, now);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "skip", "node": "fix", "line": "check",
+               "reason": "checked on the merged head"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().safety_net,
+        None
+    );
+    assert!(runtime.claim_mission_notices().is_empty());
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .all(|wake| wake.event != WakeEvent::Attention),
+        "{:?}",
+        mission.wakes
+    );
+}
+
+/// A book an earlier build saved after its Conductor closed over a refused
+/// close (with-hide/hide#2518, 1.2.8) holds the raise on the done mission,
+/// where no close or evaluation would take it off again: it reads settled,
+/// with no safety net.
+#[test]
+fn a_refused_close_an_earlier_build_left_on_a_closed_mission_reads_settled() {
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    let fixture = conducting();
+    let state = fixture._root.path().join("earlier-book");
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    refused_close(&mut runtime, now);
+    let raised = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .attention
+        .clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "skip", "node": "fix", "line": "check",
+               "reason": "checked on the merged head"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    let mut earlier = runtime.missions.book.clone();
+    earlier.get_mut("mission-1").unwrap().nodes[0].attention = raised;
+    let store = MissionStore::new(&state);
+    MissionFiles::new(store.dir().to_owned(), None)
+        .write(&earlier, &mut Vec::new())
+        .unwrap();
+    let Restored::Read(book) = store.restore() else {
+        panic!("the folder loads")
+    };
+    assert!(
+        book.get("mission-1").unwrap().nodes[0].attention.is_some(),
+        "the folder holds the raise as the earlier build saved it"
+    );
+    runtime.install_mission_store(store, Restored::Read(book));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().safety_net,
+        None
+    );
+    drop(runtime.missions.store.take());
+}
+
+/// A close that passed ended that closing: once the mission is opened
+/// again and its close is refused again, the question is asked again
+/// rather than held back as one already answered.
+#[test]
+fn a_refused_close_is_asked_again_after_its_closed_mission_reopened() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    refused_close(&mut runtime, now);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "reopen"})).unwrap();
+    for status in ["working", "done"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": {"status": status}}),
+        )
+        .unwrap();
+    }
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].done_head = None;
+    checkout_at(&mut runtime, HEAD);
+    runtime.drive_mission_health(now + 1);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(AttentionReason::CloseRefused)
+    );
+}
+
 /// with-hide/hide#2301, #2302: `show <mission id>` reads that mission, as
 /// Hide's own letters tell a Conductor to run it; a node's worker and its
 /// checker read their mission without naming it, and the worker sets its

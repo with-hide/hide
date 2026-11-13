@@ -1478,6 +1478,21 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
     }
 }
 
+/// A book from before every close settled the refused close it passed
+/// (with-hide/hide#2518) may hold one on a mission its Conductor closed,
+/// where nothing could take it off: it is settled now, as that close
+/// settles it today.
+fn settle_closed_refusals(book: &mut crate::missions::MissionBook) {
+    for mission in &mut book.missions {
+        if !matches!(
+            mission.status,
+            MissionStatus::Planning | MissionStatus::Running
+        ) {
+            super::mission_health::settle_refused_close(mission, "hide");
+        }
+    }
+}
+
 impl Runtime {
     pub(crate) fn install_mission_store(
         &mut self,
@@ -1488,6 +1503,7 @@ impl Runtime {
             Restored::Fresh => {}
             Restored::Read(mut book) | Restored::Moving(mut book) => {
                 settle_typed_answers(&mut book);
+                settle_closed_refusals(&mut book);
                 self.missions.book = book;
             }
             Restored::Unreadable(reason) => {
@@ -1580,6 +1596,7 @@ impl Runtime {
             // A cancelled mission wakes no one (D-51).
             target.wakes.clear();
         }
+        super::mission_health::settle_refused_close(target, by);
         let changed = *target != before;
         let mut events = super::mission_events::close_events(&before, target, now);
         events.extend(ended);
