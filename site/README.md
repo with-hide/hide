@@ -56,7 +56,7 @@ change to any of those changes this page in the same release.
 Use Node.js 22.7 or later, which recognizes the browser ES module in `public/downloads.js` without a package manifest of its own.
 To preview the built site, run `cd site && pnpm preview --host 127.0.0.1 --port 4399` and open `http://127.0.0.1:4399/` and `/docs/`.
 Browser modules require HTTP; opening `index.html` through `file:` is not the preview procedure.
-Check desktop at 1440 pixels and mobile at 390 pixels, in dark and light, including keyboard navigation, text wrapping, manual OS and processor selection, loading, unavailable and retry states on the landing, and search and the theme switch in the docs.
+Check desktop at 1440 pixels and mobile at 390 pixels, in dark and light, including keyboard navigation, text wrapping, each system leading the download section, a phone's hero, loading, unavailable and retry states on the landing and `/download`, and search and the theme switch in the docs.
 Run evidence belongs under ignored `agents/runs/`, never in this directory or a commit.
 
 ## Deploying
@@ -92,11 +92,15 @@ All four installers below and their individual `.sha256` sidecars must exist exa
 Any incomplete pair withholds downloads for every platform.
 Linux shows both packages, the `.deb` first, each with its own checksum.
 The app updates itself from the release's update files afterwards, so the page offers only the installers ([INSTALL.md](../docs/INSTALL.md)).
-The browser's OS suggestion is only a hint; the visitor can change it and must choose a processor.
-Unsupported combinations offer no installer.
-The hero's button is the one shortcut past the chooser (`heroOffer`): for a macOS or Windows suggestion, where one installer exists, it links that validated installer and shows its processor and system requirement, the release notes, the checksum and a link to the chooser on the line under it.
-It stands back to `Get hide ↓` for Linux, for no suggestion, before validation, after any failure, and when Chromium's architecture hint names a processor the installer does not cover (x86 on macOS, ARM on Windows); other browsers give no hint, so the line names the processor instead.
-The installer, checksum and version-specific release links appear together only after validation and a supported selection.
+Each system has one supported processor, so the page never asks for one: the browser's OS suggestion only orders the systems, the visitor's first with its files at once and the others folded under "Also for" (`downloadView`); with no suggestion, or on a phone, every system is listed alike.
+Each system names its requirement, says in one line what opening the file shows (macOS opens with no warning and is dragged into Applications, Windows SmartScreen asks for More info and Run anyway, Linux names the `apt` or `dnf` command), and links its checksum as an optional check and its install guide under `/docs/start/`.
+When Chromium's architecture hint names a processor the one build excludes (x86 on macOS, ARM on Windows), that system shows one line saying so instead of its files; other browsers give no hint, so the requirement names the processor instead.
+`/download` (`public/download.html`) lists every system with the same code and no fold, for the docs and the app to link.
+The hero's button is the one shortcut past the download section (`heroOffer`): for a macOS or Windows suggestion it links that validated installer, and the line under it carries the requirement, the release notes, what opening the file shows and the iPhone app, then a line to the other systems, the checksum and the license.
+It stands back to `Get hide ↓` for Linux, for no suggestion, before validation, after any failure, and when the architecture hint excludes the installer.
+On a phone (`phoneOf`: an iPhone, or an Android phone) the hero leads with the iPhone app on the App Store and offers `Get hide for your computer` second; an Android phone gets the computer download first and a line saying its app is coming to Google Play, with no store link until it is published (`tests/legal.test.mjs`).
+After the files the section links what to do next on this site: the practice screen, the first ten minutes and connecting a phone.
+The installer, checksum and version-specific release links appear only after validation.
 The site links the published checksum for the visitor to verify; it does not download and cryptographically verify the installer itself.
 API errors, timeouts, invalid JSON, no public release and ineligible releases leave useful GitHub Releases and source-install links available.
 The same links remain usable without JavaScript.
@@ -134,7 +138,7 @@ The terminals hold what Claude Code would draw there (`HERO_TERMINALS`), written
 Every section owl is an `<img class="owl" data-owl="...">` whose `src` is the pose's still frame and whose `data-motion` is its loop, so a pose is replaced by changing those two files.
 Supported agents are named in text; the machine map beside the names shows the marks of the three agents it uses, copied unchanged from the app's own bundle (`assets/agents/`: Claude Code's and Codex's artwork the app ships, OpenCode's MIT mark), whose terms `web/src/assets/agents/manifest.json` records. Antigravity's mark stays out of the page, because Google's brand terms ask for a request before a Google logo is used; the films draw Antigravity as a plain `A` monogram.
 
-The Discord mark beside the invite links (header, hero line, download area; the footer link stays text) is Discord's own logo from Simple Icons (CC0), drawn inline in the text colour, as Discord's brand terms allow for linking to a server.
+The Discord mark beside the invite links (header and download area; the footer link stays text) is Discord's own logo from Simple Icons (CC0), drawn inline in the text colour, as Discord's brand terms allow for linking to a server.
 The section points follow the same guides as the copy: the parent's minute, the five-minute letter and the causes that reach the person [delivery.md](../docs/delivery.md) and [status-model.md](../docs/status-model.md), a card's check, promotion and pointer [ARCHITECTURE.md](../docs/ARCHITECTURE.md) and [agent-hooks.md](../docs/agent-hooks.md), and the `hide browser` and `hide file open` commands the browser shot's terminal shows [BROWSER_DISPLAYS.md](../docs/BROWSER_DISPLAYS.md).
 `site.js` runs the one-time scroll reveals, opens the FAQ answer a link points at, and swaps each section owl between its still frame and its loop: the loop plays only while that owl is on screen and the tab is visible, and under `prefers-reduced-motion` the reveals show at once and no loop is ever loaded.
 An owl's loop is CSS keyframes inside its own SVG, so it plays as a plain `<img>` with no player script; the in-file reduced-motion rule is a second guard, because an SVG inside `<img>` does not see the page's media queries in every browser.

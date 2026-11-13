@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { heroOffer, validateRelease } from "../public/downloads.js";
+import { downloadView, heroOffer, phoneOf, validateRelease } from "../public/downloads.js";
 
 // The installers a release carries (PRD auto-update D-35), each with its checksum.
 const base = "https://github.com/with-hide/hide/releases";
@@ -30,7 +30,7 @@ test("one complete stable release returns every installer and checksum at its ow
   assert.equal(result.tag, "v1.2.3");
   assert.equal(result.releaseUrl, `${base}/tag/v1.2.3`);
   const offered = (names, formats) => names.map((name, index) => ({
-    format: formats[index], url: `${base}/download/v1.2.3/${name}`, checksumUrl: `${base}/download/v1.2.3/${name}.sha256`,
+    format: formats[index], name, url: `${base}/download/v1.2.3/${name}`, checksumUrl: `${base}/download/v1.2.3/${name}.sha256`,
   }));
   assert.deepEqual(result.downloads["macos-arm64"].files, offered([filenames[0]], ["dmg"]));
   assert.deepEqual(result.downloads["windows-x64"].files, offered([filenames[1]], ["installer"]));
@@ -117,16 +117,21 @@ test("malformed API data fails closed; unrelated assets do not replace required 
   assert.equal(validateRelease(release).status, "ready");
 });
 
-test("the hero offers the one macOS or Windows installer with its checksum and notes, unless the processor rules it out", () => {
+test("the hero offers the one macOS or Windows installer with what opening it shows, unless the processor rules it out", () => {
   const ready = validateRelease(publicRelease());
   const mac = heroOffer(ready, "macos", "");
   assert.equal(mac.label, "Download for macOS");
   assert.equal(mac.detail, "Apple Silicon · macOS 14 or later");
+  assert.equal(mac.firstLaunch, "Opens with no warning: drag hide into Applications");
+  assert.deepEqual(mac.others, ["Windows", "Linux"]);
   assert.equal(mac.url, `${base}/download/v1.2.3/${filenames[0]}`);
   assert.equal(mac.checksumUrl, `${base}/download/v1.2.3/${filenames[0]}.sha256`);
   assert.equal(mac.releaseUrl, `${base}/tag/v1.2.3`);
   assert.equal(heroOffer(ready, "macos", "arm").url, mac.url);
-  assert.equal(heroOffer(ready, "windows", "").url, `${base}/download/v1.2.3/${filenames[1]}`);
+  const windows = heroOffer(ready, "windows", "");
+  assert.equal(windows.url, `${base}/download/v1.2.3/${filenames[1]}`);
+  assert.match(windows.firstLaunch, /More info, then Run anyway/);
+  assert.deepEqual(windows.others, ["macOS", "Linux"]);
   assert.equal(heroOffer(ready, "macos", "x86"), null);
   assert.equal(heroOffer(ready, "windows", "arm"), null);
   assert.equal(heroOffer(ready, "linux", "x86"), null);
@@ -134,4 +139,51 @@ test("the hero offers the one macOS or Windows installer with its checksum and n
   for (const state of [{ status: "loading" }, { status: "error" }, validateRelease({ ...publicRelease(), prerelease: true })]) {
     assert.equal(heroOffer(state, "macos", ""), null);
   }
+});
+
+test("the download section leads with the visitor's system and its file at once, with no processor to choose", () => {
+  const ready = validateRelease(publicRelease());
+  const mac = downloadView(ready, "macos", "");
+  assert.equal(mac.tag, "v1.2.3");
+  assert.equal(mac.lead.os, "macos");
+  assert.equal(mac.lead.requirement, "Apple Silicon · macOS 14 or later");
+  assert.equal(mac.lead.excluded, null);
+  assert.deepEqual(mac.lead.files.map(file => [file.url, file.checksumUrl, file.command]),
+    [[`${base}/download/v1.2.3/${filenames[0]}`, `${base}/download/v1.2.3/${filenames[0]}.sha256`, null]]);
+  assert.equal(mac.lead.guide, "/docs/start/install-macos/");
+  assert.deepEqual(mac.others.map(system => system.os), ["windows", "linux"]);
+  // Linux has one processor and two packages: both files at once, each with the command that installs it.
+  const linux = downloadView(ready, "linux", "");
+  assert.deepEqual(linux.lead.files.map(file => [file.format, file.command]), [
+    ["deb", `sudo apt install ./${filenames[2]}`], ["rpm", `sudo dnf install ./${filenames[3]}`],
+  ]);
+  assert.deepEqual(linux.others.map(system => system.os), ["macos", "windows"]);
+});
+
+test("a processor the one build excludes reads one line instead of a file, and no system suggested lists every system", () => {
+  const ready = validateRelease(publicRelease());
+  const intel = downloadView(ready, "macos", "x86");
+  assert.deepEqual(intel.lead.files, []);
+  assert.match(intel.lead.excluded, /Intel processor\. hide runs on Apple Silicon Macs only/);
+  assert.equal(intel.others[0].files.length, 1, "the other systems keep their files");
+  assert.match(downloadView(ready, "windows", "arm").lead.excluded, /ARM processor/);
+  assert.equal(downloadView(ready, "macos", "arm").lead.excluded, null);
+  const none = downloadView(ready, "", "");
+  assert.equal(none.lead, null);
+  assert.deepEqual(none.others.map(system => system.os), ["macos", "windows", "linux"]);
+  for (const state of [{ status: "loading" }, { status: "error" }, { status: "unavailable" }]) {
+    assert.equal(downloadView(state, "macos", ""), null);
+  }
+});
+
+test("only an iPhone or an Android phone counts as a phone", () => {
+  const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+  const android = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36";
+  const tablet = "Mozilla/5.0 (Linux; Android 15; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36";
+  const ipad = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+  assert.equal(phoneOf(iphone), "ios");
+  assert.equal(phoneOf(android), "android");
+  assert.equal(phoneOf(tablet), "");
+  assert.equal(phoneOf(tablet, true), "android");
+  assert.equal(phoneOf(ipad), "");
 });
