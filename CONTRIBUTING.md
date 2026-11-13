@@ -50,6 +50,8 @@ Search open and closed issues first.
 Keep the report factual and about one screen long: what happened, what you expected, the shortest exact steps, the hide and operating-system versions, and the few log lines around the failure.
 Leave out root-cause analysis, implementation plans, proposed fixes, patches and generated investigation output.
 An issue that runs past 8,000 characters is closed automatically.
+An issue that does not use one of the forms (it lacks the headings of the bug form or of the feature request form) gets the label `needs-template` and one comment; it goes away when the description is fixed, and an issue still without a form after 7 days is closed.
+Maintainers are not checked.
 The public repository's issues are user bug reports and feature requests; the development issues CI files (flaky tests, nightly failures, the agent canary) live in the private with-hide/hide-private ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
 
 A bug report is a real contribution.
