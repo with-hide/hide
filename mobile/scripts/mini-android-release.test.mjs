@@ -59,7 +59,7 @@ describe('the Android release command on the build machine', { timeout: 120000 }
     stub(join(inputs, 'check-release-aab.py'), `${recordArgs('check')}; cat "$2" > "${home}/signers-seen"; [ -z "$STUB_CHECK_FAILS" ] || { echo "release check failed: the app is debuggable" >&2; exit 1; }; echo "release checks passed"`);
     put(join(inputs, 'bundle-manifest.json'), '{"schema":1,"files":{}}');
     put(config('upload.p12'), 'keystore bytes');
-    put(config('play.json'), JSON.stringify({ type: 'service_account', client_email: 'uploader@hide.iam.gserviceaccount.com', private_key: PRIVATE_KEY, token_uri: 'https://oauth2.googleapis.com/token' }));
+    put(config('play.json'), JSON.stringify({ type: 'service_account', client_email: 'uploader@play.example', private_key: PRIVATE_KEY, token_uri: 'https://oauth2.googleapis.com/token' }));
     secretsFile(goodSecrets());
 
     // Gradle builds the bundle unsigned, and is given no secret.
