@@ -49,7 +49,7 @@
         <div class="legal-head">
           <p class="label">Privacy</p>
           <h1>Privacy policy</h1>
-          <p class="meta">Effective from the day the iOS app is released on the App Store</p>
+          <p class="meta">Effective 13 November 2026</p>
           <p class="lead">This page says what each part of hide sends, where it goes and how long it stays. It describes the code that ships, not an intention.</p>
           <nav class="legal-langs" aria-label="Language">
             <a href="#en">English</a>
@@ -66,7 +66,7 @@
             <li>We sell no data, run no advertising, and include no tracking or advertising SDK.</li>
             <li>Your conversations, commands, code and files are never sent to us. They stay on your computer and your phone, except the part a Hide AI feature sends to the provider you chose (section 5).</li>
             <li>The desktop app sends counts of its own use, on by default, and you can turn them off in Settings › Privacy.</li>
-            <li>The phone talks to your computer through hide's relay. If you turn notifications on, your computer sends them, encrypted, to the push service your phone uses: Apple's for the iOS app, or the browser's own, which runs on Google's, Mozilla's or Microsoft's.</li>
+            <li>The phone talks to your computer through hide's relay. If you turn notifications on, your computer sends them, encrypted, to the push service your phone uses: Apple's for the iOS app, Google's for the Android app, or the browser's own, which runs on Google's, Mozilla's or Microsoft's.</li>
           </ul>
 
           <h3>1. The desktop app</h3>
@@ -129,18 +129,19 @@
             <li>When a connection starts and ends, how much data passed, and the phone protocol number the phone asked for.</li>
             <li>The IP address a connection comes from, used to count connection attempts.</li>
             <li>If you turned on notifications in the iOS app, the phone's device token and the encrypted notification, which it passes on to Apple (section 4.3). It cannot read the notification.</li>
+            <li>If you turned on notifications in the Android app, the phone's Firebase Cloud Messaging (FCM) registration token and the encrypted notification, which it passes on to Google (section 4.4). It cannot read the notification.</li>
           </ul>
           <p>The relay runs on a Google Cloud virtual machine, so Google's infrastructure carries its connections.</p>
           <h4>3.2 What the relay keeps</h4>
           <p>The relay has no database and no state file. Room membership, byte counts per room over a 24-hour window, and connection attempts per address over a 60-second window are held in memory only, and everything is cleared when the service restarts.</p>
           <p>Messages are never stored. The relay does not keep a message for later delivery; if your computer is offline, the phone shows that it cannot connect and tries again when it returns.</p>
           <h4>3.3 Logs</h4>
-          <p>The relay writes one line per event to the machine's system journal: an event name, the time, and sometimes a byte count or the name of the limit that was reached. The lines show when connections started and ended and how much data passed, but no value that identifies a computer or a phone: no room identifier, no address, no key, no name. No message content, file name or account is ever written, and nothing about a notification, its device token or its content.</p>
+          <p>The relay writes one line per event to the machine's system journal: an event name, the time, and sometimes a byte count or the name of the limit that was reached. The lines show when connections started and ended and how much data passed, but no value that identifies a computer or a phone: no room identifier, no address, no key, no name. No message content, file name or account is ever written, and, of a notification, only the name of what happened to it, never its token or its content.</p>
           <p>The journal keeps those lines at most seven days and caps them at 64 MiB in total. It rotates its files every hour, and an hourly job deletes files older than six days and trims the journal to that size, so a line is gone no later than seven days after it is written.</p>
           <p>The web server in front of the relay keeps no access log. Three kinds of alert only, a limit reached, a server failure and a fixed test line, are forwarded to Google Cloud Logging, and each carries its event name and nothing else: no room identifier, size or address. They are kept for a period in a log store outside the relay, set by that logging project and not by hide's deploy files, and they hold no value that identifies a computer or a phone.</p>
 
           <h3>4. The phone app</h3>
-          <p>The phone app has no account, no sign-in, no advertising and no analytics. It loads its own files from <code>app.withhide.dev</code>, a host with no analytics on it, and talks only to your computer through the encrypted session. If you turn notifications on, iOS itself registers the phone with Apple's push service.</p>
+          <p>The phone app has no account, no sign-in, no advertising and no analytics of its own. The iOS and Android apps carry their files inside the app; the version in a browser loads them from <code>app.withhide.dev</code>, a host with no analytics on it. The phone talks only to your computer through the encrypted session. If you turn notifications on, iOS itself registers the phone with Apple's push service, and the Android app registers it with Google's Firebase Cloud Messaging (section 4.4).</p>
           <h4>4.1 What the phone keeps</h4>
           <ul>
             <li>The computers you paired: their names, their room identifiers, their public keys, and when each was last used.</li>
@@ -157,10 +158,17 @@
           <h4>4.3 Push notifications</h4>
           <p>Notifications are off until you turn them on in the app, and the app works without them. A notification says that an agent needs you or has finished. It carries the task's title, the project's name, the state, the agent row's short status sentence, and identifiers hide uses to find the agent. The title and the sentence come from your computer and can contain text you or your agent wrote. A notification never carries terminal content, code or a conversation.</p>
           <ul>
-            <li>Your computer, not the phone and not a hide server, sends each notification. It encrypts the whole payload with a key the phone gave it inside the encrypted session, and sends it to the push service the phone uses: Apple's push notification service for hide's iOS app, and for a browser the browser's own, run by Apple, Google, Mozilla or Microsoft. The push service cannot read the payload.</li>
-            <li>For the iOS app, your computer sends the encrypted notification and the phone's device token to hide's relay, which passes them on to Apple. The relay stores neither and writes neither to its logs. What your phone needs to receive notifications, a subscription or a device token, is kept with the phone's record on your computer and nowhere else.</li>
+            <li>Your computer, not the phone and not a hide server, sends each notification. It encrypts the whole payload with a key the phone gave it inside the encrypted session, and sends it to the push service the phone uses: Apple's push notification service for hide's iOS app, Google's Firebase Cloud Messaging for hide's Android app, and for a browser the browser's own, run by Apple, Google, Mozilla or Microsoft. The push service cannot read the payload.</li>
+            <li>For the iOS app, your computer sends the encrypted notification and the phone's device token to hide's relay, which passes them on to Apple. For the Android app, your computer does the same with the phone's FCM token, and the relay passes both on to Google (section 4.4). The relay stores none of these and writes none to its logs. What your phone needs to receive notifications, a subscription, a device token or an FCM token, is kept with the phone's record on your computer and nowhere else.</li>
             <li>The push service sees the phone's token, the app or site identifier it belongs to, the time and size of each notification, and, for the iOS app, a fixed general line. The content is encrypted, and the phone decrypts it to show it; when it cannot, it shows that general line instead.</li>
             <li>No notification content goes anywhere else, and none is used for advertising.</li>
+          </ul>
+          <h4>4.4 The Android app and Google</h4>
+          <p>The Android app uses Google's services in two places, and in neither can Google read anything that comes from your computer. It needs a phone with Google Play services.</p>
+          <ul>
+            <li><strong>Notifications.</strong> When you turn notifications on, the app registers with Google's Firebase Cloud Messaging (FCM), which gives the phone a registration token, and Google's library keeps a Firebase installation ID for the app. Your computer sends the encrypted notification and that token to hide's relay. The relay passes both to Google with its own Google service account, while the request is in flight, and does not store the token or the notification or write them to its logs. The token is kept with the phone's record on your computer until you turn notifications off in the app or disconnect the phone in Settings › Mobile on the computer, and also when Google reports the token as no longer valid.</li>
+            <li><strong>What Google sees.</strong> The FCM token and the Firebase installation ID, the app's package name and the Firebase project a notification was sent to, and when each notification arrived and how large it was. When the app registers, Google's library also sends the app's version. It also sends general device details (system version, model, brand and the store that installed the app), which Google says it does not link to an identifier. The message holds nothing but the ciphertext: no title, no text and not even a fixed general line, so Google cannot read it, and the app decrypts it on the phone with the key it gave your computer.</li>
+            <li><strong>The code scanner.</strong> The app scans a pairing QR code with Google's code scanner, which is part of Google Play services and runs there, so the app asks for no camera permission and receives only the scanned text. As Google's ML Kit disclosure states, the scanner sends Google, for Google's own diagnostics and usage analytics, device information (maker, model, system version), the app's package name and version, a device identifier and a per-installation identifier, performance figures, and event types and error codes, under Google's own privacy policy. hide receives none of it.</li>
           </ul>
 
           <h3>5. Hide AI</h3>
@@ -205,7 +213,7 @@
             <li>데이터를 팔지 않고, 광고를 하지 않으며, 추적이나 광고 SDK를 넣지 않았습니다.</li>
             <li>대화, 명령, 코드, 파일은 저희에게 가지 않습니다. 사용자의 컴퓨터와 폰에 있으며, Hide AI 기능이 사용자가 고른 공급자에게 보내는 부분만 예외입니다(5절).</li>
             <li>데스크톱 앱은 사용 횟수만 보내며 기본으로 켜져 있고, 설정 › 개인정보에서 끌 수 있습니다.</li>
-            <li>폰은 hide의 중계 서버를 거쳐 사용자의 컴퓨터와 통신합니다. 알림을 켜면 그 알림을 사용자의 컴퓨터가 암호화해 폰이 쓰는 푸시 서비스로 보냅니다. iOS 앱이면 애플의 푸시 서비스이고, 브라우저라면 그 브라우저의 푸시 서비스로, 구글·모질라·마이크로소프트가 운영합니다.</li>
+            <li>폰은 hide의 중계 서버를 거쳐 사용자의 컴퓨터와 통신합니다. 알림을 켜면 그 알림을 사용자의 컴퓨터가 암호화해 폰이 쓰는 푸시 서비스로 보냅니다. iOS 앱이면 애플의 푸시 서비스, Android 앱이면 구글의 푸시 서비스이고, 브라우저라면 그 브라우저의 푸시 서비스로, 구글·모질라·마이크로소프트가 운영합니다.</li>
           </ul>
 
           <h3>1. 데스크톱 앱</h3>
@@ -268,18 +276,19 @@
             <li>연결이 시작되고 끝난 시각, 오간 데이터의 크기, 폰이 요청한 폰 프로토콜 번호.</li>
             <li>접속한 IP 주소. 접속 시도 횟수를 세는 데 씁니다.</li>
             <li>iOS 앱에서 알림을 켠 경우, 폰의 기기 토큰과 암호화된 알림. 애플로 전달하며, 알림은 읽을 수 없습니다(4.3절).</li>
+            <li>Android 앱에서 알림을 켠 경우, 폰의 Firebase Cloud Messaging(FCM) 등록 토큰과 암호화된 알림. 구글로 전달하며, 알림은 읽을 수 없습니다(4.4절).</li>
           </ul>
           <p>중계 서버는 Google Cloud의 가상 머신에서 실행되므로, 접속은 Google의 인프라를 지납니다.</p>
           <h4>3.2 중계 서버가 보관하는 것</h4>
           <p>중계 서버에는 데이터베이스도 상태 파일도 없습니다. 방 구성원, 방별 24시간 데이터 사용량, 주소별 60초 접속 시도 수는 메모리에만 있고, 서비스를 다시 시작하면 모두 사라집니다.</p>
           <p>메시지는 저장하지 않습니다. 나중에 전달하려고 쌓아 두지 않으며, 컴퓨터가 꺼져 있으면 폰에 연결할 수 없다고 표시하고 다시 연결될 때 스스로 시도합니다.</p>
           <h4>3.3 로그</h4>
-          <p>중계 서버는 이벤트마다 한 줄을 운영체제의 시스템 저널에 남깁니다. 이벤트 이름, 시각, 때로는 데이터 크기와 걸린 한도의 이름입니다. 그 줄에서 연결이 언제 시작하고 끝났는지, 데이터가 얼마나 오갔는지는 알 수 있지만, 컴퓨터나 폰을 가리키는 값(방 식별자, 주소, 키, 이름)은 적히지 않습니다. 메시지 내용, 파일 이름, 계정은 절대 적히지 않고, 알림이나 그 기기 토큰, 내용도 적히지 않습니다.</p>
+          <p>중계 서버는 이벤트마다 한 줄을 운영체제의 시스템 저널에 남깁니다. 이벤트 이름, 시각, 때로는 데이터 크기와 걸린 한도의 이름입니다. 그 줄에서 연결이 언제 시작하고 끝났는지, 데이터가 얼마나 오갔는지는 알 수 있지만, 컴퓨터나 폰을 가리키는 값(방 식별자, 주소, 키, 이름)은 적히지 않습니다. 메시지 내용, 파일 이름, 계정은 절대 적히지 않고, 알림에 대해서는 그 알림에 무슨 일이 있었는지의 이벤트 이름만 적히고, 토큰이나 내용은 적히지 않습니다.</p>
           <p>저널은 그 줄을 최대 7일 보관하고 전체 64 MiB로 제한합니다. 저널은 매시간 파일을 새로 시작하고, 매시간 도는 작업이 6일이 지난 파일을 지우고 저널을 그 크기로 줄이므로, 한 줄은 기록된 뒤 늦어도 7일 안에 사라집니다.</p>
           <p>중계 서버 앞의 웹 서버는 접속 로그를 남기지 않습니다. 한도 도달, 서버 장애, 고정된 시험 줄 세 가지 알림만 Google Cloud Logging으로 보내며, 각각 이벤트 이름만 담고 방 식별자도 크기도 주소도 담지 않습니다. 그 알림은 중계 서버 밖의 로그 보관소에 일정 기간 보관되며, 기간은 그 로깅 프로젝트가 정하고 hide의 배포 파일이 정하지 않습니다. 그 로그에는 컴퓨터나 폰을 가리키는 값이 없습니다.</p>
 
           <h3>4. 폰 앱</h3>
-          <p>폰 앱에는 계정, 로그인, 광고, 분석이 없습니다. 앱 파일은 분석이 붙지 않은 <code>app.withhide.dev</code>에서 받고, 암호화된 세션으로 사용자의 컴퓨터와만 통신합니다. 알림을 켜면 iOS 자체가 폰을 애플 푸시 서비스에 등록합니다.</p>
+          <p>폰 앱에는 계정, 로그인, 광고, 자체 분석이 없습니다. iOS 앱과 Android 앱은 앱 파일을 앱 안에 담고 있고, 브라우저에서는 분석이 붙지 않은 <code>app.withhide.dev</code>에서 받습니다. 폰은 암호화된 세션으로 사용자의 컴퓨터와만 통신합니다. 알림을 켜면 iOS 자체가 폰을 애플 푸시 서비스에 등록하고, Android 앱은 폰을 구글의 Firebase Cloud Messaging에 등록합니다(4.4절).</p>
           <h4>4.1 폰이 보관하는 것</h4>
           <ul>
             <li>연결한 컴퓨터들의 이름, 방 식별자, 공개 키, 마지막으로 쓴 시각.</li>
@@ -296,10 +305,17 @@
           <h4>4.3 푸시 알림</h4>
           <p>알림은 앱에서 직접 켜기 전까지 꺼져 있고, 알림이 없어도 앱은 동작합니다. 알림은 에이전트가 사용자를 기다리거나 일을 마쳤다는 것을 알리며, 작업 제목, 프로젝트 이름, 상태, 에이전트 행의 짧은 상태 문장, hide가 에이전트를 찾는 데 쓰는 식별자를 담습니다. 제목과 문장은 사용자의 컴퓨터에서 오며 사용자나 에이전트가 쓴 글이 들어 있을 수 있습니다. 터미널 내용, 코드, 대화는 담지 않습니다.</p>
           <ul>
-            <li>알림은 폰도 hide의 서버도 아닌 사용자의 컴퓨터가 보냅니다. 폰이 암호화된 세션 안에서 건넨 키로 내용 전체를 암호화해, 폰이 쓰는 푸시 서비스로 보냅니다. hide의 iOS 앱에서는 애플 푸시 알림 서비스이고, 브라우저에서는 그 브라우저의 푸시 서비스로 애플, 구글, 모질라, 마이크로소프트가 운영합니다. 푸시 서비스는 내용을 읽을 수 없습니다.</li>
-            <li>iOS 앱이면 컴퓨터가 암호화한 알림과 폰의 기기 토큰을 hide의 중계 서버로 보내고, 중계 서버는 그것을 애플로 전달합니다. 중계 서버는 둘 다 저장하지 않고 로그에도 남기지 않습니다. 알림을 받는 데 필요한 구독이나 기기 토큰은 사용자의 컴퓨터에 있는 그 폰의 기록에만 보관합니다.</li>
+            <li>알림은 폰도 hide의 서버도 아닌 사용자의 컴퓨터가 보냅니다. 폰이 암호화된 세션 안에서 건넨 키로 내용 전체를 암호화해, 폰이 쓰는 푸시 서비스로 보냅니다. hide의 iOS 앱에서는 애플 푸시 알림 서비스, Android 앱에서는 구글의 Firebase Cloud Messaging이고, 브라우저에서는 그 브라우저의 푸시 서비스로 애플, 구글, 모질라, 마이크로소프트가 운영합니다. 푸시 서비스는 내용을 읽을 수 없습니다.</li>
+            <li>iOS 앱이면 컴퓨터가 암호화한 알림과 폰의 기기 토큰을 hide의 중계 서버로 보내고, 중계 서버는 그것을 애플로 전달합니다. Android 앱이면 컴퓨터가 폰의 FCM 토큰으로 같은 일을 하고, 중계 서버가 둘을 구글로 전달합니다(4.4절). 중계 서버는 이 중 어느 것도 저장하지 않고 로그에도 남기지 않습니다. 알림을 받는 데 필요한 구독, 기기 토큰, FCM 토큰은 사용자의 컴퓨터에 있는 그 폰의 기록에만 보관합니다.</li>
             <li>푸시 서비스는 폰의 토큰, 그것이 속한 앱 또는 사이트 식별자, 알림이 온 시각과 크기를 보고, iOS 앱이면 고정된 일반 문구도 봅니다. 내용은 암호화되어 있고 폰이 풀어서 보여 주며, 풀지 못하면 그 일반 문구를 보여 줍니다.</li>
             <li>알림 내용은 다른 어디로도 가지 않고, 광고에 쓰이지 않습니다.</li>
+          </ul>
+          <h4>4.4 Android 앱과 구글</h4>
+          <p>Android 앱은 두 곳에서 구글의 서비스를 씁니다. 어느 쪽에서도 구글은 사용자의 컴퓨터에서 온 내용을 읽을 수 없습니다. Google Play 서비스가 있는 폰이 필요합니다.</p>
+          <ul>
+            <li><strong>알림.</strong> 알림을 켜면 앱이 구글의 Firebase Cloud Messaging(FCM)에 등록해 폰의 등록 토큰을 받고, 구글의 라이브러리는 앱의 Firebase 설치 ID를 보관합니다. 컴퓨터가 암호화한 알림과 그 토큰을 hide의 중계 서버로 보내면, 중계 서버는 요청이 처리되는 동안 자신의 Google 서비스 계정으로 둘을 구글에 전달하고, 토큰도 알림도 저장하거나 로그에 남기지 않습니다. 토큰은 사용자가 앱에서 알림을 끄거나 컴퓨터의 설정 › 모바일에서 그 폰의 연결을 끊을 때까지 사용자의 컴퓨터에 있는 그 폰의 기록에 보관하며, 구글이 토큰을 더 이상 쓸 수 없다고 알려 줄 때도 등록이 끝납니다.</li>
+            <li><strong>구글이 보는 것.</strong> FCM 토큰과 Firebase 설치 ID, 앱의 패키지 이름과 알림을 보낸 Firebase 프로젝트, 알림이 도착한 시각과 크기. 앱이 등록할 때 구글의 라이브러리는 앱 버전도 보냅니다. 또 일반적인 기기 정보(시스템 버전, 모델, 브랜드, 앱을 설치한 스토어)도 보내며, 구글은 이 기기 정보를 식별자와 연결하지 않는다고 밝힙니다. 메시지에는 암호문만 있고 제목도 문장도, 고정된 일반 문구도 없으므로 구글은 읽을 수 없으며, 앱이 폰에서 폰이 컴퓨터에 건넨 키로 풉니다.</li>
+            <li><strong>코드 스캐너.</strong> 앱은 페어링 QR 코드를 구글의 코드 스캐너로 읽습니다. 이 스캐너는 Google Play 서비스의 일부로 그 안에서 실행되므로 앱은 카메라 권한을 요청하지 않고 읽은 글자만 받습니다. 구글의 ML Kit 공개 내용에 적힌 대로 이 스캐너는 구글 자체의 진단과 사용 분석을 위해 기기 정보(제조사, 모델, 시스템 버전), 앱의 패키지 이름과 버전, 기기 식별자와 설치별 식별자, 성능 수치, 이벤트 종류와 오류 코드를 구글의 개인정보처리방침에 따라 구글로 보냅니다. hide는 그것을 받지 않습니다.</li>
           </ul>
 
           <h3>5. Hide AI</h3>
@@ -328,7 +344,7 @@
           </ul>
 
           <h3>9. 방침의 변경</h3>
-          <p>이 방침은 iOS 앱을 App Store에 출시한 날부터 시행합니다. hide의 어느 부분이 새로 무엇을 보내거나 보내기를 멈추면, 이 페이지를 같은 릴리스에서 함께 고치고 위의 시행일도 함께 옮깁니다. 모으는 내용이 달라지는 변경은 시행 전에 그 릴리스의 변경 내역에도 적습니다.</p>
+          <p>이 방침은 2026년 11월 13일부터 시행합니다. hide의 어느 부분이 새로 무엇을 보내거나 보내기를 멈추면, 이 페이지를 같은 릴리스에서 함께 고치고 위의 시행일도 함께 옮깁니다. 모으는 내용이 달라지는 변경은 시행 전에 그 릴리스의 변경 내역에도 적습니다.</p>
 
           <h3>10. 문의</h3>
           <p>이 페이지에 적힌 데이터에 책임이 있는 곳은 그랩더월드(대표 이호연)이며, 개인정보 책임자는 이호연입니다. 둘 다 아래 주소로 연락할 수 있고, 그 메일함은 저희가 읽습니다.</p>

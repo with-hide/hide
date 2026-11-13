@@ -74,8 +74,8 @@
           <ol class="support-steps">
             <li>On the computer, open <strong>Settings › Mobile</strong> and turn on <strong>Open hide from your phone</strong> (폰에서 Hide 열기).</li>
             <li>Wait until the connection row says <strong>Connected · Hide relay (Tokyo)</strong> (연결됨 · Hide 중계 (도쿄)), then choose <strong>Show QR</strong> (QR 보기).</li>
-            <li>Scan the code with the phone's camera. The phone opens <code>app.withhide.dev</code>; choose <strong>Connect</strong> (연결).</li>
-            <li>To keep it as an app, use the browser's Share menu and <strong>Add to Home Screen</strong>.</li>
+            <li>On an iPhone, install <a href="https://apps.apple.com/app/hide-remote-coding-agents/id6832780181">Hide from the App Store</a> and choose <strong>Scan QR code</strong>. On an Android phone with Google Play services, install <a href="https://play.google.com/store/apps/details?id=me.grab.hide.android">Hide from Google Play</a> and choose <strong>Scan QR code</strong>. On any other phone, scan the code with the camera; the phone opens <code>app.withhide.dev</code>; choose <strong>Connect</strong> (연결).</li>
+            <li>In a browser, you can keep it as an app with the Share menu and <strong>Add to Home Screen</strong>.</li>
           </ol>
           <ul>
             <li>The code works for five minutes, or until one phone uses it.</li>
@@ -120,7 +120,7 @@
             </details>
             <details id="no-notifications">
               <summary>The phone does not show notifications</summary>
-              <p>Notifications are off until you turn them on in the phone app, and the phone's own Settings must allow them for hide. If you added the phone before it had an app on the Home Screen, open it from the Home Screen once and turn notifications on again.</p>
+              <p>Notifications are off until you turn them on in the phone app, and the phone's own Settings must allow them for hide. If you added the phone before it had an app on the Home Screen, open it from the Home Screen once and turn notifications on again. On Android, notifications come through Google's push service, so the phone needs Google Play services, and the computer needs a Hide release that sends them to the Android app; an older Hide tells the app that the computer is older.</p>
             </details>
             <details id="statistics">
               <summary>How do I stop the desktop app sending usage statistics?</summary>
@@ -147,8 +147,8 @@
           <ol class="support-steps">
             <li>컴퓨터에서 <strong>설정 › 모바일</strong>을 열고 <strong>폰에서 Hide 열기</strong>를 켭니다.</li>
             <li>연결 줄이 <strong>연결됨 · Hide 중계 (도쿄)</strong>가 되면 <strong>QR 보기</strong>를 고릅니다.</li>
-            <li>폰 카메라로 코드를 스캔합니다. 폰에서 <code>app.withhide.dev</code>가 열리면 <strong>연결</strong>을 고릅니다.</li>
-            <li>앱처럼 쓰려면 브라우저의 공유 메뉴에서 <strong>홈 화면에 추가</strong>를 고릅니다.</li>
+            <li>iPhone에서는 <a href="https://apps.apple.com/app/hide-remote-coding-agents/id6832780181">App Store에서 Hide</a>를 설치하고 <strong>QR 코드 스캔</strong>을 고릅니다. Google Play 서비스가 있는 Android 폰에서는 <a href="https://play.google.com/store/apps/details?id=me.grab.hide.android">Google Play에서 Hide</a>를 설치하고 <strong>QR 코드 스캔</strong>을 고릅니다. 다른 폰에서는 카메라로 코드를 스캔하고, <code>app.withhide.dev</code>가 열리면 <strong>연결</strong>을 고릅니다.</li>
+            <li>브라우저에서는 공유 메뉴의 <strong>홈 화면에 추가</strong>로 앱처럼 쓸 수 있습니다.</li>
           </ol>
           <ul>
             <li>코드는 5분 동안, 또는 폰 한 대가 쓸 때까지 유효합니다.</li>
@@ -193,7 +193,7 @@
             </details>
             <details id="no-notifications-ko">
               <summary>폰에 알림이 오지 않아요</summary>
-              <p>알림은 폰 앱에서 직접 켜기 전까지 꺼져 있고, 폰의 설정에서도 hide의 알림이 허용되어 있어야 합니다. 홈 화면에 앱이 생기기 전에 연결했다면 홈 화면에서 한 번 열고 알림을 다시 켜세요.</p>
+              <p>알림은 폰 앱에서 직접 켜기 전까지 꺼져 있고, 폰의 설정에서도 hide의 알림이 허용되어 있어야 합니다. 홈 화면에 앱이 생기기 전에 연결했다면 홈 화면에서 한 번 열고 알림을 다시 켜세요. Android에서는 알림이 구글의 푸시 서비스를 거치므로 폰에 Google Play 서비스가 있어야 하고, 컴퓨터의 Hide도 알림을 Android 앱으로 보내는 릴리스여야 합니다. 더 오래된 Hide이면 앱이 컴퓨터가 오래되었다고 알려 줍니다.</p>
             </details>
             <details id="statistics-ko">
               <summary>데스크톱 앱이 사용 통계를 보내지 않게 하려면요</summary>
