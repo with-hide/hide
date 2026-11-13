@@ -100,7 +100,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
   );
   if (placed) {
     return (
-      <div ref={box} className="relative" style={{ width: placement.width, height: placement.height }} data-dependency-graph="true" data-dependency-flow={flow} data-dependency-edges={graph.edges.length} data-dependency-layout="layered">
+      <div ref={box} className="relative isolate" style={{ width: placement.width, height: placement.height }} data-dependency-graph="true" data-dependency-flow={flow} data-dependency-edges={graph.edges.length} data-dependency-layout="layered">
         {values.map((value, index) => (
           <div key={idOf(value)} className="absolute" style={{ left: places[index]!.x, top: places[index]!.y }} data-dependency-layer={places[index]!.layer}>
             {draw(value)}
@@ -111,7 +111,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
     );
   }
   return (
-    <div ref={box} className={cn("relative flex w-fit", down ? "flex-col items-center" : "items-start")} style={{ gap: `var(${gaps.layers})` }} data-dependency-graph="true" data-dependency-flow={flow} data-dependency-edges={graph.edges.length} data-dependency-layout="columns">
+    <div ref={box} className={cn("relative isolate flex w-fit", down ? "flex-col items-center" : "items-start")} style={{ gap: `var(${gaps.layers})` }} data-dependency-graph="true" data-dependency-flow={flow} data-dependency-edges={graph.edges.length} data-dependency-layout="columns">
       {graph.layers.map((layer, index) => (
         <div key={index} className={cn("flex", down ? "flex-row items-start" : "flex-col")} style={{ gap: `var(${gaps.nodes})` }} data-dependency-layer={index}>
           {layer.map(draw)}
