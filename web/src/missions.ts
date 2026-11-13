@@ -660,8 +660,9 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
  * minutes (`safety_net`, one item however many nodes), settle a raise only
  * the operator settles (the Conductor's failure, or a gate reached with no
  * Conductor that no decision asks yet), clear a worker the core raised past its
- * parent (one of the escalation causes, a person's turn aside: its step says
- * it and the Conductor's row carries it), merge or join what a waiting
+ * parent (one of the escalation causes), take a step only a person can take
+ * that a worker declared (`human_turn`, what and where, settled with Done
+ * here as in Needs You; operator decision 2026-11-13), merge or join what a waiting
  * mission left, and, while the mission runs, merge a ready pull request its
  * plan gave the operator (`due`, PRD mission-destination D-11; a scope `pr`
  * mission's ready pull request is never one, D-35). A node raised to the
@@ -675,10 +676,14 @@ export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
+  | { kind: "human_turn"; node: N; human: WorkerHuman }
   | { kind: "landing"; nodes: N[]; git: boolean; due: boolean };
 
 /** A worker row the core raised past its parent: the cause, the line its blocked turn left, and for a person's turn what and where (PRD ask-human B25). */
-export type WorkerEscalation = { cause: EscalationCause; line: string | null; human?: { kind: HumanKind; place: string } | null };
+export type WorkerEscalation = { cause: EscalationCause; line: string | null; human?: WorkerHuman | null };
+
+/** A worker's person's turn as the mission says it: what kind of step and where it is taken. */
+export type WorkerHuman = { kind: HumanKind; place: string };
 
 /** The escalation of a node's worker row, as the `내 차례` rule reads it; none for a row that was not raised. */
 export function workerEscalation(row: Pick<AgentRow, "escalation" | "request" | "human_turn"> | null | undefined): WorkerEscalation | null {
@@ -733,8 +738,10 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   }
   for (const node of orderedNodes(mission)) {
     const escalation = node.status === "working" ? shownEscalation(mission, escalationOf(node)) : null;
-    // A worker's person's turn is its step's waiting reason only: the Conductor's row carries it to Needs You, with Done (PRD ask-human D-18, B25).
-    if (escalation && escalation.cause !== "human_turn") items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
+    if (!escalation) continue;
+    // A worker's person's turn stands here too, as it does on the Conductor's row in Needs You, so the mission says what the operator does (operator decision 2026-11-13, replacing PRD ask-human D-18).
+    if (escalation.cause !== "human_turn") items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
+    else if (escalation.human) items.push({ kind: "human_turn", node, human: escalation.human });
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);
