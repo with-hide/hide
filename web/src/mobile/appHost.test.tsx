@@ -50,13 +50,13 @@ describe("the page inside the iOS app", () => {
 });
 
 describe("the page inside the Android app", () => {
-  const at = (origin: string, platform: string | null) => {
+  const at = (origin: string, platform: string | null, plugins: string[] = []) => {
     const url = new URL(origin);
     vi.stubGlobal("location", { ...window.location, protocol: url.protocol, origin: url.origin, pathname: "/" });
-    if (platform) vi.stubGlobal("Capacitor", { getPlatform: () => platform });
+    if (platform) vi.stubGlobal("Capacitor", { getPlatform: () => platform, isPluginAvailable: (name: string) => plugins.includes(name) });
   };
 
-  it("is the app's own origin where Capacitor says Android, and then registers no service worker and has no notifications", () => {
+  it("is the app's own origin where Capacitor says Android, and then registers no service worker and has no notifications without HidePush", () => {
     Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {} });
     at("https://localhost", "android");
     expect(appPlatform()).toBe("android");
@@ -76,9 +76,18 @@ describe("the page inside the Android app", () => {
     expect(appPlatform()).toBeNull();
   });
 
-  it("leaves the notifications of the iOS app where they are", () => {
+  it("has notifications in either app exactly when Capacitor reports a HidePush plugin, never in a browser", () => {
+    at("https://localhost", "android", ["HideKeychain", "HidePush"]);
+    expect(appPushAvailable()).toBe(true);
+    vi.unstubAllGlobals();
     inApp("capacitor:");
+    vi.stubGlobal("Capacitor", { isPluginAvailable: (name: string) => name === "HidePush" });
     expect(appPlatform()).toBe("ios");
     expect(appPushAvailable()).toBe(true);
+    vi.stubGlobal("Capacitor", { isPluginAvailable: () => false });
+    expect(appPushAvailable()).toBe(false);
+    vi.unstubAllGlobals();
+    at("https://app.withhide.dev", "android", ["HidePush"]);
+    expect(appPushAvailable()).toBe(false);
   });
 });

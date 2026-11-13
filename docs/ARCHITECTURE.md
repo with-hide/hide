@@ -4614,7 +4614,7 @@ The build is in [BUILD.md](BUILD.md#the-ios-app).
 `mobile/android/` is the same host for Android: a Capacitor project beside the iOS one that shares `mobile/capacitor.config.json`, `assemble.mjs` and `retained-bundles.json`, so the web folder it serves is the iOS app's, and owns nothing of the phone's behavior either.
 It is `me.grab.hide.android`, for Android 9 (API 28) and later, compiled for and targeting API 36, and its version is `mobile/android/version.json`.
 Capacitor serves the folder from `https://localhost`; `appPlatform()` in `web/src/mobile/appHost.ts` reads the Android app from that origin together with Capacitor's own answer that the platform is Android, so `appHost()` holds there as in the iOS app and every difference above follows it.
-The Android app has no notifications yet: the page never calls a push plugin there (`appPushAvailable()`), and Settings shows notifications as not available on Android in place of the switch.
+The Android app has no notifications yet: the page calls the push plugin only where Capacitor reports a `HidePush` plugin (`appPushAvailable()`), which the Android app does not link yet, and Settings shows notifications as not available on Android in place of the switch.
 Its native code is `mobile/android/app/src/main/java/me/grab/hide/android/`, whose types carry the iOS names where they do the same job.
 
 The bridge: Capacitor answers the page through a web message listener named `androidBridge`, falls back to a Java object in every frame when the web view lacks that listener, and puts two Java objects of its own plugins (cookies and HTTP) into every frame; it loads any plugin a call names.

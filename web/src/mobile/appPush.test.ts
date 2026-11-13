@@ -30,6 +30,7 @@ function install(methods: Partial<Native>) {
     ...methods,
   } as Native;
   vi.stubGlobal("Capacitor", {
+    isPluginAvailable: (name: string) => name === "HidePush",
     nativePromise: async (plugin: string, method: string, options?: Record<string, unknown>) => {
       calls.push(`${plugin}.${method}`);
       const result = native[method]!(options);
