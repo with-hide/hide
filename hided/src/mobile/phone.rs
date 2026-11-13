@@ -1090,21 +1090,17 @@ async fn handle(
                 auth: field("/keys/auth"),
             };
             let stored = mobile.set_subscription(phone_id, push);
-            Some(
-                json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
-            )
+            Some(push_state(stored))
         }
         // The iOS app's notifications: Apple's device token and the key this
         // computer encrypts each notice with, given only inside this
         // encrypted session (`docs/RELAY_PROTOCOL.md`, The notification body).
         "apns_registration" => {
-            let field = |name: &str| {
-                message
-                    .pointer(name)
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned()
-            };
+            let AppRegistration {
+                token,
+                p256dh,
+                auth,
+            } = AppRegistration::of(message);
             let environment = message
                 .get("environment")
                 .and_then(|value| serde_json::from_value(value.clone()).ok());
@@ -1112,16 +1108,14 @@ async fn handle(
                 mobile.set_apns(
                     phone_id,
                     ApnsRegistration {
-                        token: field("/token"),
+                        token,
                         environment,
-                        p256dh: field("/key/p256dh"),
-                        auth: field("/key/auth"),
+                        p256dh,
+                        auth,
                     },
                 )
             });
-            Some(
-                json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
-            )
+            Some(push_state(stored))
         }
         // The Android app's notifications: Google's registration token and the
         // key this computer encrypts each notice with, in the same shape as the
@@ -1129,24 +1123,20 @@ async fn handle(
         // host, so there is no environment. A released hided answers this
         // message `refused_request` and keeps the session.
         "fcm_registration" => {
-            let field = |name: &str| {
-                message
-                    .pointer(name)
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned()
-            };
+            let AppRegistration {
+                token,
+                p256dh,
+                auth,
+            } = AppRegistration::of(message);
             let stored = mobile.set_fcm(
                 phone_id,
                 FcmRegistration {
-                    token: field("/token"),
-                    p256dh: field("/key/p256dh"),
-                    auth: field("/key/auth"),
+                    token,
+                    p256dh,
+                    auth,
                 },
             );
-            Some(
-                json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
-            )
+            Some(push_state(stored))
         }
         "push_permission" => {
             let notifications = match message.get("state").and_then(Value::as_str) {
@@ -1173,6 +1163,39 @@ async fn handle(
             )
         }
     }
+}
+
+/// What an app's notification registration (`apns_registration`,
+/// `fcm_registration`) carries beside its service's own fields: the device's
+/// token and the key this computer encrypts each notice with. A missing field
+/// reads as empty, which the registration's own check refuses.
+struct AppRegistration {
+    token: String,
+    p256dh: String,
+    auth: String,
+}
+
+impl AppRegistration {
+    fn of(message: &Value) -> Self {
+        let field = |name: &str| {
+            message
+                .pointer(name)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned()
+        };
+        Self {
+            token: field("/token"),
+            p256dh: field("/key/p256dh"),
+            auth: field("/key/auth"),
+        }
+    }
+}
+
+/// The answer to a notification registration: whether this phone's record now
+/// keeps it.
+fn push_state(stored: bool) -> Value {
+    json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }})
 }
 
 /// A message the operator sends by acting on the phone: a reply or a key, an
