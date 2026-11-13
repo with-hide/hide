@@ -300,6 +300,30 @@ pub(super) fn settle(mission: &str, node: &mut MissionNode, by: &str) {
     }
 }
 
+/// Settles the refused close a node of `mission` still holds once the
+/// mission closed (B19): the close that passed answers it, whoever made it
+/// (Hide, the Conductor's `hide mission close`, the operator), so nothing of
+/// it reaches anyone after the close, its letters not yet sent included
+/// (with-hide/hide#2518). That close ended the closing it was about, so its
+/// cause is forgotten as a node going back to work forgets it, and a refusal
+/// after the mission is opened again is asked anew.
+pub(super) fn settle_refused_close(mission: &mut Mission, by: &str) {
+    let id = mission.id.clone();
+    for node in &mut mission.nodes {
+        let Some(cause) = node
+            .attention
+            .as_ref()
+            .filter(|attention| attention.reason == AttentionReason::CloseRefused)
+            .map(crate::missions::Attention::cause)
+        else {
+            continue;
+        };
+        settle(&id, node, by);
+        node.handled.retain(|handled| *handled != cause);
+    }
+    prune_attention_wakes(mission);
+}
+
 /// The words a gate is passed with when the operator's `끝으로` goes past
 /// it with the node's other open lines, as each skipped line's reason is.
 const OPERATOR_DECISION: &str = "운영자 판단";
@@ -1392,49 +1416,40 @@ impl Runtime {
         let wake_key = key.clone();
         // The close, the refused close it settles, its letter and its
         // events go together, under one key (B27).
-        let closed =
-            self.close_mission_with(
-                id,
-                MissionEnd::MergeWait,
-                report,
-                "hide",
-                now,
-                Some(&key),
-                |mission| {
-                    for node in &mut mission.nodes {
-                        if node.attention.as_ref().is_some_and(|attention| {
-                            attention.reason == AttentionReason::CloseRefused
-                        }) {
-                            settle(&mission.id, node, "hide");
-                        }
-                    }
-                    prune_attention_wakes(mission);
-                    mission.wake_seq += 1;
-                    let node = mission
-                        .nodes
-                        .last()
-                        .map(|node| node.key.clone())
-                        .unwrap_or_default();
-                    super::missions::push_wake(
-                        mission,
-                        PendingWake {
-                            seq: mission.wake_seq,
-                            node,
-                            pr: None,
-                            event: WakeEvent::Closed,
-                            head: None,
-                            to: None,
-                            reason: None,
-                            why: None,
-                            action: None,
-                            warning: None,
-                            ci: None,
-                            key: Some(wake_key),
-                        },
-                    );
-                    vec![MissionEvent::new(now, EventKind::HideClosed)]
-                },
-            );
+        let closed = self.close_mission_with(
+            id,
+            MissionEnd::MergeWait,
+            report,
+            "hide",
+            now,
+            Some(&key),
+            |mission| {
+                mission.wake_seq += 1;
+                let node = mission
+                    .nodes
+                    .last()
+                    .map(|node| node.key.clone())
+                    .unwrap_or_default();
+                super::missions::push_wake(
+                    mission,
+                    PendingWake {
+                        seq: mission.wake_seq,
+                        node,
+                        pr: None,
+                        event: WakeEvent::Closed,
+                        head: None,
+                        to: None,
+                        reason: None,
+                        why: None,
+                        action: None,
+                        warning: None,
+                        ci: None,
+                        key: Some(wake_key),
+                    },
+                );
+                vec![MissionEvent::new(now, EventKind::HideClosed)]
+            },
+        );
         match closed {
             Ok(_) => true,
             Err(code) => {
