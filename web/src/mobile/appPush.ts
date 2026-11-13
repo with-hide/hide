@@ -13,7 +13,7 @@
  */
 import { create } from "zustand";
 import { translate } from "../i18n/translator";
-import { appHost } from "./appHost";
+import { appPushAvailable } from "./appHost";
 import { nativeCode, push, type PushPermission } from "./appBridge";
 import { currentHost, send } from "./connection";
 import { hostStore } from "./hosts";
@@ -57,7 +57,7 @@ export function appPushRow(state: Pick<AppPushState, "pref" | "demo" | "permissi
 
 /** Reads what iOS allows now; called when the Settings tab opens and after a return from iOS Settings. */
 export async function refreshAppPush(): Promise<void> {
-  if (!appHost()) return;
+  if (!appPushAvailable()) return;
   try { set({ permission: await push.state() }); } catch { /* an older app bundle has no push plugin: the row stays off */ }
 }
 
@@ -69,7 +69,7 @@ async function registerWith(room: string, create: boolean): Promise<boolean> {
 
 /** After every `meta` of a connected computer: register again, or unregister when the person turned notifications off. */
 export async function syncAppPush(): Promise<void> {
-  if (!appHost() || usePhone.getState().demo) return;
+  if (!appPushAvailable() || usePhone.getState().demo) return;
   const room = currentHost()?.room;
   if (!room) return;
   try {
@@ -138,7 +138,7 @@ export async function turnOffAppPush(): Promise<void> {
 
 /** A computer is removed: unregister it when it is the one connected, then delete its key. */
 export async function leaveHostPush(room: string): Promise<void> {
-  if (!appHost()) return;
+  if (!appPushAvailable()) return;
   if (currentHost()?.room === room) send({ type: "push_permission", state: "denied" });
   try { await push.forget(room); } catch (error) { console.warn("phone.app_push_forget_failed", { code: nativeCode(error) }); }
 }
