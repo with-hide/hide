@@ -35,7 +35,7 @@ use super::looks;
 use super::pane::{self, Input, PaneError};
 use super::projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use super::prs;
-use super::store::{ApnsRegistration, Notifications, PushSubscription};
+use super::store::{ApnsRegistration, FcmRegistration, Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
 
 /// How often an open detail reads its pane again.
@@ -1119,6 +1119,31 @@ async fn handle(
                     },
                 )
             });
+            Some(
+                json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
+            )
+        }
+        // The Android app's notifications: Google's registration token and the
+        // key this computer encrypts each notice with, in the same shape as the
+        // iOS app's and given only inside this encrypted session. FCM has one
+        // host, so there is no environment. A released hided answers this
+        // message `refused_request` and keeps the session.
+        "fcm_registration" => {
+            let field = |name: &str| {
+                message
+                    .pointer(name)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            let stored = mobile.set_fcm(
+                phone_id,
+                FcmRegistration {
+                    token: field("/token"),
+                    p256dh: field("/key/p256dh"),
+                    auth: field("/key/auth"),
+                },
+            );
             Some(
                 json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
             )

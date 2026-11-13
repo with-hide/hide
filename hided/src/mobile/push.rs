@@ -27,10 +27,10 @@ use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use serde_json::{Value, json};
 
-use hide_relay_protocol::admission::{self, PushRequest};
+use hide_relay_protocol::admission::{self, FcmRequest, PushRequest};
 
 use super::projection::{AgentKey, Projection};
-use super::store::{ApnsRegistration, PushMode, PushSubscription};
+use super::store::{ApnsRegistration, FcmRegistration, PushMode, PushSubscription};
 #[cfg(test)]
 use hide_core::agent_state::push::VANISHED_TTL;
 pub use hide_core::agent_state::push::{Notice, NoticeState, Transitions};
@@ -39,10 +39,11 @@ const RECORD_SIZE: u32 = 4096;
 // aes128gcm adds a 16-byte salt, 4-byte record size, 1-byte key length,
 // 65-byte P-256 public key, 1-byte delimiter and 16-byte authentication tag.
 const MAX_PLAINTEXT_SIZE: usize = 4096 - 86 - 1 - 16;
-/// The same body carried by the relay to Apple's push service: the ciphertext
-/// is at most 3,000 bytes there (`admission::MAX_CIPHERTEXT`), which holds a
-/// plaintext of this size (`docs/RELAY_PROTOCOL.md`, The notification body).
-pub const MAX_APNS_PLAINTEXT: usize = admission::MAX_CIPHERTEXT - 86 - 1 - 16;
+/// The same body carried by the relay to Apple's push service or to Google's
+/// FCM: the ciphertext is at most 3,000 bytes there (`admission::MAX_CIPHERTEXT`),
+/// which holds a plaintext of this size (`docs/RELAY_PROTOCOL.md`, The
+/// notification body).
+pub const MAX_APP_PLAINTEXT: usize = admission::MAX_CIPHERTEXT - 86 - 1 - 16;
 const TTL_SECS: u64 = 60 * 60;
 const JWT_LIFETIME_SECS: u64 = 12 * 60 * 60;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -284,6 +285,24 @@ pub fn app_request(
     })
 }
 
+/// The push request for an Android app phone: the same body `app_request`
+/// builds, for the phone's key, and no collapse value: FCM has none, and the
+/// app replaces an agent's earlier notification by the tag inside the body.
+/// The request id is the link's to assign.
+pub fn fcm_request(
+    registration: &FcmRegistration,
+    payload: &Value,
+) -> Result<FcmRequest, &'static str> {
+    let plaintext = app_plaintext(payload)?;
+    let body = encrypt_for(&registration.p256dh, &registration.auth, &plaintext)
+        .map_err(|_| "encrypt_failed")?;
+    Ok(FcmRequest {
+        id: 0,
+        token: registration.token.clone(),
+        payload: URL_SAFE_NO_PAD.encode(body),
+    })
+}
+
 /// The notice JSON inside the relay's ciphertext bound. Tags to close are the
 /// one part that can shrink, from the end: a notification the phone does not
 /// close is better than none. Past that the notice does not fit.
@@ -291,7 +310,7 @@ fn app_plaintext(payload: &Value) -> Result<Vec<u8>, &'static str> {
     let mut payload = payload.clone();
     loop {
         let text = payload.to_string();
-        if text.len() <= MAX_APNS_PLAINTEXT {
+        if text.len() <= MAX_APP_PLAINTEXT {
             return Ok(text.into_bytes());
         }
         let Some(clear) = payload
@@ -615,6 +634,13 @@ pub fn registration_valid(registration: &ApnsRegistration) -> bool {
         && encrypt_for(&registration.p256dh, &registration.auth, &[]).is_ok()
 }
 
+/// Whether an Android app phone's registration can be stored: a token the
+/// relay accepts and the key in the shape `registration_valid` checks.
+pub fn fcm_registration_valid(registration: &FcmRegistration) -> bool {
+    admission::fcm_token_valid(&registration.token)
+        && encrypt_for(&registration.p256dh, &registration.auth, &[]).is_ok()
+}
+
 /// The JSON a phone's service worker receives.
 pub fn payload(notice: &Notice, clear: &BTreeSet<AgentKey>) -> Value {
     json!({
@@ -735,12 +761,12 @@ mod tests {
         let tags: Vec<String> = (0..400).map(|n| format!("device-1:w1:p{n}")).collect();
         let payload = json!({"title": "task", "tag": "device-1:w1:p1", "clear": tags});
         let plain: Value = serde_json::from_slice(&app_plaintext(&payload).unwrap()).unwrap();
-        assert!(plain.to_string().len() <= MAX_APNS_PLAINTEXT);
+        assert!(plain.to_string().len() <= MAX_APP_PLAINTEXT);
         assert_eq!(plain["title"], "task");
         let kept = plain["clear"].as_array().unwrap();
         assert!(!kept.is_empty() && kept.len() < 400);
         assert_eq!(kept[0], "device-1:w1:p0");
-        let huge = json!({"title": "x".repeat(MAX_APNS_PLAINTEXT), "clear": []});
+        let huge = json!({"title": "x".repeat(MAX_APP_PLAINTEXT), "clear": []});
         assert_eq!(app_plaintext(&huge), Err("payload_too_large"));
     }
 

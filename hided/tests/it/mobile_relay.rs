@@ -4,7 +4,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::{
-    admission::{ClientMessage, PendingAdmission, Refusal, ServerMessage},
+    admission::{self, ClientMessage, PendingAdmission, Refusal, ServerMessage},
     noise::Session,
     qr::PairingQr,
 };
@@ -120,12 +120,35 @@ async fn accept(listener: &TcpListener) -> Device {
 }
 /// Admits hided's device socket and confirms it with `registered`, spelled as
 /// the relay under test spells it: an older relay sends `{"type":"registered"}`.
+/// Every dial names `fcm` in the upgrade header, so a relay may write it.
 async fn accept_answering(listener: &TcpListener, registered: String) -> Device {
     let (stream, _) = tokio::time::timeout(GUARD, listener.accept())
         .await
         .unwrap()
         .unwrap();
-    let mut device = tokio_tungstenite::accept_async(stream).await.unwrap();
+    let mut fields = None;
+    // The callback's shape is tungstenite's, its error the HTTP response.
+    #[allow(clippy::result_large_err)]
+    let mut device = tokio_tungstenite::accept_hdr_async(
+        stream,
+        |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+            fields = request
+                .headers()
+                .get(admission::REGISTERED_FIELDS_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            Ok(response)
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        fields.is_some_and(|value| admission::registered_fields_name(
+            &value,
+            admission::REGISTERED_FIELD_FCM
+        )),
+        "hided names the fcm field when it dials"
+    );
     let Some(Message::Text(text)) = next(&mut device).await else {
         panic!("device hello");
     };
@@ -604,6 +627,27 @@ async fn push_request(
     }
 }
 
+/// The FCM request hided sends over its device socket, read as `push_request`.
+async fn fcm_request(
+    device: &mut Device,
+    phone: &mut Session,
+) -> hide_relay_protocol::admission::FcmRequest {
+    loop {
+        match next(device).await {
+            Some(Message::Text(text)) => {
+                let ClientMessage::Fcm(request) = ClientMessage::decode(&text).unwrap() else {
+                    panic!("expected fcm_request, got {text}");
+                };
+                return request;
+            }
+            Some(Message::Binary(bytes)) => {
+                phone.recv_message(&bytes, 0).unwrap();
+            }
+            other => panic!("expected fcm_request, got {other:?}"),
+        }
+    }
+}
+
 fn phones_file(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("state/phones.json")).unwrap()
 }
@@ -748,6 +792,198 @@ async fn an_app_phone_is_notified_through_the_relay_and_a_gone_token_is_dropped(
     event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
     closed(&mut device, 1).await;
     assert!(!phones_file(dir.path()).contains(APP_TOKEN));
+    running.stop();
+}
+
+/// The shape of an FCM registration token: base64url, a colon, more base64url.
+const FCM_TOKEN: &str = "cXdlcnR5dWlvcGFzZGZnaGprbA:APA91bHqU0dGVzdC10b2tlbi1mb3ItdGhlLWFuZHJvaWQtYXBwLW9mLWhpZGUtdGhhdC1sb29rcy1saWtlLWdvb2dsZXMtb3du";
+
+/// Pairs one phone over a relay that answered `registered` with `push` and
+/// `fcm` as given, and returns what the test drives.
+async fn paired_app_phone(
+    dir: &Path,
+    push: bool,
+    fcm: bool,
+) -> (hided::RunningDaemon, Shell, Device, Session, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir, listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    let mut shell = shell(&running).await;
+    event(&mut shell, "mobile_enable", json!({"enabled":true})).await;
+    let mut device = accept_answering(
+        &listener,
+        ServerMessage::Registered { push, fcm }.encode().unwrap(),
+    )
+    .await;
+    state(&mut shell, |s| s["relay"]["state"] == "connected").await;
+    event(&mut shell, "mobile_show_code", json!({})).await;
+    let code = state(&mut shell, |s| s["qr"].is_string()).await;
+    let qr = PairingQr::decode(code["qr"].as_str().unwrap()).unwrap();
+    let mut session = phone(
+        &mut device,
+        &qr,
+        1,
+        json!({"client_kind":"phone","pair":qr.code,"name":"Android"}),
+    )
+    .await;
+    let paired = receive(&mut device, &mut session, "paired").await;
+    receive(&mut device, &mut session, "agents").await;
+    let phone_id = paired["phone_id"].as_str().unwrap().to_owned();
+    (running, shell, device, session, phone_id)
+}
+
+/// The Android app's registration is the phone record's third way: it
+/// replaces an iOS registration and is replaced by one, a notice goes out to
+/// it as an `fcm_request` carrying only the token and the ciphertext, Google's
+/// gone answer drops it, its refusal keeps it, and a denied permission or an
+/// unpairing removes it.
+#[tokio::test]
+async fn an_android_app_phone_is_notified_through_fcm_and_a_gone_token_is_dropped() {
+    use hide_relay_protocol::admission::{PushOutcome, PushResult};
+    let dir = tempfile::tempdir().unwrap();
+    let (running, mut shell, mut device, mut session, phone_id) =
+        paired_app_phone(dir.path(), true, true).await;
+    let key = AppKey::new();
+
+    // A token Google would not issue is refused and stores nothing.
+    send(
+        &mut device,
+        &mut session,
+        key.fcm_registration("not a token"),
+    )
+    .await;
+    let refused = receive(&mut device, &mut session, "push_state").await;
+    assert_eq!(refused["notifications"], "refused");
+    // An FCM registration replaces an APNs one, and the reverse.
+    send(&mut device, &mut session, key.registration(APP_TOKEN)).await;
+    receive(&mut device, &mut session, "push_state").await;
+    send(&mut device, &mut session, key.fcm_registration(FCM_TOKEN)).await;
+    let stored = receive(&mut device, &mut session, "push_state").await;
+    assert_eq!(stored["notifications"], "on");
+    let file = phones_file(dir.path());
+    assert!(file.contains(FCM_TOKEN) && !file.contains(APP_TOKEN));
+    send(&mut device, &mut session, key.registration(APP_TOKEN)).await;
+    receive(&mut device, &mut session, "push_state").await;
+    let file = phones_file(dir.path());
+    assert!(!file.contains(FCM_TOKEN) && file.contains(APP_TOKEN));
+    send(&mut device, &mut session, key.fcm_registration(FCM_TOKEN)).await;
+    receive(&mut device, &mut session, "push_state").await;
+    let listed = state(&mut shell, |s| s["phones"][0]["notifications"] == "on").await;
+    assert_eq!(listed["phones"][0]["id"], phone_id);
+
+    // A notice goes out as one FCM request: the token and the ciphertext,
+    // nothing readable, and no collapse value.
+    let notice = json!({
+        "title": "a secret task title",
+        "state": "needs_you",
+        "tag": "device-1:w1:p1",
+        "device_id": "device-1",
+        "pane_id": "w1:p1",
+        "clear": [],
+    });
+    let push = |notice: &Value| {
+        let mobile = std::sync::Arc::clone(&running.mobile);
+        let (id, payload) = (phone_id.clone(), notice.clone());
+        tokio::task::spawn_blocking(move || mobile.push_to_app(&id, &payload))
+    };
+    let sent = push(&notice);
+    let request = fcm_request(&mut device, &mut session).await;
+    assert_eq!(request.token, FCM_TOKEN);
+    let text = ClientMessage::Fcm(request.clone()).encode().unwrap();
+    assert!(!text.contains("secret") && !text.contains("w1:p1") && !text.contains("collapse"));
+    let body = URL_SAFE_NO_PAD.decode(&request.payload).unwrap();
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: request.id,
+            result: PushOutcome::Delivered,
+        }),
+    )
+    .await;
+    assert_eq!(sent.await.unwrap(), Ok(()));
+    // The phone's key opens it to the notice JSON hided sends Web Push.
+    let plain: Value = serde_json::from_slice(&key.decrypt(&body)).unwrap();
+    assert_eq!(plain, notice);
+    // Decrypting spends the private half; the app's next key is a new one.
+    let key = AppKey::new();
+
+    // Google refused the token itself (another Firebase project, a malformed
+    // token): a configuration problem, so the registration stays.
+    let sent = push(&notice);
+    let again = fcm_request(&mut device, &mut session).await;
+    assert_ne!(again.id, request.id);
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: again.id,
+            result: PushOutcome::TokenRejected,
+        }),
+    )
+    .await;
+    assert_eq!(sent.await.unwrap(), Err("token_rejected"));
+    assert!(phones_file(dir.path()).contains(FCM_TOKEN));
+    // Google called the token gone: hided drops it and does not retry.
+    let sent = push(&notice);
+    let third = fcm_request(&mut device, &mut session).await;
+    control(
+        &mut device,
+        ServerMessage::PushResult(PushResult {
+            id: third.id,
+            result: PushOutcome::TokenGone,
+        }),
+    )
+    .await;
+    assert_eq!(sent.await.unwrap(), Err("token_gone"));
+    assert!(!phones_file(dir.path()).contains(FCM_TOKEN));
+    assert_eq!(push(&notice).await.unwrap(), Err("no_registration"));
+
+    // A denied permission removes it, and so does unpairing.
+    send(&mut device, &mut session, key.fcm_registration(FCM_TOKEN)).await;
+    receive(&mut device, &mut session, "push_state").await;
+    send(
+        &mut device,
+        &mut session,
+        json!({"type":"push_permission","state":"denied"}),
+    )
+    .await;
+    state(&mut shell, |s| s["phones"][0]["notifications"] == "off").await;
+    assert!(!phones_file(dir.path()).contains(FCM_TOKEN));
+    send(&mut device, &mut session, key.fcm_registration(FCM_TOKEN)).await;
+    receive(&mut device, &mut session, "push_state").await;
+    assert!(phones_file(dir.path()).contains(FCM_TOKEN));
+    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    closed(&mut device, 1).await;
+    assert!(!phones_file(dir.path()).contains(FCM_TOKEN));
+    running.stop();
+}
+
+/// A relay that did not say `fcm` (one without an FCM project, or one from
+/// before FCM, which leaves the field out) is never sent an `fcm_request`: the
+/// notice is dropped with its reason and the link carries the phone on.
+#[tokio::test]
+async fn a_relay_without_fcm_keeps_the_link_and_is_never_sent_an_fcm_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let (running, _shell, mut device, mut session, phone_id) =
+        paired_app_phone(dir.path(), true, false).await;
+    send(
+        &mut device,
+        &mut session,
+        AppKey::new().fcm_registration(FCM_TOKEN),
+    )
+    .await;
+    assert_eq!(
+        receive(&mut device, &mut session, "push_state").await["notifications"],
+        "on"
+    );
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    let sent = tokio::task::spawn_blocking(move || {
+        mobile.push_to_app(&phone_id, &json!({"title":"t","tag":"d:p","clear":[]}))
+    });
+    assert_eq!(sent.await.unwrap(), Err("relay_without_fcm"));
+    // `receive` fails on any text message, so no request reached this relay.
+    send(&mut device, &mut session, json!({"type":"ping","id":1})).await;
+    receive(&mut device, &mut session, "pong").await;
     running.stop();
 }
 

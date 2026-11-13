@@ -226,7 +226,7 @@ One HTTP/2 connection to `fcm.googleapis.com` is kept and reused through the sam
 
 This is the contract the iOS app's notification extension implements; the Android app receives the same `payload` as the `hide` value of the FCM data message.
 hided encrypts the same notice JSON a Web Push phone receives (`push::payload`, with the `room` of the computer that sent it) for the key the app registered, using RFC 8291 `aes128gcm` in one record: a 16-byte salt, a 4-byte record size of 4096, a 1-byte key length of 65, hided's 65-byte ephemeral P-256 public key, then the AES-128-GCM ciphertext of the JSON followed by the delimiter byte `0x02`.
-The plaintext is at most 2,897 bytes (`push::MAX_APNS_PLAINTEXT`), so the body stays within 3,000 bytes; past it hided drops tags to close from the end of `clear`, and a notice that still does not fit is not sent.
+The plaintext is at most 2,897 bytes (`push::MAX_APP_PLAINTEXT`), so the body stays within 3,000 bytes; past it hided drops tags to close from the end of `clear`, and a notice that still does not fit is not sent.
 The relay sends Apple exactly:
 
 ```json
