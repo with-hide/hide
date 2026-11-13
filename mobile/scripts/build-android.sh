@@ -27,7 +27,8 @@
 #
 # HIDE_ANDROID_BUILD_HOST     ssh name of the build machine (default: mini)
 # HIDE_ANDROID_SKIP_PHONE_BUILD=1   (build only) reuse web/phone-dist instead of building it (it needs the Rust wasm toolchain)
-# HIDE_ANDROID_RELAY_PORT=<port>    (build and run) a relay fixture on this Mac's loopback: the phone build and the app's
+# HIDE_ANDROID_RELAY_PORT=<port>    (build and run) a relay on this Mac's loopback (`hide-relay --listen 127.0.0.1:<port>`,
+#                                   its socket at /ws): the phone build and the app's
 #                                   content policy admit ws://127.0.0.1:<port>, SSH forwards that port to the mini and
 #                                   `adb reverse` forwards the emulator's to it; never the production relay
 set -euo pipefail
@@ -56,7 +57,7 @@ fi
 if [[ "$command" == build ]]; then
     if [[ "${HIDE_ANDROID_SKIP_PHONE_BUILD:-}" != 1 ]]; then
         if [[ -n "${HIDE_ANDROID_RELAY_PORT:-}" ]]; then
-            VITE_HIDE_RELAY_URL="ws://127.0.0.1:$HIDE_ANDROID_RELAY_PORT" bash scripts/verify-web.sh web build:phone
+            VITE_HIDE_RELAY_URL="ws://127.0.0.1:$HIDE_ANDROID_RELAY_PORT/ws" bash scripts/verify-web.sh web build:phone
         else
             bash scripts/verify-web.sh web build:phone
         fi

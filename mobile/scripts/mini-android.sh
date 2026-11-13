@@ -36,6 +36,7 @@ locked=0
 adb_started=0
 reversed=
 cleanup() {
+    local status=$?
     if [[ -n "$reversed" ]]; then "$adb" -s "$serial" reverse --remove "tcp:$reversed" < /dev/null > /dev/null 2>&1 || true; fi
     if [[ -n "$emulator_pid" ]]; then
         "$adb" -s "$serial" emu kill < /dev/null > /dev/null 2>&1 || true
@@ -45,6 +46,7 @@ cleanup() {
     fi
     if [[ "$adb_started" == 1 ]]; then "$adb" kill-server < /dev/null > /dev/null 2>&1 || true; fi
     if [[ "$locked" == 1 ]]; then rm -rf "$lock"; fi
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -133,9 +135,9 @@ case "$command" in
         if [[ -n "${HIDE_TAPS:-}" ]]; then extras+=(--es hide_debug_taps "$(device_quote "$HIDE_TAPS")"); fi
         if [[ -n "${HIDE_PAIR_LINK:-}" ]]; then
             "$adb" -s "$serial" shell am start -W -a android.intent.action.VIEW -d "$(device_quote "$HIDE_PAIR_LINK")" -n "$package/.ShellActivity" \
-                --ez hide_debug_connect true "${extras[@]}" < /dev/null > /dev/null
+                --ez hide_debug_connect true ${extras[@]+"${extras[@]}"} < /dev/null > /dev/null
         else
-            "$adb" -s "$serial" shell am start -W -n "$package/.ShellActivity" "${extras[@]}" < /dev/null > /dev/null
+            "$adb" -s "$serial" shell am start -W -n "$package/.ShellActivity" ${extras[@]+"${extras[@]}"} < /dev/null > /dev/null
         fi
         if [[ -n "${HIDE_TAPS:-}" ]]; then
             # The app says when its last step is pressed (`done`) or that one was never found (`failed <step>`).
