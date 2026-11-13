@@ -10,6 +10,8 @@ Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-
 
 The iOS app's release build, its signing, checks and TestFlight upload: [the release build](BUILD.md#the-release-build); owners are `mobile/scripts/{build-ios,mini-release}.sh`, `mobile/scripts/check-release-app.sh`, `mobile/scripts/{bundle-manifest,release-version}.mjs`, `mobile/release-{env,expect}.json` and their tests in `mobile/scripts/`.
 
+The Android app host, its build and its runs on the build machine's emulator: [what it is](ARCHITECTURE.md#the-android-app-host), [the build](BUILD.md#the-android-app); owners are `mobile/android/` (its JVM tests in `app/src/test/`, its instrumented tests in `app/src/androidTest/`), `mobile/scripts/{build-android,mini-android}.sh` and `mobile/scripts/check-versions.mjs` with its test.
+
 The iOS app's App Store page, its text, review notes, age-rating answers and screenshots made from the demo mode: [the store page](BUILD.md#the-store-page); owners are `mobile/store/` (`metadata/`, `age-rating.md`, `shots.json`), `mobile/scripts/{store-shots,check-store-text,store-limits}.mjs`, the `store-shots` command of `mobile/scripts/{build-ios,mini-ios}.sh`, and the tests `mobile/scripts/{store-shots,check-store-text}.test.mjs`.
 
 Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.

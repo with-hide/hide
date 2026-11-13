@@ -1,8 +1,9 @@
 /**
- * The web app's side of the iOS app's three plugins (`mobile/ios/App/HideShell`). Capacitor injects `window.Capacitor`
- * into the app's main frame, so nothing is bundled here and the hosted site carries no part of it; a page that is not
- * the app has no bridge and these are never called (`appHost()`). The native side answers only a call from that main
- * frame, and only for the plugins named in `BridgeGate.appPlugins`.
+ * The web app's side of the apps' plugins (`mobile/ios/App/HideShell`, `mobile/android/app`), which have the same names
+ * and call shapes on both. Capacitor injects `window.Capacitor` into the app's main frame, so nothing is bundled here and
+ * the hosted site carries no part of it; a page that is not the app has no bridge and these are never called
+ * (`appHost()`). The native side answers only a call from that main frame, and only for the plugins its gate names
+ * (`BridgeGate.appPlugins` on iOS, `BridgeGate.APP_PLUGINS` on Android, which has no `HidePush` yet: `appPushAvailable()`).
  */
 import { appHost } from "./appHost";
 

@@ -21,13 +21,13 @@ MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "pack
 # `package`, `agent-clis` and `holder-restart`, which are planned by their own
 # paths only.
 FULL = [
-    "policy", "rust", "checks", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "android", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
     "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "remote-mailbox-arm",
     "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
-    "policy", "rust", "checks", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "android", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
     "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox",
     "remote-mailbox-arm", "repeat", "desktop-e2e", "package",
 ]
@@ -64,6 +64,15 @@ class Selection(unittest.TestCase):
                     self.assertEqual(result["lanes"], ["policy", "checks", "windows-check"])
                     self.assertEqual(result["rust_packages"], [])
                     self.assertFalse(ci.reads_no_lane(status, path, CRATES, ROOT))
+
+    def test_the_android_app_host_plans_its_own_lane_and_the_mobile_check(self):
+        for status in ("A", "M", "D"):
+            for path in ("mobile/android/app/src/main/java/me/grab/hide/android/BridgeGate.java", "mobile/android/app/build.gradle"):
+                with self.subTest(status=status, path=path):
+                    self.assertEqual(plan(path, status=status)["lanes"], ["policy", "checks", "android"])
+        # The scripts that build it and check its lists are shared with the iOS app and plan every lane.
+        self.assertIn("android", plan("mobile/scripts/check-versions.mjs")["lanes"])
+        self.assertIn("rust", plan("mobile/scripts/check-versions.mjs")["lanes"])
 
     def test_web_unit_tests_keep_their_rust_and_css_build_readers(self):
         # sidebar.rs scans all web/src TS, including comments in test files;
@@ -1100,7 +1109,8 @@ class Workflows(unittest.TestCase):
         # from every leg the count chose.
         # The user docs lane adds one, planned for `site/`, the web shell's
         # sources, `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
-        self.assertLessEqual(most, 56, "a run starts more jobs than the suites and native SDK contracts need")
+        # The Android app host's lane adds one, planned for `mobile/android/`.
+        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

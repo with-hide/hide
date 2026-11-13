@@ -88,6 +88,19 @@ describe("the phone's Settings tab", () => {
     expect(setting("protocol").textContent).toMatch(/\d+$/);
   });
 
+  it("says notifications are not on Android yet in the Android app, with no switch and no call to a push plugin", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("location", { ...window.location, protocol: "https:", origin: "https://localhost" });
+    vi.stubGlobal("Capacitor", { getPlatform: () => "android", nativePromise: async (plugin: string, method: string) => { calls.push(`${plugin}.${method}`); return {}; } });
+    await act(async () => root.render(<><PhoneLanguageBoundary /><SettingsScreen key="android" /></>));
+    const section = document.querySelector("[data-phone-settings-section=notifications]")!;
+    expect(section.textContent).toContain("Not on Android yet");
+    expect(section.querySelector("[role=switch]")).toBeNull();
+    // About still reads the app's version; nothing asks a push plugin.
+    expect(calls.filter((call) => !call.startsWith("HideApp."))).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
   it("is the fourth place of the bottom bar", () => {
     const tabs = [...document.querySelectorAll("[data-phone-tab]")].map((node) => node.getAttribute("data-phone-tab"));
     expect(tabs).toEqual(["agents", "missions", "prs", "settings"]);
