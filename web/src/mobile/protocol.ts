@@ -376,6 +376,8 @@ export type PhoneMessage =
   | { type: "push_permission"; state: "denied" | "default" }
   /** The iOS app's notifications: Apple's token for this install and the key this computer encrypts each notice with. */
   | { type: "apns_registration"; token: string; environment: "sandbox" | "production"; key: { p256dh: string; auth: string } }
+  /** The Android app's notifications: Google's FCM token for this install and the same per-computer key; FCM has one host, so no environment. */
+  | { type: "fcm_registration"; token: string; key: { p256dh: string; auth: string } }
   /** Asks whether hided still answers; the phone gives up the socket when nothing comes back. */
   | { type: "ping"; id: number };
 

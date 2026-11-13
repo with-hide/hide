@@ -14,6 +14,8 @@ const { appPushRow, leaveHostPush, refreshAppPush, syncAppPush, turnOffAppPush, 
 const { patch } = await import("./store");
 
 const REGISTRATION = { found: true, token: "ab".repeat(32), environment: "sandbox", p256dh: "P".repeat(87), auth: "A".repeat(22) };
+/** What the Android app's `HidePush` answers: Google's token, named by its service, and no environment. */
+const FCM_REGISTRATION = { found: true, service: "fcm", token: "c".repeat(26) + ":APA91b" + "d".repeat(120), p256dh: "P".repeat(87), auth: "A".repeat(22) };
 type Native = Record<string, (options?: Record<string, unknown>) => unknown>;
 let native: Native;
 const calls: string[] = [];
@@ -80,6 +82,22 @@ describe("turning notifications on", () => {
     expect(useAppPush.getState()).toMatchObject({ pref: true, permission: "granted", asking: false, failed: false });
   });
 
+  it("gives the computer Google's token and the key when the Android app answers with an FCM registration", async () => {
+    install({ enable: () => FCM_REGISTRATION });
+    await turnOnAppPush();
+    expect(sent).toEqual([{ type: "fcm_registration", token: FCM_REGISTRATION.token, key: { p256dh: FCM_REGISTRATION.p256dh, auth: FCM_REGISTRATION.auth } }]);
+    expect(useAppPush.getState()).toMatchObject({ pref: true, permission: "granted", failed: false });
+  });
+
+  it("sends nothing and offers another try when the app's answer has no shape it knows", async () => {
+    for (const answer of [{ ...FCM_REGISTRATION, service: "gcm" }, { ...REGISTRATION, environment: undefined }, { ...FCM_REGISTRATION, token: undefined }]) {
+      install({ enable: () => answer });
+      await turnOnAppPush();
+      expect(sent).toEqual([]);
+      expect(useAppPush.getState()).toMatchObject({ failed: true });
+    }
+  });
+
   it("stays off and says iOS refused when the person declines the question", async () => {
     install({ enable: () => rejection("denied") });
     await turnOnAppPush();
@@ -117,6 +135,14 @@ describe("a computer that connects", () => {
     await syncAppPush();
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ type: "apns_registration", token: REGISTRATION.token });
+  });
+
+  it("registers the Android app's FCM token again on every connect", async () => {
+    localStorage.setItem("hide.phone.app-push", "on");
+    useAppPush.setState({ pref: true });
+    install({ enable: () => FCM_REGISTRATION });
+    await syncAppPush();
+    expect(sent).toEqual([{ type: "fcm_registration", token: FCM_REGISTRATION.token, key: { p256dh: FCM_REGISTRATION.p256dh, auth: FCM_REGISTRATION.auth } }]);
   });
 
   it("unregisters when the switch is off but the computer still holds a registration", async () => {

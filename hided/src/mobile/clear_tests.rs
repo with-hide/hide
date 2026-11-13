@@ -146,7 +146,7 @@ async fn scenario(discard: Discard) {
     };
     let mut b = notice("b");
     if matches!(discard, Discard::Preflight) {
-        b.title = "x".repeat(push::MAX_APNS_PLAINTEXT + 1);
+        b.title = "x".repeat(push::MAX_APP_PLAINTEXT + 1);
     }
     deliver(mobile, vec![b], &["a"]);
     if gate.is_none() {
@@ -789,9 +789,9 @@ fn a_relay_reconnect_rests_again_before_the_transport_handoff() {
             .push
             .clone()
             .unwrap();
-        fixture.mobile.lock().phones.set_apns(
+        fixture.mobile.lock().phones.set_way(
             "phone-0",
-            Some(
+            super::phones::Way::Apns(
                 serde_json::from_value(json!({
                     "token":registration["token"], "environment":"sandbox",
                     "p256dh":registration["key"]["p256dh"], "auth":registration["key"]["auth"],
@@ -818,7 +818,7 @@ fn a_relay_reconnect_rests_again_before_the_transport_handoff() {
             .mobile
             .lock()
             .phones
-            .set_subscription("phone-0", Some(web));
+            .set_way("phone-0", super::phones::Way::Web(web));
         fixture
             .pass(&roots(1, &[], &[]), t + push::SETTLE, false)
             .await;
