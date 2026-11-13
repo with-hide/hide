@@ -39,11 +39,12 @@ export function readyVersion(status: UpdateStatus | null): string | null {
 
 /**
  * The version the ready card offers: the ready one, unless the operator
- * closed its card; a newer ready version shows the card again.
+ * closed its card; a newer ready version shows the card again. A required
+ * update's card has no close, so it offers the ready version whatever was closed.
  */
 export function cardVersion(status: UpdateStatus | null): string | null {
   const ready = readyVersion(status);
-  return ready !== null && ready !== status?.dismissed ? ready : null;
+  return ready !== null && (status?.required === true || ready !== status?.dismissed) ? ready : null;
 }
 
 /** The release page of `version` on with-hide/hide, the repository the updater takes releases from (`desktop/src/main/updater.ts`). */

@@ -76,12 +76,13 @@ The steps for each system are in the [install guide](https://github.com/with-hid
 
 ## Does hide update itself?
 
-Yes. A packaged release looks for a new release shortly after it opens, every six hours after that, and when you return to the app after an hour or more away.
+Yes. A packaged release looks for a new release shortly after it opens, every two hours after that, and when you return to the app after an hour or more away.
 It downloads in the background and shows nothing until the update is ready: a dot appears on the `?` button in the sidebar.
 Choose **Restart** in the Help menu, or **Restart now** in Settings > About, to install it.
 macOS and Windows also install it the next time you quit; Linux installs it only when you choose Restart.
 A download whose digest does not match the release's update file is discarded.
 Your state in `~/.hide` and your panes and agents keep running through an update.
+When a release fixes a problem in your version, its card says **Required update** and stays open, with no **Later**, until you restart; hide never restarts by itself, and your agents and panes keep running when you do.
 
 ## Does hide keep running after I close the window?
 

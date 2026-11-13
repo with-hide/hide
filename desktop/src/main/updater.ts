@@ -4,9 +4,13 @@
 // ↑ button and its card beside Help, the dot on Help and the update at its
 // head, Settings > About) and the host relays it.
 //
-//   checks       at launch and every six hours, when asked (D-17), and when
+//   checks       at launch and every two hours, when asked (D-17), and when
 //                the operator comes back to the app an hour or more after
 //                the last look, so a ready update is still the newest
+//   requires     an update when a release of this app's channel names a
+//                minimum version above this app in its body
+//                (`<!-- hide-min-version: X.Y.Z -->`): the card then cannot be
+//                closed, and says the work keeps running across the restart
 //   chooses      the highest release of with-hide/hide whose update file and
 //                file for this system are both up, stable only unless preview
 //                releases are on, never lower than this app (D-22, D-23)
@@ -41,7 +45,7 @@ const RELEASES_API = `https://api.github.com/repos/${RELEASES_REPOSITORY}/releas
 const RELEASE_DOWNLOADS = `https://github.com/${RELEASES_REPOSITORY}/releases/download`;
 /** The first look waits for the window and the core to settle. */
 export const FIRST_CHECK_DELAY_MS = 15_000;
-export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 /** Coming back to the app looks again once the last look is this old. */
 export const LOOK_AGAIN_AFTER_MS = 60 * 60 * 1000;
 const RELEASES_TIMEOUT_MS = 30_000;
@@ -84,25 +88,38 @@ export function updateFiles(version: string, system: UpdateSystem): { info: stri
 
 export type ChosenRelease = { tag: string; version: string };
 
+type ChannelRelease = { tag: string; version: string; parsed: Version; assets: unknown[]; body: string };
+
 /**
- * The release to update to, from GitHub's list (newest first, any order
- * accepted): published, tagged `vX.Y.Z` or, with preview releases on,
- * `vX.Y.Z-rc.N` marked as a pre-release; with this system's update file and
- * update both uploaded; newer than `current`. A tag of another shape (an
- * evidence tag) and a release still uploading are skipped. Null when none is.
+ * The releases this app's channel takes, from GitHub's list (newest first,
+ * any order accepted): published, tagged `vX.Y.Z` or, with preview releases
+ * on, `vX.Y.Z-rc.N` marked as a pre-release. A tag of another shape (an
+ * evidence tag) is skipped.
  */
-export function chooseRelease(releases: unknown, input: { current: string; prerelease: boolean; system: UpdateSystem }): ChosenRelease | null {
-  const current = parseVersion(input.current);
-  if (!current || !Array.isArray(releases)) return null;
-  let best: { tag: string; version: string; parsed: Version } | null = null;
+function* channelReleases(releases: unknown, prerelease: boolean): Generator<ChannelRelease> {
+  if (!Array.isArray(releases)) return;
   for (const release of releases) {
     if (!release || typeof release !== "object") continue;
-    const { tag_name: tag, draft, prerelease, assets } = release as Record<string, unknown>;
+    const { tag_name: tag, draft, prerelease: marked, assets, body } = release as Record<string, unknown>;
     if (typeof tag !== "string" || !tag.startsWith("v") || draft !== false || !Array.isArray(assets)) continue;
     const version = tag.slice(1);
     const parsed = parseVersion(version);
-    if (!parsed || (parsed.rc !== null) !== (prerelease === true)) continue;
-    if (parsed.rc !== null && !input.prerelease) continue;
+    if (!parsed || (parsed.rc !== null) !== (marked === true)) continue;
+    if (parsed.rc !== null && !prerelease) continue;
+    yield { tag, version, parsed, assets, body: typeof body === "string" ? body : "" };
+  }
+}
+
+/**
+ * The release to update to: one of the channel's releases with this system's
+ * update file and update both uploaded, newer than `current`. A release still
+ * uploading is skipped. Null when none is.
+ */
+export function chooseRelease(releases: unknown, input: { current: string; prerelease: boolean; system: UpdateSystem }): ChosenRelease | null {
+  const current = parseVersion(input.current);
+  if (!current) return null;
+  let best: { tag: string; version: string; parsed: Version } | null = null;
+  for (const { tag, version, parsed, assets } of channelReleases(releases, input.prerelease)) {
     if (compareVersions(parsed, current) <= 0 || (best && compareVersions(parsed, best.parsed) <= 0)) continue;
     const { info, file } = updateFiles(version, input.system);
     const uploaded = (name: string) => assets.some((asset) => asset && typeof asset === "object" && (asset as Record<string, unknown>).name === name && (asset as Record<string, unknown>).state === "uploaded");
@@ -110,6 +127,28 @@ export function chooseRelease(releases: unknown, input: { current: string; prere
     best = { tag, version, parsed };
   }
   return best ? { tag: best.tag, version: best.version } : null;
+}
+
+/** The line a release's body carries to name the oldest version that may keep running without updating. */
+const MINIMUM_VERSION_LINE = /<!--\s*hide-min-version:\s*(\S+)\s*-->/;
+
+/**
+ * The oldest version an app of this channel may keep running: the highest
+ * `<!-- hide-min-version: X.Y.Z -->` one of the channel's releases names in
+ * its body. A line naming a version above its own release's is skipped, so a
+ * typo cannot require an update no release can give; null when none names one.
+ * The line can be added to a release already published, and removing it
+ * lifts the requirement at the next look.
+ */
+export function minimumVersion(releases: unknown, prerelease: boolean): string | null {
+  let floor: { version: string; parsed: Version } | null = null;
+  for (const { parsed: own, body } of channelReleases(releases, prerelease)) {
+    const named = MINIMUM_VERSION_LINE.exec(body)?.[1];
+    const parsed = named === undefined ? null : parseVersion(named);
+    if (!named || !parsed || compareVersions(parsed, own) > 0 || (floor && compareVersions(parsed, floor.parsed) <= 0)) continue;
+    floor = { version: named, parsed };
+  }
+  return floor?.version ?? null;
 }
 
 /**
@@ -187,6 +226,8 @@ export class AppUpdates {
   private phase: UpdatePhase;
   private prerelease: boolean;
   private dismissed: string | null;
+  /** Whether a release's minimum version is above this app (`minimumVersion`); read at each look of GitHub's list. */
+  private required = false;
   private running: Promise<void> | null = null;
   /** When the last look began; null until the launch look. */
   private lookedAt: number | null = null;
@@ -226,7 +267,7 @@ export class AppUpdates {
   }
 
   status(): UpdateStatus {
-    return { phase: this.phase, prerelease: this.prerelease, installOnQuit: this.system !== "deb" && this.system !== "rpm", dismissed: this.dismissed };
+    return { phase: this.phase, prerelease: this.prerelease, installOnQuit: this.system !== "deb" && this.system !== "rpm", dismissed: this.dismissed, required: this.required };
   }
 
   onChange(listener: (status: UpdateStatus) => void): () => void {
@@ -234,7 +275,7 @@ export class AppUpdates {
     return () => this.listeners.delete(listener);
   }
 
-  /** Looks soon after launch and then every six hours, until `stop`. */
+  /** Looks soon after launch and then every two hours, until `stop`. */
   start(): void {
     // The override decides what the app installs, so a stray one is visible in the log.
     if (this.feedOverride) this.log.event("update.feed_override", { url: this.feedOverride });
@@ -306,9 +347,10 @@ export class AppUpdates {
    * Closes the ready card for `version`; Help's dot and line and About stay.
    * Only the version that is ready now can be closed, so a newer one shows
    * the card again, and a close that lost a race with a newer download changes nothing.
+   * A required update's card cannot be closed.
    */
   dismiss(version: string): void {
-    if (this.phase.kind !== "ready" || this.phase.version !== version || this.dismissed === version) return;
+    if (this.required || this.phase.kind !== "ready" || this.phase.version !== version || this.dismissed === version) return;
     this.dismissed = version;
     this.saveChoices();
     this.log.event("update.card_dismissed", { version });
@@ -339,7 +381,9 @@ export class AppUpdates {
     this.log.event("update.check", { trigger, version: this.current, prerelease: this.prerelease });
     let version: string;
     try {
-      const chosen = this.feedOverride ? null : chooseRelease(await this.io.releases(), { current: this.current, prerelease: this.prerelease, system });
+      const releases = this.feedOverride ? null : await this.io.releases();
+      if (releases !== null) this.readMinimum(releases);
+      const chosen = releases === null ? null : chooseRelease(releases, { current: this.current, prerelease: this.prerelease, system });
       if (!this.feedOverride && (!chosen || chosen.version === ready?.version)) {
         this.log.event("update.none", { latest: chosen?.version ?? null });
         if (!ready) this.set({ kind: "idle", checkedAt: this.io.now() });
@@ -382,6 +426,18 @@ export class AppUpdates {
     }
     this.log.event("update.ready", { version });
     this.set({ kind: "ready", version });
+  }
+
+  /** Whether a release now requires an update of this app; the log and the card follow a change. */
+  private readMinimum(releases: unknown): void {
+    const minimum = minimumVersion(releases, this.prerelease);
+    const current = parseVersion(this.current);
+    const parsed = minimum === null ? null : parseVersion(minimum);
+    const required = current !== null && parsed !== null && compareVersions(current, parsed) < 0;
+    if (required === this.required) return;
+    this.required = required;
+    this.log.event(required ? "update.required" : "update.no_longer_required", { version: this.current, minimum });
+    this.emit();
   }
 
   private set(phase: UpdatePhase): void {
