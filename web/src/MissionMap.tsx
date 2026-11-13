@@ -308,8 +308,8 @@ function ReportLine({ mission }: { mission: Mission }) {
  * before anything else does, with Hide's mark when Hide changed it last; the
  * band of what the operator does, its gate's `볼 것` and a merge that is
  * theirs now; its worker's agent mark, model and how long it has taken, with
- * its device when away as a tab on the card's top edge, never a cut chip in
- * that row; a bar of one cell per step of how its work goes
+ * its device when away as a tab standing on the card's top edge, never a
+ * cut chip in that row; a bar of one cell per step of how its work goes
  * (done, being worked, or only planned) with the step being worked under it,
  * or `계획 n단계 · 시작 전` before a worker starts; and under a hairline its
  * bottom line: for a node that changes code where its branch goes, for one
@@ -391,7 +391,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       still={doing != null && doing.state !== "working"}
       title={titleText}
       accessory={hide ? <HideMark words={hide} /> : null}
-      tab={device ? <DeviceChip label={device} variant="remote" className="max-w-[calc(var(--size-mission-node)*2/3)] rounded-none rounded-tr-sm rounded-bl-sm" /> : null}
+      tab={device ? <DeviceChip label={device} variant="remote" className="max-w-full rounded-b-none" /> : null}
       data-node-attention={attention ? node.attention!.to : undefined}
       aria-label={[
         node.title,

@@ -21,7 +21,7 @@ const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20
 
 /**
  * The same card frame, state, title and touch target on the desktop and phone; its rows stand one spacing token apart, carry no gaps of their own and all start at the card's left edge (PRD mission-destination D-51).
- * A `tab` is a label in the card's top right corner, on a line of its own above the title, so it takes no width from a row and covers no edge that arrives at the card's top; the turn dot stays over its corner.
+ * A `tab` stands on the card's top edge near its right end, outside the card like a folder's tab and clear of the turn dot, so it takes no width or height from the card; it stands above the map's edges, so a line that arrives from above passes behind it instead of over its words.
  */
 export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, failed, title, accessory, tab, children, ...props }: {
   node: Pick<MissionNode, "key" | "title" | "kind" | "status" | "blocked">;
@@ -53,7 +53,7 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
       {...props}
     >
       {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
-      {tab ? <span className="-mt-xs -mr-sm flex min-w-0 justify-end" data-node-tab="true">{tab}</span> : null}
+      {tab ? <span className="absolute right-md bottom-full z-10 flex min-w-0 max-w-[calc(var(--size-mission-node)/2)]" data-node-tab="true">{tab}</span> : null}
       <span className="flex min-w-0 items-center gap-xs" data-node-head="true">
         <MissionNodeMark look={look} label={word} still={still} failed={failed} />
         {title ?? <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")}>{node.title}</span>}
