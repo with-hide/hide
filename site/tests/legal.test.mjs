@@ -10,6 +10,7 @@ const page = name => readFileSync(fileURLToPath(new URL(`../public/${name}.html`
 const index = page("index");
 const privacy = page("privacy");
 const support = page("support");
+const download = page("download");
 
 test("the site footer links both legal pages, and each page links the other", () => {
   for (const href of ["./privacy", "./support"]) {
@@ -64,7 +65,7 @@ test("the support page covers what a paired phone needs: connecting, help and re
 });
 
 test("no page loads a third-party script, so the policy's claim about the site stays true", () => {
-  for (const html of [index, privacy, support]) {
+  for (const html of [index, privacy, support, download]) {
     const sources = [...html.matchAll(/<script[^>]*\bsrc="([^"]+)"/g)].map(m => m[1]);
     for (const src of sources) {
       assert.ok(
@@ -87,7 +88,7 @@ test("the pages the policy links live on this site point at a page that exists",
 // The privacy policy still names Google Play services, which the app needs; it never links the store.
 test("no site page links Google Play until the Android app is published, and the pages say it is coming", () => {
   const faq = repoFile("site/src/content/docs/docs/reference/faq.md");
-  for (const [name, text] of [["index", index], ["privacy", privacy], ["support", support], ["faq", faq]]) {
+  for (const [name, text] of [["index", index], ["privacy", privacy], ["support", support], ["download", download], ["faq", faq]]) {
     assert.doesNotMatch(text, /play\.google\.com/, `${name} does not link Google Play`);
   }
   assert.match(index, /Android app coming to Google Play/);

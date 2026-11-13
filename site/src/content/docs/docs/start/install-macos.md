@@ -13,7 +13,7 @@ sidebar:
 
 ## Install
 
-1. Download `hide-v<version>-macos-arm64.dmg` and its `.sha256` file from [withhide.dev](https://withhide.dev) or the [Releases page](https://github.com/with-hide/hide/releases).
+1. Download `hide-v<version>-macos-arm64.dmg` and its `.sha256` file from [the download page](/download) or the [Releases page](https://github.com/with-hide/hide/releases).
 2. In the folder that holds both, check the download. Continue only when it prints `OK`.
 
    ```sh
