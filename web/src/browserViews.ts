@@ -22,6 +22,7 @@ import { windowDeviceId } from "./screenMachine";
 import { type SnapshotRest, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { areasOf, workspaceKey, type ViewWorkspace } from "./viewLayout";
+import { isLoopbackHost } from "./loopbackHost";
 
 // --- pure rules ---------------------------------------------------------------
 
@@ -57,8 +58,9 @@ const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?
  * The address a page's Open in default browser hands to the operating
  * system's default browser (issue 2293), or null when it offers none: only a
  * web address, never a `file:` page or another scheme, and not a loopback
- * page of a checkout on another machine than this window's, whose
- * `localhost` would be this machine's in the default browser.
+ * page of a checkout on another machine than this window's (`isLoopbackHost`,
+ * the host's own rule), whose `localhost` would be this machine's in the
+ * default browser.
  */
 export function defaultBrowserAddress(address: string, pageDevice: string, windowDevice: string): string | null {
   let url: URL;
@@ -68,7 +70,7 @@ export function defaultBrowserAddress(address: string, pageDevice: string, windo
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  if (pageDevice !== windowDevice && LOOPBACK.test(url.host)) return null;
+  if (pageDevice !== windowDevice && isLoopbackHost(url.hostname)) return null;
   return url.href;
 }
 

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { Parameters as EmulationParameters } from "electron";
 import type { BrowserCommand, BrowserDevicePlacement, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
+import { isLoopbackHost } from "../../../web/src/loopbackHost";
 
 /** A Workspace holds at most this many displays (`MAX_VIEW_DISPLAYS` is 32);
  * the bound is kept wider than the core's. */
@@ -236,13 +237,6 @@ export function browserPartition(workspace: string, url: string, node: string | 
     return `persist:hide-browser-loopback-${createHash("sha256").update(device).digest("hex").slice(0, 32)}`;
   }
   return "persist:hide-browser-web";
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
-  const mapped = /^\[::(?:(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4}))\]$/.exec(host);
-  const embeddedLoopback = mapped ? Number.parseInt(mapped[1]!, 16) >> 8 === 127 : false;
-  return host === "localhost" || host === "0.0.0.0" || host === "[::1]" || /^127\./.test(host) || embeddedLoopback;
 }
 
 /** Route a remote page's absolute loopback requests through its owned View.
