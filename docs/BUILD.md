@@ -756,12 +756,14 @@ A whole run took about 6 minutes and the mini's free disk fell by about 1 GB (20
 The command stops before it starts only when the mini has less than 5 GB free, a few times what a run uses, so a run cannot fill the disk under the mini's other work; a run that runs out of space anyway fails at the step that ran out.
 
 **Version and build number.**
-The version is the numeric part of the repository's own (`HIDE_VERSION`, else the newest `v<version>` tag, as `desktop/scripts/build-identity.mjs` resolves it for the desktop app), so `0.4.0-rc.1` and `0.4.0-main.<commit>` are both `0.4.0`.
+The version is the app's own: the `version` of `mobile/package.json`, three numbers, and it moves only when the app is released to the App Store, not with the desktop release.
+The phone is a shell around a hosted phone page, so a desktop release reaches it through the phone protocol ([Retained bundles and the pin](#retained-bundles-and-the-pin)), which needs no store release; the app and the desktop number their releases apart, and what says whether a desktop and a phone work together is the protocol, never the two versions.
+The first App Store version is 1.0.0.
 The build number is the UTC time of the machine that starts the command, taken after the Swift tests and just before the mini starts, `YYYYMMDDHHMMSS`: it rises with every run, a second run on the same commit uploads under a new number, and nothing is edited by hand.
 App Store Connect refuses a build number that is not higher than every earlier build of the same version, so two runs that overlap are decided by the order they upload in, and a mini whose clock runs backwards is refused after the upload with Apple's own message.
 A run that fails before the upload, or whose upload Apple refused, is run again as it is.
 `bash mobile/scripts/build-ios.sh status <delivery id>` reads an upload's state again (`altool --build-status`, with the key from the same files) and changes nothing; it exits non-zero when altool fails or does not answer in 5 minutes.
-The version is the last tag's until a release is tagged, so a run between releases uploads another build of the last version: once Apple has approved a version, a run from main that still carries it is refused by Apple's validation after the whole build, and the next tag or `HIDE_VERSION` is the way out.
+A run between app releases uploads another build of the version in `mobile/package.json`: once Apple has approved a version, a run from main that still carries it is refused by Apple's validation after the whole build, and raising `version` in that file (in a pull request, like any change) is the way out.
 Builds made between releases are development builds; expire them in App Store Connect before an external group or a review sees the build list.
 
 #### What a release owns
@@ -849,7 +851,7 @@ The release gate's own tests (the check script, the manifest, the secrets) are n
 
 #### Later: from the desktop release
 
-The release workflow of the private repository can run this command after it publishes a desktop release: `HIDE_VERSION=<tag> bash mobile/scripts/build-ios.sh release` on the operator's Mac, which reaches the mini the same way and needs the same three files there.
+The release workflow of the private repository can run this command after it publishes a desktop release that needs a new app (not every desktop release does): `bash mobile/scripts/build-ios.sh release` on the operator's Mac, which reaches the mini the same way and needs the same three files there.
 A workflow on the candidate runner is not possible as it stands: that runner accepts only `release-candidate.yml` on main, runs as an account with no access to the key, and a hosted macOS job would need the key as a GitHub secret.
 The protocol order in [Retained bundles and the pin](#retained-bundles-and-the-pin) applies first: build the app from the main that carries the new protocol's bundle, with the previous one pinned.
 
