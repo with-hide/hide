@@ -23,6 +23,20 @@ const BUILD: ReleaseIdentity = ReleaseIdentity {
     order: 42,
 };
 
+/// How the release sends an archive's body; every other answer is sent whole.
+#[derive(Clone, Copy)]
+enum Pace {
+    Whole,
+    /// In `parts` writes with `gap` between them.
+    Steady {
+        parts: usize,
+        gap: Duration,
+    },
+    /// Half of it, then nothing, holding the connection open until the
+    /// client gives up.
+    StopsHalfway,
+}
+
 /// The release HTTP boundary: each path's status and body, and how often it
 /// was asked for. Drop wakes and joins its accept loop, including after an
 /// assertion fails; no test changes the process HOME or runtime.
@@ -38,6 +52,13 @@ impl Release {
     }
     fn serve_with(
         routes: BTreeMap<String, (u16, Vec<u8>)>,
+        on_request: impl FnMut(&str) + Send + 'static,
+    ) -> Self {
+        Self::serve_paced(routes, Pace::Whole, on_request)
+    }
+    fn serve_paced(
+        routes: BTreeMap<String, (u16, Vec<u8>)>,
+        pace: Pace,
         mut on_request: impl FnMut(&str) + Send + 'static,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -46,7 +67,7 @@ impl Release {
         let count = hits.clone();
         let (stop, receiver) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            for stream in listener.incoming() {
+            'serve: for stream in listener.incoming() {
                 if receiver.try_recv().is_ok() {
                     break;
                 }
@@ -79,7 +100,24 @@ impl Release {
                     body.len()
                 )
                 .unwrap();
-                stream.write_all(&body).unwrap();
+                match pace {
+                    Pace::Steady { parts, gap } if path.ends_with(".tar.gz") => {
+                        for part in body.chunks(body.len().div_ceil(parts)) {
+                            stream.write_all(part).unwrap();
+                            // A release that answers slowly is what the
+                            // test is about; a stop ends the wait early.
+                            if receiver.recv_timeout(gap).is_ok() {
+                                break 'serve;
+                            }
+                        }
+                    }
+                    Pace::StopsHalfway if path.ends_with(".tar.gz") => {
+                        stream.write_all(&body[..body.len() / 2]).unwrap();
+                        // Ends when the client closes, or at the 30 s hang guard.
+                        let _ = stream.read(&mut [0]);
+                    }
+                    _ => stream.write_all(&body).unwrap(),
+                }
             }
         });
         Self {
@@ -237,7 +275,15 @@ fn every_platform_kit_is_fetched_checked_and_reused_offline() {
     let server = Release::serve(fixture.routes());
     for name in CONTRACT.kits.keys() {
         let (os, arch) = split(name);
-        let files = cache::load(&BUILD, os, arch, home.path(), &server.base()).unwrap();
+        let files = cache::load(
+            &BUILD,
+            os,
+            arch,
+            home.path(),
+            &server.base(),
+            &cache::RELEASE,
+        )
+        .unwrap();
         let kit = &CONTRACT.kits[name];
         let mut expected: Vec<(String, bool)> = CONTRACT
             .programs
@@ -263,7 +309,15 @@ fn every_platform_kit_is_fetched_checked_and_reused_offline() {
     assert_eq!(server.archive_hits(), CONTRACT.kits.len());
     for name in CONTRACT.kits.keys() {
         let (os, arch) = split(name);
-        cache::load(&BUILD, os, arch, home.path(), "http://127.0.0.1:0").unwrap();
+        cache::load(
+            &BUILD,
+            os,
+            arch,
+            home.path(),
+            "http://127.0.0.1:0",
+            &cache::RELEASE,
+        )
+        .unwrap();
         assert!(cache_root(home.path()).join(name).is_dir());
     }
     assert!(!cache_root(home.path()).join("staging").exists());
@@ -299,9 +353,16 @@ fn a_manifest_of_another_build_is_refused_before_any_archive() {
         let server = Release::serve(routes);
         let reason = format!(
             "{:#}",
-            cache::load(&BUILD, "linux", "aarch64", home.path(), &server.base())
-                .err()
-                .unwrap()
+            cache::load(
+                &BUILD,
+                "linux",
+                "aarch64",
+                home.path(),
+                &server.base(),
+                &cache::RELEASE
+            )
+            .err()
+            .unwrap()
         );
         assert!(
             reason.contains("names another build"),
@@ -373,9 +434,16 @@ fn a_wrong_header_or_an_unlisted_entry_is_refused_and_never_cached() {
         let server = Release::serve(fixture.routes());
         let reason = format!(
             "{:#}",
-            cache::load(&BUILD, "windows", "x86_64", home.path(), &server.base())
-                .err()
-                .unwrap()
+            cache::load(
+                &BUILD,
+                "windows",
+                "x86_64",
+                home.path(),
+                &server.base(),
+                &cache::RELEASE
+            )
+            .err()
+            .unwrap()
         );
         let root = cache_root(home.path());
         assert!(!root.join(windows).exists(), "{defect}: {reason}");
@@ -389,7 +457,17 @@ fn a_wrong_header_or_an_unlisted_entry_is_refused_and_never_cached() {
     }
     let home = tempfile::tempdir().unwrap();
     let server = Release::serve(release(&BUILD, None).routes());
-    assert!(cache::load(&BUILD, "windows", "x86_64", home.path(), &server.base()).is_ok());
+    assert!(
+        cache::load(
+            &BUILD,
+            "windows",
+            "x86_64",
+            home.path(),
+            &server.base(),
+            &cache::RELEASE
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -410,14 +488,32 @@ fn wrong_archive_digest_or_size_is_never_cached_and_retry_can_succeed() {
         }
         let failure = Release::serve(routes);
         assert!(
-            cache::load(&BUILD, "linux", "aarch64", home.path(), &failure.base()).is_err(),
+            cache::load(
+                &BUILD,
+                "linux",
+                "aarch64",
+                home.path(),
+                &failure.base(),
+                &cache::RELEASE
+            )
+            .is_err(),
             "{defect}"
         );
         let root = cache_root(home.path());
         assert!(!root.join("linux-aarch64").exists());
         assert!(!root.join("staging").exists());
         let retry = Release::serve(good.routes());
-        assert!(cache::load(&BUILD, "linux", "aarch64", home.path(), &retry.base()).is_ok());
+        assert!(
+            cache::load(
+                &BUILD,
+                "linux",
+                "aarch64",
+                home.path(),
+                &retry.base(),
+                &cache::RELEASE
+            )
+            .is_ok()
+        );
     }
 }
 
@@ -428,10 +524,26 @@ fn wrong_archive_digest_or_size_is_never_cached_and_retry_can_succeed() {
 fn a_changed_or_old_slot_is_replaced_before_upload() {
     let home = tempfile::tempdir().unwrap();
     let server = Release::serve(release(&BUILD, None).routes());
-    let first = cache::load(&BUILD, "linux", "aarch64", home.path(), &server.base()).unwrap();
+    let first = cache::load(
+        &BUILD,
+        "linux",
+        "aarch64",
+        home.path(),
+        &server.base(),
+        &cache::RELEASE,
+    )
+    .unwrap();
     let root = cache_root(home.path());
     fs::write(root.join("linux-aarch64/hide"), "corrupt").unwrap();
-    let repaired = cache::load(&BUILD, "linux", "aarch64", home.path(), &server.base()).unwrap();
+    let repaired = cache::load(
+        &BUILD,
+        "linux",
+        "aarch64",
+        home.path(),
+        &server.base(),
+        &cache::RELEASE,
+    )
+    .unwrap();
     assert_eq!(
         first.iter().map(|f| &f.digest).collect::<Vec<_>>(),
         repaired.iter().map(|f| &f.digest).collect::<Vec<_>>()
@@ -441,7 +553,15 @@ fn a_changed_or_old_slot_is_replaced_before_upload() {
     let old = root.join("linux-x86_64");
     hide_platform::fs::private::create_dir(&old).unwrap();
     fs::write(old.join("hided-linux-x86_64"), "format 3").unwrap();
-    cache::load(&BUILD, "linux", "x86_64", home.path(), &server.base()).unwrap();
+    cache::load(
+        &BUILD,
+        "linux",
+        "x86_64",
+        home.path(),
+        &server.base(),
+        &cache::RELEASE,
+    )
+    .unwrap();
     assert!(!old.join("hided-linux-x86_64").exists());
     assert!(old.join("hided").is_file());
 }
@@ -464,7 +584,14 @@ fn a_failed_download_preserves_its_reason_and_reports_failed_staging_cleanup() {
         }
     });
     let (result, records) = crate::diagnostics::capture(|| {
-        cache::load(&BUILD, "linux", "aarch64", home.path(), &server.base())
+        cache::load(
+            &BUILD,
+            "linux",
+            "aarch64",
+            home.path(),
+            &server.base(),
+            &cache::RELEASE,
+        )
     });
     let reason = format!("{:#}", result.err().unwrap());
     assert!(
@@ -484,6 +611,80 @@ fn a_failed_download_preserves_its_reason_and_reports_failed_staging_cleanup() {
             .as_str()
             .unwrap()
             .contains("device asset could not be downloaded")
+    );
+}
+
+/// A kit that keeps arriving downloads however long it takes in all: the
+/// stall bound is for one wait, not for the whole body (ureq's
+/// `timeout_recv_body` would be the latter).
+#[test]
+fn a_kit_that_keeps_arriving_slowly_downloads_past_the_stall_bound() {
+    let home = tempfile::tempdir().unwrap();
+    let bounds = cache::Bounds {
+        stall: Duration::from_secs(1),
+        whole: Duration::from_secs(60),
+    };
+    // Ten parts with 150 ms between them: 1.35 s in all, past the stall bound.
+    let pace = Pace::Steady {
+        parts: 10,
+        gap: Duration::from_millis(150),
+    };
+    let server = Release::serve_paced(release(&BUILD, None).routes(), pace, |_| {});
+    let files = cache::load(
+        &BUILD,
+        "linux",
+        "aarch64",
+        home.path(),
+        &server.base(),
+        &bounds,
+    );
+    assert!(files.is_ok(), "{:#}", files.err().unwrap());
+    assert!(cache_root(home.path()).join("linux-aarch64").is_dir());
+    assert_eq!(server.archive_hits(), 1);
+}
+
+/// A download that stops arriving fails once nothing came for the stall
+/// bound, says so, and leaves nothing behind; the next attempt can succeed.
+#[test]
+fn a_kit_download_that_stops_arriving_fails_naming_the_stall() {
+    let home = tempfile::tempdir().unwrap();
+    let bounds = cache::Bounds {
+        stall: Duration::from_millis(300),
+        whole: Duration::from_secs(60),
+    };
+    let routes = release(&BUILD, None).routes();
+    let stalled = Release::serve_paced(routes.clone(), Pace::StopsHalfway, |_| {});
+    let reason = format!(
+        "{:#}",
+        cache::load(
+            &BUILD,
+            "linux",
+            "aarch64",
+            home.path(),
+            &stalled.base(),
+            &bounds
+        )
+        .err()
+        .unwrap()
+    );
+    assert!(
+        reason.contains("Nothing arrived from the release for 300ms"),
+        "{reason}"
+    );
+    let root = cache_root(home.path());
+    assert!(!root.join("linux-aarch64").exists());
+    assert!(!root.join("staging").exists());
+    let retry = Release::serve(routes);
+    assert!(
+        cache::load(
+            &BUILD,
+            "linux",
+            "aarch64",
+            home.path(),
+            &retry.base(),
+            &bounds
+        )
+        .is_ok()
     );
 }
 

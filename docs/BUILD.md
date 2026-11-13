@@ -411,7 +411,8 @@ A developer's `<name>-<os>-<arch>` file in the build's folder comes first (`hold
 From a folder a device gets exactly the runtime files its kit names, the files a release kit carries, and a folder short of one is refused with its name; the Windows kit's runtime is held to `contracts/conpty.json` by hide-node's contract test, which a change to the pin runs.
 A build that is not a published release (a `-main.` or `0.0.0-` version, one without a commit, or one no package numbered, such as a plain `cargo build --release`, whose build order is 0) downloads nothing, and its refusal names the developer folder: `node desktop/scripts/device-helpers.mjs stage <device-bundles.json> <archive> <folder>` checks a release or CI kit against its manifest and unpacks it there under those names.
 
-The connection worker fetches `https://github.com/with-hide/hide/releases/download/v<app-version>/device-bundles.json`, then the kit's archive, over HTTPS with a 60-second request bound and at most five redirects; the manifest is capped at 64 KiB and a kit at 256 MiB.
+The connection worker fetches `https://github.com/with-hide/hide/releases/download/v<app-version>/device-bundles.json`, then the kit's archive, over HTTPS with at most five redirects;
+a request fails once nothing arrives or leaves for 30 seconds, so a slow download that keeps arriving runs on, and half an hour bounds it in all (`hide-node/src/ssh/kit/cache.rs`, `RELEASE`); the manifest is capped at 64 KiB and a kit at 256 MiB.
 Before any archive it refuses a manifest whose version, commit or build order differs from the ones compiled into the build (`hided::cli::RELEASE`), whose format is not the contract's, or which does not name exactly the contract's platforms and each kit's files.
 It checks archive size and hash, then exact entry names, regular-file types, sizes, file hashes and the programs' executable headers before atomically publishing a cache slot.
 
