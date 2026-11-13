@@ -1255,6 +1255,82 @@ fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
     assert_eq!(row(&runtime), ("none".into(), "stopped".into()));
 }
 
+/// Claude Code opens its question dialog (`AskUserQuestion`) with the same
+/// permission request a call's approval takes. The engine's state moves as
+/// the operator answers, before that state's session read or the call's end
+/// reaches the core, and meanwhile no read words the question: the row stays
+/// the question it was and never turns into an approval.
+#[test]
+fn a_wait_on_the_question_dialog_stays_a_question_until_its_call_ends() {
+    use crate::agent_state::escalation::Verb;
+    use hide_node_link::panes::HookTurn;
+    use hide_session::turns::UserTurnKind;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let publish = |runtime: &mut Runtime, status: &str| {
+        let mut engine_session = session(&[("w1:p1", "claude", false)]);
+        engine_session["agents"][0]["agent_status"] = status.into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(engine_session).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, waiting: &[&str]| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(HookTurn::Working),
+            counts: None,
+            session_start: false,
+            waiting: Some(waiting.iter().map(|call| (*call).to_owned()).collect()),
+            account: None,
+            refused: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (
+            row.demand.clone(),
+            row.blocked,
+            row.user_turn.as_ref().map(|turn| turn.kind),
+            crate::agent_state::demand_verb(row),
+        )
+    };
+    let question = "AskUserQuestion:0123456789abcdef";
+
+    report(&mut runtime, &[question]);
+    publish(&mut runtime, "working");
+    assert_eq!(
+        row(&runtime),
+        (
+            "question".into(),
+            true,
+            Some(UserTurnKind::Question),
+            Some(Verb::Answer)
+        )
+    );
+    // A call's approval beside the question is the operator's to grant.
+    report(&mut runtime, &[question, "Bash:0123456789abcdef"]);
+    publish(&mut runtime, "working");
+    assert_eq!(
+        row(&runtime),
+        ("approval".into(), true, None, Some(Verb::Approval))
+    );
+    // The answered question's call ended.
+    report(&mut runtime, &[]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("none".into(), false, None, None));
+}
+
 /// An agent exited and started again in the same pane: the engine dropped the
 /// agent, then lists it again under the session that ended, and the new
 /// session's hook, proven to run in the pane, decides the row.

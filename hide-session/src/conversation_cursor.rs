@@ -835,7 +835,8 @@ impl LargeRecord {
                             }
                             Scope::Block => {
                                 if let Some(frame) = self.frames.last_mut() {
-                                    frame.block_question = token.value == "AskUserQuestion";
+                                    frame.block_question =
+                                        token.value == crate::calls::CLAUDE_QUESTION_TOOL;
                                     frame.block_start = starts_work(&token.value);
                                     frame.block_stop = stops_work(&token.value);
                                 }
