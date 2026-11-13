@@ -1526,6 +1526,8 @@ it("tells a node being worked from one whose worker rests on someone and one no 
     // A worker stopped with nothing to wait on says why on its line and how long ago on its worker row (mission-56).
     expect(look("stopped")).toEqual({ line: "Stopped · usage limit · You've hit your limit · resets 4pm", pace: "stopped", ring: "stopped", label: "Stopped · usage limit · You've hit your limit · resets 4pm", time: "stopped 3m ago" });
     expect(card(map, "stopped").querySelector("[data-node-work]")?.getAttribute("title")).toBe("Stopped 3m ago · usage limit · You've hit your limit · resets 4pm");
+    // A stopped node's mark is a grey disc with two pause bars, not the empty dashed ring of a node still waiting to start.
+    expect([card(map, "stopped").querySelectorAll("[data-node-mark] rect").length, card(map, "stopped").querySelector("[data-node-mark] circle")?.getAttribute("class")]).toEqual([2, "fill-mission-stopped"]);
     // Hide cannot see the worker's row: the card stays as it was, in progress and turning.
     expect(look("unseen")).toEqual({ line: null, pace: "working", ring: "working", label: "In progress", time: null });
     expect(card(map, "rests").getAttribute("aria-label")).toContain("Waiting · review");
