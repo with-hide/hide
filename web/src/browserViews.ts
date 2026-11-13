@@ -54,6 +54,25 @@ export function parseWorkspaceKey(key: string): ViewWorkspace | null {
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;
 
 /**
+ * The address a page's Open in default browser hands to the operating
+ * system's default browser (issue 2293), or null when it offers none: only a
+ * web address, never a `file:` page or another scheme, and not a loopback
+ * page of a checkout on another machine than this window's, whose
+ * `localhost` would be this machine's in the default browser.
+ */
+export function defaultBrowserAddress(address: string, pageDevice: string, windowDevice: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (pageDevice !== windowDevice && LOOPBACK.test(url.host)) return null;
+  return url.href;
+}
+
+/**
  * A local file's absolute path as a `file:` URL, escaped the way Chromium
  * writes a file URL's path (plus `%`), which is also the one spelling the
  * daemon writes back after it checks the path.

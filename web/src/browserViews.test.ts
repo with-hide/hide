@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressShown, addressUrl, browserDisplays, fileUrl, hostKey, isHtmlFile, parseWorkspaceKey, placements, stillFits, stillWanted, withoutClosed } from "./browserViews";
+import { addressShown, addressUrl, browserDisplays, defaultBrowserAddress, fileUrl, hostKey, isHtmlFile, parseWorkspaceKey, placements, stillFits, stillWanted, withoutClosed } from "./browserViews";
 import type { ViewLayoutSnapshot } from "./snapshot";
 import { workspaceKey } from "./viewLayout";
 
@@ -28,6 +28,24 @@ describe("the address field", () => {
     expect(fileUrl("/a/100%/#x?.html")).toBe("file:///a/100%25/%23x%3F.html");
     expect(fileUrl("C:/reports/a b.HTML")).toBe("file:///C:/reports/a%20b.HTML");
     expect(fileUrl("/a/{b}`c\"<d>")).toBe("file:///a/%7Bb%7D%60c%22%3Cd%3E");
+  });
+});
+
+describe("open in default browser", () => {
+  it("hands over a web address and nothing else", () => {
+    expect(defaultBrowserAddress("https://example.com/login?next=/a#b", "mac", "mac")).toBe("https://example.com/login?next=/a#b");
+    expect(defaultBrowserAddress("http://127.0.0.1:3000/", "mac", "mac")).toBe("http://127.0.0.1:3000/");
+    for (const address of ["file:///Users/example/a.html", "about:blank", "slack://open", "javascript:alert(1)", "data:text/html,x", "mailto:a@example.com", "", "not a url"]) {
+      expect(defaultBrowserAddress(address, "mac", "mac")).toBeNull();
+    }
+  });
+
+  it("offers no loopback page of another machine, whose localhost the default browser would read as this one's", () => {
+    for (const address of ["http://localhost:8765/", "http://127.0.0.1:8765/a", "http://[::1]:8765/", "http://0.0.0.0:8765/"]) {
+      expect(defaultBrowserAddress(address, "devbox", "mac")).toBeNull();
+      expect(defaultBrowserAddress(address, "mac", "mac")).not.toBeNull();
+    }
+    expect(defaultBrowserAddress("https://example.com/", "devbox", "mac")).toBe("https://example.com/");
   });
 });
 

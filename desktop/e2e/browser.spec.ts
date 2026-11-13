@@ -820,6 +820,45 @@ test("browser: a sign-in popup keeps its opener, belongs to its page, and a link
   expect((await probe()).asked).toHaveLength(3);
 });
 
+test("browser: Open in default browser hands a web page's address to the system once, and a file page offers none", { tag: "@platform" }, async () => {
+  const local = path.join(fixture.root, "fixture", "local.html");
+  fs.writeFileSync(local, '<!doctype html><meta charset="utf-8"><title>Local page</title><h1>Local</h1>');
+  ({ app } = await launchShell(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await shellPage(app);
+  await enterWorkspace(page, "fixture");
+  // The system's opener is stood in for, so no browser starts.
+  await app.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    (globalThis as { defaultBrowser?: string[] }).defaultBrowser = opened;
+    shell.openExternal = async (url: string) => { opened.push(url); };
+  });
+  const handed = () => app!.evaluate(() => (globalThis as { defaultBrowser?: string[] }).defaultBrowser ?? []);
+
+  const address = `${origin}/signin.html`;
+  expect(await openFromCli(address, ["--wait"])).toMatchObject({ status: 0, ok: true });
+  await viewOf(address);
+  const button = page.locator("[data-browser-open-default]");
+  await expect(button).toBeVisible({ timeout: 20_000 });
+  await expect(button).toHaveAttribute("aria-label", "Open in default browser");
+  await windowShot("browser-open-default");
+  await button.click();
+  await expect.poll(handed).toEqual([address]);
+  // The page stays where it was, and the log names the scheme and host, never the address.
+  expect((await viewOf(address)).visible).toBe(true);
+  const lines = hostLog(run.env).filter((line) => line.event === "link.external");
+  expect(lines).toEqual([expect.objectContaining({ protocol: "http:" })]);
+  expect(JSON.stringify(lines)).not.toContain("signin.html");
+
+  // A `file:` page has no default-browser form, so it offers none.
+  const file = await openFromCli(local, ["--wait"]);
+  expect(file).toMatchObject({ status: 0, ok: true });
+  const toolbar = page.locator(`[data-browser-toolbar="${(file.result as { view_id: string }).view_id}"]`);
+  await expect(toolbar).toBeVisible({ timeout: 20_000 });
+  await expect(toolbar.locator("[data-browser-open-default]")).toHaveCount(0);
+  expect(await handed()).toEqual([address]);
+});
+
 test("new-tab: empty page creates no native renderer and address loads in the same display", async () => {
   ({ app } = await launchShell(run.env));
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
