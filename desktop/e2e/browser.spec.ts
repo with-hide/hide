@@ -821,8 +821,8 @@ test("browser: a sign-in popup keeps its opener, belongs to its page, and a link
 });
 
 test("browser: Open in default browser hands a web page's address to the system once, and a file page offers none", { tag: "@platform" }, async () => {
-  // The checkout's own spelling, as the core registered it (a Windows runner's temp folder can arrive in its short 8.3 form).
-  const local = path.join(fs.realpathSync.native(path.join(fixture.root, "fixture")), "local.html");
+  // An HTML file outside every checkout, built as outside-files.spec.ts builds its own, opens as a page of the window's grant.
+  const local = path.join(fs.realpathSync.native(run.root), "local.html");
   fs.writeFileSync(local, '<!doctype html><meta charset="utf-8"><title>Local page</title><h1>Local</h1>');
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
@@ -851,10 +851,11 @@ test("browser: Open in default browser hands a web page's address to the system 
   expect(lines).toEqual([expect.objectContaining({ protocol: "http:" })]);
   expect(JSON.stringify(lines)).not.toContain("signin.html");
 
-  // A `file:` page has no default-browser form, so it offers none.
+  // A local file's page has no default-browser form, so it offers none.
   const file = await openFromCli(local);
-  expect(file).toMatchObject({ status: 0, ok: true });
-  const toolbar = page.locator(`[data-browser-toolbar="${(file.result as { view_id: string }).view_id}"]`);
+  expect(file, JSON.stringify(file)).toMatchObject({ status: 0, ok: true });
+  await expect(page.locator('[data-view-tab-bar] [role="tab"][data-tab-kind="external"][aria-label*="local.html"]')).toHaveAttribute("data-external", "held");
+  const toolbar = page.locator("[data-browser-toolbar]").filter({ has: page.locator('[data-browser-address="external"]') });
   await expect(toolbar).toBeVisible();
   await expect(toolbar.locator("[data-browser-open-default]")).toHaveCount(0);
   expect(await handed()).toEqual([address]);
