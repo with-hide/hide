@@ -110,6 +110,8 @@ function fixture() {
   write(join(aab, 'base/root/META-INF/x.version'), '1');
   write(join(aab, 'BUNDLE-METADATA/com.android.tools/x'), '1');
   write(join(aab, 'META-INF/UPLOAD.RSA'), 'signature');
+  // The native libraries the release ships on purpose (DataStore's, through Firebase).
+  for (const library of want.nativeLibraries) write(join(aab, 'base/lib', library), 'ELF');
   write(signers, `${want.uploadCertificateSha256}\n`);
   const sha = createHash('sha256').update(PAGE).digest('hex');
   write(join(root, 'manifest.json'), JSON.stringify({ schema: 1, files: { 'index.html': sha, 'p/5/index.html': sha } }));
@@ -178,6 +180,7 @@ describe('the release gate on the signed bundle', () => {
     'the debug test activity in the code': [() => write(join(aab, 'base/dex/classes.dex'), 'dex me/grab/hide/android/ShellTestActivity'), 'holds no debug hook (ShellTestActivity)'],
     'no code': [() => rmSync(join(aab, 'base/dex'), { recursive: true }), 'holds code'],
     'a native library': [() => write(join(aab, 'base/lib/arm64-v8a/libbarhopper_v3.so'), 'ELF'), 'native libraries are exactly'],
+    'a listed native library missing': [() => rmSync(join(aab, 'base/lib', want.nativeLibraries[0])), 'native libraries are exactly'],
     'a web file changed after assembly': [() => write(join(aab, 'base/assets/public/p/5/index.html'), '<html>other</html>'), 'public/p/5/index.html differs'],
     'a web file nobody assembled': [() => write(join(aab, 'base/assets/public/extra.js'), 'x'), 'holds different files'],
     'no web bundle': [() => rmSync(join(aab, 'base/assets/public'), { recursive: true }), 'no assets/public/'],
