@@ -529,8 +529,8 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     const titleRow = card(map, "core").querySelector("[data-node-mark]")!.parentElement!;
     expect([...titleRow.children].map((one) => (one as HTMLElement).dataset.nodeMark !== undefined ? "mark" : (one as HTMLElement).dataset.nodeTitle ? "title" : "other")).toEqual(["mark", "title"]);
     expect(card(map, "core").querySelector("[data-node-run]")?.parentElement).toBe(card(map, "core"));
-    // A worker on another machine names it on its row, beside the band at the card's left.
-    expect([card(map, "away").querySelector("[data-node-run] [data-device-chip]")?.getAttribute("data-device-chip"), card(map, "away").querySelector("[data-node-remote]") !== null]).toEqual(["mini", true]);
+    // A worker on another machine names it in the card's top right corner, never inside its worker row, beside the band at the card's left; a worker here has no corner (operator decision 2026-11-13).
+    expect([card(map, "away").querySelector("[data-node-tab] [data-device-chip]")?.getAttribute("data-device-chip"), card(map, "away").querySelector("[data-node-run] [data-device-chip]"), card(map, "away").querySelector("[data-node-remote]") !== null, card(map, "core").querySelector("[data-node-tab]")]).toEqual(["mini", null, true, null]);
     // A finished node with no launch kept, or a node with no worker, names no model and no mark.
     expect(["ran-unknown", "asked", "next"].map(worker)).toEqual([null, null, null]);
     // A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13, B12).

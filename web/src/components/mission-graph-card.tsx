@@ -19,8 +19,11 @@ const LOOK_CARD: Record<NodeLook, string> = {
 /** A card waiting on the operator wears 내 차례's card colour as a thick border and ring over its look, readable at the map's smallest zoom (PRD mission-node-simple B2). */
 const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20";
 
-/** The same card frame, state, title and touch target on the desktop and phone; its rows stand one spacing token apart, carry no gaps of their own and all start at the card's left edge (PRD mission-destination D-51). */
-export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, failed, title, accessory, children, ...props }: {
+/**
+ * The same card frame, state, title and touch target on the desktop and phone; its rows stand one spacing token apart, carry no gaps of their own and all start at the card's left edge (PRD mission-destination D-51).
+ * A `tab` is a label in the card's top right corner, on a line of its own above the title, so it takes no width from a row and covers no edge that arrives at the card's top; the turn dot stays over its corner.
+ */
+export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, failed, title, accessory, tab, children, ...props }: {
   node: Pick<MissionNode, "key" | "title" | "kind" | "status" | "blocked">;
   look: NodeLook;
   word: string;
@@ -32,6 +35,8 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
   failed?: boolean;
   title?: ReactNode;
   accessory?: ReactNode;
+  /** The device a worker runs on when away from the window (with-hide/hide-private docs/tasks-and-pr-list.md, A mission's map). */
+  tab?: ReactNode;
   children?: ReactNode;
 } & Omit<ComponentProps<typeof Button>, "children" | "title" | "node">) {
   return (
@@ -48,6 +53,7 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
       {...props}
     >
       {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
+      {tab ? <span className="-mt-xs -mr-sm flex min-w-0 justify-end" data-node-tab="true">{tab}</span> : null}
       <span className="flex min-w-0 items-center gap-xs" data-node-head="true">
         <MissionNodeMark look={look} label={word} still={still} failed={failed} />
         {title ?? <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")}>{node.title}</span>}
