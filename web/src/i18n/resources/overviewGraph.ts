@@ -81,6 +81,7 @@ const words = {
   "agentReply.reason.too_long": ["Too long to send in one go", "한 번에 보내기엔 너무 길어요", "一度に送るには長すぎます", "内容过长，无法一次发送"],
   "agentReply.reason.control_characters": ["Control characters cannot be sent", "제어 문자는 보낼 수 없어요", "制御文字は送信できません", "无法发送控制字符"],
   "agentReply.reason.in_flight": ["The last reply is still being sent", "앞의 답을 아직 보내는 중이에요", "前の返信をまだ送信中です", "上一条回复仍在发送"],
+  "agentReply.reason.busy": ["Too many replies are being sent: try again in a moment", "보내는 중인 답이 너무 많아요. 잠시 뒤 다시 보내세요", "送信中の返信が多すぎます。少し待ってから送ってください", "正在发送的回复过多，请稍后再试"],
   "agentReply.reason.offline": ["Hide is not connected: nothing was sent", "Hide와 연결이 끊겨 보내지 않았어요", "Hide に接続されていません。送信していません", "未连接到 Hide，未发送"],
   "agentReply.reason.failed": ["Couldn't send", "보내지 못했어요", "送信できませんでした", "发送失败"],
 } as const;

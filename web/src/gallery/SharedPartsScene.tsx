@@ -45,10 +45,10 @@ const HUMAN_TURN = { id: "gallery.1", kind: "auth", place: "https://github.com/l
 const galleryCopy = async () => true;
 /** One reply field per state it draws (issue 2513), keyed by an invented pane; the gallery's send goes nowhere. */
 const REPLY_FIELDS = {
-  "reply-typed": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, refused: null, at: 1 },
-  "reply-sending": { text: "프로덕션까지 배포해 주세요", session: null, sent: "gallery-request", refused: null, at: 2 },
-  "reply-asleep": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, refused: "asleep", at: 3 },
-  "reply-uncertain": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, refused: "uncertain", at: 4 },
+  "reply-typed": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, sentAt: null, refused: null },
+  "reply-sending": { text: "프로덕션까지 배포해 주세요", session: null, sent: "gallery-request", sentAt: null, refused: null },
+  "reply-asleep": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, sentAt: null, refused: "asleep" },
+  "reply-uncertain": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, sentAt: null, refused: "uncertain" },
 };
 const galleryReply = { replyToAgent: () => null };
 const time = (text: string) => <span className="font-mono text-caption text-muted-foreground">{text}</span>;

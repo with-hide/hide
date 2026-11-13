@@ -21,10 +21,13 @@
 //! is its own receipt in the `pane_replies` section, by request id:
 //! `sending`, then `sent` or `refused` with a reason. A request id the core
 //! already holds a receipt for is never written again; its receipt stands.
-//! The section keeps the newest [`RECEIPTS`] receipts, dropping the oldest
-//! settled one first, so every screen finds its own answer in a coalesced
-//! frame; a screen that finds none for a reply it sent (a restart, a lost
-//! event) reads the result as unknown rather than waiting for it.
+//! The section holds at most [`RECEIPTS`] receipts. Admission keeps at most
+//! [`PENDING`], half of them, still sending (a reply past that is refused as
+//! `busy` before anything is asked), so every receipt still sending stays
+//! and at least as many settled ones fit beside them; past the bound the
+//! oldest settled receipt goes, so every screen finds its own answer in a
+//! coalesced frame. A screen that finds none for a reply it sent (a restart,
+//! a lost event) reads the result as unknown rather than waiting for it.
 
 use super::*;
 use crate::model::{PaneReplyReceipt, ThreadInputState};
@@ -34,9 +37,12 @@ use std::time::Duration;
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The receipts `pane_replies` keeps; a receipt still sending is never
-/// dropped, and at most one per pane is (one write per pane at a time).
+/// The receipts `pane_replies` holds at most (the contract's `maxItems`).
 pub(super) const RECEIPTS: usize = 64;
+/// The receipts that may be sending at once (one per pane, as each pane has
+/// one writing slot): a reply past it is refused as `busy`, so a sending
+/// receipt is never dropped and the newest settled ones keep the rest.
+pub(super) const PENDING: usize = RECEIPTS / 2;
 
 /// The Overview's reply to an agent (`pane_reply`): `text` and Enter into
 /// the pane of `pane_id`, the core pane id of an agent Hide observes, while
@@ -190,7 +196,13 @@ impl Runtime {
         let refusal = session_thread::input_problem(&payload.text, &[])
             .map(Err)
             .unwrap_or(target);
-        let target = match refusal {
+        let target = match refusal.and_then(|target| {
+            if self.pending_pane_replies() < PENDING {
+                Ok(target)
+            } else {
+                Err("busy")
+            }
+        }) {
             Ok(target) => target,
             Err(reason) => {
                 return self.settle_pane_reply(&payload.pane_id, &payload.request_id, Err(reason));
@@ -298,6 +310,16 @@ impl Runtime {
             Err(reason) => (ThreadInputState::Refused, Some(reason)),
         };
         self.set_pane_reply(pane_id, request_id, state, reason)
+    }
+
+    fn pending_pane_replies(&self) -> usize {
+        self.snapshot.pane_replies.as_deref().map_or(0, |section| {
+            section
+                .receipts
+                .iter()
+                .filter(|held| held.state == ThreadInputState::Sending)
+                .count()
+        })
     }
 
     fn pane_reply_receipt(&self, request_id: &str) -> Option<&PaneReplyReceipt> {
@@ -617,14 +639,30 @@ mod tests {
     }
 
     /// Every request keeps its own receipt, so an answer published in the
-    /// same frame as a later one is still there; past the cap the oldest
-    /// settled receipts go and one still sending stays.
+    /// same frame as a later one is still there. At most half the receipts
+    /// may be sending: one past that is refused as busy before anything is
+    /// asked, every sending receipt stays, and the newest settled ones fill
+    /// the rest of the bound.
     #[test]
-    fn each_reply_keeps_its_own_receipt_up_to_the_cap_and_a_sending_one_is_never_dropped() {
-        let mut runtime = crate::runtime::tests::runtime();
-        runtime.set_pane_reply("w1:p1", REPLY, ThreadInputState::Sending, None);
+    fn sending_receipts_are_admitted_up_to_half_the_bound_and_never_dropped() {
+        let terminals = Arc::new(GrantingTerminals::default());
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            panic!("a busy core asks the engine nothing, asked {method}");
+        });
+        let mut runtime = live(&fake, &terminals);
         let id = |index: usize| format!("00000000-0000-4000-8000-{index:012}");
-        for index in 0..RECEIPTS + 5 {
+        for index in 0..PENDING {
+            runtime.set_pane_reply(
+                &format!("w{index}:p1"),
+                &id(index),
+                ThreadInputState::Sending,
+                None,
+            );
+        }
+        runtime.send_pane_reply(reply("w1:p1", REPLY, "계속"));
+        assert_eq!(answer(&runtime, REPLY), refused("busy"));
+        assert!(terminals.permits.lock().unwrap().is_empty());
+        for index in PENDING..PENDING + RECEIPTS + 5 {
             runtime.set_pane_reply(
                 "w2:p1",
                 &id(index),
@@ -634,16 +672,24 @@ mod tests {
         }
         let receipts = &runtime.snapshot.pane_replies.as_ref().unwrap().receipts;
         assert_eq!(receipts.len(), RECEIPTS);
-        assert_eq!(receipts[0].request_id, REPLY, "the sending receipt stays");
-        assert!(answer(&runtime, &id(5)).is_none());
-        assert!(answer(&runtime, &id(6)).is_some());
-        assert!(answer(&runtime, &id(RECEIPTS + 4)).is_some());
+        assert!((0..PENDING).all(|index| {
+            answer(&runtime, &id(index))
+                .is_some_and(|(_, state, _)| state == ThreadInputState::Sending)
+        }));
+        assert!(
+            answer(&runtime, &id(PENDING + RECEIPTS + 4)).is_some(),
+            "the newest settled receipt is kept"
+        );
+        assert!(
+            answer(&runtime, REPLY).is_none(),
+            "the oldest settled receipt went first"
+        );
         // Settling keeps the receipt's place; an unchanged section is not published.
-        assert!(runtime.set_pane_reply("w1:p1", REPLY, ThreadInputState::Sent, None));
+        assert!(runtime.set_pane_reply("w0:p1", &id(0), ThreadInputState::Sent, None));
         assert_eq!(
             runtime.snapshot.pane_replies.as_ref().unwrap().receipts[0].state,
             ThreadInputState::Sent
         );
-        assert!(!runtime.set_pane_reply("w1:p1", REPLY, ThreadInputState::Sent, None));
+        assert!(!runtime.set_pane_reply("w0:p1", &id(0), ThreadInputState::Sent, None));
     }
 }

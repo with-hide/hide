@@ -1,5 +1,5 @@
 import { ArrowUpIcon, LoaderCircleIcon } from "lucide-react";
-import { useAgentReply } from "../agentReply";
+import { REPLY_MAX_LENGTH, useAgentReply } from "../agentReply";
 import type { Actions } from "../actions";
 import type { MessageKey } from "../i18n/catalogs";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -10,7 +10,7 @@ import { Input } from "./ui/input";
 import { Hint } from "./ui/tooltip";
 
 /** The refusals the field words itself; any other reads as a plain failure. */
-const REASONS = new Set(["pane_gone", "pane_changed", "session_changed", "unknown", "asleep", "input_refused", "unavailable", "device_unreachable", "uncertain", "too_long", "control_characters", "in_flight", "offline"]);
+const REASONS = new Set(["pane_gone", "pane_changed", "session_changed", "unknown", "asleep", "input_refused", "unavailable", "device_unreachable", "uncertain", "too_long", "control_characters", "in_flight", "busy", "offline"]);
 
 /**
  * A one-line reply to an agent without opening its session (the Overview's
@@ -32,6 +32,7 @@ export function AgentReplyField({ paneId, session, name, actions, className }: {
           aria-label={t("agentReply.label", { name })}
           aria-invalid={reason ? true : undefined}
           placeholder={t("agentReply.placeholder")}
+          maxLength={REPLY_MAX_LENGTH}
           value={reply.text}
           readOnly={reply.sending}
           onChange={(event) => reply.setText(event.target.value)}

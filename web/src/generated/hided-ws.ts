@@ -888,7 +888,7 @@ export interface PaneReplyPayload {
   session?: string | null;
 }
 /**
- * The `pane_replies` snapshot section: one receipt per `pane_reply` request, oldest first, at most 64; past that the oldest settled receipt goes and a receipt still sending stays. A screen that finds no receipt for a reply it sent (a daemon restart, a lost event) treats the result as unknown rather than waiting for it.
+ * The `pane_replies` snapshot section: one receipt per `pane_reply` request, oldest first, at most 64. At most 32 may be sending at once (a reply past that is refused as `busy` before anything is asked), so every receipt still sending stays; past 64 the oldest settled receipt goes. A screen that finds no receipt for a reply it sent (a daemon restart, a lost event) treats the result as unknown rather than waiting for it.
  */
 export interface PaneRepliesSection {
   /**
@@ -902,7 +902,7 @@ export interface PaneRepliesSection {
      */
     state: "sending" | "sent" | "refused";
     /**
-     * A stable refusal code: empty, too_long, control_characters, pane_gone, pane_changed, session_changed, in_flight, asleep, input_refused, unavailable, device_unreachable, uncertain.
+     * A stable refusal code: empty, too_long, control_characters, pane_gone, pane_changed, session_changed, in_flight, busy, asleep, input_refused, unavailable, device_unreachable, uncertain.
      */
     reason?: string;
   }[];

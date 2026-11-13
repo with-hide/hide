@@ -1097,8 +1097,8 @@ A `pane_reply` whose `session` is not the one the pane runs is refused before an
 The phone's reply keeps its own path in hided (`hided/src/mobile/pane.rs`), for its per-phone claims on request ids; the steps are the same.
 The text is checked as a thread's input is (empty, 16 KiB, control characters other than a new line and a tab).
 The answer is the request's receipt in the `pane_replies` snapshot section, on its own revision: `{request_id, pane_id, state: sending | sent | refused, reason}`, oldest first, so each window reads its own request in any frame, a coalesced one included; a request id the core holds a receipt for is never written again, so a repeat while sending or after it converges on that receipt.
-The section keeps the newest 64 receipts, dropping the oldest settled one first and never one still sending (at most one per pane), and an unchanged section is not published.
-The receipts live in memory only: a screen that finds no receipt for a reply it sent within 15 s (a daemon restart, a lost event) shows the result as unknown with its words kept, never as sending for ever (`web/src/agentReply.ts`).
+The section holds at most 64 receipts: admission keeps at most 32 sending (one per pane, a reply past that refused as `busy` before anything is asked), so no receipt still sending is ever dropped, and past 64 the oldest settled receipt goes; an unchanged section is not published.
+The receipts live in memory only. The web shell's store, not the field on screen, settles each draft from its receipt and runs one timer for the replies still waiting, so a draft whose field has unmounted settles too, and a reply with no receipt within 15 s (a daemon restart, a lost event) shows as unknown with its words kept, never as sending for ever (`web/src/agentReply.ts`).
 
 ## The link record
 
