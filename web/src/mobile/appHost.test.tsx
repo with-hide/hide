@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { VersionScreen } from "./HostList";
 import { renderMarkdown } from "./markdown";
 import { useLoaderTranslation } from "./loaderTranslation";
-import { appHost, serviceWorkerAllowed } from "./appHost";
+import { appHost, appPlatform, appPushAvailable, serviceWorkerAllowed } from "./appHost";
 
 function inApp(protocol: string) {
   vi.stubGlobal("location", { ...window.location, protocol, pathname: "/" });
@@ -46,5 +46,39 @@ describe("the page inside the iOS app", () => {
     inApp("capacitor:");
     expect(draw()).not.toMatch(/<a [^>]*href="http:/);
     expect(draw()).toContain('href="https://example.com/b"');
+  });
+});
+
+describe("the page inside the Android app", () => {
+  const at = (origin: string, platform: string | null) => {
+    const url = new URL(origin);
+    vi.stubGlobal("location", { ...window.location, protocol: url.protocol, origin: url.origin, pathname: "/" });
+    if (platform) vi.stubGlobal("Capacitor", { getPlatform: () => platform });
+  };
+
+  it("is the app's own origin where Capacitor says Android, and then registers no service worker and has no notifications", () => {
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {} });
+    at("https://localhost", "android");
+    expect(appPlatform()).toBe("android");
+    expect(appHost()).toBe(true);
+    expect(serviceWorkerAllowed()).toBe(false);
+    expect(appPushAvailable()).toBe(false);
+  });
+
+  it("is a browser page anywhere else, or without Capacitor's word for Android", () => {
+    at("https://app.withhide.dev", "android");
+    expect(appHost()).toBe(false);
+    vi.unstubAllGlobals();
+    at("https://localhost", "web");
+    expect(appHost()).toBe(false);
+    vi.unstubAllGlobals();
+    at("https://localhost", null);
+    expect(appPlatform()).toBeNull();
+  });
+
+  it("leaves the notifications of the iOS app where they are", () => {
+    inApp("capacitor:");
+    expect(appPlatform()).toBe("ios");
+    expect(appPushAvailable()).toBe(true);
   });
 });
