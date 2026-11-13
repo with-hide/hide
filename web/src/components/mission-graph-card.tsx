@@ -21,7 +21,7 @@ const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20
 
 /**
  * The same card frame, state, title and touch target on the desktop and phone; its rows stand one spacing token apart, carry no gaps of their own and all start at the card's left edge (PRD mission-destination D-51).
- * A `tab` stands on the card's top edge near its right end, outside the card like a folder's tab and clear of the turn dot, so it takes no width or height from the card; it stands above the map's edges, so a line that arrives from above passes behind it instead of over its words.
+ * A `tab` stands on the card's top edge flush with its right side, outside the card like a folder's tab, the card's corner under it square, so it takes no width or height from the card; it stands above the map's edges, so a line that arrives from above passes behind it instead of over its words, and the turn dot stays over its corner.
  */
 export function MissionGraphCard({ node, look, word, yours, selected = false, dimmed = false, still, failed, title, accessory, tab, children, ...props }: {
   node: Pick<MissionNode, "key" | "title" | "kind" | "status" | "blocked">;
@@ -48,12 +48,12 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
       className={cn(
         "relative flex h-auto w-(--size-mission-node) min-w-0 min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-md border bg-card px-sm py-xs text-left font-normal text-foreground hover:text-foreground whitespace-normal outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
         yours ? ATTENTION_CARD : LOOK_CARD[look], node.kind === "external" && "border-dotted",
-        selected && "outline-2 outline-offset-2 outline-primary", dimmed && "opacity-(--opacity-dimmed)",
+        tab && "rounded-tr-none", selected && "outline-2 outline-offset-2 outline-primary", dimmed && "opacity-(--opacity-dimmed)",
       )}
       {...props}
     >
-      {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
-      {tab ? <span className="absolute right-md bottom-full z-10 flex min-w-0 max-w-[calc(var(--size-mission-node)/2)]" data-node-tab="true">{tab}</span> : null}
+      {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs z-20 size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
+      {tab ? <span className="absolute -right-px bottom-full z-10 flex min-w-0 max-w-[calc(var(--size-mission-node)/2)]" data-node-tab="true">{tab}</span> : null}
       <span className="flex min-w-0 items-center gap-xs" data-node-head="true">
         <MissionNodeMark look={look} label={word} still={still} failed={failed} />
         {title ?? <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")}>{node.title}</span>}
