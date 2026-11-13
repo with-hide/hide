@@ -4607,6 +4607,40 @@ The loader reads that intent alongside the saved computers and chooses the desti
 The web view uses the launch background and seeds the page's stored light/dark choice before styles can paint; the page's settings subscriber owns later theme changes.
 The build is in [BUILD.md](BUILD.md#the-ios-app).
 
+### The Android app host
+
+`mobile/android/` is the same host for Android: a Capacitor project beside the iOS one that shares `mobile/capacitor.config.json`, `assemble.mjs` and `retained-bundles.json`, so the web folder it serves is the iOS app's, and owns nothing of the phone's behavior either.
+It is `me.grab.hide.android`, for Android 9 (API 28) and later, compiled for and targeting API 36, and its version is `mobile/android/version.json`.
+Capacitor serves the folder from `https://localhost`; `appPlatform()` in `web/src/mobile/appHost.ts` reads the Android app from that origin together with Capacitor's own answer that the platform is Android, so `appHost()` holds there as in the iOS app and every difference above follows it.
+The Android app has no notifications yet: the page never calls a push plugin there (`appPushAvailable()`), and Settings shows notifications as not available on Android in place of the switch.
+Its native code is `mobile/android/app/src/main/java/me/grab/hide/android/`, whose types carry the iOS names where they do the same job.
+
+The bridge: Capacitor answers the page through a web message listener named `androidBridge`, falls back to a Java object in every frame when the web view lacks that listener, and puts two Java objects of its own plugins (cookies and HTTP) into every frame; it loads any plugin a call names.
+`BridgeGate` removes the three Java objects and Capacitor's listener and registers itself under the same name for the app's own origin only, and passes a message on only when it comes from the main frame, is a plugin call or the page's error report, and names a plugin in `BridgeGate.APP_PLUGINS` (`HideKeychain`, `HideScanner`, `HideApp`; there is no `Console`, since Capacitor's Android bridge sends the console to the system log without a plugin).
+`mobile/scripts/check-versions.mjs` fails when that list and the app's `@CapacitorPlugin` classes differ, when `capacitor.settings.gradle` names a project beside Capacitor's own library (an npm plugin `cap sync` found), when the app applies `capacitor.build.gradle` (through which `cap sync` links a plugin's library) and when the app links a library outside its fixed list.
+A web view without the web message listener gets no bridge at all: the app shows its own page asking for an updated Android System WebView, with a link to it on Google Play.
+The gate is in place before the page is loaded again, because a Java object stays in a page until its next load.
+`BridgeGateWebViewTest`, an instrumented test in a real web view, proves that a same-origin frame and a sandboxed frame reach neither a plugin nor the cookie object while the main frame's call passes, and fails when the gate's install goes.
+
+The navigation: `ShellWebViewClient` puts `NavigationPolicy` in front of Capacitor's client, the same rule as iOS: the app's origin loads inside, an `https` address goes to Capacitor, which opens it outside, and every other scheme is cancelled (Capacitor would hand `tel:`, `intent:` or another app's scheme to the system).
+The web view makes no second window, so `window.open` and a link with a target reach the same rule as a navigation.
+`PhoneRouter` answers `/p/<n>/` with that bundle's `index.html`, where Capacitor's local server would answer the root page.
+
+The pairing credential is kept by `HideKeychain` (`PairingStore`): Android has no keychain for a small secret, so each computer's item is a file named by its room in the app's no-backup folder, sealed with AES-GCM under one Android Keystore key that never leaves the Keystore and works only while the phone is unlocked, with the room as the cipher's associated data, so a file moved to another room's name does not open.
+The calls and their checks are iOS's (`save`, `read`, `remove`, `list`, at most 16 items), and an item is written beside its file and moved over it.
+The folder and the key go with the app when it is deleted, so nothing of an earlier install is left to clear; the app also turns backup off (`allowBackup` false and data extraction rules that exclude every domain from cloud backup and device transfer).
+`PairingStoreKeystoreTest` runs on a device against the real Keystore.
+
+`HideScanner` uses Google's code scanner (`play-services-code-scanner`): Google Play services draws the camera view, so the app asks for no camera permission, and the call returns only the text of a code that is a Hide pairing link (`PairLink.accept`), scanning again when it is not.
+A pairing link opens the app as an App Link (`https://app.withhide.dev`, path `/`, `autoVerify`; the `assetlinks.json` the hosted site will serve is not part of this app); `ShellActivity` hands it to `PairLinkInbox` and takes it off the intent before Capacitor sees it, on a launch and on a new intent alike.
+The inbox is iOS's: the exact link form, at most 1024 bytes, kept one minute and given out once, to the page's `takeLink`.
+
+`HideApp.appearance` sets the system bars' icons to the page's light or dark and the color behind them; Capacitor's `SystemBars` leaves room for the bars and the keyboard, by letting the page draw under the bars on a web view of version 140 or later, which reports `env(safe-area-inset-*)`, and by padding the window on an older one, where the native color behind the bars is the page's background in its default color theme.
+The system back presses the page's visible `data-phone-back` button, within the top open sheet, closes a sheet with no back button as Escape does, and with nothing to go back to moves the app to the background; the page keeps owning its back action, as on iOS.
+A phone (smallest width under 600 dp) stays upright.
+The release build has no cleartext traffic, no web view debugging, no Capacitor logging and no advertising id permission; a debug build allows cleartext to `127.0.0.1` for a relay fixture and has the debug inputs (`src/debug`, `DebugInputs`) the build script's `run` uses, which a release build does not contain.
+The build is in [BUILD.md](BUILD.md#the-android-app).
+
 ### The desktop host
 
 `desktop/` is the Electron app this repository ships: it shows the web shell hided serves in its own window, holds no UI state and embeds no daemon.

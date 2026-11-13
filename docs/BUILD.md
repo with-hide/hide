@@ -876,6 +876,50 @@ A desktop that speaks a newer phone protocol than any bundle inside the app make
 So a protocol bump and an app release take this order: raise `PHONE_PROTOCOL` and release the desktop, whose candidate uploads the new `p/<n>/` to the hosted site; build the app from that main (the assembler picks the new bundle up from source, and the previous protocol is pinned in a pull request of its own with `pnpm --dir mobile pin` before the app is built); submit it and wait for approval; and only then ship the desktop that speaks the new protocol to users, because until the app is approved an iOS phone stays on the version screen.
 Raising a protocol number for an addition is not needed ([ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion)), which keeps this order for the rare change an older side would misread.
 
+## The Android app
+
+`mobile/android/` is the Capacitor host that carries the phone web app inside an Android app (`me.grab.hide.android`, Android 9 or later, compiled for and targeting API 36); [ARCHITECTURE.md](ARCHITECTURE.md#the-android-app-host) owns what it is.
+It builds with the same web folder as the iOS app, and its emulator runs on the Mac mini, beside the iOS simulator, so nothing about the build needs node or Rust there.
+Its version is `mobile/android/version.json`, which `app/build.gradle` reads and checks as `X.Y.Z`; signing, the version code for the store and the upload are not part of this build yet.
+
+### Setting up the build machine
+
+The mini holds, under its own account and nothing system-wide but Homebrew's packages:
+
+1. `brew install openjdk@21 android-commandlinetools` (Gradle 8.14 and the Android Gradle plugin 8.13 run on JDK 21);
+2. an SDK in `~/Library/Android/sdk`: `sdkmanager --sdk_root="$HOME/Library/Android/sdk" --install "cmdline-tools;latest" platform-tools "platforms;android-36" "build-tools;36.0.0" emulator "system-images;android-36;google_apis_playstore;arm64-v8a"`, then `sdkmanager --licenses`;
+3. one emulator, `avdmanager create avd -n hide-android -k "system-images;android-36;google_apis_playstore;arm64-v8a" -d pixel_7`; the Play Store image carries Google Play services, which the code scanner needs.
+
+Together they take about 7 GB (the SDK about 4 GB, the emulator's disk about 2 GB).
+The scripts name these paths themselves (`mobile/scripts/mini-android.sh`), so no shell profile on the mini changes.
+
+### Building and running
+
+`bash mobile/scripts/build-android.sh` is the one command.
+It runs, on this machine, the phone build, `check-versions.mjs` and `assemble.mjs` as the iOS build does, then `cap sync android`, and copies `mobile/android/` and the Capacitor library it names (from `node_modules`, at the same place relative to it) to `~/hide-android-build/<branch>/` on the machine named by `HIDE_ANDROID_BUILD_HOST` (default `mini`).
+There `mini-android.sh`, piped over `ssh`, runs `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` (the JVM tests and the debug app), boots the emulator, installs the app and its instrumented tests and runs them in the app's own process with its real web view (`BridgeGateWebViewTest`, `PairingStoreKeystoreTest`); a failing test fails the command.
+`HIDE_ANDROID_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`.
+
+`bash mobile/scripts/build-android.sh run` installs the built debug app, launches it, waits `HIDE_ANDROID_SETTLE` seconds (default 15) and captures the screen; `HIDE_ANDROID_CAPTURE=<file.png>` copies the capture back, with the app's log beside it as `<file>.log`.
+A pairing link on its standard input (`printf '%s' "$link" | bash mobile/scripts/build-android.sh run`) reaches the app as the App Link a camera would open, and Connect is pressed once the page asks, since an emulator has no camera to point at a screen; the link is in no argument and in no file on the mini.
+`HIDE_ANDROID_TAPS` presses, fills and scrolls to elements of the page as `HIDE_IOS_TAPS` does, and `HIDE_ANDROID_APPEARANCE=light|dark` sets the emulator's appearance.
+The link, the taps and the clock are read by the debug build only (`app/src/debug/`); the release build has an empty stand-in.
+`bash mobile/scripts/build-android.sh clean` deletes the branch's folder there.
+
+For a relay fixture, start `target/debug/hide-relay --listen 127.0.0.1:<port>` and a candidate hided with `HIDE_RELAY_URL=ws://127.0.0.1:<port>/ws` on this machine, and pass `HIDE_ANDROID_RELAY_PORT=<port>` to `build` and each `run`: the phone build connects to `ws://127.0.0.1:<port>/ws`, the assembly admits only that endpoint, SSH forwards the port to the mini and `adb reverse` forwards the emulator's port to it.
+Only a debug build may reach cleartext `127.0.0.1`; a release build refuses cleartext traffic.
+A pairing code lives five minutes, so show it right before the `run`.
+
+One emulator runs on the mini at a time: a command takes a lock folder (`~/hide-android-build/.emulator.lock`, holding its pid), waits for it up to ten minutes and then refuses, naming the command that holds it; a lock whose owner is gone is taken over.
+Everything a command starts it ends on every exit, a failure included: the emulator it booted (`emu kill`, then a signal), the adb server it started on a port of its own (5039, so an adb another program runs is never touched), the port it reversed and the lock.
+The app's data stays in the emulator between runs, so a pairing survives a restart of the app and of the emulator; the instrumented tests of a `build` remove the pairing items they test, so pair again after a `build`.
+Each branch's state is one folder of about 0.25 GB; once 4 other branches hold a folder there, the build refuses and prints them, as the iOS build does.
+Gradle's download cache is the mini account's own `~/.gradle`, shared by every branch, and Gradle runs without its daemon, so nothing of a build stays running.
+
+### In CI
+
+The `Android app` lane of `pr.yml` runs the JVM tests and a debug build on Linux, on the runner's own Android SDK, for a change under `mobile/android/` ([TESTING.md](TESTING.md#how-many-jobs-a-run-starts)); the instrumented tests need an emulator and run only through `build` above.
+
 ## Mobile relay server
 
 Installing, updating and operating the production relay is owned by a private operations document, not this guide.
