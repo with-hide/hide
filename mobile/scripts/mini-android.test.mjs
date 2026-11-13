@@ -88,11 +88,11 @@ wait
     const next = spawnSync('bash', [script, 'run', 'branch'], { encoding: 'utf8', env: env({ HIDE_ANDROID_SETTLE: '0' }), timeout: 90000 });
     expect(next.status, next.stdout + next.stderr).toBe(0);
 
-    // The next run ended the leftover adb server before it started its own, and its own last of all.
+    // The next run ended the leftover emulator the graceful way (its disk synced, then its console's kill) and the
+    // leftover adb server before it started its own, and its own last of all.
     const calls = lines('adb.log').slice(before);
-    expect(calls[0]).toBe('kill-server');
-    expect(calls[1]).toBe('start-server');
-    expect(calls.at(-1)).toBe('kill-server');
+    expect(calls.slice(0, 4)).toEqual(['-s emulator-5584 shell sync', '-s emulator-5584 emu kill', 'kill-server', 'start-server']);
+    expect(calls.slice(-3)).toEqual(['-s emulator-5584 shell sync', '-s emulator-5584 emu kill', 'kill-server']);
     const everything = [left, leftChild, leftServer, ...emulators()[1]];
     expect(emulators()).toHaveLength(2);
     await until('every emulator and adb server to be gone', () => !everything.some(alive), 15000).catch((error) => {

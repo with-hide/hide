@@ -39,6 +39,8 @@ settle=${HIDE_ANDROID_SETTLE:-15}
 # however it ends. Every program that may outlive the shell starts with 9>&- (each adb and sleep through these functions,
 # the emulator, Gradle, tee), so none keeps the lock after the run.
 adb() { "$adb_bin" "$@" < /dev/null 9>&-; }
+# An adb call to a device that may not answer (one being ended), bounded so a hung device cannot hold the run.
+adb_within() { local seconds=$1; shift; perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die' -- "$seconds" "$adb_bin" "$@" < /dev/null 9>&-; }
 pause() { sleep "$1" 9>&-; }
 started_at() { ps -o lstart= -p "$1" 2> /dev/null | sed 's/^ *//; s/ *$//' || true; }
 
@@ -51,12 +53,7 @@ cleanup() {
     local exit_status=$?
     if [[ -n "$reversed" ]]; then adb -s "$serial" reverse --remove "tcp:$reversed" > /dev/null 2>&1 || true; fi
     if [[ -n "$emulator_pid" ]]; then
-        # `emu kill` ends the emulator without the device's own shutdown: what the device has not written to its disk yet
-        # is lost, and a half-written file (the web view's storage database) loses every later write on each start.
-        adb -s "$serial" shell sync > /dev/null 2>&1 || true
-        adb -s "$serial" emu kill > /dev/null 2>&1 || true
-        for _ in $(seq 1 30); do kill -0 "$emulator_pid" 2> /dev/null || break; pause 1; done
-        end_group "$emulator_pid" "$emulator_started"
+        end_emulator "$emulator_pid" "$emulator_started"
         wait "$emulator_pid" 2> /dev/null || true
     fi
     if [[ "$adb_started" == 1 ]]; then adb kill-server > /dev/null 2>&1 || true; fi
@@ -71,6 +68,18 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# Ends an emulator gracefully: its disk synced, since `emu kill` skips the device's own shutdown and what the device has
+# not written yet is lost (a half-written file, the web view's storage database, then loses every later write on each
+# start), then `emu kill` and up to 30 s to exit. A signal to its process group only for one that will not stop.
+end_emulator() {
+    local pid=$1 started=$2
+    [[ -n "$started" && "$(started_at "$pid")" == "$started" ]] || return 0
+    adb_within 20 -s "$serial" shell sync > /dev/null 2>&1 || true
+    adb_within 20 -s "$serial" emu kill > /dev/null 2>&1 || true
+    for _ in $(seq 1 30); do [[ "$(started_at "$pid")" == "$started" ]] || return 0; pause 1; done
+    end_group "$pid" "$started"
+}
 
 # Ends the process group of a recorded leader while that leader is still the same process (its pid and start time), so
 # a pid reused since is never signalled.
@@ -119,7 +128,7 @@ take_lock() {
     if [[ -s "$record" ]]; then
         local pid started
         read -r pid started < "$record"
-        end_group "$pid" "$started"
+        end_emulator "$pid" "$started"
     fi
     rm -f "$record"
     adb kill-server > /dev/null 2>&1 || true
