@@ -34,7 +34,7 @@ import {
   nodeLook,
   nodeQuestion,
   nodeSteps,
-  nodeWork,
+  nodePace,
   nodeResumable,
   openAttention,
   ownCriteria,
@@ -131,7 +131,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   ];
   return (
     <MapPanelHead
-      mark={<MissionNodeMark look={look} label={markWord(node, look, t)} still={(nodeWork(mission, node)?.state ?? "working") !== "working"} />}
+      mark={<MissionNodeMark look={look} label={markWord(node, look, t)} pace={nodePace(mission, node)} />}
       title={node.title}
       ways={<WorkerWays mission={mission} node={node} actions={actions} />}
       close={t("mission.panel.close")}

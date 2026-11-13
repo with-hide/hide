@@ -10513,14 +10513,16 @@ mod wire_enum_tests {
                     cause: None,
                     since_unix_ms: 0,
                 },
-                NodeWork::NoWorker,
+                NodeWork::NoWorker {
+                    since_unix_ms: None,
+                },
             ];
             for variant in &work {
                 match variant {
                     NodeWork::Working
                     | NodeWork::Waiting { .. }
                     | NodeWork::Stopped { .. }
-                    | NodeWork::NoWorker => {}
+                    | NodeWork::NoWorker { .. } => {}
                 }
             }
             let states: Vec<String> = work

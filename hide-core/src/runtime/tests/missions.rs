@@ -9293,6 +9293,10 @@ fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
     // It went to work two hours ago, so a push read now is after it.
     let worked = crate::runtime::unix_milliseconds() - 120 * minute;
     runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms = Some(worked);
+    // No worker is bound here: the first judgment times the node as one no
+    // worker stands for, which the map draws from then, and warns nothing.
+    assert!(runtime.warn_missions(worked));
+    assert_eq!(warnings_of(&runtime).0, []);
     assert!(!runtime.warn_missions(worked + 89 * minute));
     assert!(runtime.warn_missions(worked + 90 * minute));
     let (kinds, letters) = warnings_of(&runtime);
@@ -9544,7 +9548,22 @@ fn a_node_in_progress_says_whether_its_worker_works_waits_or_is_gone() {
         json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
     )
     .unwrap();
-    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::NoWorker {
+            since_unix_ms: None
+        }),
+        "no warning judgment has seen it yet"
+    );
+    runtime.warn_missions(STOPPED_SINCE);
+    runtime.warn_missions(STOPPED_SINCE + 3 * MINUTE);
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::NoWorker {
+            since_unix_ms: Some(STOPPED_SINCE)
+        }),
+        "timed from the first judgment that saw it, not the latest"
+    );
     command(
         &mut runtime,
         "sender",
@@ -9586,7 +9605,14 @@ fn a_node_in_progress_says_whether_its_worker_works_waits_or_is_gone() {
         .unwrap()
         .ended = true;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+    runtime.warn_missions(STOPPED_SINCE + 10 * MINUTE);
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::NoWorker {
+            since_unix_ms: Some(STOPPED_SINCE + 10 * MINUTE)
+        }),
+        "a worker that ended is timed from the judgment that saw it gone"
+    );
 }
 
 /// When the `fix` node's worker (`agent-2`, the `recipient` pane) rests in

@@ -245,12 +245,13 @@ function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageK
 
 /**
  * A node's state as the head's and the chip's cells colour it (PRD
- * mission-node-simple D-01, D-02, B5): waiting, in progress, done, and a
- * node someone has to look at in the decision colour (`hold`). A node that
- * cannot start yet waits; once the mission is cancelled, a node it never
- * finished is cancelled, and a dropped node left the plan, so it has no cell.
+ * mission-node-simple D-01, D-02, B5): waiting, in progress, stopped (in
+ * progress with no one moving it, `nodePace`), done, and a node someone has
+ * to look at in the decision colour (`hold`). A node that cannot start yet
+ * waits; once the mission is cancelled, a node it never finished is
+ * cancelled, and a dropped node left the plan, so it has no cell.
  */
-export type NodeTone = "done" | "working" | "hold" | "waiting" | "cancelled" | "dropped";
+export type NodeTone = "done" | "working" | "stopped" | "hold" | "waiting" | "cancelled" | "dropped";
 
 export function nodeTone(mission: Pick<Mission, "status">, node: MissionNodeBrief): NodeTone {
   if (node.status === "dropped") return "dropped";
@@ -261,7 +262,7 @@ export function nodeTone(mission: Pick<Mission, "status">, node: MissionNodeBrie
     case "done":
       return "done";
     case "working":
-      return "working";
+      return nodePace(mission, node) === "stopped" ? "stopped" : "working";
     case "planned":
       return "waiting";
   }
@@ -291,12 +292,12 @@ export function missionCells(mission: MissionBrief): CellTone[] {
  * someone has to look at in the decision colour (PRD mission-node-simple B5);
  * dropped nodes have none.
  */
-export type HeadCell = Exclude<NodeLook, "dropped"> | "attention";
+export type HeadCell = Exclude<NodeLook, "dropped"> | "attention" | "stopped";
 export function missionHeadCells(mission: Mission): HeadCell[] {
   return orderedNodes(mission).flatMap((node): HeadCell[] => {
     const look = nodeLook(mission, node);
     if (look === "dropped") return [];
-    return [openAttention(mission, node) ? "attention" : look];
+    return [openAttention(mission, node) ? "attention" : nodePace(mission, node) === "stopped" ? "stopped" : look];
   });
 }
 
@@ -477,6 +478,30 @@ export function nodeLook<N extends Pick<MissionNode, "status" | "kind" | "blocke
   if (node.blocked || node.status === "planned") return "waiting";
   // A worker Hide put to sleep leaves its node in progress (PRD mission-node-simple D-01, B1): its sleep is the panel's and the mark's hover words.
   return "working";
+}
+
+/**
+ * How a node in progress moves now, which its ring, its card's frame, its
+ * current step's cell, its head cell and its edges draw alike, on the desktop
+ * and the phone (operator decision 2026-11-13): `working` while its worker
+ * works or Hide cannot read its row, `waiting` while its worker rests on
+ * someone or sleeps, `stopped` while its worker stopped with nothing to wait
+ * on or no worker stands for it. Null for a node not in progress.
+ */
+export type NodePace = "working" | "waiting" | "stopped";
+export function nodePace(mission: Pick<Mission, "status">, node: Pick<MissionNodeBrief, "status" | "kind" | "blocked" | "agent_runtime" | "work">): NodePace | null {
+  if (nodeLook(mission, node) !== "working") return null;
+  const state = node.work?.state;
+  if (state === "stopped" || state === "no_worker") return "stopped";
+  if (state === "waiting" || workerAsleep(node)) return "waiting";
+  return "working";
+}
+
+/** When a stopped node stopped: its worker's stop, or when no worker stood for it; null while the core has not timed it. */
+export function stoppedSince(work: MissionNodeWork | null | undefined): number | null {
+  if (work?.state === "stopped") return work.since_unix_ms;
+  if (work?.state === "no_worker") return work.since_unix_ms ?? null;
+  return null;
 }
 
 /** Whether the core found a node's work in main (B17, B19). */
@@ -779,13 +804,13 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `일꾼 없음`; a stop's age is the card's, at the line's end. */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
       return t("mission.work.working");
     case "no_worker":
-      return t("mission.work.noWorker");
+      return t("mission.work.stopped", { why: t("mission.work.stop.noWorker") });
     case "waiting":
       return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
     case "stopped":
@@ -817,8 +842,13 @@ function waitingOnWord(on: MissionWaitingOn, t: TFunction<"translation">): strin
   }
 }
 
-/** A step's state on the map: finished, being worked, or only planned (the worker has not reached it). */
-export type StepTone = "done" | "working" | "plan";
+/** A step's state on the map: finished, being worked, stopped at (its node's pace is `stopped`), or only planned (the worker has not reached it). */
+export type StepTone = "done" | "working" | "stopped" | "plan";
+
+/** A node's step cells as its pace draws them: the step being worked turns the stopped colour while no one moves the node. */
+export function pacedSteps(steps: readonly NodeStep[], pace: NodePace | null): StepTone[] {
+  return steps.map((step) => (pace === "stopped" && step.tone === "working" ? "stopped" : step.tone));
+}
 
 /** A step of a node as the card's bar draws it. */
 export type NodeStep = { title: string; tone: StepTone };

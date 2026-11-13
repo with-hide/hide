@@ -321,7 +321,8 @@ pub struct NodeView {
 /// its worker works, its worker rests and the node waits on someone
 /// (`waiting_on`, said beside it), its worker stopped with no one to wait
 /// on (`mission_health::stopped_worker`), since when and why, or no worker
-/// stands for it.
+/// stands for it (`mission_health::worker_gone`), since when a warning
+/// judgment first saw it, absent before one did.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum NodeWork {
@@ -333,21 +334,32 @@ pub enum NodeWork {
         cause: Option<crate::missions::StopCause>,
         since_unix_ms: u64,
     },
-    NoWorker,
+    NoWorker {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        since_unix_ms: Option<u64>,
+    },
 }
 
 /// What `view`, a node of a running mission, is doing now: from its
-/// worker's registration (none or ended is no worker, asleep rests) and,
-/// for a running one, its agent row's activity (`working` works, `stopped`
-/// rests, or stands stopped when `stopped` says so); a row Hide cannot see,
-/// or whose activity it does not know, says nothing rather than a guess.
+/// worker's registration (none or ended is no worker, since `gone_since`;
+/// asleep rests) and, for a running one, its agent row's activity
+/// (`working` works, `stopped` rests, or stands stopped when `stopped` says
+/// so); a row Hide cannot see, or whose activity it does not know, says
+/// nothing rather than a guess.
 fn node_work(
     mission: &Mission,
     view: &NodeView,
     row_activity: Option<&str>,
     stopped: Option<&crate::mission_health::WorkerStopped>,
+    gone_since: Option<u64>,
 ) -> Option<NodeWork> {
-    use crate::delivery::answer::Runtime as Life;
+    use crate::mission_health::WorkerLife;
+    let worker = view.agent_runtime.map(WorkerLife::of);
+    if crate::mission_health::worker_gone(mission, view.status, view.kind, worker) {
+        return Some(NodeWork::NoWorker {
+            since_unix_ms: gone_since,
+        });
+    }
     if !mission.status.open()
         || view.status != NodeStatus::Working
         || view.kind == NodeKind::External
@@ -355,10 +367,11 @@ fn node_work(
         return None;
     }
     let waiting = || view.waiting_on.clone().map(|on| NodeWork::Waiting { on });
-    match view.agent_runtime {
-        None | Some(Life::Ended | Life::Closed) => Some(NodeWork::NoWorker),
-        Some(Life::Asleep) => waiting(),
-        Some(Life::Running) => match row_activity? {
+    match worker? {
+        // Answered above.
+        WorkerLife::Ended => None,
+        WorkerLife::Asleep => waiting(),
+        WorkerLife::Running => match row_activity? {
             "working" => Some(NodeWork::Working),
             "stopped" => match stopped {
                 Some(stop) => Some(NodeWork::Stopped {
@@ -749,9 +762,11 @@ pub(crate) struct MissionRuntime {
     /// stops standing, so it holds at most one per node standing.
     pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
     /// Since when each node's worker has stood stopped
-    /// (`mission_health::stopped_worker`), by mission, node and worker, as a
+    /// (`mission_health::stopped_worker`) or gone
+    /// (`mission_health::worker_gone`), by mission, node and worker, as a
     /// warning judgment first saw it (`Runtime::warn_missions`): the time
-    /// its warning and the map count from. The row's own last change cannot
+    /// a stop's warning and the map count from. A stop that turns into a
+    /// worker gone keeps its time, since its key does not change. The row's own last change cannot
     /// say it: when a long turn's end lands it still holds the turn's start,
     /// and when a Conductor's letter ends the excuse a report gave it holds
     /// the time before the report, so the five minutes were already spent.
@@ -4412,8 +4427,14 @@ impl Runtime {
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
-                // The map draws a stop from when a warning judgment first saw
-                // it (`stop_clock`), so not before one did.
+                // The map draws a stop, and a worker gone, from when a
+                // warning judgment first saw it (`stop_clock`), so not
+                // before one did.
+                let clock = self
+                    .missions
+                    .stop_clock
+                    .get(&super::mission_health::stop_key(mission, node))
+                    .copied();
                 let fact = crate::mission_health::NodeFacts {
                     worker: Some(crate::mission_health::WorkerLife::Running),
                     stopped: record
@@ -4421,12 +4442,9 @@ impl Runtime {
                             self.worker_stopped(record, ledger, &mission.conductor.actor)
                         })
                         .and_then(|stop| {
-                            let key = super::mission_health::stop_key(mission, node);
-                            self.missions.stop_clock.get(&key).map(|since| {
-                                crate::mission_health::WorkerStopped {
-                                    since_unix_ms: *since,
-                                    ..stop
-                                }
+                            clock.map(|since| crate::mission_health::WorkerStopped {
+                                since_unix_ms: since,
+                                ..stop
                             })
                         }),
                     ..Default::default()
@@ -4438,7 +4456,7 @@ impl Runtime {
                     self.mission_pulls(mission),
                     self.gate_open(mission, node),
                 );
-                view.work = node_work(mission, &view, activity, stopped);
+                view.work = node_work(mission, &view, activity, stopped, clock);
                 view
             })
             .collect();

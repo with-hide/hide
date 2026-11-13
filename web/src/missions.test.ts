@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import { kindWord } from "./missionLine";
 import { missionEntry, rowLine, rowLineText } from "./missionList";
 import { missionEntries } from "./mobile/missionModel";
@@ -855,6 +855,37 @@ describe("nodeSteps", () => {
   });
 });
 
+describe("how a node in progress moves (operator decision 2026-11-13)", () => {
+  it("is worked, rests on someone or stands stopped, and only a node in progress has a pace", () => {
+    const m = mission("m");
+    const pace = (extra: Partial<MissionNode>) => nodePace(m, node("a", { status: "working", ...extra }));
+    expect(pace({ work: { state: "working" } })).toBe("working");
+    // A row Hide cannot read says nothing, and the card stays as it was: worked.
+    expect(pace({})).toBe("working");
+    expect(pace({ work: { state: "waiting", on: { kind: "review" } } })).toBe("waiting");
+    // A worker Hide put to sleep rests; its sleep is the label's.
+    expect(pace({ agent_runtime: "asleep" })).toBe("waiting");
+    expect(pace({ work: { state: "stopped", cause: null, since_unix_ms: 1 } })).toBe("stopped");
+    expect(pace({ work: { state: "no_worker" } })).toBe("stopped");
+    expect(pace({ work: { state: "no_worker", since_unix_ms: 1 } })).toBe("stopped");
+    expect(nodePace(m, node("a", { status: "planned" }))).toBeNull();
+    expect(nodePace(m, node("a", { status: "done" }))).toBeNull();
+    expect(nodePace(m, node("a", { status: "working", kind: "external" }))).toBeNull();
+    expect(nodePace(mission("m", { status: "cancelled" }), node("a", { status: "working", work: { state: "no_worker" } }))).toBeNull();
+  });
+
+  it("draws a stopped node's head cell and its step at work in the stopped colour", () => {
+    const m = mission("m", { nodes: [node("a", { status: "working", work: { state: "no_worker" } }), node("b", { status: "working", work: { state: "waiting", on: { kind: "ci" } } }), node("c", { status: "working", work: { state: "no_worker" }, attention: raised("operator", "worker_ended") })] });
+    // A node the operator has to look at keeps the decision colour over its pace, on the map's head and on the chip and list row alike.
+    expect(missionHeadCells(m)).toEqual(["stopped", "working", "attention"]);
+    expect(missionCells(m)).toEqual(["stopped", "working", "hold"]);
+    const steps = [{ title: "a", tone: "done" as const }, { title: "b", tone: "working" as const }, { title: "c", tone: "plan" as const }];
+    expect(pacedSteps(steps, "stopped")).toEqual(["done", "stopped", "plan"]);
+    expect(pacedSteps(steps, "waiting")).toEqual(["done", "working", "plan"]);
+    expect(pacedSteps(steps, null)).toEqual(["done", "working", "plan"]);
+  });
+});
+
 describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
     for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
@@ -865,7 +896,8 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
     expect(nodeWorkWords({ state: "stopped", cause: { kind: "limit", line: "resets 4pm" }, since_unix_ms: 1 }, t)).toBe("Stopped · usage limit · resets 4pm");
     expect(nodeWorkWords({ state: "stopped", cause: { kind: "error", line: "API Error: 500" }, since_unix_ms: 1 }, t)).toBe("Stopped · API error");
     expect(nodeWorkWords({ state: "stopped", cause: null, since_unix_ms: 1 }, t)).toBe("Stopped · no report");
-    expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("No worker");
+    // No worker is a stop too, said as one (operator decision 2026-11-13).
+    expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("Stopped · no worker");
     for (const kind of ["decision", "blocked", "start", "worker", "review", "verify", "ci", "merge", "conductor"] as const) {
       expect(nodeWorkWords({ state: "waiting", on: { kind } }, t)).toMatch(/^Waiting · \S/);
     }

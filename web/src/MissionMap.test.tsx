@@ -510,9 +510,11 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", "branch-out": "external", next: "waiting", sleeping: "working", ran: "done", bound: "working", "ran-unknown": "done", launched: "working", "on-branch": "working", away: "working" });
     // One of three shapes, its word on hover and first in the card's name.
     expect(["next", "core", "api"].map((key) => card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label"))).toEqual(["Waiting", "In progress", "Done"]);
-    // A worker Hide put to sleep leaves its node in progress, the same ring; only its words name the sleep (B1).
+    // A worker Hide put to sleep leaves its node in progress; its words name the sleep (B1), and its ring rests in dashes, since a ring turns only while someone works the node (operator decision 2026-11-13).
     expect([card(map, "sleeping").dataset.nodeLook, card(map, "sleeping").querySelector("[data-node-mark]")?.getAttribute("aria-label")]).toEqual(["working", "In progress · Worker asleep"]);
-    expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
+    expect(card(map, "sleeping").querySelector("[data-node-mark]")?.getAttribute("data-node-mark-pace")).toBe("waiting");
+    expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).not.toContain("animate-spin");
+    expect(card(map, "core").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
     // The worker has its own row under the title: its agent mark and model, the plan's marked planned, the launch's once kept (codex here, where the plan said claude); effort is the hover's (D-51).
     const worker = (key: string) => {
       const run = card(map, key).querySelector<HTMLElement>("[data-node-run]");
@@ -1485,26 +1487,55 @@ it("lights a device worker's Terminal and opens its pane there by the address it
   } finally { await map.unmount(); }
 });
 
-it("tells a node being worked from one whose worker rests and what it waits on, or has no worker (hide-private issue 680)", async () => {
+it("tells a node being worked from one whose worker rests on someone and one no one moves, stopped or with no worker, on its ring, frame, line and time (hide-private issue 680, operator decision 2026-11-13)", async () => {
+  // The page reads its own clock, so the test holds it.
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
+  const steps = ["Plan", "Build", "Ship"];
   const nodes = [
     node("busy", { status: "working", work: { state: "working" } }),
     node("rests", { status: "working", work: { state: "waiting", on: { kind: "review" } } }),
-    node("gone", { status: "working", work: { state: "no_worker" } }),
-    node("stopped", { status: "working", work: { state: "stopped", cause: { kind: "limit", line: "You've hit your limit · resets 4pm" }, since_unix_ms: Date.now() - 3 * 60_000 } }),
+    node("gone", { status: "working", steps, work: { state: "no_worker", since_unix_ms: now - 48 * 60_000 } }),
+    node("untimed", { status: "working", work: { state: "no_worker" } }),
+    node("stopped", { status: "working", work: { state: "stopped", cause: { kind: "limit", line: "You've hit your limit · resets 4pm" }, since_unix_ms: now - 3 * 60_000 } }),
     node("unseen", { status: "working" }),
   ];
   const map = await mount({ items: [mission({ nodes })] });
   try {
-    const look = (key: string) => [card(map, key).querySelector("[data-node-work]")?.textContent ?? null, card(map, key).querySelector("[data-node-mark]")?.hasAttribute("data-node-mark-still"), card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label")];
-    expect(look("busy")).toEqual([null, false, "Working"]);
-    expect(look("rests")).toEqual(["Waiting · review", true, "Waiting · review"]);
-    expect(look("gone")).toEqual(["No worker", true, "No worker"]);
-    // A worker stopped with nothing to wait on says why first and how long ago at the end, its ring still (mission-56).
-    expect(look("stopped")).toEqual(["Stopped · usage limit · You've hit your limit · resets 4pm· 3m", true, "Stopped · usage limit · You've hit your limit · resets 4pm"]);
+    const look = (key: string) => {
+      const one = card(map, key);
+      return {
+        line: one.querySelector("[data-node-work]")?.textContent ?? null,
+        pace: one.getAttribute("data-node-pace"),
+        ring: one.querySelector("[data-node-mark]")?.getAttribute("data-node-mark-pace") ?? null,
+        label: one.querySelector("[data-node-mark]")?.getAttribute("aria-label") ?? null,
+        time: one.querySelector("[data-node-took]")?.textContent ?? null,
+      };
+    };
+    expect(look("busy")).toEqual({ line: null, pace: "working", ring: "working", label: "Working", time: null });
+    expect(look("rests")).toEqual({ line: "Waiting · review", pace: "waiting", ring: "waiting", label: "Waiting · review", time: null });
+    // No worker reads as a stop, timed from when the core first saw it, never as work in progress or the operator's colour.
+    expect(look("gone")).toEqual({ line: "Stopped · no worker", pace: "stopped", ring: "stopped", label: "Stopped · no worker", time: "stopped 48m ago" });
+    expect(card(map, "gone").querySelector("[data-node-work]")?.className).toContain("text-mission-stopped");
+    expect(card(map, "gone").className).toContain("border-mission-stopped");
+    expect(card(map, "gone").className).not.toContain("ring-mission-working");
+    expect(card(map, "busy").className).toContain("ring-mission-working");
+    // Before the core timed it, it says no time rather than how long the node ran.
+    expect(look("untimed")).toMatchObject({ line: "Stopped · no worker", pace: "stopped", time: null });
+    // A worker stopped with nothing to wait on says why on its line and how long ago on its worker row (mission-56).
+    expect(look("stopped")).toEqual({ line: "Stopped · usage limit · You've hit your limit · resets 4pm", pace: "stopped", ring: "stopped", label: "Stopped · usage limit · You've hit your limit · resets 4pm", time: "stopped 3m ago" });
     expect(card(map, "stopped").querySelector("[data-node-work]")?.getAttribute("title")).toBe("Stopped 3m ago · usage limit · You've hit your limit · resets 4pm");
+    // A stopped node's mark is a grey disc with two pause bars, not the empty dashed ring of a node still waiting to start.
+    expect([card(map, "stopped").querySelectorAll("[data-node-mark] rect").length, card(map, "stopped").querySelector("[data-node-mark] circle")?.getAttribute("class")]).toEqual([2, "fill-mission-stopped"]);
+    // Only a resting node's ring is cut into dashes; a worked one, or one whose row Hide cannot read, keeps the whole ring.
+    const dashed = (key: string) => card(map, key).querySelector("[data-node-mark] path")?.hasAttribute("stroke-dasharray") ?? null;
+    expect(["busy", "rests", "unseen"].map(dashed)).toEqual([false, true, false]);
     // Hide cannot see the worker's row: the card stays as it was, in progress and turning.
-    expect(look("unseen")).toEqual([null, false, "In progress"]);
+    expect(look("unseen")).toEqual({ line: null, pace: "working", ring: "working", label: "In progress", time: null });
     expect(card(map, "rests").getAttribute("aria-label")).toContain("Waiting · review");
+    // The map's head draws the stopped nodes in their colour.
+    expect(map.q("[data-progress-cells]")?.getAttribute("data-progress-cells")).toBe("working working stopped stopped stopped working");
   } finally { await map.unmount(); }
 });
 

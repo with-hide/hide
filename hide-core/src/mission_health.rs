@@ -29,6 +29,36 @@ pub(crate) enum WorkerLife {
     Ended,
 }
 
+impl WorkerLife {
+    /// A registration's life (`coordination::life`) as these rules read it:
+    /// a closed one has ended.
+    pub(crate) fn of(life: crate::delivery::answer::Runtime) -> Self {
+        use crate::delivery::answer::Runtime as Life;
+        match life {
+            Life::Running => Self::Running,
+            Life::Asleep => Self::Asleep,
+            Life::Ended | Life::Closed => Self::Ended,
+        }
+    }
+}
+
+/// A node of an open mission in progress that no worker stands for: none
+/// bound, or its registration ended (`NodeWork::NoWorker`); an outside node
+/// has no worker of its own. The map draws it stopped, timed from the first
+/// warning judgment that saw it (`Runtime::stops_seen`), as a stopped
+/// worker is.
+pub(crate) fn worker_gone(
+    mission: &Mission,
+    status: NodeStatus,
+    kind: NodeKind,
+    worker: Option<WorkerLife>,
+) -> bool {
+    mission.status.open()
+        && status == NodeStatus::Working
+        && kind != NodeKind::External
+        && matches!(worker, None | Some(WorkerLife::Ended))
+}
+
 /// What the runtime knows of one node beside the record.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NodeFacts {

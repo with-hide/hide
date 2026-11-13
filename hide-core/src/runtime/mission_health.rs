@@ -885,15 +885,8 @@ impl Runtime {
                     .agent_id
                     .as_deref()
                     .and_then(|id| ledger?.agents.iter().find(|record| record.id == id));
-                let worker =
-                    record.map(
-                        |record| match super::missions::worker_life(record, sleeping) {
-                            crate::delivery::answer::Runtime::Running => WorkerLife::Running,
-                            crate::delivery::answer::Runtime::Asleep => WorkerLife::Asleep,
-                            crate::delivery::answer::Runtime::Ended
-                            | crate::delivery::answer::Runtime::Closed => WorkerLife::Ended,
-                        },
-                    );
+                let worker = record
+                    .map(|record| WorkerLife::of(super::missions::worker_life(record, sleeping)));
                 // The worker's own pull requests, of this project only: a
                 // number names a pull request only beside its repository.
                 let own_prs = record
@@ -944,8 +937,9 @@ impl Runtime {
     /// judgment that saw it (`MissionRuntime::stop_clock`): a node whose
     /// worker stands stopped (`mission_health::stopped_worker`) has its
     /// fact's stop carry the clock's time, or `now` when this judgment is the
-    /// first. The answer is the clock's entries for `mission` now, one per
-    /// node standing stopped.
+    /// first, and a node no worker stands for (`mission_health::worker_gone`)
+    /// is timed the same way for the map alone. The answer is the clock's
+    /// entries for `mission` now, one per node standing stopped or gone.
     fn stops_seen(
         &self,
         mission: &Mission,
@@ -960,7 +954,12 @@ impl Runtime {
                 continue;
             };
             let waits = operator_waits.get(at).copied().unwrap_or(false);
-            if crate::mission_health::stopped_worker(mission, node, fact, pulls, waits).is_none() {
+            let gone =
+                crate::mission_health::worker_gone(mission, node.status, node.kind, fact.worker);
+            if !gone
+                && crate::mission_health::stopped_worker(mission, node, fact, pulls, waits)
+                    .is_none()
+            {
                 continue;
             }
             let key = stop_key(mission, node);

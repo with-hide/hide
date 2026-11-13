@@ -1694,12 +1694,12 @@ export type MissionNode = {
 /** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
 export type MissionNodeHold = { why: string; until_unix_ms: number };
 
-/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker. */
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
 export type MissionNodeWork =
   | { state: "working" }
   | { state: "waiting"; on: MissionWaitingOn }
   | { state: "stopped"; cause: MissionStopCause | null; since_unix_ms: number }
-  | { state: "no_worker" };
+  | { state: "no_worker"; since_unix_ms?: number | null };
 /** Why a node's worker stopped (`StopCause`): the provider refused its turn on a usage limit or with an API error, with the agent's own first line for it. */
 export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
@@ -1792,7 +1792,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;

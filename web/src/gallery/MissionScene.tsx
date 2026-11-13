@@ -211,9 +211,10 @@ function warned(one: MissionNode, now: number): MissionNode {
  * The stalled state (hide-private issues 678-680): eleven letters wait for
  * the Conductor behind a draft in its input, the search fix's worker rests
  * while its review is open, the screen's worker on the Mac mini rests on its
- * CI, the API change has no worker left, and the reopen fix's worker works.
+ * CI, the API change has had no worker for 48 minutes, drawn stopped, and
+ * the reopen fix's worker works.
  */
-function stalled(one: MissionNode): MissionNode {
+function stalled(one: MissionNode, now: number): MissionNode {
   switch (one.key) {
     case "fix-1490":
       return { ...one, work: { state: "waiting", on: { kind: "review" } } };
@@ -222,7 +223,7 @@ function stalled(one: MissionNode): MissionNode {
     case "fix-1487":
       return { ...one, work: { state: "working" } };
     case "api":
-      return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "no_worker" } };
+      return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "no_worker", since_unix_ms: now - 48 * MINUTE } };
     default:
       return one;
   }
@@ -433,7 +434,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const state = answered || looking ? "decision" : shown === "gate-plan" ? "plan" : shown === "gate-nocond" ? "no-conductor" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || shown === "stopped" || gating || adhoc || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
-  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : shown === "stopped" ? stopped(one, now) : one)));
+  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one, now) : shown === "stopped" ? stopped(one, now) : one)));
   const at = (key: string) => nodes.find((one) => one.key === key)!;
   if (shown === "gate-plan") {
     gated(at("cause"), "ahead", "원인 결론");

@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, openAttention } from "../missions";
+import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, nodePace, openAttention } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { phoneLineNode, workerOf } from "./missionModel";
@@ -91,7 +91,10 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
       </span>
     </span>
   ) : null;
-  const word = t(`mission.look.${look}`);
+  // How the step moves now, drawn as the desktop's card draws it; a stopped one says so in its colour, without the cause or the time, which stay on the Mac (operator decision 2026-11-13).
+  const pace = nodePace(mission, node);
+  const stopped = pace === "stopped" ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain")) : null;
+  const word = stopped ?? t(`mission.look.${look}`);
   const detail = reason?.kind === "attention"
     ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
     : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
@@ -99,7 +102,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   return (
     <div data-dependency-node={node.key} className="flex">
       <MissionGraphCard
-        node={node} look={look} word={word} yours={mergeDue || turn}
+        node={node} look={look} word={word} yours={mergeDue || turn} pace={pace}
         aria-label={[
           node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, detail,
           // The lines are drawn for the eye, so their words and states are said here (B28).
@@ -123,6 +126,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
             <span className="min-w-0 truncate">{agentProductName(node.worker_agent)}</span>
           </span>
         ) : null}
+        {stopped ? <span className="truncate text-caption text-mission-stopped" data-node-work={node.work?.state}>{stopped}</span> : null}
         {detail ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
         {branch || result || marks ? (
           <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
