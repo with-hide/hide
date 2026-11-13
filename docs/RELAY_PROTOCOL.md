@@ -265,6 +265,14 @@ The `auth` secret is part of this message, so it crosses the bridge from the pag
 Only the app's main frame can call the plugin (`BridgeGate`), and the secret opens nothing without the private key, which stays in the Keychain's shared group.
 An older hided answers the message `refused_request` and keeps the session, so the addition keeps `PHONE_PROTOCOL` at 5.
 hided sends only while its relay link is up and said `push: true`.
+
+The Android app sends the FCM twin, `fcm_registration {token, key: {p256dh, auth}}`: Google's registration token (`admission::fcm_token_valid`) and a per-computer key in the same shape, with no environment, since FCM has one host.
+hided answers it with the same `push_state` and keeps it in the phone's record as the third registration kind; the Web Push subscription, the APNs registration and the FCM registration each replace the others, and `push_permission {state: "denied"}`, unpairing and a `token_gone` answer remove it, while a `token_rejected` answer keeps it and writes the configuration diagnostic, as for Apple.
+Its notices are the same body, encrypted for the phone's key under the same plaintext bound (`push::MAX_APP_PLAINTEXT`), and go out as `fcm_request {id, token, payload}` with no collapse value; the app replaces an agent's earlier notification by the tag inside the body.
+They share the APNs path's queue, wait, unanswered-request cap and held-notice rule below.
+hided names the field it reads in every dial's upgrade request (`Hide-Registered-Fields: fcm`, Compatibility and deploy order) and sends `fcm_request` only after a `registered` whose `fcm` is true; without the relay method or `fcm: true` a notice for an Android phone is dropped with a diagnostic (`relay_without_fcm`).
+The page sends `fcm_registration` when the app's `HidePush.enable` or `registration` answers `{found: true, service: "fcm", token, p256dh, auth}`; an answer without `service` is the iOS app's, with `environment`.
+A released hided answers `fcm_registration` `refused_request` and keeps the session, and the page then says the computer is older than the app, as for `apns_registration`.
 A notice that finds no link is held for that phone, replaced by a newer notice for the same agent tag, at most 8 per phone and at most 60 seconds, and sent once when the link comes up; past those limits, or when the phone is gone, it is dropped with a diagnostic.
 Notices about the person's own letters (`letter_undelivered`) are not held.
 
