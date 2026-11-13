@@ -910,8 +910,10 @@ For a relay fixture, start `target/debug/hide-relay --listen 127.0.0.1:<port>` a
 Only a debug build may reach cleartext `127.0.0.1`; a release build refuses cleartext traffic.
 A pairing code lives five minutes, so show it right before the `run`.
 
-One emulator runs on the mini at a time: a command takes a lock folder (`~/hide-android-build/.emulator.lock`, holding its pid), waits for it up to ten minutes and then refuses, naming the command that holds it; a lock whose owner is gone is taken over.
-Everything a command starts it ends on every exit, a failure included: the emulator it booted (`emu kill`, then a signal), the adb server it started on a port of its own (5039, so an adb another program runs is never touched), the port it reversed and the lock.
+One emulator runs on the mini at a time: a command takes a kernel lock (flock) on `~/hide-android-build/.emulator-lock`, as the iOS release does, waits for it up to ten minutes and then refuses, naming the holder its text records (pid, start time, branch).
+The lock ends with the command's shell however that ends, and no program the command starts inherits it.
+Everything a command starts it ends on every exit, a failure included: the emulator it booted (`emu kill`, then a signal to its process group), the adb server it started on a port of its own (5039, so an adb another program runs is never touched), the port it reversed and the lock.
+A command killed before it could (a `SIGKILL`, a lost connection) is cleaned by the next one: holding the lock, that one ends the emulator the killed one recorded in `~/hide-android-build/.emulator-run` (the same pid and start time, so a reused pid is never signalled), and with it the port reversed through it, and the adb server on its port, before it starts its own; `mobile/scripts/mini-android.test.mjs` proves it against stand-ins.
 The app's data stays in the emulator between runs, so a pairing survives a restart of the app and of the emulator; the instrumented tests of a `build` remove the pairing items they test, so pair again after a `build`.
 Each branch's state is one folder of about 0.25 GB; once 4 other branches hold a folder there, the build refuses and prints them, as the iOS build does.
 Gradle's download cache is the mini account's own `~/.gradle`, shared by every branch, and Gradle runs without its daemon, so nothing of a build stays running.
