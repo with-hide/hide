@@ -8,12 +8,16 @@
 //    or the subtitle, which Apple already indexes;
 //  - the decided facts (name, English subtitle, URLs, categories) are as decided, and the first two lines of a
 //    description say it works with Hide on the computer;
-//  - the screenshots' words in mobile/store/shots.json follow the same naming rule (store-shots.mjs).
+//  - Google Play's page is source too (mobile/store/android/metadata, the layout fastlane's `supply` reads) and is held
+//    to Play's limits (title 30, short description 80, full description 4000, release notes 500) and the same rules,
+//    plus Play's metadata policy where a file can show it (no emoji, no word in capitals);
+//  - the screenshots' words in mobile/store/shots.json follow the same naming rule (store-shots.mjs), and the Play list
+//    (mobile/store/android/shots.json) names shots that exist, at Play's sizes.
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { AGENT_NAMES, LIMITS, REVIEW_NOTES_LIMIT, lengthOf, thirdPartyNamesIn } from './store-limits.mjs';
-import { loadShots, shotProblems } from './store-shots.mjs';
+import { AGENT_NAMES, LIMITS, PLAY_LIMITS, REVIEW_NOTES_LIMIT, lengthOf, thirdPartyNamesIn } from './store-limits.mjs';
+import { androidShotProblems, loadAndroidShots, loadShots, shotProblems } from './store-shots.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -35,6 +39,47 @@ const words = (text) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boole
 
 async function read(path) {
   try { return (await readFile(path, 'utf8')).replace(/\n$/, ''); } catch { return null; }
+}
+
+const PLAY_LOCALES = ['en-US', 'ko-KR'];
+// Play's files, by the name fastlane supply reads, and the limit each is held to.
+const PLAY_FILES = { title: 'title', short_description: 'short_description', full_description: 'full_description', changelog: 'changelogs/default' };
+// The language a Play locale's rules are written in.
+const PLAY_LANGUAGE = { 'en-US': 'en-US', 'ko-KR': 'ko' };
+
+/** What is wrong with Google Play's page text, empty when nothing is. */
+async function checkPlay(root) {
+  const problems = [];
+  const base = join(root, 'store/android/metadata');
+  const present = (await readdir(base, { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  if (present.join() !== [...PLAY_LOCALES].sort().join()) problems.push(`mobile/store/android/metadata holds ${present.join(', ') || 'nothing'}, expected ${PLAY_LOCALES.join(', ')}`);
+  for (const locale of PLAY_LOCALES) {
+    const text = {};
+    for (const [field, file] of Object.entries(PLAY_FILES)) {
+      const where = `android/${locale}/${file}.txt`;
+      const value = await read(join(base, locale, `${file}.txt`));
+      if (value === null || value.trim() === '') { problems.push(`${where} is missing or empty`); continue; }
+      if (value !== value.trim()) problems.push(`${where} has blank space around its text`);
+      if (value.includes('—')) problems.push(`${where} has an em dash`);
+      if (/\p{Extended_Pictographic}/u.test(value)) problems.push(`${where} has an emoji, which Play's metadata policy refuses`);
+      const shouting = value.match(/\b[A-Z]{4,}\b/g);
+      if (shouting) problems.push(`${where} has ${shouting[0]} in capitals, which Play's metadata policy refuses`);
+      if (lengthOf(value) > PLAY_LIMITS[field]) problems.push(`${where} is ${lengthOf(value)} characters, over Play's ${PLAY_LIMITS[field]}`);
+      text[field] = value;
+    }
+    if (text.title !== undefined && text.title !== DECIDED.name) problems.push(`android/${locale}/title.txt is "${text.title}", decided "${DECIDED.name}"`);
+    for (const field of ['title', 'short_description']) {
+      const names = text[field] === undefined ? [] : thirdPartyNamesIn(text[field]);
+      if (names.length) problems.push(`android/${locale}/${field}.txt names ${names.join(', ')}, which is another company's mark`);
+    }
+    if (text.full_description !== undefined) {
+      const language = PLAY_LANGUAGE[locale];
+      if (!text.full_description.split('\n').slice(0, 2).some((line) => WORKS_WITH_HIDE[language].test(line))) problems.push(`android/${locale}/full_description.txt: the first two lines must say the app works with Hide from withhide.dev`);
+      const lower = text.full_description.toLowerCase();
+      if (AGENT_NAMES.some((name) => lower.includes(name)) && !INDEPENDENT[language].test(text.full_description)) problems.push(`android/${locale}/full_description.txt names an agent without saying Hide is independent of it`);
+    }
+  }
+  return problems;
 }
 
 /** @returns {Promise<string[]>} what is wrong, empty when nothing is */
@@ -103,7 +148,8 @@ export async function check(root = ROOT) {
   const expected = [...LOCALES, 'review_information'].sort();
   if (locales.join() !== expected.join()) problems.push(`mobile/store/metadata holds ${locales.join(', ')}, expected ${expected.join(', ')}`);
 
-  return [...problems, ...shotProblems(await loadShots(root))];
+  const shots = await loadShots(root);
+  return [...problems, ...(await checkPlay(root)), ...shotProblems(shots), ...androidShotProblems(await loadAndroidShots(root), shots)];
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

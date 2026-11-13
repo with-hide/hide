@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Hide Android app with the phone bundle inside it, on the Mac mini, and runs it in the emulator there.
 #
-# Usage: build-android.sh [build | run | clean]
+# Usage: build-android.sh [build | run | store-shots | clean]
 #   build  (default) the phone bundle, the version and plugin check, the web folder (assemble.mjs), `cap sync android`, a
 #          copy of the Gradle project to the mini, and there: the JVM tests, the debug app and its instrumented tests,
 #          which run on the mini's emulator; a failing test fails the command
@@ -12,6 +12,11 @@
 #           scrolls to it); HIDE_ANDROID_APPEARANCE=light|dark sets the emulator's appearance;
 #           HIDE_ANDROID_CAPTURE=<file.png> copies the capture back here, and the app's log beside it as <file>.log;
 #           HIDE_ANDROID_SETTLE=<seconds>, default 15)
+#   store-shots  the Google Play screenshots, feature graphic and icon in Korean and English: the same phone build and copy
+#          as `build`, then on the mini the debug app (no test) runs in the emulator, one shot at a time, in demo mode, in the
+#          shot's language and in light appearance with the status bar fixed at 9:41, and the raw captures come back to be
+#          framed by mobile/scripts/store-shots.mjs: HIDE_STORE_SHOTS_OUT=<folder>, default
+#          agents/runs/android-mission/store-assets (docs/BUILD.md, The store page of the Android app)
 #   clean  delete this branch's whole folder on the mini
 #
 # Every command ends what it started on the mini: the emulator it booted is shut down, its own adb server is stopped and
@@ -37,7 +42,7 @@ cd "$(dirname "$0")/../.."
 
 command=${1:-build}
 host=${HIDE_ANDROID_BUILD_HOST:-mini}
-case "$command" in build | run | clean) ;; *) printf 'usage: %s [build | run | clean]\n' "$0" >&2; exit 2 ;; esac
+case "$command" in build | run | store-shots | clean) ;; *) printf 'usage: %s [build | run | store-shots | clean]\n' "$0" >&2; exit 2 ;; esac
 ssh_options=()
 if [[ -n "${HIDE_ANDROID_RELAY_PORT:-}" ]]; then
     [[ "$HIDE_ANDROID_RELAY_PORT" =~ ^[1-9][0-9]{3,4}$ ]] && (( HIDE_ANDROID_RELAY_PORT > 1023 && HIDE_ANDROID_RELAY_PORT < 65536 )) || { printf 'invalid HIDE_ANDROID_RELAY_PORT\n' >&2; exit 2; }
@@ -48,13 +53,19 @@ branch=$(git branch --show-current)
 slug=$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')
 remote=hide-android-build/$slug
 
+# The shots to take, read (and checked) before anything runs on the mini.
+store_plan=
+if [[ "$command" == store-shots ]]; then
+    store_plan=$(node mobile/scripts/store-shots.mjs plan-android)
+fi
+
 # The pairing link of a `run`, read before anything else so it is never an argument or a file.
 pair_link=
 if [[ "$command" == run && ! -t 0 ]]; then
     IFS= read -r pair_link || true
 fi
 
-if [[ "$command" == build ]]; then
+if [[ "$command" == build || "$command" == store-shots ]]; then
     if [[ "${HIDE_ANDROID_SKIP_PHONE_BUILD:-}" != 1 ]]; then
         if [[ -n "${HIDE_ANDROID_RELAY_PORT:-}" ]]; then
             VITE_HIDE_RELAY_URL="ws://127.0.0.1:$HIDE_ANDROID_RELAY_PORT/ws" bash scripts/verify-web.sh web build:phone
@@ -84,6 +95,11 @@ remote_status=0
 {
     if [[ -n "$pair_link" ]]; then printf 'HIDE_PAIR_LINK=%q\n' "$pair_link"; fi
     if [[ -n "${HIDE_ANDROID_TAPS:-}" ]]; then printf 'HIDE_TAPS=%q\n' "$HIDE_ANDROID_TAPS"; fi
+    if [[ "$command" == store-shots ]]; then
+        printf 'HIDE_STORE_PLAN=%q\n' "$store_plan"
+        printf 'HIDE_STORE_CLOCK=%q\n' "$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('mobile/store/android/shots.json','utf8')).clock)")"
+        printf 'HIDE_STORE_APPEARANCE=%q\n' "$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('mobile/store/android/shots.json','utf8')).appearance)")"
+    fi
     cat mobile/scripts/mini-android.sh
 } | ssh "${ssh_options[@]}" "$host" env HIDE_ANDROID_SETTLE="${HIDE_ANDROID_SETTLE:-15}" \
     HIDE_ANDROID_RELAY_PORT="${HIDE_ANDROID_RELAY_PORT:-}" HIDE_ANDROID_APPEARANCE="${HIDE_ANDROID_APPEARANCE:-}" \
@@ -93,4 +109,12 @@ remote_status=0
 if [[ "$command" == run && -n "${HIDE_ANDROID_CAPTURE:-}" ]]; then
     scp -q "$host:$remote/shots/run.png" "$HIDE_ANDROID_CAPTURE"
     scp -q "$host:$remote/shots/run.log" "${HIDE_ANDROID_CAPTURE%.png}.log"
+fi
+
+if [[ "$command" == store-shots ]]; then
+    out=${HIDE_STORE_SHOTS_OUT:-agents/runs/android-mission/store-assets}
+    mkdir -p "$out/raw"
+    rm -f "$out/raw"/*.png
+    scp -q "$host:$remote/shots/store/*.png" "$out/raw/"
+    node mobile/scripts/store-shots.mjs compose-android "$out/raw" "$out"
 fi

@@ -49,8 +49,16 @@ emulator_started=
 locked=0
 adb_started=0
 reversed=
+display_changed=0
 cleanup() {
     local exit_status=$?
+    # A store-shots run's screen size, density and status bar are the emulator's own settings, kept in its disk: put back.
+    if [[ "$display_changed" == 1 ]]; then
+        adb_within 20 -s "$serial" shell wm size reset > /dev/null 2>&1 || true
+        adb_within 20 -s "$serial" shell wm density reset > /dev/null 2>&1 || true
+        adb_within 20 -s "$serial" shell am broadcast -a com.android.systemui.demo -e command exit > /dev/null 2>&1 || true
+        adb_within 20 -s "$serial" shell settings put global sysui_demo_allowed 0 > /dev/null 2>&1 || true
+    fi
     if [[ -n "$reversed" ]]; then adb -s "$serial" reverse --remove "tcp:$reversed" > /dev/null 2>&1 || true; fi
     if [[ -n "$emulator_pid" ]]; then
         end_emulator "$emulator_pid" "$emulator_started"
@@ -221,6 +229,57 @@ case "$command" in
         if [[ -n "$pid" ]]; then adb -s "$serial" logcat -d --pid="$pid" > "$shots/run.log" || true; else : > "$shots/run.log"; fi
         adb -s "$serial" shell am force-stop "$package"
         printf 'capture: %s\n' "$shots/run.png"
+        ;;
+    store-shots)
+        # The raw captures of the Play screenshots (mobile/scripts/store-shots.mjs composes them): the debug app on a screen of
+        # 1080x1920, in demo mode, one shot at a time with the debug inputs of `run`. HIDE_STORE_PLAN is one tab-separated
+        # line per shot (language, file, settle seconds, locale tag, steps).
+        cd "$project"
+        ./gradlew --no-daemon --console=plain assembleDebug < /dev/null 9>&-
+        boot_emulator
+        adb -s "$serial" install -r app/build/outputs/apk/debug/app-debug.apk > /dev/null
+        case "$HIDE_STORE_APPEARANCE" in light) mode=no ;; dark) mode=yes ;; *) printf 'invalid appearance\n' >&2; exit 2 ;; esac
+        adb -s "$serial" shell cmd uimode night "$mode" > /dev/null
+        display_changed=1
+        adb -s "$serial" shell wm size 1080x1920 > /dev/null
+        adb -s "$serial" shell wm density 420 > /dev/null
+        # The system bar, as Android's own demo mode draws it: 9:41, a full battery and the Wi-Fi signal, no notification icons.
+        # A broadcast reaches System UI only once it listens, which is later than the boot's end, so every shot sends them
+        # again before it starts (they set the same values again).
+        adb -s "$serial" shell settings put global sysui_demo_allowed 1
+        demo() { adb -s "$serial" shell am broadcast -a com.android.systemui.demo -e command "$@" > /dev/null; }
+        status_bar() {
+            demo enter
+            demo clock -e hhmm "$(printf '%s' "$HIDE_STORE_CLOCK" | sed -E 's/^[0-9-]+T([0-9]{2}):([0-9]{2}).*/\1\2/')"
+            demo battery -e level 100 -e plugged false
+            demo network -e wifi show -e level 4 -e fully true
+            demo network -e mobile hide
+            demo notifications -e visible false
+        }
+        pause 10
+        rm -rf "$shots/store"
+        mkdir -p "$shots/store"
+        while IFS=$'\t' read -r lang file settle tag steps; do
+            [[ -n "$lang" ]] || continue
+            status_bar
+            adb -s "$serial" shell cmd locale set-app-locales "$package" --locales "$tag" > /dev/null
+            adb -s "$serial" shell am force-stop "$package"
+            adb -s "$serial" shell run-as "$package" rm -f cache/hide-debug-taps || true
+            adb -s "$serial" shell am start -W -n "$package/.ShellActivity" \
+                --es hide_debug_taps "$(device_quote "$steps")" --es hide_debug_now "$(device_quote "$HIDE_STORE_CLOCK")" > /dev/null
+            waited=0 outcome=
+            until [[ -n "$outcome" ]]; do
+                outcome=$(adb -s "$serial" shell run-as "$package" cat cache/hide-debug-taps 2> /dev/null | tr -d '\r' || true)
+                (( waited < settle + 120 )) || { printf 'store-shots: %s %s: the steps never finished\n' "$lang" "$file" >&2; exit 1; }
+                pause 1
+                waited=$((waited + 1))
+            done
+            [[ "$outcome" == done ]] || { printf 'store-shots: %s %s: %s\n' "$lang" "$file" "$outcome" >&2; exit 1; }
+            pause "$settle"
+            adb -s "$serial" exec-out screencap -p > "$shots/store/$lang-$file.png"
+            printf 'capture: %s-%s\n' "$lang" "$file"
+        done <<< "$HIDE_STORE_PLAN"
+        adb -s "$serial" shell am force-stop "$package"
         ;;
     clean)
         rm -rf "$base"

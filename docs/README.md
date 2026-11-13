@@ -14,6 +14,8 @@ The Android app host, its build and its runs on the build machine's emulator: [w
 
 The iOS app's App Store page, its text, review notes, age-rating answers and screenshots made from the demo mode: [the store page](BUILD.md#the-store-page); owners are `mobile/store/` (`metadata/`, `age-rating.md`, `shots.json`), `mobile/scripts/{store-shots,check-store-text,store-limits}.mjs`, the `store-shots` command of `mobile/scripts/{build-ios,mini-ios}.sh`, and the tests `mobile/scripts/{store-shots,check-store-text}.test.mjs`.
 
+The Android app's Google Play page, its text, form answers and screenshots made from the demo mode: [the store page of the Android app](BUILD.md#the-store-page-of-the-android-app); owners are `mobile/store/android/` (`metadata/`, `play-forms.md`, `shots.json`), `mobile/scripts/{store-shots,check-store-text,store-limits}.mjs`, the `store-shots` command of `mobile/scripts/{build-android,mini-android}.sh`, and the tests `mobile/scripts/{store-shots,check-store-text}.test.mjs`.
+
 Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.
 
 Relay deployment code: owners are `deploy/relay/`, `scripts/relay-deploy.py`, `.github/workflows/relay-artifact.yml` and `.github/workflows/relay-deploy-check.yml`.
