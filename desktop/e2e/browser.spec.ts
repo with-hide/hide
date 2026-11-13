@@ -821,7 +821,8 @@ test("browser: a sign-in popup keeps its opener, belongs to its page, and a link
 });
 
 test("browser: Open in default browser hands a web page's address to the system once, and a file page offers none", { tag: "@platform" }, async () => {
-  const local = path.join(fixture.root, "fixture", "local.html");
+  // The checkout's own spelling, as the core registered it (a Windows runner's temp folder can arrive in its short 8.3 form).
+  const local = path.join(fs.realpathSync.native(path.join(fixture.root, "fixture")), "local.html");
   fs.writeFileSync(local, '<!doctype html><meta charset="utf-8"><title>Local page</title><h1>Local</h1>');
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
@@ -851,7 +852,7 @@ test("browser: Open in default browser hands a web page's address to the system 
   expect(JSON.stringify(lines)).not.toContain("signin.html");
 
   // A `file:` page has no default-browser form, so it offers none.
-  const file = await openFromCli(local, ["--wait"]);
+  const file = await openFromCli(local);
   expect(file).toMatchObject({ status: 0, ok: true });
   const toolbar = page.locator(`[data-browser-toolbar="${(file.result as { view_id: string }).view_id}"]`);
   await expect(toolbar).toBeVisible();
