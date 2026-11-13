@@ -1528,6 +1528,9 @@ it("tells a node being worked from one whose worker rests on someone and one no 
     expect(card(map, "stopped").querySelector("[data-node-work]")?.getAttribute("title")).toBe("Stopped 3m ago · usage limit · You've hit your limit · resets 4pm");
     // A stopped node's mark is a grey disc with two pause bars, not the empty dashed ring of a node still waiting to start.
     expect([card(map, "stopped").querySelectorAll("[data-node-mark] rect").length, card(map, "stopped").querySelector("[data-node-mark] circle")?.getAttribute("class")]).toEqual([2, "fill-mission-stopped"]);
+    // Only a resting node's ring is cut into dashes; a worked one, or one whose row Hide cannot read, keeps the whole ring.
+    const dashed = (key: string) => card(map, key).querySelector("[data-node-mark] path")?.hasAttribute("stroke-dasharray") ?? null;
+    expect(["busy", "rests", "unseen"].map(dashed)).toEqual([false, true, false]);
     // Hide cannot see the worker's row: the card stays as it was, in progress and turning.
     expect(look("unseen")).toEqual({ line: null, pace: "working", ring: "working", label: "In progress", time: null });
     expect(card(map, "rests").getAttribute("aria-label")).toContain("Waiting · review");
