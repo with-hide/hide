@@ -64,8 +64,12 @@ public class HideKeychainPlugin extends Plugin {
 
     @PluginMethod
     public void list(PluginCall call) {
-        JSObject answer = new JSObject();
-        answer.put("rooms", new JSArray(store.list()));
-        call.resolve(answer);
+        try {
+            JSObject answer = new JSObject();
+            answer.put("rooms", new JSArray(store.list()));
+            call.resolve(answer);
+        } catch (PairingStore.Failure failure) {
+            fail(call, failure);
+        }
     }
 }

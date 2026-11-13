@@ -103,6 +103,32 @@ public class PairingStoreKeystoreTest {
     }
 
     @Test
+    public void failsAListItCannotReadAndKeepsEveryItemForTheNextRead() throws Exception {
+        File folder = new File(context.getCacheDir(), "pairing-read-test");
+        File aside = new File(context.getCacheDir(), "pairing-read-test-aside");
+        PairingStore other = new PairingStore(folder, PairingStore.KEY_ALIAS + ".read-test");
+        try {
+            // A folder not made yet holds no item; that is no failure.
+            assertEquals(List.of(), other.list());
+            other.save(new PairingStore.Item(room(1), NOISE, "kept"));
+            // A file where the folder was cannot be listed: the list fails rather than answering that nothing is kept,
+            // which would have the page drop its saved computer and then the computer's item.
+            assertTrue(folder.renameTo(aside));
+            assertTrue(folder.createNewFile());
+            assertEquals("keychain_failed", code(() -> other.list()));
+            assertEquals("keychain_failed", code(() -> other.save(new PairingStore.Item(room(2), NOISE, "c"))));
+            assertTrue(folder.delete() && aside.renameTo(folder));
+            assertEquals(List.of(room(1)), other.list());
+            assertEquals("kept", other.read(room(1)).credential);
+        } finally {
+            if (folder.isFile()) folder.delete();
+            if (aside.exists() && !folder.exists()) aside.renameTo(folder);
+            other.removeAll();
+            folder.delete();
+        }
+    }
+
+    @Test
     public void refusesARoomOrAFieldOfAnotherShape() {
         assertEquals("invalid_room", code(() -> store.read("../escape")));
         assertEquals("invalid_room", code(() -> store.remove("")));

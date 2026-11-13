@@ -161,7 +161,7 @@ public final class PairingStore {
     }
 
     /** The rooms that have an item, never a secret. */
-    public synchronized List<String> list() {
+    public synchronized List<String> list() throws Failure {
         return rooms();
     }
 
@@ -176,10 +176,17 @@ public final class PairingStore {
         }
     }
 
-    private List<String> rooms() {
+    /**
+     * Only a folder that is not there yet holds no item. A folder that cannot be read fails, as the iOS Keychain's list
+     * does: an empty answer would have the web side drop every saved computer, and then their credentials as orphans.
+     */
+    private List<String> rooms() throws Failure {
         List<String> rooms = new ArrayList<>();
         String[] names = folder.list();
-        if (names == null) return rooms;
+        if (names == null) {
+            if (!folder.exists()) return rooms;
+            throw new Failure("keychain_failed");
+        }
         for (String name : names) {
             if (!name.endsWith(SUFFIX)) continue;
             String room = name.substring(0, name.length() - SUFFIX.length());
