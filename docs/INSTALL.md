@@ -655,10 +655,16 @@ Hide AI's settings move with the core and come back with it.
 ## Update
 
 A packaged release of hide updates itself from [with-hide/hide's releases](https://github.com/with-hide/hide/releases).
-It looks shortly after it opens, every six hours after, and when you come back to the app an hour or more after it last looked, takes the highest release whose files for this system are all uploaded, and downloads it in the background.
+It looks shortly after it opens, every two hours after, and when you come back to the app an hour or more after it last looked, takes the highest release whose files for this system are all uploaded, and downloads it in the background.
 An update already waiting is replaced by a newer release that comes out meanwhile, so the one you install is the newest.
 Nothing shows while it looks or downloads.
 When the update is ready, a dot appears on the `?` button at the bottom of the sidebar, and the last line of the Help menu reads `hide <version> ready · Restart`.
+
+An update can be required.
+A release that fixes a problem every older version has names the oldest version that may keep running in its notes, as the hidden line `<!-- hide-min-version: X.Y.Z -->`, and an app below it shows its ready update's card as **Required update**, with no close and no **Later**, until you restart.
+The card says your work does not stop, because a restart closes only the window ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#help-menu)); it never takes the keyboard from a pane and never restarts the app by itself.
+The highest such line among the releases your app may take counts, a line naming a version above its own release is ignored, and taking the line out of a release lifts the requirement at the next look.
+Only an app that has this behavior follows the line: 1.2.8 and earlier show an ordinary update card.
 
 - **Restart** in the Help menu, or **Restart now** in Settings > About, closes the window, installs the update and opens the new version.
 - Without that, macOS and Windows install it the next time you quit hide, and the next launch is the new version.

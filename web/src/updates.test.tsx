@@ -12,7 +12,7 @@ import { cardVersion, checkedAgo, releaseNotesUrl } from "./updates";
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 afterEach(() => { document.body.innerHTML = ""; });
 
-const status = (phase: UpdatePhase, more: Partial<UpdateStatus> = {}): UpdateStatus => ({ phase, prerelease: false, installOnQuit: true, dismissed: null, ...more });
+const status = (phase: UpdatePhase, more: Partial<UpdateStatus> = {}): UpdateStatus => ({ phase, prerelease: false, installOnQuit: true, dismissed: null, required: false, ...more });
 const actions = createActions(() => true);
 const updateRow = () => document.querySelector<HTMLElement>("[data-settings-update]");
 const action = () => document.querySelector<HTMLButtonElement>("[data-update-action]");
@@ -110,6 +110,9 @@ it("offers the ready version on the card until its card is closed, and a newer r
   expect(cardVersion(status({ kind: "ready", version: "0.5.0" }, { dismissed: "0.5.0" }))).toBeNull();
   expect(cardVersion(status({ kind: "ready", version: "0.5.1" }, { dismissed: "0.5.0" }))).toBe("0.5.1");
   expect(cardVersion(status({ kind: "ready", version: "1.2.2-rc.1" }, { dismissed: "1.2.2-rc.1" }))).toBeNull();
+  // A required update's card has no close, so a close from before it was required does not keep it shut.
+  expect(cardVersion(status({ kind: "ready", version: "0.5.0" }, { dismissed: "0.5.0", required: true }))).toBe("0.5.0");
+  expect(cardVersion(status({ kind: "downloading", version: "0.5.0", percent: 10 }, { required: true }))).toBeNull();
 });
 
 it("links a version's release notes on with-hide/hide", () => {
