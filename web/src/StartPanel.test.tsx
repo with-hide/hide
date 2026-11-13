@@ -301,6 +301,8 @@ it("keeps the Overview in front when an Overview project's + opened the panel, a
     expect(started()).toHaveLength(1);
     expect(started()[0]!.payload).toMatchObject({ checkout_path: "/local/docs" });
     expect(useUiStore.getState()).toMatchObject({ overviewOpen: true, opening: null });
+    // The answer follows what was sent: a device's new worktree is not opened either.
+    expect(useStartPanel.getState().present).toBe(false);
 
     // Any other open presents the started pane: the Overview gives way to the opening.
     await act(async () => {
@@ -311,6 +313,7 @@ it("keeps the Overview in front when an Overview project's + opened the panel, a
     expect(started()).toHaveLength(2);
     expect(useUiStore.getState().overviewOpen).toBe(false);
     expect(useUiStore.getState().opening?.target).toMatchObject({ startRequestId: started()[1]!.payload.request_id });
+    expect(useStartPanel.getState().present).toBe(true);
   });
 });
 

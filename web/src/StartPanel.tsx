@@ -63,8 +63,8 @@ function useStartAnswer() {
       // A start's core result owns selection and ordered engine focus.
       // Opening it again here would undo a newer visit made while it waited;
       // only a device's worktree is opened from the page once listed.
-      // An open that asked to stay (`StartPreset.stay`) presents nothing, on a device either.
-      if (answer.paneId && requestKind === "worktree_create" && panel.preset?.stay !== true) followStartedPane(answer.paneId, answer.deviceId);
+      // A start sent from an open that asked to stay (`StartPreset.stay`) presents nothing, on a device either.
+      if (answer.paneId && requestKind === "worktree_create" && panel.present) followStartedPane(answer.paneId, answer.deviceId);
       if (answer.agentPhase === "failed") panel.fail(agentFailure(answer.agentReason, answer.agentLine));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;
@@ -342,7 +342,7 @@ function StartPanel({ actions }: { actions: Actions }) {
     const id = startRequestId();
     // An open that asked to stay (an Overview project's `+`) leaves the screen where it is when the start goes.
     const stay = preset?.stay === true;
-    useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start");
+    useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start", !stay);
     if (target.kind === "worktree") {
       actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(effective), prompt: text.trim() || null, purpose: null, profile: profileToSend, ...(stay ? { present: false } : {}) });
       return;

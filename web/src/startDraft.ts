@@ -76,6 +76,8 @@ type StartPanelState = {
   /** The id of the request whose answer the panel waits for. */
   request: string | null;
   requestKind: "agent_start" | "worktree_create";
+  /** Whether the request in flight brings its pane forward; false for an open that asked to stay (`StartPreset.stay`). */
+  present: boolean;
   /** Why the last start did not go, shown inside the panel. */
   failure: StartFailure | null;
   /** The text the request in flight carries. */
@@ -86,7 +88,7 @@ type StartPanelState = {
   close: () => void;
   setText: (text: string) => void;
   setTarget: (key: string) => void;
-  begin: (requestId: string, kind?: "agent_start" | "worktree_create") => void;
+  begin: (requestId: string, kind?: "agent_start" | "worktree_create", present?: boolean) => void;
   fail: (failure: StartFailure) => void;
   /** The start went: the text is spent and the panel is done; `taskId` names an agent still starting. */
   finish: (taskId: number | null) => void;
@@ -104,6 +106,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   preset: null,
   request: null,
   requestKind: "agent_start",
+  present: true,
   failure: null,
   sent: "",
   spent: null,
@@ -112,7 +115,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   close: () => set({ isOpen: false }),
   setText: (text) => set({ text, failure: null }),
   setTarget: (target) => set({ target }),
-  begin: (request, requestKind = "agent_start") => set((s) => ({ request, requestKind, failure: null, sent: s.text })),
+  begin: (request, requestKind = "agent_start", present = true) => set((s) => ({ request, requestKind, present, failure: null, sent: s.text })),
   fail: (failure) => set({ request: null, failure }),
   finish: (taskId) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, spent: taskId === null ? null : { taskId, text: s.sent } })),
   restore: (failure) => set((s) => (s.spent ? { text: s.text === "" ? s.spent.text : s.text, failure, spent: null } : {})),

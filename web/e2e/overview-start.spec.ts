@@ -1,6 +1,8 @@
 // Issue 2514: a project's `+` on the Overview's Work map (beside its name, expanded or folded)
 // and in the side column opens the start panel on that project, and the start keeps the operator
 // in the Overview, where the new session joins the map. The name stays the project's drag handle.
+// End to end because the unit tests cannot see what decides it here: the Overview layer's modal keeps
+// the pointer and keyboard to itself, and the started agent joins the map only on the core's answer.
 import { expect, test } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
