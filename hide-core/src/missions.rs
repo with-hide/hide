@@ -3536,20 +3536,6 @@ pub(crate) fn apply_patch(
         Some(None) => next.hold = None,
         None => {}
     }
-    if let Some(status) = patch.status {
-        if status == NodeStatus::Working && next.started_at_unix_ms.is_none() {
-            next.started_at_unix_ms = Some(now);
-        }
-        if status == NodeStatus::Working && next.status != NodeStatus::Working {
-            next.worked_at_unix_ms = Some(now);
-        }
-        if status.finished() && !next.status.finished() {
-            next.finished_at_unix_ms = Some(now);
-        } else if !status.finished() {
-            next.finished_at_unix_ms = None;
-        }
-        next.status = status;
-    }
     macro_rules! take {
         ($field:ident) => {
             if let Some(value) = &patch.$field {
@@ -3580,6 +3566,28 @@ pub(crate) fn apply_patch(
     next.pr_seen.retain(|seen| held.contains(&seen.number));
     if let Some(attempts) = patch.attempts {
         next.attempts = attempts;
+    }
+    // A planned node the patch names a worker, a pull request or a branch
+    // for has started, so it is at work: the map, the warnings and the
+    // stalls read a node's work from its status, and a worker bound with no
+    // `--status working` ran drawn as not started and watched by none of
+    // them.
+    let status = patch.status.or_else(|| {
+        (next.status == NodeStatus::Planned && next.started()).then_some(NodeStatus::Working)
+    });
+    if let Some(status) = status {
+        if status == NodeStatus::Working && next.started_at_unix_ms.is_none() {
+            next.started_at_unix_ms = Some(now);
+        }
+        if status == NodeStatus::Working && next.status != NodeStatus::Working {
+            next.worked_at_unix_ms = Some(now);
+        }
+        if status.finished() && !next.status.finished() {
+            next.finished_at_unix_ms = Some(now);
+        } else if !status.finished() {
+            next.finished_at_unix_ms = None;
+        }
+        next.status = status;
     }
     // A branch read in main proves that branch for that finish only: another
     // branch, or the node at work again, waits for a read of its own (B17).
@@ -4027,15 +4035,22 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     }
     convert_old_kinds(&mut value)?;
     let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
-    for line in stored
+    for node in stored
         .book
         .missions
         .iter_mut()
         .flat_map(|mission| mission.nodes.iter_mut())
-        .flat_map(|node| node.criteria.iter_mut())
     {
-        line.carry_spent_rerun();
-        line.count_tally();
+        for line in &mut node.criteria {
+            line.carry_spent_rerun();
+            line.count_tally();
+        }
+        // A node a build before this one left planned with its worker, pull
+        // request or branch named started then, so it reads as at work
+        // (`apply_patch`); when it started was not kept.
+        if node.status == NodeStatus::Planned && node.started() {
+            node.status = NodeStatus::Working;
+        }
     }
     if stored
         .book
@@ -5531,6 +5546,56 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(bound.agent_id.as_deref(), Some("agent-1"));
+    }
+
+    /// A planned node whose worker, pull request or branch is named has
+    /// started, so it is at work without `--status working`: a node bound
+    /// with `--agent-id` alone ran a live worker drawn as not started, out
+    /// of every warning's reach. A book an earlier build left that way reads
+    /// it at work too.
+    #[test]
+    fn a_planned_node_named_its_worker_pr_or_branch_is_at_work() {
+        let planned = apply_plan(
+            &mission(),
+            &plan(vec![node("fix", NodeKind::Change, &[])]),
+            2,
+        )
+        .unwrap();
+        let fix = &planned.nodes[0];
+        for patch in [
+            NodePatch {
+                agent_id: Some(Some("agent-1".into())),
+                ..NodePatch::default()
+            },
+            NodePatch {
+                pr: Some(Some(7)),
+                ..NodePatch::default()
+            },
+            NodePatch {
+                branch: Some(Some("fix/a".into())),
+                ..NodePatch::default()
+            },
+        ] {
+            let started = apply_patch(fix, &patch, 3).unwrap();
+            assert_eq!(started.status, NodeStatus::Working, "{patch:?}");
+            assert_eq!(started.started_at_unix_ms, Some(3));
+            assert_eq!(started.worked_at_unix_ms, Some(3));
+        }
+        let noted = apply_patch(
+            fix,
+            &NodePatch {
+                line: Some(Some("brief ready".into())),
+                ..NodePatch::default()
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(noted.status, NodeStatus::Planned);
+
+        let mut kept = planned.clone();
+        kept.nodes[0].agent_id = Some("agent-1".into());
+        let read = decode(&encode_mission(&kept).unwrap()).unwrap();
+        assert_eq!(read.book.missions[0].nodes[0].status, NodeStatus::Working);
     }
 
     /// PRD mission-node-simple D-16, B26: a failed node of a closed
