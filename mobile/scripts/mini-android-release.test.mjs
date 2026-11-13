@@ -123,7 +123,14 @@ esac`);
 
   const env = (extra = {}) => ({ PATH: `${bin}:/usr/bin:/bin`, HOME: home, TMPDIR: tmpdir(), JAVA_HOME: java, ANDROID_HOME: join(home, 'sdk'), ...extra });
   const args = (again = '0') => ['release', 'branch', '1.0.0', CODE, COMMIT, again];
-  const run = (extra = {}, argv = args()) => spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: env(extra), timeout: 100000 });
+  // A whole run, awaited: a test worker blocked on a child for long misses vitest's own messages under load.
+  const run = (extra = {}, argv = args()) => new Promise((done) => {
+    const child = spawn('bash', [script, ...argv], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
+    const result = { stdout: '', stderr: '', status: null };
+    child.stdout.on('data', (chunk) => { result.stdout += chunk; });
+    child.stderr.on('data', (chunk) => { result.stderr += chunk; });
+    child.once('close', (code) => { result.status = code; done(result); });
+  });
   const start = (extra = {}) => {
     const child = spawn('bash', [script, ...args()], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
     const seen = { out: '', exit: null };
@@ -162,9 +169,9 @@ esac`);
   };
 
   describe('the secrets', () => {
-    it('stop it before it builds anything when one is missing, naming the key and no value', () => {
+    it('stop it before it builds anything when one is missing, naming the key and no value', async () => {
       secretsFile([`HIDE_ANDROID_UPLOAD_PASSWORD=${PASSWORD}`]);
-      const result = run();
+      const result = await run();
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('HIDE_ANDROID_UPLOAD_KEYSTORE is missing');
       expect(result.stderr).toContain('HIDE_ANDROID_PLAY_SERVICE_ACCOUNT is missing');
@@ -173,45 +180,45 @@ esac`);
       leftNothing();
     });
 
-    it('do not ask for the service account when nothing is uploaded', () => {
+    it('do not ask for the service account when nothing is uploaded', async () => {
       secretsFile(goodSecrets().slice(0, 3));
-      const result = run({ HIDE_ANDROID_NO_UPLOAD: '1' });
+      const result = await run({ HIDE_ANDROID_NO_UPLOAD: '1' });
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
     });
 
-    it('are refused from the environment, where every program the run starts would see them', () => {
-      const result = run({ HIDE_ANDROID_UPLOAD_PASSWORD: PASSWORD });
+    it('are refused from the environment, where every program the run starts would see them', async () => {
+      const result = await run({ HIDE_ANDROID_UPLOAD_PASSWORD: PASSWORD });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('HIDE_ANDROID_UPLOAD_PASSWORD is set in the environment');
       expect(read('argv.log')).not.toContain('gradlew');
       expect(everything(result)).not.toContain(PASSWORD);
     });
 
-    it('are refused when a file can be read by another account', () => {
+    it('are refused when a file can be read by another account', async () => {
       writeFileSync(`${config('upload.p12')}.mode`, '644');
-      expect(run().stderr).toContain('HIDE_ANDROID_UPLOAD_KEYSTORE names a file other accounts can read');
+      expect((await run()).stderr).toContain('HIDE_ANDROID_UPLOAD_KEYSTORE names a file other accounts can read');
       rmSync(`${config('upload.p12')}.mode`);
       writeFileSync(`${config('release.env')}.mode`, '640');
-      expect(run().stderr).toContain('readable by it alone');
+      expect((await run()).stderr).toContain('readable by it alone');
     });
 
-    it('are refused when the password does not open the keystore, before anything is built', () => {
+    it('are refused when the password does not open the keystore, before anything is built', async () => {
       secretsFile(goodSecrets().map((line) => line.replace(PASSWORD, 'AnotherPasswordOfLength24')));
-      const result = run();
+      const result = await run();
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('HIDE_ANDROID_UPLOAD_PASSWORD does not open HIDE_ANDROID_UPLOAD_KEYSTORE');
       expect(everything(result)).not.toContain('AnotherPasswordOfLength24');
       expect(read('argv.log')).not.toContain('gradlew');
     });
 
-    it('are refused when the service account file is not one', () => {
+    it('are refused when the service account file is not one', async () => {
       put(config('play.json'), JSON.stringify({ type: 'authorized_user', client_email: 'x' }));
-      expect(run().stderr).toContain('HIDE_ANDROID_PLAY_SERVICE_ACCOUNT is not a service account key file');
+      expect((await run()).stderr).toContain('HIDE_ANDROID_PLAY_SERVICE_ACCOUNT is not a service account key file');
     });
 
-    it('reach keytool and jarsigner through a pipe only, and Gradle not at all', () => {
-      const result = run({ HIDE_ANDROID_NO_UPLOAD: '1' });
+    it('reach keytool and jarsigner through a pipe only, and Gradle not at all', async () => {
+      const result = await run({ HIDE_ANDROID_NO_UPLOAD: '1' });
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
       // The stand-ins refuse a wrong password, so the signature proves jarsigner read it from the file it was handed.
@@ -220,16 +227,16 @@ esac`);
       noSecretAnywhere(result);
     });
 
-    it('are replaced in the log when a tool prints one, and the run goes on', () => {
-      const result = run({ HIDE_ANDROID_NO_UPLOAD: '1', STUB_JARSIGNER_ECHOES: '1', STUB_GRADLE_PRINTS: 'cached ya29.anotherAccessTokenSeenByGradle' });
+    it('are replaced in the log when a tool prints one, and the run goes on', async () => {
+      const result = await run({ HIDE_ANDROID_NO_UPLOAD: '1', STUB_JARSIGNER_ECHOES: '1', STUB_GRADLE_PRINTS: 'cached ya29.anotherAccessTokenSeenByGradle' });
       expect(result.status).toBe(0);
       expect(log()).toContain('signing with <HIDE_ANDROID_UPLOAD_PASSWORD>');
       expect(log()).toContain('cached <token>');
       noSecretAnywhere(result);
     });
 
-    it('withhold the end of a failed step\'s log, and delete the log, when a key reached it that redaction cannot replace', () => {
-      const result = run({ STUB_GRADLE_PRINTS: '-----BEGIN PRIVATE KEY-----', STUB_GRADLE_FAILS: '1' });
+    it('withhold the end of a failed step\'s log, and delete the log, when a key reached it that redaction cannot replace', async () => {
+      const result = await run({ STUB_GRADLE_PRINTS: '-----BEGIN PRIVATE KEY-----', STUB_GRADLE_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).not.toContain('the end of its log');
       expect(result.stderr).toContain('a secret value reached the log');
@@ -239,23 +246,23 @@ esac`);
   });
 
   describe('a run', () => {
-    it('signs and checks the bundle and stops before Play when asked, leaving no record, work or lock', () => {
-      const result = run({ HIDE_ANDROID_NO_UPLOAD: '1' });
+    it('signs and checks the bundle and stops before Play when asked, leaving no record, work or lock', async () => {
+      const result = await run({ HIDE_ANDROID_NO_UPLOAD: '1' });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`signed and checked 1.0.0 (${CODE}), sha256 ${SHA}`);
       expect(result.stdout).toContain('nothing was sent to Play');
       expect(read('signers-seen')).toBe('12:F9:F3:EF\n');
       // The checked bundle stays for an upload by hand, and the next run starts without it.
       expect(readFileSync(join(base(), 'signed.aab'), 'utf8')).toBe(BUNDLE);
-      expect(run({ STUB_GRADLE_FAILS: '1' }).status).toBe(1);
+      expect((await run({ STUB_GRADLE_FAILS: '1' })).status).toBe(1);
       expect(existsSync(join(base(), 'signed.aab'))).toBe(false);
       expect(read('play.log')).toBe('');
       expect(records()).toEqual([]);
       leftNothing();
     });
 
-    it('uploads to the internal track through one edit, the token in a header pipe, and records it', () => {
-      const result = run();
+    it('uploads to the internal track through one edit, the token in a header pipe, and records it', async () => {
+      const result = await run();
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`uploaded: 1.0.0 (${CODE}) to the internal testing track`);
@@ -272,8 +279,8 @@ esac`);
       leftNothing();
     });
 
-    it('does not put a token Play echoed back into the output or the log', () => {
-      const result = run({ STUB_TOKEN_ECHOES: '1' });
+    it('does not put a token Play echoed back into the output or the log', async () => {
+      const result = await run({ STUB_TOKEN_ECHOES: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('Play refused the service account');
       expect(log()).toContain('<token>');
@@ -282,22 +289,22 @@ esac`);
       leftNothing();
     });
 
-    it('stops at a failed release check before anything reaches Play', () => {
-      const result = run({ STUB_CHECK_FAILS: '1' });
+    it('stops at a failed release check before anything reaches Play', async () => {
+      const result = await run({ STUB_CHECK_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release check failed: the app is debuggable');
       expect(read('play.log')).toBe('');
       leftNothing();
     });
 
-    it('refuses a bundle the signature does not wholly cover, and one signed by another key reaches the check', () => {
-      expect(run({ STUB_UNSIGNED_ENTRIES: '1' }).stderr).toContain('entries the signature does not cover');
-      run({ HIDE_ANDROID_NO_UPLOAD: '1', STUB_SIGNER: 'AB:CD' });
+    it('refuses a bundle the signature does not wholly cover, and one signed by another key reaches the check', async () => {
+      expect((await run({ STUB_UNSIGNED_ENTRIES: '1' })).stderr).toContain('entries the signature does not cover');
+      await run({ HIDE_ANDROID_NO_UPLOAD: '1', STUB_SIGNER: 'AB:CD' });
       expect(read('signers-seen')).toBe('AB:CD\n');
     });
 
-    it('deletes the edit when Play refuses the commit, so nothing reaches a track, and may run again', () => {
-      const result = run({ STUB_COMMIT_FAILS: '1' });
+    it('deletes the edit when Play refuses the commit, so nothing reaches a track, and may run again', async () => {
+      const result = await run({ STUB_COMMIT_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release stopped at "commit the edit"');
       expect(result.stderr).toContain('The caller does not have permission');
@@ -306,19 +313,19 @@ esac`);
       expect(records().map((line) => line.split(' ')[4])).toEqual(['started', 'deleted']);
       noSecretAnywhere(result);
       leftNothing();
-      expect(run().status).toBe(0);
+      expect((await run()).status).toBe(0);
     });
 
-    it('refuses a bundle Play took under another version code', () => {
-      const result = run({ STUB_PLAY_CODE: '1' });
+    it('refuses a bundle Play took under another version code', async () => {
+      const result = await run({ STUB_PLAY_CODE: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('another version code');
       expect(read('play.log')).toContain('DELETE');
       leftNothing();
     });
 
-    it('cleans up after a failed Gradle build, showing the end of its log', () => {
-      const result = run({ STUB_GRADLE_FAILS: '1' });
+    it('cleans up after a failed Gradle build, showing the end of its log', async () => {
+      const result = await run({ STUB_GRADLE_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release stopped at "bundle"');
       expect(result.stderr).toContain('Build failed with an exception');
@@ -354,7 +361,7 @@ esac`);
     it('runs one release at a time, naming the holder', async () => {
       const { seen } = start({ STUB_GRADLE_HANGS: '1' });
       await pidIn('grandchild');
-      const second = run();
+      const second = await run();
       expect(second.status).toBe(1);
       expect(second.stderr).toContain('another Android release is running on this machine (pid');
       expect(spawnSync('bash', [script, 'busy', 'branch', 'branch'], { encoding: 'utf8', env: env() }).status).toBe(1);
@@ -362,18 +369,18 @@ esac`);
       expect(seen.exit).toBe(null);
     });
 
-    it('refuses a commit that already went, unless asked to upload it again', () => {
-      expect(run().status).toBe(0);
-      const again = run();
+    it('refuses a commit that already went, unless asked to upload it again', async () => {
+      expect((await run()).status).toBe(0);
+      const again = await run();
       expect(again.status).toBe(1);
       expect(again.stderr).toContain('this commit already has an upload record');
-      expect(run({}, args('1')).status).toBe(0);
+      expect((await run({}, args('1'))).status).toBe(0);
       expect(spawnSync('bash', [script, 'uploads', 'branch'], { encoding: 'utf8', env: env() }).stdout.trim().split('\n')).toHaveLength(4);
     });
 
-    it('refuses a disk below the floor and a version code Play does not take', () => {
-      expect(run({ STUB_FREE_GB: '1' }).stderr).toContain('needs at least 3 GB');
-      expect(run({}, ['release', 'branch', '1.0.0', '2100000001', COMMIT, '0']).stderr).toContain('not a number Play takes');
+    it('refuses a disk below the floor and a version code Play does not take', async () => {
+      expect((await run({ STUB_FREE_GB: '1' })).stderr).toContain('needs at least 3 GB');
+      expect((await run({}, ['release', 'branch', '1.0.0', '2100000001', COMMIT, '0'])).stderr).toContain('not a number Play takes');
     });
   });
 });
