@@ -9,6 +9,7 @@ import com.getcapacitor.BridgeWebViewClient;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Capacitor's web view client with the app's two rules in front of it: where the page may go ({@link NavigationPolicy})
@@ -17,14 +18,31 @@ import java.util.Map;
  */
 final class ShellWebViewClient extends BridgeWebViewClient {
 
-    ShellWebViewClient(Bridge bridge) {
+    private final Consumer<Uri> openOutside;
+
+    /** {@code openOutside} takes an address the page may not load but the phone may open: its browser, in the app. */
+    ShellWebViewClient(Bridge bridge, Consumer<Uri> openOutside) {
         super(bridge);
+        this.openOutside = openOutside;
     }
 
+    /**
+     * The client carries out the policy's answer itself. Capacitor's own answer ({@code Bridge.launchIntent}) compares the
+     * host and the scheme but not the port, so it would load {@code https://localhost:8443/} in the app's web view, and it
+     * asks no policy before it hands an address to the system.
+     */
     @Override
     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-        if (NavigationPolicy.decide(request.getUrl().toString()) == NavigationPolicy.Decision.CANCEL) return true;
-        return super.shouldOverrideUrlLoading(view, request);
+        Uri url = request.getUrl();
+        switch (NavigationPolicy.decide(url.toString())) {
+            case INSIDE:
+                return false;
+            case OUTSIDE:
+                openOutside.accept(url);
+                return true;
+            default:
+                return true;
+        }
     }
 
     @Override

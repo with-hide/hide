@@ -4616,18 +4616,21 @@ The Android app has no notifications yet: the page never calls a push plugin the
 Its native code is `mobile/android/app/src/main/java/me/grab/hide/android/`, whose types carry the iOS names where they do the same job.
 
 The bridge: Capacitor answers the page through a web message listener named `androidBridge`, falls back to a Java object in every frame when the web view lacks that listener, and puts two Java objects of its own plugins (cookies and HTTP) into every frame; it loads any plugin a call names.
-`BridgeGate` removes the three Java objects and Capacitor's listener and registers itself under the same name for the app's own origin only, and passes a message on only when it comes from the main frame, is a plugin call or the page's error report, and names a plugin in `BridgeGate.APP_PLUGINS` (`HideKeychain`, `HideScanner`, `HideApp`; there is no `Console`, since Capacitor's Android bridge sends the console to the system log without a plugin).
+The app's web view (`GatedWebView`, put in place of Capacitor's by an app layout of the same name as Capacitor's) refuses every Java object, so none is ever in a page.
+`BridgeGate` removes Capacitor's listener and registers itself under the same name for the app's own origin only, and passes a message on only when it comes from the main frame, is a plugin call or the page's error report, and names a plugin in `BridgeGate.APP_PLUGINS` (`HideKeychain`, `HideScanner`, `HideApp`; there is no `Console`, since Capacitor's Android bridge sends the console to the system log without a plugin).
 `mobile/scripts/check-versions.mjs` fails when that list and the app's `@CapacitorPlugin` classes differ, when `capacitor.settings.gradle` names a project beside Capacitor's own library (an npm plugin `cap sync` found), when the app applies `capacitor.build.gradle` (through which `cap sync` links a plugin's library) and when the app links a library outside its fixed list.
-A web view without the web message listener gets no bridge at all: the app shows its own page asking for an updated Android System WebView, with a link to it on Google Play.
-The gate is in place before the page is loaded again, because a Java object stays in a page until its next load.
-`BridgeGateWebViewTest`, an instrumented test in a real web view, proves that a same-origin frame and a sandboxed frame reach neither a plugin nor the cookie object while the main frame's call passes, and fails when the gate's install goes.
+A web view without the web message listener gets no bridge at all, and neither does one where Capacitor could not add its listener (it then falls back to its Java object, which the web view refused): the app drops the bridge and shows its own page asking for an updated Android System WebView, with a link to it on Google Play.
+The gate is in place before the page is loaded again, because a page keeps the listener it was loaded with.
+`BridgeGateWebViewTest`, an instrumented test in a real web view, proves that a same-origin frame and a sandboxed frame reach neither a plugin nor the cookie object while the main frame's call passes, and fails when the gate's install goes; and that a listener Capacitor could not add leaves no bridge.
 
-The navigation: `ShellWebViewClient` puts `NavigationPolicy` in front of Capacitor's client, the same rule as iOS: the app's origin loads inside, an `https` address goes to Capacitor, which opens it outside, and every other scheme is cancelled (Capacitor would hand `tel:`, `intent:` or another app's scheme to the system).
+The navigation: `ShellWebViewClient` carries out `NavigationPolicy` itself, the same rule as iOS: the app's origin loads inside, any other `https` address opens in the phone's browser, and every other scheme is cancelled.
+Capacitor's own client would hand `tel:`, `intent:` or another app's scheme to the system, and, comparing no port, load `https://localhost:8443/` inside; `ShellNavigationWebViewTest` drives the real client with that address.
 The web view makes no second window, so `window.open` and a link with a target reach the same rule as a navigation.
 `PhoneRouter` answers `/p/<n>/` with that bundle's `index.html`, where Capacitor's local server would answer the root page.
 
 The pairing credential is kept by `HideKeychain` (`PairingStore`): Android has no keychain for a small secret, so each computer's item is a file named by its room in the app's no-backup folder, sealed with AES-GCM under one Android Keystore key that never leaves the Keystore and works only while the phone is unlocked, with the room as the cipher's associated data, so a file moved to another room's name does not open.
 The calls and their checks are iOS's (`save`, `read`, `remove`, `list`, at most 16 items), and an item is written beside its file and moved over it.
+A folder the app cannot read fails a `list` (`keychain_failed`) as the iOS Keychain's does; only a folder not made yet is empty, since an empty answer would have the page drop every saved computer and then its credential.
 The folder and the key go with the app when it is deleted, so nothing of an earlier install is left to clear; the app also turns backup off (`allowBackup` false and data extraction rules that exclude every domain from cloud backup and device transfer).
 `PairingStoreKeystoreTest` runs on a device against the real Keystore.
 

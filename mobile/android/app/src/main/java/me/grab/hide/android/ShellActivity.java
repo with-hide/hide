@@ -1,11 +1,13 @@
 package me.grab.hide.android;
 
 import android.annotation.SuppressLint;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
 import android.webkit.WebView;
 import androidx.activity.EdgeToEdge;
 import androidx.activity.OnBackPressedCallback;
@@ -14,6 +16,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import java.util.Set;
 
@@ -29,6 +32,7 @@ import java.util.Set;
  */
 public class ShellActivity extends BridgeActivity {
 
+    private static final String TAG = "HideShell";
     private static final String WEBVIEW_ON_PLAY = "https://play.google.com/store/apps/details?id=com.google.android.webview";
 
     /** The page's choice ({@code HideApp.appearance}): light, dark or the system's. */
@@ -58,13 +62,19 @@ public class ShellActivity extends BridgeActivity {
         // Without the web message listener Capacitor would answer every frame through `addJavascriptInterface`: no bridge
         // is made at all, and the page asks for a newer web view instead.
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            setContentView(R.layout.update_webview);
-            findViewById(R.id.update_webview_open).setOnClickListener((view) -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(WEBVIEW_ON_PLAY))));
+            showUpdatePage();
             return;
         }
         super.load();
+        // With the feature, Capacitor still falls back to that Java object when it cannot add its listener; the web view
+        // refused it (GatedWebView), and the app drops the bridge rather than run one the page cannot reach or ungated.
+        if (((GatedWebView) bridge.getWebView()).refused(BridgeGate.HANDLER)) {
+            Log.w(TAG, "the bridge's web message listener could not be added; no bridge");
+            dropBridge();
+            return;
+        }
         BridgeGate.install(bridge, exposedPlugins());
-        bridge.setWebViewClient(new ShellWebViewClient(bridge));
+        bridge.setWebViewClient(new ShellWebViewClient(bridge, this::openOutside));
         WebView webView = bridge.getWebView();
         seedTheme(webView);
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -74,10 +84,38 @@ public class ShellActivity extends BridgeActivity {
             }
         });
         DebugInputs.attach(this, bridge, getIntent());
-        // Capacitor began loading the page before the gate existed, and a Java object it put into the page leaves only on
-        // the next load: every page the app shows is loaded after the gate.
+        // Capacitor began loading the page under its own listener, and a page keeps the listener it was loaded with: every
+        // page the app shows is loaded after the gate took the listener's place.
         webView.stopLoading();
         bridge.reload();
+    }
+
+    private void showUpdatePage() {
+        setContentView(R.layout.update_webview);
+        findViewById(R.id.update_webview_open).setOnClickListener((view) -> openOutside(Uri.parse(WEBVIEW_ON_PLAY)));
+    }
+
+    /**
+     * The bridge Capacitor made goes, with its web view and plugins, and the activity goes on as on a web view without the
+     * listener feature: Capacitor's lifecycle steps skip a missing bridge.
+     */
+    private void dropBridge() {
+        Bridge made = bridge;
+        bridge = null;
+        made.getWebView().stopLoading();
+        showUpdatePage();
+        made.onDestroy();
+        made.onDetachedFromWindow();
+    }
+
+    /** An address the page may not load but the phone may open goes to the phone's browser. A test records it instead. */
+    protected void openOutside(Uri url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, url));
+        } catch (ActivityNotFoundException e) {
+            // No app takes https on this phone; the page stays where it is.
+            Log.w(TAG, "no app opens an outside address");
+        }
     }
 
     @Override

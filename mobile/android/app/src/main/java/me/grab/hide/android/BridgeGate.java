@@ -26,8 +26,9 @@ import org.json.JSONObject;
  * among them; and two of its plugins put a Java object of their own into every frame. The phone app draws agent-made
  * HTML in a sandboxed frame ({@code look-frame.html}). The gate takes the listener's place under the same name, for the
  * app's own origin only, and passes a call on only when it comes from the main frame, is a plugin call or an error
- * report, and names a plugin the app has chosen to expose; it takes every Java object Capacitor put into the page away.
- * A web view without the listener feature never gets a bridge at all ({@link ShellActivity}).
+ * report, and names a plugin the app has chosen to expose. The app's web view refuses every Java object
+ * ({@link GatedWebView}), and a web view without the listener feature, or one where Capacitor could not add its listener,
+ * never gets a bridge at all ({@link ShellActivity}).
  */
 public final class BridgeGate implements WebViewCompat.WebMessageListener {
 
@@ -43,9 +44,6 @@ public final class BridgeGate implements WebViewCompat.WebMessageListener {
      * hands the page's console to the system log without a plugin, and no {@code HidePush} yet.
      */
     public static final Set<String> APP_PLUGINS = Set.of("HideKeychain", "HideScanner", "HideApp");
-
-    /** The Java objects Capacitor 8.6 puts into every frame: its legacy bridge and two of its own plugins'. */
-    static final String[] CAPACITOR_INTERFACES = { HANDLER, "CapacitorCookiesAndroidInterface", "CapacitorHttpAndroidInterface" };
 
     private static final String TAG = "HideBridge";
 
@@ -90,7 +88,6 @@ public final class BridgeGate implements WebViewCompat.WebMessageListener {
     public static BridgeGate install(Bridge bridge, Set<String> plugins) {
         WebView webView = bridge.getWebView();
         BridgeGate gate = new BridgeGate(capacitorHandler(bridge), plugins);
-        for (String name : CAPACITOR_INTERFACES) webView.removeJavascriptInterface(name);
         WebViewCompat.removeWebMessageListener(webView, HANDLER);
         WebViewCompat.addWebMessageListener(webView, HANDLER, Set.of(ORIGIN), gate);
         return gate;

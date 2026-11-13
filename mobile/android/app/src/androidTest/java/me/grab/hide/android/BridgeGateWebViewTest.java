@@ -2,14 +2,17 @@ package me.grab.hide.android;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import android.content.Intent;
 import android.os.SystemClock;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.webkit.WebViewFeature;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -24,8 +27,8 @@ import org.junit.runner.RunWith;
  * The app's own activity, with its real web view and Capacitor's real bridge: a call from a sandboxed frame or from a
  * same-origin frame never reaches a plugin, the main frame's call to one of the app's plugins does, and the main frame's
  * call to a plugin of Capacitor's own (CapacitorCookies, which sets a cookie) does not. Without {@link BridgeGate}'s
- * install line in {@link ShellActivity} this fails: Capacitor answers the cookie call, and its cookie object stays in the
- * sandboxed frame, which sets a cookie through it.
+ * install line in {@link ShellActivity} this fails: Capacitor answers the cookie call. When Capacitor cannot add its
+ * listener, the app makes no bridge; without that check it runs with Capacitor's fallback in place.
  */
 @RunWith(AndroidJUnit4.class)
 public class BridgeGateWebViewTest {
@@ -91,6 +94,8 @@ public class BridgeGateWebViewTest {
         AtomicReference<WebView> webView = new AtomicReference<>();
         scenario.onActivity((activity) -> {
             webView.set(activity.getBridge().getWebView());
+            // The app's web view, which takes no Java object (GatedWebView), not Capacitor's.
+            assertTrue(webView.get() instanceof GatedWebView);
             webView.get().loadDataWithBaseURL("https://localhost/gate-test", PAGE, "text/html", "utf-8", null);
         });
         JSONObject results = waitForDone(webView.get());
@@ -111,6 +116,21 @@ public class BridgeGateWebViewTest {
         assertFalse(results.has("cookie"));
         String cookies = CookieManager.getInstance().getCookie("https://localhost");
         assertFalse(String.valueOf(cookies), cookies != null && cookies.contains("gate"));
+    }
+
+    @Test
+    public void makesNoBridgeWhenCapacitorCannotAddItsListener() {
+        // The web view has the listener feature, so only the failed registration leads here.
+        assertTrue(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER));
+        Intent intent = new Intent(InstrumentationRegistry.getInstrumentation().getTargetContext(), ShellTestActivity.class)
+            .putExtra(ShellTestActivity.BREAK_LISTENER, true);
+        try (ActivityScenario<ShellTestActivity> broken = ActivityScenario.launch(intent)) {
+            broken.onActivity((activity) -> {
+                assertNull(activity.getBridge());
+                assertTrue(activity.findViewById(R.id.update_webview_title) != null);
+                assertNull(activity.findViewById(R.id.webview));
+            });
+        }
     }
 
     /** Polls the page's own record until its last call is answered. */

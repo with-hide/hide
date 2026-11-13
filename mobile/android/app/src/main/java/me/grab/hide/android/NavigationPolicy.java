@@ -9,17 +9,17 @@ import java.util.Locale;
  * window ({@code window.open} and a link with a target, which the web view, making no second window, turns into a
  * navigation of its own).
  *
- * <p>Capacitor hands every address outside the app to the system ({@code Intent.ACTION_VIEW}) whatever its scheme, so a page
- * could open {@code tel:}, {@code intent:} or another app's scheme. An address inside the app's origin goes on to
- * Capacitor, which loads it; an {@code https} address goes on to Capacitor, which opens it outside; anything else is
- * cancelled.
+ * <p>Capacitor would hand every address outside the app to the system ({@code Intent.ACTION_VIEW}) whatever its scheme, so
+ * a page could open {@code tel:}, {@code intent:} or another app's scheme, and it would load an address of the app's host
+ * on another port. {@link ShellWebViewClient} carries out this answer instead: an address inside the app's origin loads,
+ * an {@code https} address opens outside, anything else is cancelled.
  */
 public final class NavigationPolicy {
 
     public enum Decision {
-        /** The app's own origin, or a frame the page makes of itself: Capacitor loads it. */
+        /** The app's own origin, or a frame the page makes of itself: the web view loads it. */
         INSIDE,
-        /** An https address: Capacitor opens it outside the app. */
+        /** Any other https address, another port of the app's host included: the phone's browser opens it. */
         OUTSIDE,
         /** Every other scheme. */
         CANCEL,

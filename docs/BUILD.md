@@ -897,7 +897,7 @@ The scripts name these paths themselves (`mobile/scripts/mini-android.sh`), so n
 
 `bash mobile/scripts/build-android.sh` is the one command.
 It runs, on this machine, the phone build, `check-versions.mjs` and `assemble.mjs` as the iOS build does, then `cap sync android`, and copies `mobile/android/` and the Capacitor library it names (from `node_modules`, at the same place relative to it) to `~/hide-android-build/<branch>/` on the machine named by `HIDE_ANDROID_BUILD_HOST` (default `mini`).
-There `mini-android.sh`, piped over `ssh`, runs `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` (the JVM tests and the debug app), boots the emulator, installs the app and its instrumented tests and runs them in the app's own process with its real web view (`BridgeGateWebViewTest`, `PairingStoreKeystoreTest`); a failing test fails the command.
+There `mini-android.sh`, piped over `ssh`, runs `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` (the JVM tests and the debug app), boots the emulator, installs the app and its instrumented tests and runs them in the app's own process with its real web view (`BridgeGateWebViewTest`, `ShellNavigationWebViewTest`, `PairingStoreKeystoreTest`, through the debug build's `ShellTestActivity`); a failing test fails the command.
 `HIDE_ANDROID_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`.
 
 `bash mobile/scripts/build-android.sh run` installs the built debug app, launches it, waits `HIDE_ANDROID_SETTLE` seconds (default 15) and captures the screen; `HIDE_ANDROID_CAPTURE=<file.png>` copies the capture back, with the app's log beside it as `<file>.log`.
