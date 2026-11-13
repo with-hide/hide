@@ -117,12 +117,35 @@ test("the policy's relay journal retention is not shorter than what the deploy k
 test("the policy names what Google sees through FCM and that the relay passes the token, in each language", () => {
   // The Android app's notifications go through Google's FCM; the Play data safety form declares the same facts (mobile/store/android/play-forms.md).
   const claims = {
-    en: [/<h4>4\.4 The Android app and Google<\/h4>/, /Firebase Cloud Messaging \(FCM\)/, /Firebase installation ID/, /The relay passes both to Google/, /does not store the token/, /not even a fixed general line/, /code scanner[\s\S]*diagnostics/],
-    ko: [/<h4>4\.4 Android 앱과 구글<\/h4>/, /Firebase Cloud Messaging\(FCM\)/, /Firebase 설치 ID/, /중계 서버는[^<]*둘을 구글에 전달/, /토큰도 알림도 저장하거나 로그에 남기지 않습니다/, /고정된 일반 문구도 없으므로/, /코드 스캐너[\s\S]*진단 정보/],
+    en: [
+      /passes on to Google \(section 4\.4\)/, // 3.1, what the relay sees
+      /<h4>4\.4 The Android app and Google<\/h4>/, /in neither can Google read anything that comes from your computer/,
+      /Firebase Cloud Messaging \(FCM\)/, /Firebase installation ID/, /The relay passes both to Google/, /does not store the token/,
+      /when Google reports the token as no longer valid/, /system version, model, brand and the store that installed the app/,
+      /not even a fixed general line/,
+      /code scanner[\s\S]*device identifier and a per-installation identifier, performance figures, and event types and error codes/,
+    ],
+    ko: [
+      /구글로 전달하며/,
+      /<h4>4\.4 Android 앱과 구글<\/h4>/, /어느 쪽에서도 구글은 사용자의 컴퓨터에서 온 내용을 읽을 수 없습니다/,
+      /Firebase Cloud Messaging\(FCM\)/, /Firebase 설치 ID/, /중계 서버는[^<]*둘을 구글에 전달/, /토큰도 알림도 저장하거나 로그에 남기지 않습니다/,
+      /구글이 토큰을 더 이상 쓸 수 없다고 알려 줄 때도 등록이 끝납니다/, /시스템 버전, 모델, 브랜드, 앱을 설치한 스토어/,
+      /고정된 일반 문구도 없으므로/,
+      /코드 스캐너[\s\S]*기기 식별자와 설치별 식별자, 성능 수치, 이벤트 종류와 오류 코드/,
+    ],
   };
   for (const [id, patterns] of Object.entries(claims)) {
     const body = section(privacy, id);
     for (const re of patterns) assert.match(body, re, `${id}: the policy carries ${re}`);
     assert.match(body, /<li>[^<]*FCM[^<]*<\/li>/, `${id}: the relay's list of what it sees names FCM`);
+    // The scan session ID is collected only with auto-zoom, which the app leaves off, so the policy does not claim it.
+    assert.doesNotMatch(body, /session ID|세션 ID/, `${id}: no scan session ID`);
+  }
+});
+
+test("the Play data safety answers say what the policy says about Google's identifiers and diagnostics", () => {
+  const form = repoFile("mobile/store/android/play-forms.md");
+  for (const re of [/Firebase installation ID/, /device identifier and a per-installation identifier/, /performance figures, event types and error codes/, /site\/public\/privacy\.html/]) {
+    assert.match(form, re, `play-forms.md carries ${re}`);
   }
 });
