@@ -93,12 +93,19 @@ public class HidePushServiceTest {
         return NoticeSealer.seal(notice.toString().getBytes(StandardCharsets.UTF_8), key.publicKey, key.auth);
     }
 
-    /** The app's notifications once the system lists what {@code until} waits for; the manager posts asynchronously. */
+    /**
+     * The app's notices once the system lists what {@code until} waits for; the manager posts asynchronously. The summary
+     * the system groups an app's notifications under once several are shown (`g:Aggregate_...`) is the system's own and is
+     * left out.
+     */
     private List<StatusBarNotification> shown(Predicate<List<StatusBarNotification>> until) {
         long deadline = SystemClock.uptimeMillis() + 10_000;
         List<StatusBarNotification> active = List.of();
         while (SystemClock.uptimeMillis() < deadline) {
-            active = List.of(manager.getActiveNotifications());
+            active = new ArrayList<>();
+            for (StatusBarNotification notification : manager.getActiveNotifications()) {
+                if ((notification.getNotification().flags & Notification.FLAG_GROUP_SUMMARY) == 0) active.add(notification);
+            }
             if (until.test(active)) return active;
             SystemClock.sleep(100); // wait-ok: the next read of the system's list
         }
@@ -124,6 +131,9 @@ public class HidePushServiceTest {
         service.onMessageReceived(message(seal(NoticeSealer.notice(ROOM).put("tag", "dev|w1:p1").put("pane_id", "w1:p1").put("clear", new JSONArray()), key)));
         service.onMessageReceived(message(seal(NoticeSealer.notice(ROOM).put("title", "An older notice").put("clear", new JSONArray()), key)));
         shown((active) -> active.size() == 2);
+        // Android drops an update of a shown notification that comes faster than five a second, which two posts a moment
+        // apart reach (`Shedding` in the system log); the replacement comes a second later, as an agent's next notice does.
+        SystemClock.sleep(1_000); // wait-ok: the system's notification update rate falls under its five a second
         service.onMessageReceived(message(seal(NoticeSealer.notice(ROOM), key)));
         // One notification is left, the agent's, with the new notice's title: the system lists a close and an update in
         // the order they were made, so both are waited for.
