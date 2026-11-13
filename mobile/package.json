@@ -1,7 +1,7 @@
 {
   "name": "hide-mobile",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.2.7",
   "description": "The Hide iOS app host: a Capacitor shell that carries the phone web app inside the app.",
   "type": "module",
   "scripts": {
