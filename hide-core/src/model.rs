@@ -8322,7 +8322,7 @@ pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
     OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
 };
-pub use pane_replies::PaneRepliesSnapshot;
+pub use pane_replies::{PaneRepliesSnapshot, PaneReplyReceipt};
 pub use rest::{RestSections, RestWire};
 pub use session_thread::*;
 pub use suggestions::*;

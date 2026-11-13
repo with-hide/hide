@@ -45,10 +45,10 @@ const HUMAN_TURN = { id: "gallery.1", kind: "auth", place: "https://github.com/l
 const galleryCopy = async () => true;
 /** One reply field per state it draws (issue 2513), keyed by an invented pane; the gallery's send goes nowhere. */
 const REPLY_FIELDS = {
-  "reply-typed": { text: "프로덕션까지 배포해 주세요", sent: null, refused: null },
-  "reply-sending": { text: "프로덕션까지 배포해 주세요", sent: "gallery-request", refused: null },
-  "reply-asleep": { text: "프로덕션까지 배포해 주세요", sent: null, refused: "asleep" },
-  "reply-uncertain": { text: "프로덕션까지 배포해 주세요", sent: null, refused: "uncertain" },
+  "reply-typed": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, refused: null, at: 1 },
+  "reply-sending": { text: "프로덕션까지 배포해 주세요", session: null, sent: "gallery-request", refused: null, at: 2 },
+  "reply-asleep": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, refused: "asleep", at: 3 },
+  "reply-uncertain": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, refused: "uncertain", at: 4 },
 };
 const galleryReply = { replyToAgent: () => null };
 const time = (text: string) => <span className="font-mono text-caption text-muted-foreground">{text}</span>;
@@ -78,7 +78,7 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
   const plan = useMemo(() => planFixture("running", AT), []);
   const finished = useMemo(() => planFixture("finished", AT), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: { missions: { items: missions() } } as unknown as SnapshotRest, agents: [], connection: "live", paneReplies: null });
+    useShellStore.setState({ rest: { missions: { items: missions() } } as unknown as SnapshotRest, agents: [], connection: "live", paneReplies: { receipts: [{ request_id: "gallery-request", pane_id: "reply-sending", state: "sending" }] } });
     useReplyFields.setState({ fields: REPLY_FIELDS });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
@@ -124,11 +124,11 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
           <State name="Device not connected"><HumanTurnDone turn={{ ...HUMAN_TURN, id: "away", device_id: "mini" }} actions={{ finishHumanTurn: open }} /></State>
         </Part>
         <Part name="Reply without opening · AgentReplyField">
-          <State name="Empty"><AgentReplyField paneId="reply-empty" name="배포 확인" actions={galleryReply} /></State>
-          <State name="Typed"><AgentReplyField paneId="reply-typed" name="배포 확인" actions={galleryReply} /></State>
-          <State name="Sending"><AgentReplyField paneId="reply-sending" name="배포 확인" actions={galleryReply} /></State>
-          <State name="Refused: asleep"><AgentReplyField paneId="reply-asleep" name="배포 확인" actions={galleryReply} /></State>
-          <State name="Refused: no answer"><AgentReplyField paneId="reply-uncertain" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Empty"><AgentReplyField session={null} paneId="reply-empty" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Typed"><AgentReplyField session={null} paneId="reply-typed" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Sending"><AgentReplyField session={null} paneId="reply-sending" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Refused: asleep"><AgentReplyField session={null} paneId="reply-asleep" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Refused: no answer"><AgentReplyField session={null} paneId="reply-uncertain" name="배포 확인" actions={galleryReply} /></State>
         </Part>
         <Part name="Ready update · UpdateReadyCardBody">
           <State name="Card beside the ↑ button"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>

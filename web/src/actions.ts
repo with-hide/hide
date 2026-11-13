@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneReplyPayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -1245,13 +1245,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A reply to an agent from the Overview, without opening its session: the
-     * core types `text` and Enter into its pane as a phone's reply does, and
-     * answers on `pane_replies` by the request id this returns. `null` when
-     * the event never left this page, so nothing was sent.
+     * core types `text` and Enter into its pane as a phone's reply does, while
+     * the pane still runs `session` (the digest of the session drawn there),
+     * and answers on `pane_replies` by the request id this returns. `null`
+     * when the event never left this page, so nothing was sent.
      */
-    replyToAgent(paneId: string, text: string): string | null {
+    replyToAgent(paneId: string, text: string, session: string | null): string | null {
       const requestId = crypto.randomUUID();
-      return dispatch({ schema_version: 2, kind: "pane_reply", payload: { pane_id: paneId, request_id: requestId, text } }) === false ? null : requestId;
+      const payload = { pane_id: paneId, request_id: requestId, text, session } satisfies PaneReplyPayload;
+      return dispatch({ schema_version: 2, kind: "pane_reply", payload }) === false ? null : requestId;
     },
 
     /**

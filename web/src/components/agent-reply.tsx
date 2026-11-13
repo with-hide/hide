@@ -10,7 +10,7 @@ import { Input } from "./ui/input";
 import { Hint } from "./ui/tooltip";
 
 /** The refusals the field words itself; any other reads as a plain failure. */
-const REASONS = new Set(["pane_gone", "pane_changed", "asleep", "input_refused", "unavailable", "device_unreachable", "uncertain", "too_long", "control_characters", "in_flight", "offline"]);
+const REASONS = new Set(["pane_gone", "pane_changed", "session_changed", "unknown", "asleep", "input_refused", "unavailable", "device_unreachable", "uncertain", "too_long", "control_characters", "in_flight", "offline"]);
 
 /**
  * A one-line reply to an agent without opening its session (the Overview's
@@ -18,9 +18,10 @@ const REASONS = new Set(["pane_gone", "pane_changed", "asleep", "input_refused",
  * words and Enter into the agent's pane, as the phone's reply does. The words
  * stay while they are sent and after a refusal, with its reason under them.
  */
-export function AgentReplyField({ paneId, name, actions, className }: { paneId: string; name: string; actions: Pick<Actions, "replyToAgent">; className?: string }) {
+/** `session` is the digest of the session drawn in the pane, which the core checks it still runs before typing. */
+export function AgentReplyField({ paneId, session, name, actions, className }: { paneId: string; session: string | null; name: string; actions: Pick<Actions, "replyToAgent">; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const reply = useAgentReply(paneId, actions.replyToAgent);
+  const reply = useAgentReply(paneId, session, actions.replyToAgent);
   const reason = reply.refused ? t(`agentReply.reason.${REASONS.has(reply.refused) ? reply.refused : "failed"}` as MessageKey) : null;
   const send = t("agentReply.send");
   return (

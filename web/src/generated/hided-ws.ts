@@ -130,7 +130,9 @@ export type SnapshotSections =
   | AgentNotice
   | DesktopNoticesPayload
   | DesktopActivityPayload
-  | HumanTurnDonePayload;
+  | HumanTurnDonePayload
+  | PaneReplyPayload
+  | PaneRepliesSection;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
  */
@@ -875,4 +877,33 @@ export interface DesktopActivityPayload {
  */
 export interface HumanTurnDonePayload {
   declaration: string;
+}
+/**
+ * Payload of the `pane_reply` client event (issue 2513): the Overview's reply to an agent without opening its session. The core types `text` and Enter into the pane of `pane_id` (a core pane id) through the one reply write a session thread's input uses (`hide-core/src/runtime/pane_reply.rs`), only while that pane still runs `session`, the digest of the session the screen drew there (the Overview's `session_digest`, null when it drew none); otherwise `session_changed`. `request_id` is the 36-character UUID the answer is named by: a request id the core holds a receipt for is never written again. The answer is the request's receipt in the `pane_replies` section.
+ */
+export interface PaneReplyPayload {
+  pane_id: string;
+  request_id: string;
+  text: string;
+  session?: string | null;
+}
+/**
+ * The `pane_replies` snapshot section: one receipt per `pane_reply` request, oldest first, at most 64; past that the oldest settled receipt goes and a receipt still sending stays. A screen that finds no receipt for a reply it sent (a daemon restart, a lost event) treats the result as unknown rather than waiting for it.
+ */
+export interface PaneRepliesSection {
+  /**
+   * @maxItems 64
+   */
+  receipts: {
+    request_id: string;
+    pane_id: string;
+    /**
+     * session_thread_input_state in snapshot-wire-enums.json.
+     */
+    state: "sending" | "sent" | "refused";
+    /**
+     * A stable refusal code: empty, too_long, control_characters, pane_gone, pane_changed, session_changed, in_flight, asleep, input_refused, unavailable, device_unreachable, uncertain.
+     */
+    reason?: string;
+  }[];
 }

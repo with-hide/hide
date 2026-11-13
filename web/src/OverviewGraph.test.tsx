@@ -324,7 +324,7 @@ it("answers a waiting agent from its item and from the session detail, keeping r
   const enter = (input: HTMLInputElement) => act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
   const answer = (state: "sending" | "sent" | "refused", reason?: string) => act(async () => {
     const sent = events.at(-1)!.payload as { request_id: string };
-    useShellStore.setState({ paneReplies: { replies: { r: { request_id: sent.request_id, state, ...(reason ? { reason } : {}) } } } });
+    useShellStore.setState({ paneReplies: { receipts: [{ request_id: sent.request_id, pane_id: "r", state, ...(reason ? { reason } : {}) }] } });
   });
   try {
     await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
@@ -338,7 +338,8 @@ it("answers a waiting agent from its item and from the session detail, keeping r
     await type(input(), "프로덕션까지 해 주세요");
     await enter(input());
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ schema_version: 2, kind: "pane_reply", payload: { pane_id: "r", text: "프로덕션까지 해 주세요" } });
+    // It names the session the map drew there, which the core checks the pane still runs.
+    expect(events[0]).toMatchObject({ schema_version: 2, kind: "pane_reply", payload: { pane_id: "r", text: "프로덕션까지 해 주세요", session: "digest-r" } });
     expect((events[0]!.payload as { request_id: string }).request_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(useUiStore.getState().opening).toBeNull();
     await answer("sending");
@@ -351,6 +352,10 @@ it("answers a waiting agent from its item and from the session detail, keeping r
     expect(input().value).toBe("프로덕션까지 해 주세요");
     expect(field().querySelector('[role="alert"]')?.textContent).toBe("The session is asleep: wake it to send");
     expect(input().getAttribute("aria-invalid")).toBe("true");
+    // Editing the words clears the reason.
+    await type(input(), "프로덕션까지 해 주세요!");
+    expect(field().querySelector('[role="alert"]')).toBeNull();
+    await type(input(), "프로덕션까지 해 주세요");
 
     // A reply that never left the page is refused as offline, its words kept.
     online = false;

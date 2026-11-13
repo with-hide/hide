@@ -72,6 +72,8 @@ const words = {
   "agentReply.reason.pane_gone": ["This session's terminal is gone: nothing was sent", "이 세션의 터미널이 없어요. 보내지 않았어요", "このセッションの端末がありません。送信していません", "此会话的终端已不存在，未发送"],
   "agentReply.reason.pane_changed": ["Another session runs in this terminal now: nothing was sent", "이 터미널에서 이제 다른 세션이 돌아요. 보내지 않았어요", "この端末では別のセッションが動いています。送信していません", "此终端现在运行另一个会话，未发送"],
   "agentReply.reason.asleep": ["The session is asleep: wake it to send", "세션이 잠들어 있어요. 깨운 뒤 보내세요", "セッションはスリープ中です。起こしてから送信してください", "会话正在休眠，请唤醒后再发送"],
+  "agentReply.reason.session_changed": ["Another session runs here now: nothing was sent", "이제 다른 세션이 돌고 있어요. 보내지 않았어요", "別のセッションが動いています。送信していません", "现在运行的是另一个会话，未发送"],
+  "agentReply.reason.unknown": ["No answer came back: check the session before sending again", "결과를 확인하지 못했어요. 다시 보내기 전에 세션을 확인하세요", "結果を確認できませんでした。再送前にセッションを確認してください", "未能确认结果，重新发送前请检查会话"],
   "agentReply.reason.input_refused": ["The terminal did not take the words: nothing was sent", "터미널이 말을 받지 않았어요. 보내지 않았어요", "端末が入力を受け付けませんでした。送信していません", "终端未接收输入，未发送"],
   "agentReply.reason.unavailable": ["Hide could not reach the terminal: nothing was sent", "터미널에 닿지 못했어요. 보내지 않았어요", "端末に届きませんでした。送信していません", "无法连接终端，未发送"],
   "agentReply.reason.device_unreachable": ["The device does not answer: nothing was sent", "기기가 답하지 않아요. 보내지 않았어요", "デバイスが応答しません。送信していません", "设备无响应，未发送"],

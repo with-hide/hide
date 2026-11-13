@@ -3368,8 +3368,9 @@ export type SessionThreadPane = "same" | "changed" | "gone";
 export type SessionThreadOlder = "idle" | "loading" | "capacity" | "failed";
 /** What became of the input box's words (`session_thread_input_state`); `reason` is a refusal's code. */
 export type SessionThreadInput = { request_id: string; state: "sending" | "sent" | "refused"; reason?: string };
-/** What became of the replies sent to agents from a screen that does not show their session (`pane_replies`, the core's `pane_reply`): the newest per core pane id, named by its request id. */
-export type PaneRepliesSection = { replies: Record<string, SessionThreadInput> };
+/** What became of each reply sent to an agent from a screen that does not show its session (`pane_replies`, the core's `pane_reply`): one receipt per request id, the contract's `paneRepliesSection`. */
+export type PaneRepliesSection = import("./generated/hided-ws").PaneRepliesSection;
+export type PaneReplyReceipt = PaneRepliesSection["receipts"][number];
 export type SessionThreadSection = {
   /** Advances with every open; an older page or an input answers only this one. */
   generation: number;

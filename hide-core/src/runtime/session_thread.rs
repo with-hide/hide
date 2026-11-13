@@ -134,7 +134,6 @@ struct OpenThread {
     activity: Option<SessionActivity>,
     next_check_ms: u64,
     retry_at_ms: Option<u64>,
-    inputting: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -245,7 +244,6 @@ impl Runtime {
                 activity: None,
                 next_check_ms: 0,
                 retry_at_ms: None,
-                inputting: false,
             });
         } else {
             thread.pane = ThreadPane::Gone;
@@ -475,9 +473,10 @@ impl Runtime {
             // answer on.
             return self.settle_thread_input(&payload.request_id, Err("closed"));
         };
+        // One reply at a time per pane, whichever screen sent it: the
+        // writing slot `begin_reply_write` takes answers `in_flight`.
         let refusal = input_problem(&payload.text, &payload.paths)
-            .or(self.thread_input_target(open.generation).err())
-            .or(open.inputting.then_some("in_flight"));
+            .or(self.thread_input_target(open.generation).err());
         if let Some(reason) = refusal {
             return self.settle_thread_input(&payload.request_id, Err(reason));
         }
@@ -491,9 +490,7 @@ impl Runtime {
         let on_device = device != self.node.as_str();
         let staging = (on_device && !payload.paths.is_empty()).then(|| self.staging_link(&device));
         let own_node = self.own_node();
-        if let Some(open) = self.session_thread.open.as_mut() {
-            open.inputting = true;
-        }
+        let core_pane = payload.pane_id.clone();
         let request_id = payload.request_id.clone();
         self.set_session_thread(|thread| {
             thread.input = Some(ThreadInputSnapshot {
@@ -519,12 +516,12 @@ impl Runtime {
         let Some(context) = self.worker_context.clone() else {
             // Nothing moves between here and the write without a worker.
             let sent = write(&|| Ok(()));
-            return self.ingest_thread_input(generation, &request_id, sent);
+            return self.ingest_thread_input(generation, &core_pane, &request_id, sent);
         };
         let spawned = thread::Builder::new()
             .name("hide-thread-input".to_owned())
             .spawn({
-                let request_id = request_id.clone();
+                let (request_id, core_pane) = (request_id.clone(), core_pane.clone());
                 move || {
                     let still = || {
                         let runtime = context.runtime.upgrade().ok_or("closed")?;
@@ -533,12 +530,17 @@ impl Runtime {
                     };
                     let sent = write(&still);
                     apply_in(&context, move |runtime| {
-                        runtime.ingest_thread_input(generation, &request_id, sent)
+                        runtime.ingest_thread_input(generation, &core_pane, &request_id, sent)
                     });
                 }
             });
         if spawned.is_err() {
-            return self.ingest_thread_input(generation, &request_id, Err("unavailable"));
+            return self.ingest_thread_input(
+                generation,
+                &core_pane,
+                &request_id,
+                Err("unavailable"),
+            );
         }
         true
     }
@@ -814,21 +816,22 @@ impl Runtime {
     fn ingest_thread_input(
         &mut self,
         generation: u64,
+        pane_id: &str,
         request_id: &str,
         sent: Result<(), &'static str>,
     ) -> bool {
-        let Some(open) = self
+        // The pane's writing slot goes back, and words that landed count,
+        // whether or not the thread is still open.
+        self.end_reply_write(pane_id, sent, "thread_input");
+        if self
             .session_thread
             .open
-            .as_mut()
-            .filter(|open| open.generation == generation)
-        else {
+            .as_ref()
+            .is_none_or(|open| open.generation != generation)
+        {
             return false;
-        };
-        open.inputting = false;
-        let pane_id = open.pane_id.clone();
+        }
         if sent.is_ok() {
-            self.note_reply_landed(&pane_id, "thread_input");
             self.read_session_thread();
         } else if let Err(reason) = sent {
             crate::diagnostic!(serde_json::json!({
@@ -1628,6 +1631,128 @@ mod tests {
                 .map(|input| (input.state, input.reason)),
             Some((ThreadInputState::Refused, Some("pane_changed".to_owned())))
         );
+    }
+
+    /// The thread's input box and the Overview's reply take the same pane's
+    /// one writing slot: while either waits for its permit the other is
+    /// refused as in flight and asks for nothing, so two replies never
+    /// interleave their words and Enters in one pane.
+    #[test]
+    fn a_thread_input_and_an_overview_reply_to_one_pane_never_write_together() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let terminals = Arc::new(GrantingTerminals::default());
+        terminals
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime.set_terminals(Arc::clone(&terminals) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert_eq!(method, "submit_text");
+            crate::engine::fake::reply(())
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let shared = crate::runtime::tests::SharedRuntime::new(runtime);
+        shared.lock().unwrap().worker_context = Some(RuntimeWorkerContext {
+            runtime: shared.weak(),
+            notifier: crate::handle::ChangeNotifier::noop(),
+        });
+        let overview = |request: &str| super::super::pane_reply::PaneReplyPayload {
+            pane_id: "w1:p1".to_owned(),
+            request_id: request.to_owned(),
+            text: "오버뷰에서".to_owned(),
+            session: Some("s".to_owned()),
+        };
+        let receipt = |runtime: &Runtime, request: &str| {
+            runtime
+                .snapshot
+                .pane_replies
+                .as_ref()
+                .and_then(|section| {
+                    section
+                        .receipts
+                        .iter()
+                        .find(|held| held.request_id == request)
+                        .cloned()
+                })
+                .map(|held| (held.state, held.reason))
+        };
+        let grant = || {
+            crate::runtime::tests::wait_for("a permit ask", || {
+                terminals.held.lock().unwrap().is_some()
+            });
+            terminals.held.lock().unwrap().take().unwrap()
+        };
+
+        // The thread's input first: the Overview's reply waits for nothing.
+        shared
+            .lock()
+            .unwrap()
+            .send_session_thread_input(ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                text: "스레드에서".to_owned(),
+                paths: Vec::new(),
+            });
+        let held = grant();
+        const FIRST: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+        shared.lock().unwrap().send_pane_reply(overview(FIRST));
+        assert_eq!(
+            receipt(&shared.lock().unwrap(), FIRST),
+            Some((ThreadInputState::Refused, Some("in_flight".to_owned())))
+        );
+        assert_eq!(terminals.permits.lock().unwrap().len(), 1);
+        node.answer(Ok(page(100, 200, false, vec![said("받았어요")])));
+        held(Ok(()));
+        crate::runtime::tests::wait_for("the thread input's answer", || {
+            thread(&shared.lock().unwrap())
+                .input
+                .is_some_and(|input| input.state == ThreadInputState::Sent)
+        });
+
+        // The Overview's reply first: the thread's input is refused the same way.
+        const SECOND: &str = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e";
+        const THIRD: &str = "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f";
+        shared.lock().unwrap().send_pane_reply(overview(SECOND));
+        let held = grant();
+        shared
+            .lock()
+            .unwrap()
+            .send_session_thread_input(ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: THIRD.to_owned(),
+                text: "또 스레드에서".to_owned(),
+                paths: Vec::new(),
+            });
+        assert_eq!(
+            thread(&shared.lock().unwrap()).input.map(|input| (
+                input.request_id,
+                input.state,
+                input.reason
+            )),
+            Some((
+                THIRD.to_owned(),
+                ThreadInputState::Refused,
+                Some("in_flight".to_owned())
+            ))
+        );
+        assert_eq!(terminals.permits.lock().unwrap().len(), 2);
+        held(Ok(()));
+        crate::runtime::tests::wait_for("the reply's answer", || {
+            receipt(&shared.lock().unwrap(), SECOND)
+                .is_some_and(|(state, _)| state == ThreadInputState::Sent)
+        });
+        let typed: Vec<_> = fake
+            .calls_of("submit_text")
+            .into_iter()
+            .map(|call| call["text"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(typed, ["스레드에서", "오버뷰에서"]);
     }
 
     /// An input that arrives after its thread closed, or after another
