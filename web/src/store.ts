@@ -119,6 +119,7 @@ export type Frame = {
     session_work_search?: import("./snapshot").SessionWorkSearch | null;
     session_thread?: import("./snapshot").SessionThreadSection;
     session_thread_history?: import("./snapshot").SessionThreadHistorySection;
+    pane_replies?: import("./snapshot").PaneRepliesSection;
     find?: PaneFind;
     chunks?: TerminalChunk[];
   } & Partial<DirectoryList> &
@@ -212,6 +213,8 @@ type Store = {
   sessionThread: import("./snapshot").SessionThreadSection | null;
   /** Its kept pages (`session_thread_history`). */
   sessionThreadHistory: import("./snapshot").SessionThreadHistorySection | null;
+  /** The answers to replies sent to agents without opening their session (`pane_replies`); null until the first. */
+  paneReplies: import("./snapshot").PaneRepliesSection | null;
   /** hided refused a thread input before the core saw it: its request and why. */
   threadInputRefusal: { request_id: string; reason: string } | null;
   agents: AgentRow[];
@@ -388,6 +391,7 @@ export const useShellStore = create<Store>((set, get) => ({
   sessionWorkSearch: null,
   sessionThread: null,
   sessionThreadHistory: null,
+  paneReplies: null,
   threadInputRefusal: null,
   agents: [],
   focusedPaneId: null,
@@ -494,6 +498,7 @@ export const useShellStore = create<Store>((set, get) => ({
         sessionWorkSearch: payload.session_work_search ?? null,
         sessionThread: payload.session_thread ?? null,
         sessionThreadHistory: payload.session_thread_history ?? null,
+        paneReplies: payload.pane_replies ?? null,
       });
     } else if (
       payload.editor !== undefined ||
@@ -505,7 +510,8 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.desk_jobs !== undefined || payload.desk_mentions !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined ||
-      payload.session_thread !== undefined || payload.session_thread_history !== undefined
+      payload.session_thread !== undefined || payload.session_thread_history !== undefined ||
+      payload.pane_replies !== undefined
     ) {
       set({
         editor: payload.editor ?? get().editor,
@@ -523,6 +529,7 @@ export const useShellStore = create<Store>((set, get) => ({
         sessionWorkSearch: payload.session_work_search !== undefined ? payload.session_work_search && share(get().sessionWorkSearch, payload.session_work_search) : get().sessionWorkSearch,
         sessionThread: payload.session_thread ? share(get().sessionThread, payload.session_thread) : get().sessionThread,
         sessionThreadHistory: payload.session_thread_history ? share(get().sessionThreadHistory, payload.session_thread_history) : get().sessionThreadHistory,
+        paneReplies: payload.pane_replies ? share(get().paneReplies, payload.pane_replies) : get().paneReplies,
       });
     }
     if (frame.type === "directory_list") {

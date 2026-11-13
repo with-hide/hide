@@ -1778,6 +1778,7 @@ pub(super) enum Event {
     SessionThreadOlder(super::session_thread::ThreadOlderPayload),
     SessionThreadClose,
     SessionThreadInput(super::session_thread::ThreadInputPayload),
+    PaneReply(super::pane_reply::PaneReplyPayload),
     SessionWorkSearch(super::links::RecordSearchPayload),
     SessionMissedStatus(super::links::MissedStatusPayload),
     BacklogAdd(super::backlog::BacklogAddPayload),
@@ -2112,6 +2113,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
                 SessionThreadInput
             )
         }
+        // The Overview's reply to an agent whose session is not open.
+        "pane_reply" => decode!(super::pane_reply::PaneReplyPayload, PaneReply),
         "session_work_search" => {
             let search: super::links::RecordSearchPayload =
                 serde_json::from_value(payload).map_err(|_| invalid_payload(&kind))?;
@@ -2425,6 +2428,7 @@ impl Runtime {
             Event::SessionThreadOlder(payload) => self.read_older_session_thread(payload),
             Event::SessionThreadClose => self.close_session_thread(),
             Event::SessionThreadInput(payload) => self.send_session_thread_input(payload),
+            Event::PaneReply(payload) => self.send_pane_reply(payload),
             Event::SessionWorkSearch(payload) => self.search_work_sessions(payload),
             Event::SessionMissedStatus(payload) => self.set_missed_status(payload),
             Event::BacklogAdd(payload) => self.add_backlog(payload),

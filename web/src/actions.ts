@@ -1244,6 +1244,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * A reply to an agent from the Overview, without opening its session: the
+     * core types `text` and Enter into its pane as a phone's reply does, and
+     * answers on `pane_replies` by the request id this returns. `null` when
+     * the event never left this page, so nothing was sent.
+     */
+    replyToAgent(paneId: string, text: string): string | null {
+      const requestId = crypto.randomUUID();
+      return dispatch({ schema_version: 2, kind: "pane_reply", payload: { pane_id: paneId, request_id: requestId, text } }) === false ? null : requestId;
+    },
+
+    /**
      * `세션 보관` (PRD session-archive B5-B7): a session that is not working,
      * or waits on the operator, goes at once; one with work running asks
      * first with what is working.

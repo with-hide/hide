@@ -66,6 +66,21 @@ const words = {
   "overviewGraph.fit": ["Fit graph", "전체 보기", "全体表示", "适应画布"],
   "overviewGraph.zoomIn": ["Zoom in", "확대", "拡大", "放大"],
   "overviewGraph.zoomOut": ["Zoom out", "축소", "縮小", "缩小"],
+  "agentReply.label": ["Reply to {{name}}", "{{name}}에게 답하기", "{{name}} に返信", "回复 {{name}}"],
+  "agentReply.placeholder": ["Reply without opening", "열지 않고 바로 답하기", "開かずに返信", "直接回复"],
+  "agentReply.send": ["Send", "보내기", "送信", "发送"],
+  "agentReply.reason.pane_gone": ["This session's terminal is gone: nothing was sent", "이 세션의 터미널이 없어요. 보내지 않았어요", "このセッションの端末がありません。送信していません", "此会话的终端已不存在，未发送"],
+  "agentReply.reason.pane_changed": ["Another session runs in this terminal now: nothing was sent", "이 터미널에서 이제 다른 세션이 돌아요. 보내지 않았어요", "この端末では別のセッションが動いています。送信していません", "此终端现在运行另一个会话，未发送"],
+  "agentReply.reason.asleep": ["The session is asleep: wake it to send", "세션이 잠들어 있어요. 깨운 뒤 보내세요", "セッションはスリープ中です。起こしてから送信してください", "会话正在休眠，请唤醒后再发送"],
+  "agentReply.reason.input_refused": ["The terminal did not take the words: nothing was sent", "터미널이 말을 받지 않았어요. 보내지 않았어요", "端末が入力を受け付けませんでした。送信していません", "终端未接收输入，未发送"],
+  "agentReply.reason.unavailable": ["Hide could not reach the terminal: nothing was sent", "터미널에 닿지 못했어요. 보내지 않았어요", "端末に届きませんでした。送信していません", "无法连接终端，未发送"],
+  "agentReply.reason.device_unreachable": ["The device does not answer: nothing was sent", "기기가 답하지 않아요. 보내지 않았어요", "デバイスが応答しません。送信していません", "设备无响应，未发送"],
+  "agentReply.reason.uncertain": ["Hide got no answer: the words may have reached the terminal", "답을 못 받았어요. 말이 터미널에 들어갔을 수 있어요", "応答がありません。端末に届いた可能性があります", "未收到响应，内容可能已进入终端"],
+  "agentReply.reason.too_long": ["Too long to send in one go", "한 번에 보내기엔 너무 길어요", "一度に送るには長すぎます", "内容过长，无法一次发送"],
+  "agentReply.reason.control_characters": ["Control characters cannot be sent", "제어 문자는 보낼 수 없어요", "制御文字は送信できません", "无法发送控制字符"],
+  "agentReply.reason.in_flight": ["The last reply is still being sent", "앞의 답을 아직 보내는 중이에요", "前の返信をまだ送信中です", "上一条回复仍在发送"],
+  "agentReply.reason.offline": ["Hide is not connected: nothing was sent", "Hide와 연결이 끊겨 보내지 않았어요", "Hide に接続されていません。送信していません", "未连接到 Hide，未发送"],
+  "agentReply.reason.failed": ["Couldn't send", "보내지 못했어요", "送信できませんでした", "发送失败"],
 } as const;
 type Key = keyof typeof words;
 export const overviewGraphEnglish = Object.fromEntries(Object.entries(words).map(([key, value]) => [key, value[0]])) as Record<Key, string>;
