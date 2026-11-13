@@ -2707,10 +2707,11 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
             purpose: "review".into(),
         },
     ];
-    // A Settings edit applies from the next mission (B48): this one was
-    // created with none and keeps admitting any agent.
+    // A mission created with none keeps admitting any agent, in a plan and
+    // a spawn alike: candidates added in Settings since do not narrow it.
     runtime.snapshot.ui_state.conductor_settings.candidates = candidates.clone();
     assert_eq!(admit(&runtime, "opencode", launch(None, None)), Ok(true));
+    command(&mut runtime, "sender", plan_fix_by("codex")).expect("any agent is planned");
     // A mission created with candidates is held to them.
     runtime.missions.book.missions.clear();
     command(
@@ -2750,6 +2751,125 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     runtime.missions.book.missions[0].candidates.truncate(1);
     assert_eq!(
         prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
+        crate::coordination::refusal("mission_candidate_refused", "Codex")
+    );
+}
+
+/// A worker candidate of `agent` that fixes no profile, model or effort.
+fn candidate_of(agent: &str) -> crate::missions::Candidate {
+    crate::missions::Candidate {
+        agent: agent.into(),
+        profile: None,
+        model: None,
+        effort: None,
+        purpose: String::new(),
+    }
+}
+
+/// `plan()` with its node `fix`, not started, worked by `agent` on the
+/// model its CLI keeps by default.
+fn plan_fix_by(agent: &str) -> Value {
+    let model = crate::missions::cli_default_model(agent);
+    json!({"op": "plan", "plan": {"nodes": [
+        {"key": "cause", "title": "Find the cause", "kind": "research", "criteria": ["it works"]},
+        {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr",
+         "depends_on": ["cause"], "worker": {"agent": agent, "model": model}},
+    ]}})
+}
+
+/// A candidate the operator adds in Settings › Mission while a mission runs
+/// applies to it at once (B48): the plan naming it for a node not started
+/// and the worker spawned under a node's intent are admitted, where the
+/// same agent in neither the mission's own candidates nor Settings' was
+/// refused, with the next action saying where the candidates come from.
+#[test]
+fn a_candidate_added_in_settings_applies_to_a_running_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    let model = crate::missions::cli_default_model("codex").unwrap();
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("claude")];
+    running(&mut runtime);
+    runtime.snapshot.ui_state.conductor_settings.candidates =
+        vec![candidate_of("claude"), candidate_of("opencode")];
+
+    let refused = command(&mut runtime, "sender", plan_fix_by("codex")).unwrap_err();
+    assert_eq!(
+        refused,
+        crate::coordination::refusal(
+            "mission_candidate_refused",
+            &format!("fix: Codex ({model})")
+        )
+    );
+    assert_eq!(
+        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
+        crate::coordination::refusal("mission_candidate_refused", "Codex")
+    );
+    runtime
+        .snapshot
+        .ui_state
+        .conductor_settings
+        .candidates
+        .push(candidate_of("codex"));
+    command(&mut runtime, "sender", plan_fix_by("codex")).expect("the added candidate is planned");
+    prepare_spawn(&mut runtime, &conductor, None).expect("the added candidate starts");
+    // The refusal above told the Conductor where its candidates come from.
+    let next = crate::missions::next_action("mission_candidate_refused");
+    assert!(
+        next.contains("when it was created") && next.contains("add it in Settings > Mission"),
+        "{next}"
+    );
+}
+
+/// A candidate removed from Settings › Mission still admits work in a
+/// mission created with it, so a node planned on it is not stranded; the
+/// next mission is created without it and refuses it (B48).
+#[test]
+fn a_candidate_removed_in_settings_applies_from_the_next_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    let model = crate::missions::cli_default_model("codex").unwrap();
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("codex")];
+    running(&mut runtime);
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("claude")];
+
+    command(&mut runtime, "sender", plan_fix_by("codex"))
+        .expect("the removed candidate is planned");
+    prepare_spawn(&mut runtime, &conductor, None).expect("the removed candidate starts");
+
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    let (created, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the next bug"}),
+    )
+    .unwrap();
+    let next = created["mission"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        command(&mut runtime, "sender", plan_fix_by("codex")).unwrap_err(),
+        crate::coordination::refusal(
+            "mission_candidate_refused",
+            &format!("fix: Codex ({model})")
+        )
+    );
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    assert_eq!(
+        prepare_spawn_of(
+            &mut runtime,
+            &conductor,
+            None,
+            &format!("{next}:cause"),
+            Some("Find the cause.")
+        )
+        .unwrap_err(),
         crate::coordination::refusal("mission_candidate_refused", "Codex")
     );
 }
@@ -2828,6 +2948,14 @@ fn a_candidate_admits_the_profile_a_worker_starts_with() {
     };
     runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate(None)];
     running(&mut runtime);
+    // Settings' candidates admit too (B48): emptied, so the mission's own,
+    // set below, judge alone.
+    runtime
+        .snapshot
+        .ui_state
+        .conductor_settings
+        .candidates
+        .clear();
     let defaults = hide_agent_adapter::LaunchChoice::default();
     let admit = |runtime: &Runtime, profile: Option<&str>| {
         runtime
