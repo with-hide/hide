@@ -83,6 +83,19 @@ test("the pages the policy links live on this site point at a page that exists",
   }
 });
 
+// The Android app is not on Google Play yet, so no page offers a download link that would answer "not found".
+// The privacy policy still names Google Play services, which the app needs; it never links the store.
+test("no site page links Google Play until the Android app is published, and the pages say it is coming", () => {
+  const faq = repoFile("site/src/content/docs/docs/reference/faq.md");
+  for (const [name, text] of [["index", index], ["privacy", privacy], ["support", support], ["faq", faq]]) {
+    assert.doesNotMatch(text, /play\.google\.com/, `${name} does not link Google Play`);
+  }
+  assert.match(index, /Android app coming to Google Play/);
+  assert.match(support, /The Android app is coming to Google Play\./);
+  assert.match(support, /Android 앱은 Google Play에 곧 올라옵니다/);
+  assert.match(faq, /The Android app is coming to Google Play\./);
+});
+
 // The product's own files are the expected answer here: the event names in the Rust
 // source and the retention in the deploy files. The page is the public statement of
 // both, so it fails the build when it falls behind them.

@@ -35,7 +35,7 @@ Grok has three differences today:
 
 1. On your computer, open Settings > Mobile and turn on **Open hide from your phone**.
 2. Wait until the connection row reads `Connected · Hide relay (Tokyo)`, then press **Show QR**.
-3. On an iPhone, install [Hide from the App Store](https://apps.apple.com/app/hide-remote-coding-agents/id6832780181) and choose **Scan QR code**. On an Android phone with Google Play services, install [Hide from Google Play](https://play.google.com/store/apps/details?id=me.grab.hide.android) and choose **Scan QR code**. On any other phone, scan the code with the camera; it opens `app.withhide.dev`; tap **Connect**.
+3. On an iPhone, install [Hide from the App Store](https://apps.apple.com/app/hide-remote-coding-agents/id6832780181) and choose **Scan QR code**. The Android app is coming to Google Play. On an Android phone or any other phone, scan the code with the camera; it opens `app.withhide.dev`; tap **Connect**.
 4. In a browser, you can keep it as an app with Share, then Add to Home Screen.
 
 You need no Hide account, payment or Tailscale installation.
