@@ -932,10 +932,10 @@ A failure on a different SHA is not evidence of flakiness by itself, and the sam
 A flaky test never blocks a pull request's required gate or a merge, and it does not stay: it is isolated as an issue rather than moved out of its lane, and its cause is removed by that issue's deadline.
 CI retries a failed test once, for classification and for the report, and for nothing else.
 
-Every issue CI files lives in the private repository with-hide/hide-private: the flaky `quarantine` issues, the `nightly-failure` issues, and the `agent-canary` record and its failures.
-The public repository with-hide/hide takes only user bug reports and feature requests, through its issue forms.
-`ISSUE_REPOSITORY` in `scripts/ci-flaky-report.py` and `scripts/agent-canary-record.py` names the private repository; the runs, jobs, logs, artifacts and pull requests they read stay the public repository's.
-Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, for both repositories, and that one token reads the run here and writes the issue there.
+Every issue CI files lives in with-hide/hide beside the user bug reports, so a contributor can open each one a test or a comment names: the flaky `quarantine` issues, the `nightly-failure` issues, and the `agent-canary` record and its failures.
+The labels tell them apart from user reports, and an issue a person files about the code itself takes the Development issue form and its `development` label.
+`ISSUE_REPOSITORY` in `scripts/ci-flaky-report.py` and `scripts/agent-canary-record.py` names that repository.
+Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, and that token reads the run and writes the issue; the issues it files come from `with-hide-dev-issues[bot]`, which the contribution gate does not check.
 A reusable workflow receives the key from each caller by name.
 A lane whose run has no key, such as a fork's, files nothing and still passes.
 
@@ -1065,7 +1065,7 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
 - The report fails its job when GitHub does, and when it cannot mint the App's token, so a failure it could not file shows as a red report job rather than a silence.
-  `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide-private.
+  `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide.
 - The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.
   An older gh does not know that flag, so the report reads `gh --version` before the first log and stops with one line naming the minimum, the version it found and the fix (`upgrade gh`) instead of gh's `unknown flag` and usage.
   It decodes whatever bytes the log holds, reads a carriage return as a line break and removes every terminal control before it parses or quotes the text, and every excerpt a lane writes into an annotation or the report quotes into an issue goes through the same removal; on 2026-10-10 and 2026-10-16 the report died on the first log it read and opened no issue.
@@ -1076,9 +1076,9 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - [ ] The expected answer comes from a requirement or contract outside the implementation; a changed expectation names that source.
 - [ ] It sits at the cheapest layer that can observe the result; an e2e spec covers a flow that crosses a boundary.
 - [ ] An e2e spec names the user flow it protects and why a unit or core test cannot observe it; without both, the spec belongs at a lower layer.
-- [ ] The pull request's `Tests` section shows the repeat result for each new or changed test (the tests, the number of runs, a link to the repeat job), and every run passed.
+- [ ] The pull request's folded `Tests` block shows the repeat result for each new or changed test (the tests, the number of runs, a link to the repeat job), and every run passed.
 - [ ] No fixed waits; every wait names the state it waits for, and polls only observe.
-- [ ] No new `sleep`, fixed delay or `timeout:` override appears without the state it waits for, and the `Tests` section's `Waits` line lists each one ([Wait for state, not time](#wait-for-state-not-time)).
+- [ ] No new `sleep`, fixed delay or `timeout:` override appears without the state it waits for, and the `Tests` block's `Waits` line lists each one ([Wait for state, not time](#wait-for-state-not-time)).
 - [ ] Nothing slow runs while the test holds a request the product will time out, and polls in that window set `intervals`.
 - [ ] An order the result depends on is fixed by a gate at a real boundary, with the barrier asserted before release.
 - [ ] The fixture copies the whole isolation environment, owns every process it starts on every exit path, and reports cleanup failures without replacing the original error.

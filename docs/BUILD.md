@@ -957,7 +957,7 @@ The version name is `mobile/android/version.json`; Play orders builds by the ver
 `mini-android-release.sh` lists, in one place, what a run creates, and one cleanup removes exactly that on a normal end, a failed step, TERM, HUP or INT, and a closed standard output: the lock (its text emptied), the work folder `~/hide-android-build/<branch>/release/` (the unsigned and the signed bundle, the unpacked bundle, the signers, the API's answers, the temporary folder), a curl still talking to Play, and a Play edit it opened and did not commit, which it deletes so nothing it uploaded reaches a track (the record gets a `deleted` line, and that commit may run again).
 Gradle runs in a process group of its own with a 20-minute bound, so a bound or a signal ends it with every process it started; signing is bounded at 5 minutes, each API call at 2 and the upload at 30.
 What stays: `release.log` (redacted and searched), the machine's `uploads.log`, the empty lock file, Gradle's unsigned release outputs in the branch's project, and after a no-upload run `signed.aab`; `clean` removes the branch folder.
-A `build` or `clean` of the branch a release is running from, and a second release of any branch, are refused while the lock is held.
+A `build`, `store-shots` or `clean` of the branch a release is running from, and a second release of any branch, are refused while the lock is held.
 
 #### The Android release's secrets
 
@@ -987,6 +987,20 @@ It lists every failed check, and the upload never starts after one; `mobile/scri
 | Native libraries | none |
 | Web bundle | every file of `assets/public/` is in the manifest `bundle-manifest.mjs` made after `cap sync` (`android`), with its SHA-256, and none is missing |
 | Signature | signed by the upload key alone (the certificate's SHA-256 is `uploadCertificateSha256`); `jarsigner -verify` finds no entry the signature does not cover |
+### The store page of the Android app
+
+`mobile/store/android/` is the Google Play page as source: the text in `metadata/` (the layout fastlane's `supply` reads: one folder each for `en-US` and `ko-KR` with `title`, `short_description`, `full_description` and `changelogs/default`), `play-forms.md` (the answers for the Play Console forms that are not text, with the reason for each: data safety, content rating, target audience, ads, app access, countries and store settings) and `shots.json` (which of the iOS shots Play shows, in which order, the sizes, and the Play locale of each language).
+The words and steps of a shot stay in `mobile/store/shots.json`, so the two stores say the same things; `shots.json` here only names them.
+Nothing here is uploaded by any command; the person who owns the Play Console account enters it there.
+`mobile/scripts/check-store-text.mjs` (run by `bash scripts/verify-web.sh mobile test`, with the iOS page) fails a Play field over Play's limit (title 30, short description 80, full description 4000, release notes 500), another company's product name in the title or the short description, a description that names an agent without saying Hide is independent of its maker or whose first two lines do not say it works with Hide from withhide.dev, an emoji or a word of four or more capital letters, a title other than the decided one, a missing file or locale, and a shot list that is not Play's size or names a shot that does not exist (`store-limits.mjs` holds the limits and the names).
+
+`bash mobile/scripts/build-android.sh store-shots` makes the screenshots, the feature graphic and the icon.
+It does the same phone build and copy to the mini as `build`, builds the debug app without tests, and there takes the emulator lock and runs the app in demo mode, one shot at a time, with the debug inputs of [a run](#building-and-running): the screen is set to 1080x1920 (and put back on exit), Android's own demo mode fixes the system bar at 9:41 with a full battery and signal, the app's language is set to the shot's Play locale (`cmd locale set-app-locales`), appearance is light, and the page's clock starts at the same time as the iOS shots'.
+The app writes `hide-debug-taps` when the last step is pressed, and the script waits for it as the run does, so a shot whose steps did not finish stops the run instead of being captured.
+The raw captures come back to this Mac and `mobile/scripts/store-shots.mjs compose-android` frames each in a device frame with its headline, as the iOS shots are, and writes the layout `supply` reads under `HIDE_STORE_SHOTS_OUT` (default `agents/runs/android-mission/store-assets`): `<locale>/images/phoneScreenshots/<file>.png` at 1080x1920 (24-bit, no alpha), `<locale>/images/featureGraphic.png` at 1024x500 (24-bit, the first shot's capture beside its words) and `<locale>/images/icon.png` at 512x512 (32-bit; the iOS app's icon art, which is a full square of the Android icon's background and owl).
+`compose-android` refuses a capture that is not 1080x1920, so a capture of another device or a failed screenshot is never framed.
+The shots carry no notification: the app's notifications are the system's own and are not part of a screen capture.
+The images are run artifacts and are never committed ([AGENTS.md](../AGENTS.md#evidence-belongs-outside-the-repository)).
 
 ### In CI
 

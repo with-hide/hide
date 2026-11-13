@@ -11,12 +11,12 @@ A pull request asks a maintainer to find out whether the problem is real, whethe
 The template and the limits exist so that a maintainer can answer those questions from the pull request itself.
 
 Using an agent is not the problem; hide is built for running them, and its maintainers use them every day.
-Say which one you used and that you read and ran every line, in the `AI use` section of the template.
+No one is asked to read every line an agent wrote; in the template's `Accountability` section you say that the problem is real, that you tried the result yourself, and that the description says only what you saw.
 
 ### What a pull request needs
 
 - The title is `<type>: <sentence>` ([Commit messages and attribution](#commit-messages-and-attribution)).
-- The body follows [the template](.github/pull_request_template.md) and fills `Summary` (the problem and the change, `Closes #<issue>` when there is one), `Evidence` (what you ran and saw, and what you did not verify), `Review` (where a reviewer should look) and `AI use`.
+- The body follows [the template](.github/pull_request_template.md) and fills `Summary` (the problem, how you know it is real, and a Before and After table; `Closes #<issue>` when there is one), `Not verified` (what you did not check, and why) and `Accountability`.
 - It is one change that a reader can follow.
   A maintainer may ask for an issue or a Discussion first when the change is large or decides how hide behaves; the pull request waits, labeled `needs-issue`, until there is one.
 
@@ -52,7 +52,7 @@ For the next change, run `git fetch upstream` and add another worktree from `ups
 | The template | checked | checked | not checked |
 | CI | waits for a maintainer to approve each run | runs by itself: the gate approves it | runs by itself |
 
-- A pull request that misses the title or a template section gets the label `needs-template` and one comment naming what is missing.
+- A pull request whose title is not `<type>: <sentence>`, or whose `Summary` or `Not verified` is empty, gets the label `needs-template` and one comment naming what is missing; the rest of the template is the reviewer's to judge.
   Fix it by editing the description; the label goes away on its own, and a pull request still missing it after 3 days is closed.
 - The label `needs-triage` marks a pull request from an account younger than 30 days. It closes nothing.
 - A person whose pull requests were closed by a maintainer three times without merging has their next pull request closed on opening.
@@ -71,9 +71,9 @@ Search open and closed issues first.
 Keep the report factual and about one screen long: what happened, what you expected, the shortest exact steps, the hide and operating-system versions, and the few log lines around the failure.
 Leave out root-cause analysis, implementation plans, proposed fixes, patches and generated investigation output.
 An issue that runs past 8,000 characters is closed automatically.
-An issue that does not use one of the forms (it lacks the headings of the bug form or of the feature request form) gets the label `needs-template` and one comment; it goes away when the description is fixed, and an issue still without a form after 7 days is closed.
+An issue that does not use one of the forms (it lacks the headings of the bug form, the feature request form or the development issue form) gets the label `needs-template` and one comment; it goes away when the description is fixed, and an issue still without a form after 7 days is closed.
 Maintainers are not checked.
-The public repository's issues are user bug reports and feature requests; the development issues CI files (flaky tests, nightly failures, the agent canary) live in the private with-hide/hide-private ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
+The repository's issues hold user bug reports and feature requests and, beside them, development issues: the ones CI files (flaky tests, nightly failures, the agent canary; [docs/TESTING.md](docs/TESTING.md#flaky-tests)) and the ones a contributor opens with the Development issue form, which carry the `development` label.
 
 A bug report is a real contribution.
 It does not reserve the work: a maintainer may fix it before you do.
@@ -104,7 +104,7 @@ Before opening a pull request on this repository:
 
 1. Read `AGENTS.md` and the template.
 2. Check that the problem is real: you or your human reproduced it, or the change was asked for.
-3. Fill every template section yourself from what you ran, and name yourself under `AI use`.
+3. Fill every template section yourself from what you ran, and check an `Accountability` box only when it is true.
    Never write `N/A` or a guess where the template asks for evidence.
 4. Open one pull request at a time for one change.
    Do not open several to see which one a maintainer takes.
@@ -262,7 +262,7 @@ Revert the merge the failure points to in a pull request of its own (`git revert
 A main push run that fails only in macOS jobs does not stop merges.
 Pull requests run no macOS job unless they change a macOS path (operator decision 2026-11-01; [docs/TESTING.md](docs/TESTING.md#where-the-macos-runners-went) owns the paths and the measurement behind it), so main's push run and the nightly are where a macOS-only break first shows, and the operator accepted that it does.
 The failed jobs must all be macOS jobs (`desktop e2e`, `os contract (macOS)`, or a `(macos)` leg of `vt`, `omp SDK` or `package`) and checks that only aggregate their results; a Linux or Windows job failing in the same run keeps the freeze.
-Whoever merges records the failed run and opens a development issue for it in with-hide/hide-private, and the fix, a revert or a forward fix as above, lands before the next release, whose tagged commit's main `verify` must pass, macOS included.
+Whoever merges records the failed run and opens a development issue for it, and the fix, a revert or a forward fix as above, lands before the next release, whose tagged commit's main `verify` must pass, macOS included.
 
 During development, an existing Windows-only failure need not stop unrelated pull requests when all of these hold:
 
@@ -340,7 +340,7 @@ The `herdr names` reasons, one per entry of `scripts/herdr-names-allowlist.json`
 - `to-rewrite`: a comment, doc sentence, prompt or string that explains current behaviour by what Herdr did; rewrite it and remove the entry.
 - `guard`: the gate itself, its check, its documentation and the workflow line that runs it.
 
-No test leaves a required gate: CI retries a failed test once and files a flaky one as an issue in with-hide/hide-private with a deadline, there is no quarantine tag or step, and a Rust test is never ignored for flakiness; [docs/TESTING.md](docs/TESTING.md#flaky-tests) owns the policy.
+No test leaves a required gate: CI retries a failed test once and files a flaky one as an issue with a deadline, there is no quarantine tag or step, and a Rust test is never ignored for flakiness; [docs/TESTING.md](docs/TESTING.md#flaky-tests) owns the policy.
 
 A web e2e test that exercises what differs by operating system is tagged `{ tag: "@platform" }` with a comment saying what, and a pull request whose plan includes the platform lanes runs those on Windows as well as in the full Linux shards, and the nightly runs them on macOS: Trash, process ownership, file watching and saving, worktree paths, disk cleanup, terminal input and echo through the platform's pane holder, and platform editing chords and browser-composed Korean input.
 Every web e2e presses its chords through `web/e2e/chords.ts`, which reads them from the shell's registry for the runner's system, so the Linux shards press the Ctrl+Shift and Alt+Shift chords Windows and Linux use and the macOS run presses the ⌘ ones; a spec spells a chord itself only when it binds one in Settings or presses one the shell must not answer.
@@ -351,7 +351,7 @@ The desktop suite is written against macOS: it presses ⌘ chords, reads macOS's
 A desktop e2e test that checks what the desktop host does differently on another system is tagged `{ tag: "@platform" }` with a comment saying what, and the Linux and Windows nightly and a pull request's `windows desktop` lane run `desktop e2e --grep @platform`: the host's processes and local stream (`hide connect`, a daemon ending and the next one, whether closing the last window ends the app), the CLI's name and places, the path it hands the wire, the file manager's reveal, and an agent profile's account folder, a native path the node checks and makes private by its system's rule.
 A test is chosen by whether it checks such a difference, never by whether it passes there; a tagged test that fails on Linux or Windows is fixed under the same assertion (its fixture in `web/e2e/platform-fixture.ts` or `desktop/e2e/fixture.ts`, or a product issue), and gets no deadline, retry, skip or `@flaky`.
 A test with no such difference, or one for a macOS-only behavior, stays untagged and runs on macOS only; the chord a tagged test presses comes from `web/e2e/chords.ts`, not from a spelled `Meta`: the attach test is the one that reads the host's accelerators for the system, and the tests that press a ⌘ chord by name stay macOS only.
-Each failed test and each failed job that annotated no test reaches the nightly report on main, which opens one `nightly-failure` issue in with-hide/hide-private per failure, comments once per run attempt on the issue already open for it, and closes a lane's issues when a scheduled run passes it, never when the lane's job passed with a `Not measured` warning, which the report lists instead ([docs/TESTING.md](docs/TESTING.md#nightly-failures)).
+Each failed test and each failed job that annotated no test reaches the nightly report on main, which opens one `nightly-failure` issue per failure, comments once per run attempt on the issue already open for it, and closes a lane's issues when a scheduled run passes it, never when the lane's job passed with a `Not measured` warning, which the report lists instead ([docs/TESTING.md](docs/TESTING.md#nightly-failures)).
 The reporter's API failures fail its job, and every listing it reads fails on overflow instead of filing a duplicate.
 Package smoke and simulated hooks prove private fixture behavior; physical IME/candidate windows, real agent hook sessions, first-launch OS security prompts and operator PATH remain device QA.
 Run the platform set after the web build with `bash scripts/verify-web.sh web e2e --grep @platform`.
@@ -412,7 +412,7 @@ Typing, drag, wheel, focus, project Tree/List and destructive cleanup review in 
 Cleanup deletion tests must use a private fixture root; never use an operator project as a cleanup target.
 The guide's maintenance policy requires affected app scenarios for input/rendering/lifecycle changes and matched measurements for performance claims; this is review-required evidence, not a branch-protection check today.
 The nightly measures one fixed fixture (`perf.yml`, [The nightly performance lane](docs/PERFORMANCE_TESTING.md#the-nightly-performance-lane)) and files a run that is invalid; its dated records are a trend to read, not a pull request's evidence.
-Record completed and unrun checks in the PR's Evidence section (`Verified` and `Not verified`); a green `verify` result alone does not prove responsiveness in the app.
+Record completed checks in the PR's folded `Evidence` block (`Verified`) and unrun ones under `Not verified`; a green `verify` result alone does not prove responsiveness in the app.
 
 ## Local harness transition
 

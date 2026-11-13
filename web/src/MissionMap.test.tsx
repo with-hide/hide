@@ -1245,6 +1245,23 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
   } finally { await git.unmount(); }
 });
 
+it("lists a worker's person's turn in 내 차례 with its node, what and where, and Done that sends the declaration once (operator decision 2026-11-13)", async () => {
+  const declared = { pane_id: "p2", escalation: { cause: "human_turn", letter_id: null, since_unix_ms: 1, human_notice: true }, human_turn: { id: "agent-9.1", kind: "permission", place: "console.firebase.google.com/terms", pane_id: "p2", title: "w", since_unix_ms: 1, own: true } } as unknown as AgentRow;
+  const map = await mount({ items: [mission({ nodes: [node("push", { title: "Push", status: "working", pane_id: "p2" }), node("store", { title: "Store", status: "working", pane_id: "p3" })] })] }, [], [], {}, [declared]);
+  try {
+    expect(map.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toBe("human_turn");
+    const item = map.q('[data-mission-turn-item="human_turn"]')!;
+    expect(item.querySelector('[data-mark-human="true"]')).not.toBeNull();
+    expect(item.querySelector("[data-mission-turn-node]")?.getAttribute("data-mission-turn-node")).toBe("push");
+    expect(item.querySelector('[data-human-turn-place="agent-9.1"]')?.textContent).toBe("Permission · console.firebase.google.com/terms");
+    expect(item.querySelector('[data-human-turn-copy="agent-9.1"]')).not.toBeNull();
+    const done = item.querySelector<HTMLButtonElement>('[data-human-turn-done="agent-9.1"]')!;
+    expect(done.textContent).toBe("Done");
+    await act(async () => done.click());
+    expect(map.events.filter((event) => event.kind === "human_turn_done").map((event) => event.payload)).toEqual([{ declaration: "agent-9.1" }]);
+  } finally { await map.unmount(); }
+});
+
 it("puts in a node's panel what waits on whom with its choices, the worker's life, the Conductor's line dimmed once Hide's facts passed it, Hide's record, and 다시 진행 on finished work (PRD mission-node-simple B4, B15-B17)", async () => {
   const nodes = [
     node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50, on_row: false, item: false, choices: ["leave", "drop"] } }),

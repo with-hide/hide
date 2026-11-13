@@ -47,15 +47,18 @@ jobs:
             const IDLE_DAYS = 14;
             const TEMPLATE_GRACE_DAYS = 3;
             const ISSUE_TEMPLATE_GRACE_DAYS = 7;
-            // The headings the two issue forms write (.github/ISSUE_TEMPLATE); an issue needs every heading of one form.
+            // The headings the issue forms write (.github/ISSUE_TEMPLATE); an issue needs every heading of one form.
             const ISSUE_FORMS = [
               ['What happened', 'Steps to reproduce'],
               ['What are you trying to do?', 'What would help'],
+              ['What is wrong', 'Where'],
             ];
             const DAY = 24 * 60 * 60 * 1000;
             const TYPES = ['feat', 'fix', 'perf', 'refactor', 'test', 'docs', 'build', 'ci', 'chore', 'revert'];
-            const SECTIONS = ['Summary', 'Evidence', 'Review', 'AI use'];
-            const BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
+            // The sections a contributor must write; how well, and the rest of the template, is the reviewer's to judge.
+            const SECTIONS = ['Summary', 'Not verified'];
+            // with-hide-dev-issues files CI's development issues (docs/TESTING.md, Flaky tests).
+            const BOTS = new Set(['dependabot[bot]', 'github-actions[bot]', 'with-hide-dev-issues[bot]']);
             const MARKERS = { template: '<!-- hide:gate-template -->', closed: '<!-- hide:gate-closed -->', stale: '<!-- hide:gate-stale -->' };
             const LABELS = {
               'needs-triage': ['fbca04', 'A maintainer should look at the account'],
@@ -124,8 +127,19 @@ jobs:
             }
             const search = async (q) => (await github.rest.search.issuesAndPullRequests({ q, per_page: 1 })).data.total_count;
 
+            // The lines the template itself holds, comments removed: a line a body keeps from it is not an answer.
+            let skeleton;
+            async function templateSkeleton() {
+              if (!skeleton) {
+                const { data } = await github.rest.repos.getContent({ owner, repo, path: '.github/pull_request_template.md', ref: context.payload.repository?.default_branch ?? 'main' });
+                skeleton = new Set(Buffer.from(data.content, 'base64').toString('utf8')
+                  .replace(/<!--[\s\S]*?-->/g, '').split('\n').map(line => line.trim()).filter(Boolean));
+              }
+              return skeleton;
+            }
+
             // What the title and the body of a pull request still lack, as a list of plain sentences.
-            function templateProblems(pull) {
+            function templateProblems(pull, skeleton) {
               const problems = [];
               const title = pull.title ?? '';
               if (!new RegExp(`^(${TYPES.join('|')})(\\([^)]+\\))?!?: \\S`).test(title)) {
@@ -135,11 +149,9 @@ jobs:
               const parts = body.split(/^##\s+/m).slice(1);
               for (const section of SECTIONS) {
                 const part = parts.find(p => p.split('\n')[0].trim().toLowerCase() === section.toLowerCase());
-                // The folded `<details>` block of the template is not the section's own answer.
-                const text = (part ?? '').split('\n').slice(1)
-                  .join('\n').split('<details')[0].split('\n')
-                  .filter(line => !/^\s*[-*]\s*\*\*[^*]+\*\*:?\s*$/.test(line))
-                  .join('').replace(/\s/g, '');
+                // The folded `<details>` blocks after a section are not its answer.
+                const own = (part ?? '').split('\n').slice(1).join('\n').split('<details')[0];
+                const text = own.split('\n').filter(line => !skeleton.has(line.trim())).join('').replace(/\s/g, '');
                 if (text.length < 10) problems.push(`The \`## ${section}\` section is missing or empty.`);
               }
               return problems;
@@ -191,7 +203,7 @@ jobs:
                 }
               }
 
-              const problems = templateProblems(pull);
+              const problems = templateProblems(pull, await templateSkeleton());
               const labelled = pull.labels?.some(l => l.name === 'needs-template');
               if (problems.length) {
                 await say(pull.number, MARKERS.template, [
