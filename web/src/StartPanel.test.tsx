@@ -287,6 +287,33 @@ it("lists each agent with its profiles as items, shows the core's choice chosen 
   });
 });
 
+it("keeps the Overview in front when an Overview project's + opened the panel, and brings the Workspace forward otherwise (issue 2514)", async () => {
+  await withPanel(async ({ render, events, q }) => {
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout");
+    // From an Overview project's `+`: the start goes to that project and the Overview over the Workspace stays.
+    await render(profileSnapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, { blog: "default" }), "docs");
+    await act(async () => {
+      useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: true, opening: null });
+      useStartPanel.getState().open(false, { projectId: "docs", stay: true });
+    });
+    expect(q("[data-start-target]")?.getAttribute("data-start-target")).toBe(checkoutKey("core-machine", "/local/docs"));
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started()).toHaveLength(1);
+    expect(started()[0]!.payload).toMatchObject({ checkout_path: "/local/docs" });
+    expect(useUiStore.getState()).toMatchObject({ overviewOpen: true, opening: null });
+
+    // Any other open presents the started pane: the Overview gives way to the opening.
+    await act(async () => {
+      useStartPanel.setState({ request: null });
+      useStartPanel.getState().open(false, { projectId: "docs" });
+    });
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started()).toHaveLength(2);
+    expect(useUiStore.getState().overviewOpen).toBe(false);
+    expect(useUiStore.getState().opening?.target).toMatchObject({ startRequestId: started()[1]!.payload.request_id });
+  });
+});
+
 it("shows each item's account usage left, the same figure on two items of one account, and a dash where it is not known (agent-profiles-phase2 B3, D-11)", async () => {
   await withPanel(async ({ render, q, openItems }) => {
     const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-also", "also"), profileFixture.listed("p-gate", "gate")], defaults: {} };

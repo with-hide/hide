@@ -1,5 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronsDownUpIcon, GitBranchIcon, MailIcon } from "lucide-react";
+import { ChevronsDownUpIcon, GitBranchIcon, MailIcon, PlusIcon } from "lucide-react";
 import { useId } from "react";
 import { AgentMark } from "./AgentMark";
 import { agentWithProfile, badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
@@ -8,6 +8,7 @@ import { AskLine } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
+import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
@@ -31,11 +32,12 @@ function useRevealNode(id: string) {
 export type OperatorNode = Node<{ label: string }, "operator">;
 /** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
 /** `muted`: the side column's search found nothing of this project. */
-export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
+/** `start` opens the start panel on the project (its workspace id), leaving the Overview in front. */
+export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void; start: (workspaceId: string) => void }, "project">;
 /** The soft light behind a project's sessions, fading to nothing at its edge. */
 export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
 /** A folded project: one circle with its name and counts. */
-export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void }, "cluster">;
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void; start: (workspaceId: string) => void }, "cluster">;
 export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
 /** A team root's fold: how many descendants, their states, and whether they are folded away. */
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
@@ -77,14 +79,25 @@ export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
   return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
 }
 
+/** A project's `+` on the map, as the sidebar's project row has it: the start panel on that project.
+ * It sits beside the name, never on it, because the name is the project's drag handle. */
+function ProjectStartButton({ workspaceId, label, start }: { workspaceId: string; label: string; start: (workspaceId: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const name = t("sidebar.startAgentIn", { name: label });
+  return <Hint label={name}>
+    <Button variant="ghost" size="inline" className="og-project-start nodrag nopan" aria-label={name} data-graph-project-start={workspaceId} onClick={() => start(workspaceId)}><PlusIcon aria-hidden="true" /></Button>
+  </Hint>;
+}
+
 export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
   const { t } = useInterfaceTranslation();
   const label = data.group.project.workspace.label;
   const id = data.group.id;
-  // The name drags the project; the fold button beside it is not part of the drag handle. Folding
+  // The name drags the project; the start and fold buttons beside it are not part of the drag handle. Folding
   // replaces this node under the pointer, so no pointer leave arrives and the emphasis ends with the fold.
   return <div className="og-project" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-emphasized={data.emphasized} data-muted={data.muted} data-accent={data.accent} onPointerEnter={() => data.point(id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(id)} onBlur={() => data.point(null)}>
     <span className="og-project-name og-project-drag" title={t("overviewGraph.dragProject", { project: label })}>{label}</span>
+    <ProjectStartButton workspaceId={data.group.project.workspace.id} label={label} start={data.start} />
     <button type="button" className="og-project-fold nodrag nopan" aria-label={t("overviewGraph.foldProject", { project: label })} title={t("overviewGraph.foldProject", { project: label })} onClick={() => { data.point(null); data.fold(id); }}><ChevronsDownUpIcon aria-hidden="true" /></button>
   </div>;
 }
@@ -107,7 +120,7 @@ export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
   return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} data-muted={data.muted} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
-    <strong>{label}</strong>
+    <span className="og-cluster-name"><strong>{label}</strong><ProjectStartButton workspaceId={summary.project.workspace.id} label={label} start={data.start} /></span>
     <GraphStateCounts summary={summary} />
   </div>;
 }

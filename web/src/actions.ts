@@ -1767,8 +1767,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
       resumeSessionId?: string;
       resumeSessionPath?: string;
+      /** False keeps the screen in front instead of bringing the started pane's Workspace forward (`StartPreset.stay`). */
+      present?: boolean;
     }) {
-      if (!request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
+      if (request.present !== false && !request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
@@ -1799,10 +1801,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Opens the start panel. Over Settings the panel takes Settings' place,
      * because Settings holds the keyboard, and Settings is what was in front (B25).
      */
-    openStartPanel(projectId?: string) {
+    openStartPanel(projectId?: string, options?: { stay?: boolean }) {
       const overSettings = ui().overlay === "settings";
       if (overSettings) ui().closeOverlay("settings");
-      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null);
+      useStartPanel.getState().open(overSettings, projectId ? { projectId, ...(options?.stay ? { stay: true } : {}) } : null);
     },
 
     /**
@@ -2735,6 +2737,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       prompt?: string | null;
       /** As `startAgent`'s. */
       profile?: string | null;
+      /** As `startAgent`'s. */
+      present?: boolean;
     }) {
       // A worktree on this machine comes forward through its start's follow
       // in the core; the page only presents what the core selected, as for an
@@ -2742,7 +2746,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // (`followStartedPane`).
       const local = request.deviceId === localDeviceId(rest());
       const requestId = request.requestId ?? (local ? startRequestId() : undefined);
-      if (local && requestId) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
+      if (local && requestId && request.present !== false) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
       dispatch({
         schema_version: 2,
         kind: "create_worktree",

@@ -149,6 +149,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const sessionKeyOf = useCallback((id: string) => { const row = model.allAgents.find((row) => row.id === id); return row ? graphSessionKey(row) : undefined; }, [model.allAgents]);
   const projectKeyOf = useCallback((id: string) => { const summary = model.summaries.find((summary) => summary.id === id); return summary ? graphProjectKey(summary.project.workspace) : undefined; }, [model.summaries]);
   const toggleTeam = useCallback((root: string) => { const session = sessionKeyOf(root); if (session) actions.changeOverviewGraph({ kind: "team_folded", session, folded: !teamFolded(root) }); }, [actions, sessionKeyOf, teamFolded]);
+  // A project's `+` opens the start panel on it; the start keeps the Overview in front, where the new session joins the map.
+  const startInProject = useCallback((workspaceId: string) => actions.openStartPanel(workspaceId, { stay: true }), [actions]);
   const toggleFoldProject = useCallback((id: string) => { const project = projectKeyOf(id); if (project) actions.changeOverviewGraph({ kind: "project_folded", project, folded: !foldedProjects.has(id) }); }, [actions, projectKeyOf, foldedProjects]);
   const foldAll = () => actions.changeOverviewGraph({ kind: "fold_all", projects: model.projects.map((group) => graphProjectKey(group.project.workspace)) });
   const revealing = useRef<string | null>(null);
@@ -288,14 +290,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
         if (!summary) continue;
         const orb = size.root.orb * 1.5;
         const box = { width: size.label.width, height: orb + size.gap * 7 };
-        nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, emphasized: emphasizedProject(group.id), muted: missed(members), unfold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
+        nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, emphasized: emphasizedProject(group.id), muted: missed(members), unfold: toggleFoldProject, point: setPointedProject, start: startInProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
         orbs.set(cluster(group.id), { x: middle.x, y: middle.y, r: orb / 2 });
         for (const row of members) endpoint.set(row.id, cluster(group.id));
         clusterProject.set(cluster(group.id), group.id);
         continue;
       }
       const top = Math.min(...members.map((row) => pointOf(row.id)!.y)) - size.root.orb / 2 - size.gap * 2 - size.label.height;
-      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, emphasized: emphasizedProject(group.id), muted: missed(members), fold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
+      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, emphasized: emphasizedProject(group.id), muted: missed(members), fold: toggleFoldProject, point: setPointedProject, start: startInProject }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
       const drawnHere = new Set(members.map((row) => row.id));
       for (const row of members) {
         const point = pointOf(row.id)!;
@@ -447,7 +449,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
       <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodeDragStart={dragStart} onNodeDrag={dragging} onNodeDragStop={dragStop} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
         <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={resetLayout}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
-      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn deviceId={scopedDevice} projectId={projectId} model={model} query={query} setQuery={setQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} show={showFound} actions={actions} />}
+      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn deviceId={scopedDevice} projectId={projectId} model={model} query={query} setQuery={setQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} start={startInProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} show={showFound} actions={actions} />}
     </div> : null}
   </div>;
 }
@@ -468,7 +470,7 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator.
  * Its search finds projects by name and sessions by their own words; a found session is shown on the map. */
-function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, toggle, point, locate, choose, show, actions }: { deviceId: string; projectId: string | null; model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; show: (id: string, target: HTMLElement) => void; actions: Actions }) {
+function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, toggle, point, start, locate, choose, show, actions }: { deviceId: string; projectId: string | null; model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; start: (workspaceId: string) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; show: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
   const summaries = model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id));
@@ -487,10 +489,12 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
     <div className="og-project-list">{summaries.map((summary) => {
       const label = summary.project.workspace.label;
       const off = hidden.has(summary.id);
-      // Folding is the map's (its name's button, the folded circle, Fold all); the row only hides (PRD overview-graph-remembered D-02, D-03).
+      // Folding is the map's (its name's button, the folded circle, Fold all); the row only hides, and its `+` starts an agent there (PRD overview-graph-remembered D-02, D-03).
       const eye = t(off ? "overviewGraph.revealProject" : "overviewGraph.hideProject", { project: label });
+      const startIn = t("sidebar.startAgentIn", { name: label });
       return <div key={summary.id} data-graph-project-row={summary.project.workspace.id} data-hidden={off} onPointerEnter={() => point(summary.id)} onPointerLeave={() => point(null)} onFocus={() => point(summary.id)} onBlur={() => point(null)}>
         <button type="button" aria-label={t("overviewGraph.locateProject", { project: label })} disabled={off} onClick={() => locate(summary)}><strong>{label}</strong><GraphStateCounts summary={summary} /><span className="og-count">{summary.sessions}</span></button>
+        <Hint label={startIn}><Button variant="ghost" size="icon-sm" className="og-row-start" aria-label={startIn} data-graph-project-row-start={summary.project.workspace.id} onClick={() => start(summary.project.workspace.id)}><PlusIcon /></Button></Hint>
         <Hint label={eye}><Button variant="ghost" size="icon-sm" className="og-eye" aria-pressed={off} aria-label={eye} disabled={!summary.admitted} onClick={() => toggle(summary.id)}>{off ? <EyeOffIcon /> : <EyeIcon />}</Button></Hint>
       </div>;
     })}</div>

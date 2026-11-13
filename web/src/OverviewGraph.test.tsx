@@ -10,6 +10,8 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { missionFixture, withMissionAsk } from "./gallery/MissionScene";
 import { OverviewGraph } from "./OverviewGraph";
+import { ClusterGraphNode, ProjectGraphNode, type ClusterNode, type ProjectNode } from "./overviewGraphNodes";
+import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import type { BoardProject } from "./projectBoard";
 import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
 import type { Checkout, OverviewGraphChoices, SnapshotRest, Workspace } from "./snapshot";
@@ -535,4 +537,62 @@ it("with no session awake, offers New agent in the one project in scope and keep
     await render([...draw([]), { workspace: { ...workspace, id: "other", label: "Other" }, agents: [], device: null } as BoardProject]);
     expect(container.querySelector("[data-graph-welcome] p")).toBeNull();
   } finally { await act(async () => root.unmount()); }
+});
+
+it("opens the start panel on a project from its row's + and from its name's + on the map, folded or not, leaving drag and fold alone (issue 2514)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+  const agent = legacyAgentRow({ id: "p1", pane_id: "p1", identity_label: "Map work", agent_kind: "claude", session_id: "native-p1", group: "working", activity: "working" });
+  const workspace: Workspace = { id: "project", label: "Project", device_id: "local", path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: "p1", project_id: "project", checkout_id: checkout.id }] } };
+  const projects: BoardProject[] = [{ workspace, agents: [agent], device: null }];
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: [workspace], focused_device_id: "local" }, status: {}, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [] } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: [agent], focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  useUiStore.setState({ overviewOpen: true, opening: null, screen: { kind: "workspace" } });
+  const savedPanel = useStartPanel.getState();
+  useStartPanel.setState({ isOpen: false, preset: null });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    const row = container.querySelector('[data-graph-project-row="project"]')!;
+    // The row's own press still moves the camera and opens nothing.
+    await act(async () => row.querySelector<HTMLButtonElement>('button[aria-label="Locate Project"]')!.click());
+    expect(useStartPanel.getState().isOpen).toBe(false);
+    // Its `+` opens the start panel on the project, asking the start to keep the Overview in front.
+    const plus = row.querySelector<HTMLButtonElement>('[data-graph-project-row-start="project"]')!;
+    expect(plus.getAttribute("aria-label")).toBe("Start agent in Project");
+    await act(async () => plus.click());
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, preset: { projectId: "project", stay: true } });
+    expect(useUiStore.getState()).toMatchObject({ overviewOpen: true, opening: null });
+    expect(events).toHaveLength(0);
+    await act(async () => root.unmount());
+
+    // On the map the `+` sits beside the name, outside its drag handle, and so does a folded project's.
+    const start = vi.fn();
+    const fold = vi.fn();
+    const group = { id: "project", project: { workspace } } as unknown as ProjectNode["data"]["group"];
+    const summary = { id: "project", project: { workspace }, sessions: 1, turn: 0, working: 1, results: 0 } as unknown as ClusterNode["data"]["summary"];
+    const map = createRoot(container);
+    await act(async () => map.render(<TooltipProvider><ReactFlowProvider>
+      <ProjectGraphNode {...{ data: { group, accent: "sky", current: false, emphasized: false, muted: false, fold, point: () => {}, start } } as unknown as NodeProps<ProjectNode>} />
+      <ClusterGraphNode {...{ data: { summary, accent: "sky", orb: 40, emphasized: false, muted: false, unfold: fold, point: () => {}, start } } as unknown as NodeProps<ClusterNode>} />
+    </ReactFlowProvider></TooltipProvider>));
+    for (const node of [container.querySelector(".og-project")!, container.querySelector(".og-cluster")!]) {
+      const button = node.querySelector<HTMLButtonElement>('[data-graph-project-start="project"]')!;
+      expect(button.getAttribute("aria-label")).toBe("Start agent in Project");
+      expect(button.closest(".og-project-drag, .og-cluster-drag")).toBeNull();
+      expect(button.classList.contains("nodrag")).toBe(true);
+      await act(async () => button.click());
+    }
+    expect(start.mock.calls).toEqual([["project"], ["project"]]);
+    expect(fold).not.toHaveBeenCalled();
+    await act(async () => map.unmount());
+  } finally {
+    useStartPanel.setState(savedPanel, true);
+  }
 });

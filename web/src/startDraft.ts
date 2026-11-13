@@ -19,7 +19,12 @@ import type { AgentStartTarget } from "./agentLayout";
  * project row's `+` (PRD sidebar-titlebar-refresh D-04), and the agent kind
  * when the surface chose one, else the remembered one.
  */
-export type StartPreset = { projectId: string; kind?: ProviderKind };
+/**
+ * `stay` keeps the screen in front when the start goes: an Overview's project
+ * `+` (issue 2514) leaves the operator on the Overview, where the new session
+ * joins the map, instead of bringing its Workspace forward.
+ */
+export type StartPreset = { projectId: string; kind?: ProviderKind; stay?: boolean };
 
 /**
  * Why a start did not go: the core's own sentence, shown as sent, or a catalog

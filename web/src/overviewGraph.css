@@ -36,11 +36,11 @@
 .og-project[data-current="true"] { opacity: 1; }
 /* Pointed at, or holding the chosen session, the project's name and glow stand out (PRD D-17, B21). */
 .og-project[data-emphasized="true"] { opacity: 1; text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }
-/* The in-map fold button is quiet until the name is pointed at (PRD D-19, B25). */
-.og-project-fold { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 1.2em; height: 1.2em; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--og-accent); opacity: var(--opacity-dimmed); cursor: pointer; }
-.og-project-fold svg { width: 85%; height: 85%; }
-.og-project:hover .og-project-fold, .og-project-fold:focus-visible { opacity: 1; }
-.og-project-fold:hover { background: var(--accent); }
+/* The in-map start and fold buttons are quiet until the name is pointed at (PRD D-19, B25; issue 2514). */
+.og-project-fold, .og-project-start { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 1.2em; height: 1.2em; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--og-accent); opacity: var(--opacity-dimmed); cursor: pointer; }
+.og-project-fold svg, .og-project-start svg { width: 85%; height: 85%; }
+.og-project:hover .og-project-fold, .og-project-fold:focus-visible, .og-project:hover .og-project-start, .og-cluster:hover .og-project-start, .og-project-start:focus-visible { opacity: 1; }
+.og-project-fold:hover, .og-project-start:hover { background: var(--accent); color: var(--og-accent); }
 .og-project-fold:focus-visible { outline: var(--size-hairline) solid var(--ring); }
 .og-project-drag:active, .og-cluster-drag:active { cursor: grabbing; }
 .og-glow { display: block; overflow: visible; }
@@ -67,7 +67,9 @@
 /* The operator's turn inside a folded project is a badge at the circle's top, larger than a session's. */
 .og-cluster-orb .og-orb-state { top: 0; bottom: auto; right: 0; transform: scale(1.4); transform-origin: top right; }
 .og-cluster-orb:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
-.og-cluster strong { max-width: 100%; overflow: hidden; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); font-size: var(--text-headline); font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+/* A folded project's name keeps its `+` beside it, on the name's own ground (issue 2514). */
+.og-cluster-name { display: flex; max-width: 100%; align-items: center; gap: var(--spacing-xxs); padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); font-size: var(--text-headline); font-weight: 700; line-height: 1.2; }
+.og-cluster strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .og-cluster .og-state-counts { justify-content: center; background: var(--background); border-radius: var(--radius-sm); padding-inline: var(--spacing-xxs); }
 
 /* The chosen team's dashed outline goes round its root and every delegated descendant. */
@@ -156,11 +158,11 @@
 .og-project-list > div > button:first-child:disabled { cursor: default; }
 .og-project-list strong { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
 .og-count { flex-shrink: 0; min-width: 2ch; margin-left: auto; text-align: right; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-/* The row's eye shows on pointer or keyboard focus, and always on a hidden row (PRD overview-graph-remembered D-02). */
-.og-project-list .og-eye { flex-shrink: 0; opacity: 0; }
-.og-project-list > div:hover .og-eye, .og-project-list > div:focus-within .og-eye, .og-project-list > div[data-hidden="true"] .og-eye { opacity: 1; }
-/* A touch screen has no pointer to point with, so the eye is always there. */
-@media (hover: none) { .og-project-list .og-eye { opacity: 1; } }
+/* The row's `+` and eye show on pointer or keyboard focus, and the eye always on a hidden row (PRD overview-graph-remembered D-02; issue 2514). */
+.og-project-list .og-eye, .og-project-list .og-row-start { flex-shrink: 0; opacity: 0; }
+.og-project-list > div:hover .og-eye, .og-project-list > div:focus-within .og-eye, .og-project-list > div[data-hidden="true"] .og-eye, .og-project-list > div:hover .og-row-start, .og-project-list > div:focus-within .og-row-start { opacity: 1; }
+/* A touch screen has no pointer to point with, so the `+` and the eye are always there. */
+@media (hover: none) { .og-project-list .og-eye, .og-project-list .og-row-start { opacity: 1; } }
 .og-navigator h3, .og-details h3, .og-waiting-alone h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
 .og-waiting h3 span { color: var(--warning); font-variant-numeric: tabular-nums; }
 .og-waiting h3 { margin-bottom: var(--spacing-sm); }
