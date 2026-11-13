@@ -357,8 +357,8 @@ jobs:
           gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
           HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -369,7 +369,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -774,8 +774,8 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/verify-web.sh desktop test
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -786,7 +786,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -1177,8 +1177,8 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci-plan.py aggregate
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -1189,7 +1189,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Connect test failures and passes across job reruns
         if: ${{ !cancelled() }}
         continue-on-error: true

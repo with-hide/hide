@@ -61,9 +61,9 @@ A documents-only overlap (`*.md`, `*.pen`, `site/`) never stacks; it is resolved
 
 ## Issues
 
-Development issues (flaky tests, nightly failures, the agent canary, follow-ups) live in the private with-hide/hide-private, where CI files its own ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
-The public with-hide/hide takes only user bug reports and feature requests through its issue forms; an agent opens a development issue in with-hide/hide-private (`gh issue create --repo with-hide/hide-private`, and the `issue` skill with that repository as its target).
-A pull request that ends one names it across repositories, `Closes with-hide/hide-private#N`.
+Every issue about Hide's code lives in the public with-hide/hide, so a contributor reads the same issues a maintainer does: user bug reports and feature requests through their forms, and development issues (flaky tests, nightly failures, the agent canary, follow-ups) beside them.
+CI files its own under the `quarantine`, `nightly-failure` and `agent-canary` labels ([docs/TESTING.md](docs/TESTING.md#flaky-tests)); an agent opens one with the Development issue form's headings and the `development` label (`gh issue create --repo with-hide/hide --label development`, or the `issue` skill, which reads that form).
+A pull request that ends one names it, `Closes #N`.
 
 ## Before Opening A Pull Request
 
