@@ -68,6 +68,17 @@ final class KeychainShell: ShellViewController {
     }
 }
 
+/// The app's own controller with its real plugins (`appPlugins()` as the app has them), over a folder of test pages.
+final class AppPluginShell: ShellViewController {
+    var folder: URL!
+
+    override func instanceDescriptor() -> InstanceDescriptor {
+        let descriptor = super.instanceDescriptor()
+        descriptor.appLocation = folder
+        return descriptor
+    }
+}
+
 final class ShellViewControllerTests: XCTestCase {
     private static func call(_ id: String) -> String {
         "webkit.messageHandlers.bridge.postMessage({type:'message',pluginId:'Probe',methodName:'ping',callbackId:'\(id)',options:{}})"
@@ -213,5 +224,42 @@ final class ShellViewControllerTests: XCTestCase {
         wait(for: [finished], timeout: 30)
         XCTAssertEqual(shell.keychain.calls.sorted(), ["main", "main-final"])
         XCTAssertTrue(BridgeGate.appPlugins.isSuperset(of: ["HideKeychain", "HideScanner", "HideApp", "HidePush"]))
+    }
+
+    /// The page turns the app's notifications on only where Capacitor reports a `HidePush` plugin (`appPushAvailable` in
+    /// web/src/mobile/appHost.ts), which the Android app does not have yet: the iOS app's real web view must report it,
+    /// and must not report a plugin the app does not register. Each name is asked both ways the page can ask: the
+    /// native bridge's `isPluginAvailable` (the plugin's object) and the plugin header that `@capacitor/core`'s
+    /// `isPluginAvailable` reads once the page's own Capacitor is loaded. Drop `HidePushPlugin` from `appPlugins()` and
+    /// this fails.
+    func testThePageSeesTheAppsNotificationPlugin() throws {
+        try "<!doctype html><body>plugins</body>".write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        let shell = AppPluginShell()
+        shell.folder = folder
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        window.rootViewController = shell
+        window.makeKeyAndVisible()
+        retained = [shell, window]
+        let answered = expectation(description: "the page reported the plugins it sees")
+        var seen: [Bool]?
+        let question = """
+        document.readyState === 'complete' && typeof Capacitor === 'object'
+          ? ['HidePush', 'HideKeychain', 'NoSuchPlugin'].flatMap((name) => [
+              Capacitor.isPluginAvailable(name),
+              (Capacitor.PluginHeaders || []).some((header) => header.name === name),
+            ])
+          : null
+        """
+        func ask() {
+            shell.webView?.evaluateJavaScript(question) { value, _ in
+                if let flags = value as? [Bool] { seen = flags; answered.fulfill(); return }
+                // The page has not loaded yet: ask again.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { ask() }
+            }
+            if shell.webView == nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { ask() } }
+        }
+        ask()
+        wait(for: [answered], timeout: 30)
+        XCTAssertEqual(seen, [true, true, true, true, false, false])
     }
 }
