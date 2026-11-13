@@ -6,7 +6,7 @@ import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import { kindWord } from "./missionLine";
-import { missionEntry } from "./missionList";
+import { missionEntry, rowLine, rowLineText } from "./missionList";
 import { missionEntries } from "./mobile/missionModel";
 import type { PhoneMission } from "./mobile/protocol";
 import { forgetCatalogs } from "./agentPicker";
@@ -469,15 +469,23 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => workerEscalation(raisedOnly as AgentRow))[0]).toMatchObject({ kind: "worker_blocked", line: null });
   });
 
-  it("keeps a worker's person's turn off 내 차례 and says it on its step, what and where (PRD ask-human D-18, B25)", () => {
+  it("lists a worker's person's turn in 내 차례 with what and where, and says it on its step too (operator decision 2026-11-13; PRD ask-human B25)", () => {
     const ko = initializeInterfaceI18n("ko").getFixedT(null, "translation");
-    const working = node("api", { status: "working", pane_id: "p2" });
+    const working = node("api", { title: "API", status: "working", pane_id: "p2" });
     const declared = { escalation: { cause: "human_turn", letter_id: null, since_unix_ms: 1, human_notice: false }, human_turn: { id: "w.1", kind: "auth", place: "github.com/login", pane_id: "p2", title: "w", since_unix_ms: 1, own: true } } as unknown as AgentRow;
     const escalation = workerEscalation(declared);
     expect(escalation).toMatchObject({ cause: "human_turn", human: { kind: "auth", place: "github.com/login" } });
-    expect(turnItems(mission("m", { nodes: [working] }), () => escalation)).toEqual([]);
+    const items = turnItems(mission("m", { nodes: [working] }), () => escalation);
+    expect(items).toEqual([{ kind: "human_turn", node: working, human: { kind: "auth", place: "github.com/login" } }]);
+    // The list stands the mission in its 내 차례 and words the row as the step does.
+    const entry = missionEntry(mission("m", { nodes: [working] }), () => escalation);
+    expect(entry.group).toBe("turn");
+    expect(rowLineText(rowLine(entry.mission, entry.turn[0]!)!, ko)).toBe("API · 인증 · github.com/login");
     expect(holdReason(mission("m", { nodes: [working] }), working, () => escalation)).toEqual({ kind: "worker", escalation });
     expect(escalationWhy(escalation!, ko)).toBe("인증 · github.com/login");
+    // A step that is not working has no worker to wait on, and a finished mission nothing in 내 차례.
+    expect(turnItems(mission("m", { nodes: [{ ...working, status: "done" }] }), () => escalation)).toEqual([]);
+    expect(turnItems(mission("m", { status: "done", nodes: [working] }), () => escalation)).toEqual([]);
   });
 
   it("lists what waits for main in the Conductor's merge order while the mission waits to merge, a branch-only one as a join", () => {

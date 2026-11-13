@@ -7,7 +7,8 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { mergePull, attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, safetyNetLine, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
+import { humanTurnText } from "./humanTurn";
+import { mergePull, attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, safetyNetLine, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation, type WorkerHuman } from "./missions";
 import type { Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionSafetyNet, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
@@ -99,6 +100,7 @@ const TURN_PILL: Record<TurnItem["kind"], MessageKey> = {
   letters: "missionScreen.pill.letters",
   attention: "missionScreen.pill.attention",
   worker_blocked: "missionScreen.pill.blocked",
+  human_turn: "missionScreen.pill.attention",
   landing: "missionScreen.pill.merge",
 };
 
@@ -123,6 +125,7 @@ export type RowLine<N extends MissionNodeBrief = MissionNodeBrief> =
   | { kind: "safety_net"; net: MissionSafetyNet }
   | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
+  | { kind: "human_turn"; node: N; human: WorkerHuman }
   | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "landing"; nodes: N[]; join: boolean }
   | { kind: "planning" }
@@ -145,6 +148,8 @@ export function rowLine<M extends MissionBrief>(mission: M, turn: TurnItem<M["no
         return { kind: "letters", letters: turn.letters };
       case "worker_blocked":
         return { kind: "worker_blocked", node: turn.node, cause: turn.cause, line: turn.line };
+      case "human_turn":
+        return { kind: "human_turn", node: turn.node, human: turn.human };
       case "attention":
         return { kind: "attention", node: turn.node, attention: turn.attention };
       case "landing":
@@ -175,6 +180,8 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
       return heldLettersText(line.letters, t);
     case "worker_blocked":
       return `${line.node.title} · ${line.line ?? t(`mission.turn.cause.${line.cause}`)}`;
+    case "human_turn":
+      return `${line.node.title} · ${humanTurnText(t, line.human)}`;
     case "attention":
       return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes)}`;
     case "landing":
