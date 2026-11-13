@@ -1,4 +1,6 @@
-import { expect, test as base } from "@playwright/test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, test as base, type Page } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { screenshot } from "./wire";
@@ -678,4 +680,87 @@ test("the missions tab lists a mission, and its answer reaches the device as one
   await expect.poll(() => answers().length).toBe(2);
   expect(answers()).toMatchObject([{ mission: "mission-one", key: 2, text: "sign it after lunch" }, { mission: "mission-one", key: 2, option: 1 }]);
   expect(answers()[0]!.request_id).not.toBe(answers()[1]!.request_id);
+});
+
+test.describe("the Android app's notifications", () => {
+  // The page as the Android app serves it: the phone bundle at Capacitor's `https://localhost` origin, with a stand-in of
+  // Capacitor's bridge in place of the app (its `HidePush` answers as `HidePushPlugin` does: Google's token, named by its
+  // service, and no environment). Pairing goes through the app's own link hand-off (`HideApp.takeLink`); the connection,
+  // the Noise session and the device are the fixture's real ones.
+  const REGISTRATION = { token: "c".repeat(26) + ":APA91b" + "d".repeat(120), p256dh: "P".repeat(87), auth: "A".repeat(22) };
+  const dist = fileURLToPath(new URL("../phone-dist/", import.meta.url));
+
+  async function openAndroidApp(page: Page, relay: Awaited<ReturnType<typeof startPhoneRelay>>) {
+    await page.route("https://localhost/**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      const file = path.resolve(dist, "." + (pathname.endsWith("/") ? pathname + "index.html" : pathname));
+      if (!file.startsWith(dist)) return route.fulfill({ status: 403 });
+      return route.fulfill({ path: file, headers: { "Cache-Control": "no-store" } });
+    });
+    await page.addInitScript(({ link, registration }) => {
+      const read = (key: string) => JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, { noiseKey: string; credential?: string }>;
+      const granted = () => localStorage.getItem("fixture.permission") === "granted";
+      const answer = () => ({ found: true, service: "fcm", ...registration });
+      const native: Record<string, (options: Record<string, string>) => unknown> = {
+        "HideApp.info": () => ({ version: "1.0.0", build: "1" }),
+        "HideApp.takeLink": () => {
+          if (sessionStorage.getItem("fixture.link-taken")) return {};
+          sessionStorage.setItem("fixture.link-taken", "true");
+          return { link };
+        },
+        "HideApp.appearance": () => ({}),
+        "HideKeychain.save": ({ room, noiseKey, credential }) => {
+          localStorage.setItem("fixture.keychain", JSON.stringify({ ...read("fixture.keychain"), [room]: { noiseKey, ...(credential ? { credential } : {}) } }));
+          return {};
+        },
+        "HideKeychain.read": ({ room }) => { const item = read("fixture.keychain")[room]; return item ? { found: true, ...item } : { found: false }; },
+        "HideKeychain.list": () => ({ rooms: Object.keys(read("fixture.keychain")) }),
+        "HidePush.state": () => ({ permission: granted() ? "granted" : "unknown" }),
+        "HidePush.enable": () => { localStorage.setItem("fixture.permission", "granted"); return answer(); },
+        "HidePush.registration": () => granted() ? answer() : { found: false },
+        "HidePush.forget": () => ({}),
+        "HidePush.takeOpen": () => ({}),
+      };
+      Object.assign(window, { Capacitor: {
+        getPlatform: () => "android",
+        isPluginAvailable: (name: string) => ["HideApp", "HideKeychain", "HideScanner", "HidePush"].includes(name),
+        nativePromise: async (plugin: string, method: string, options: Record<string, string> = {}) => {
+          const call = native[`${plugin}.${method}`];
+          if (!call) throw Object.assign(new Error(`${plugin}.${method}`), { code: "unimplemented" });
+          return call(options);
+        },
+        addListener: () => ({ remove: () => undefined }),
+      } });
+    }, { link: relay.qr, registration: REGISTRATION });
+    await page.goto("https://localhost/");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+    expect(await page.evaluate(() => window.location.origin)).toBe("https://localhost");
+    await page.locator('[data-phone-tab="settings"]').click();
+    return page.getByRole("switch", { name: "Receive notifications", exact: true });
+  }
+
+  const registrations = (relay: Awaited<ReturnType<typeof startPhoneRelay>>) => relay.received.filter((frame) => String(frame.type).endsWith("_registration"));
+  const sessions = (relay: Awaited<ReturnType<typeof startPhoneRelay>>) => relay.received.filter((frame) => frame.client_kind === "phone").length;
+
+  test("the switch gives the computer Google's token and the phone's key, and reads on", async ({ page, relay }) => {
+    const receive = await openAndroidApp(page, relay);
+    await expect(page.locator('[data-phone-notifications="off"]')).toBeVisible();
+    await receive.click();
+    await expect.poll(() => registrations(relay)).toEqual([{ type: "fcm_registration", token: REGISTRATION.token, key: { p256dh: REGISTRATION.p256dh, auth: REGISTRATION.auth } }]);
+    await expect(page.locator('[data-phone-notifications="on"]')).toBeVisible();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("a computer that refuses the registration is marked outdated and the session goes on", async ({ page, relay }) => {
+    relay.state.refuseAppRegistration = true;
+    const receive = await openAndroidApp(page, relay);
+    await receive.click();
+    await expect.poll(() => registrations(relay).map((frame) => frame.type)).toEqual(["fcm_registration"]);
+    await expect(page.locator("[data-phone-notifications]")).toContainText("Update Hide on the computer");
+    // The same session: the agents list is still live, and the phone never joined again.
+    await page.locator('[data-phone-tab="agents"]').click();
+    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+    expect(sessions(relay)).toBe(1);
+  });
 });
