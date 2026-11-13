@@ -74,6 +74,15 @@ function manifest(change = (m) => m) {
       node('receiver', { 'android:exported': 'true', 'android:name': 'androidx.profileinstaller.ProfileInstallReceiver', 'android:permission': 'android.permission.DUMP' }, [
         node('intent-filter', {}, [node('action', { 'android:name': 'androidx.profileinstaller.action.INSTALL_PROFILE' })]),
       ]),
+      // The notifications: the app's own message service and tap activity, and Firebase's receiver, which only Google
+      // Play services (the holder of c2dm.permission.SEND) can reach.
+      node('activity', { 'android:exported': 'false', 'android:name': 'me.grab.hide.android.NoticeOpenActivity' }),
+      node('service', { 'android:exported': 'false', 'android:name': 'me.grab.hide.android.HidePushService' }, [
+        node('intent-filter', {}, [node('action', { 'android:name': 'com.google.firebase.MESSAGING_EVENT' })]),
+      ]),
+      node('receiver', { 'android:exported': 'true', 'android:name': 'com.google.firebase.iid.FirebaseInstanceIdReceiver', 'android:permission': 'com.google.android.c2dm.permission.SEND' }, [
+        node('intent-filter', {}, [node('action', { 'android:name': 'com.google.android.c2dm.intent.RECEIVE' })]),
+      ]),
     ],
   };
   change(m);
@@ -158,6 +167,7 @@ describe('the release gate on the signed bundle', () => {
     'an exported service': [component('service', { 'android:exported': 'true', 'android:name': 'me.example.Leak' }), 'exported components are exactly'],
     'a component exported by an intent filter alone': [component('receiver', { 'android:name': 'me.example.Implicit' }, [node('intent-filter')]), 'exported components are exactly'],
     'the receiver\'s permission dropped': [putManifest((m) => { delete m.components[4].attributes['android:permission']; }), 'exported components are exactly'],
+    'the notification receiver open to every app': [putManifest((m) => { delete m.components[7].attributes['android:permission']; }), 'exported components are exactly'],
     'web view inspection on': [putConfig((c) => ({ ...c, android: { webContentsDebuggingEnabled: true } })), 'cannot be inspected'],
     'Capacitor logging on': [putConfig((c) => ({ ...c, loggingBehavior: 'debug' })), 'logging is none'],
     'a remote page': [putConfig((c) => ({ ...c, server: { url: 'http://192.168.0.2:5173' } })), 'server url'],
