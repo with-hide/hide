@@ -417,7 +417,7 @@ const zhCN = {
   "sidebar.updateCard.releaseNotes": "更新内容",
   "sidebar.updateCard.required": "必需的更新",
   "sidebar.updateCard.requiredVersion": "hide {{version}} 修复了当前版本的问题。方便时请重新启动。",
-  "sidebar.updateCard.requiredKeep": "你的工作不会中断：重新启动期间，代理和终端会继续运行。",
+  "sidebar.updateCard.requiredKeep": "你的工作不会中断：重新启动期间，智能体和终端会继续运行。",
   "sidebar.raisedMore": "更多",
   "sidebar.inactive": "未活动",
   "sidebar.foldProject": "折叠 {{name}}",

@@ -278,6 +278,8 @@ test("a ready update shows the ↑ button, opens its card once per version, and 
     // running, and stays through Escape and a click elsewhere, still taking no key meant for a pane.
     await page.locator('[data-update-card="0.5.1"] [data-update-card-later]').click();
     await expect(page.locator('[data-update-card="0.5.1"]')).toHaveCount(0);
+    // The closed card hands the keyboard back to its ↑ button from a timer; wait for it, or it lands after the next focus.
+    await expect(page.locator('[data-update-button="0.5.1"]')).toBeFocused();
     await trigger.focus();
     await show(page, { kind: "ready", version: "0.5.1" }, true, true);
     const required = page.locator('[data-update-card="0.5.1"][data-update-card-required]');
