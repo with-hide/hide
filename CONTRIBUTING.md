@@ -71,9 +71,9 @@ Search open and closed issues first.
 Keep the report factual and about one screen long: what happened, what you expected, the shortest exact steps, the hide and operating-system versions, and the few log lines around the failure.
 Leave out root-cause analysis, implementation plans, proposed fixes, patches and generated investigation output.
 An issue that runs past 8,000 characters is closed automatically.
-An issue that does not use one of the forms (it lacks the headings of the bug form or of the feature request form) gets the label `needs-template` and one comment; it goes away when the description is fixed, and an issue still without a form after 7 days is closed.
+An issue that does not use one of the forms (it lacks the headings of the bug form, the feature request form or the development issue form) gets the label `needs-template` and one comment; it goes away when the description is fixed, and an issue still without a form after 7 days is closed.
 Maintainers are not checked.
-The public repository's issues are user bug reports and feature requests; the development issues CI files (flaky tests, nightly failures, the agent canary) live in the private with-hide/hide-private ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
+The repository's issues hold user bug reports and feature requests and, beside them, development issues: the ones CI files (flaky tests, nightly failures, the agent canary; [docs/TESTING.md](docs/TESTING.md#flaky-tests)) and the ones a contributor opens with the Development issue form, which carry the `development` label.
 
 A bug report is a real contribution.
 It does not reserve the work: a maintainer may fix it before you do.
@@ -262,7 +262,7 @@ Revert the merge the failure points to in a pull request of its own (`git revert
 A main push run that fails only in macOS jobs does not stop merges.
 Pull requests run no macOS job unless they change a macOS path (operator decision 2026-11-01; [docs/TESTING.md](docs/TESTING.md#where-the-macos-runners-went) owns the paths and the measurement behind it), so main's push run and the nightly are where a macOS-only break first shows, and the operator accepted that it does.
 The failed jobs must all be macOS jobs (`desktop e2e`, `os contract (macOS)`, or a `(macos)` leg of `vt`, `omp SDK` or `package`) and checks that only aggregate their results; a Linux or Windows job failing in the same run keeps the freeze.
-Whoever merges records the failed run and opens a development issue for it in with-hide/hide-private, and the fix, a revert or a forward fix as above, lands before the next release, whose tagged commit's main `verify` must pass, macOS included.
+Whoever merges records the failed run and opens a development issue for it, and the fix, a revert or a forward fix as above, lands before the next release, whose tagged commit's main `verify` must pass, macOS included.
 
 During development, an existing Windows-only failure need not stop unrelated pull requests when all of these hold:
 
@@ -340,7 +340,7 @@ The `herdr names` reasons, one per entry of `scripts/herdr-names-allowlist.json`
 - `to-rewrite`: a comment, doc sentence, prompt or string that explains current behaviour by what Herdr did; rewrite it and remove the entry.
 - `guard`: the gate itself, its check, its documentation and the workflow line that runs it.
 
-No test leaves a required gate: CI retries a failed test once and files a flaky one as an issue in with-hide/hide-private with a deadline, there is no quarantine tag or step, and a Rust test is never ignored for flakiness; [docs/TESTING.md](docs/TESTING.md#flaky-tests) owns the policy.
+No test leaves a required gate: CI retries a failed test once and files a flaky one as an issue with a deadline, there is no quarantine tag or step, and a Rust test is never ignored for flakiness; [docs/TESTING.md](docs/TESTING.md#flaky-tests) owns the policy.
 
 A web e2e test that exercises what differs by operating system is tagged `{ tag: "@platform" }` with a comment saying what, and a pull request whose plan includes the platform lanes runs those on Windows as well as in the full Linux shards, and the nightly runs them on macOS: Trash, process ownership, file watching and saving, worktree paths, disk cleanup, terminal input and echo through the platform's pane holder, and platform editing chords and browser-composed Korean input.
 Every web e2e presses its chords through `web/e2e/chords.ts`, which reads them from the shell's registry for the runner's system, so the Linux shards press the Ctrl+Shift and Alt+Shift chords Windows and Linux use and the macOS run presses the ⌘ ones; a spec spells a chord itself only when it binds one in Settings or presses one the shell must not answer.
@@ -351,7 +351,7 @@ The desktop suite is written against macOS: it presses ⌘ chords, reads macOS's
 A desktop e2e test that checks what the desktop host does differently on another system is tagged `{ tag: "@platform" }` with a comment saying what, and the Linux and Windows nightly and a pull request's `windows desktop` lane run `desktop e2e --grep @platform`: the host's processes and local stream (`hide connect`, a daemon ending and the next one, whether closing the last window ends the app), the CLI's name and places, the path it hands the wire, the file manager's reveal, and an agent profile's account folder, a native path the node checks and makes private by its system's rule.
 A test is chosen by whether it checks such a difference, never by whether it passes there; a tagged test that fails on Linux or Windows is fixed under the same assertion (its fixture in `web/e2e/platform-fixture.ts` or `desktop/e2e/fixture.ts`, or a product issue), and gets no deadline, retry, skip or `@flaky`.
 A test with no such difference, or one for a macOS-only behavior, stays untagged and runs on macOS only; the chord a tagged test presses comes from `web/e2e/chords.ts`, not from a spelled `Meta`: the attach test is the one that reads the host's accelerators for the system, and the tests that press a ⌘ chord by name stay macOS only.
-Each failed test and each failed job that annotated no test reaches the nightly report on main, which opens one `nightly-failure` issue in with-hide/hide-private per failure, comments once per run attempt on the issue already open for it, and closes a lane's issues when a scheduled run passes it, never when the lane's job passed with a `Not measured` warning, which the report lists instead ([docs/TESTING.md](docs/TESTING.md#nightly-failures)).
+Each failed test and each failed job that annotated no test reaches the nightly report on main, which opens one `nightly-failure` issue per failure, comments once per run attempt on the issue already open for it, and closes a lane's issues when a scheduled run passes it, never when the lane's job passed with a `Not measured` warning, which the report lists instead ([docs/TESTING.md](docs/TESTING.md#nightly-failures)).
 The reporter's API failures fail its job, and every listing it reads fails on overflow instead of filing a duplicate.
 Package smoke and simulated hooks prove private fixture behavior; physical IME/candidate windows, real agent hook sessions, first-launch OS security prompts and operator PATH remain device QA.
 Run the platform set after the web build with `bash scripts/verify-web.sh web e2e --grep @platform`.
