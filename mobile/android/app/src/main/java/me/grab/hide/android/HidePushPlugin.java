@@ -16,9 +16,15 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.messaging.FirebaseMessaging;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -42,6 +48,17 @@ public class HidePushPlugin extends Plugin {
     private PushKeyStore store;
     /** Keystore work and Firebase's answers run here, off the main thread and off the plugin thread that takes the next call. */
     private ExecutorService work;
+    /**
+     * Where Firebase's answers go: {@link #work}, or nowhere once the plugin has ended, since Firebase answers on a thread of
+     * its own after the activity may be gone and a call of a destroyed plugin has no page to answer.
+     */
+    private final Executor answers = (task) -> {
+        try {
+            work.execute(task);
+        } catch (RejectedExecutionException ended) {
+            Log.i(TAG, "an answer came after the plugin ended");
+        }
+    };
 
     @Override
     public void load() {
@@ -54,6 +71,7 @@ public class HidePushPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         inbox.setListener(null);
+        main.removeCallbacksAndMessages(null);
         work.shutdownNow();
     }
 
@@ -114,7 +132,8 @@ public class HidePushPlugin extends Plugin {
 
     /**
      * The registration to send again on a connection: only for a computer whose key exists and only while the system still
-     * shows notifications. Nothing is created here.
+     * shows notifications. Nothing is created here: the key is read before Firebase is asked, so a computer with no key
+     * makes no Firebase installation or token, as on iOS.
      */
     @PluginMethod
     public void registration(PluginCall call) {
@@ -124,7 +143,18 @@ public class HidePushPlugin extends Plugin {
             call.resolve(notFound());
             return;
         }
-        registration(call, room, false);
+        work.execute(() -> {
+            try {
+                if (store.read(room) == null) {
+                    call.resolve(notFound());
+                    return;
+                }
+            } catch (SealedFiles.Failure failure) {
+                fail(call, failure.code);
+                return;
+            }
+            registration(call, room, false);
+        });
     }
 
     private void registration(PluginCall call, String room, boolean create) {
@@ -132,7 +162,7 @@ public class HidePushPlugin extends Plugin {
         main.postDelayed(() -> {
             if (answered.compareAndSet(false, true)) fail(call, "token_timeout");
         }, TOKEN_WAIT_MS);
-        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(work, (task) -> {
+        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(answers, (task) -> {
             if (!answered.compareAndSet(false, true)) return;
             if (!task.isSuccessful() || task.getResult() == null) {
                 // Google's reason (no Play services, no network) is the system's; the page gets the one word.
@@ -168,7 +198,8 @@ public class HidePushPlugin extends Plugin {
     /**
      * Deletes a computer's key: its notices open no more. With none left no notice could be opened, so the app gives its
      * token back and Google answers {@code UNREGISTERED} to every computer that still sends one, including one removed
-     * while it was off and could not be told, as the iOS app unregisters from Apple.
+     * while it was off and could not be told, as the iOS app unregisters from Apple. It answers once the token is deleted,
+     * so an {@code enable} right after it gets a new token, never the one being deleted.
      */
     @PluginMethod
     public void forget(PluginCall call) {
@@ -185,10 +216,17 @@ public class HidePushPlugin extends Plugin {
                 // A key list that cannot be read is not "none left": nothing is given back on a guess.
                 if (store.rooms().isEmpty()) {
                     FirebaseMessaging.getInstance().setAutoInitEnabled(false);
-                    FirebaseMessaging.getInstance().deleteToken();
+                    Tasks.await(FirebaseMessaging.getInstance().deleteToken(), TOKEN_WAIT_MS, TimeUnit.MILLISECONDS);
                 }
             } catch (SealedFiles.Failure failure) {
                 Log.w(TAG, "notice keys unreadable after a removal: " + failure.code);
+            } catch (ExecutionException | TimeoutException e) {
+                // The key is gone, so no notice opens; a token Google keeps answers with the fixed text until it expires.
+                Log.w(TAG, "notification token not deleted: " + e.getClass().getSimpleName());
+            } catch (InterruptedException e) {
+                // The plugin is ending (shutdownNow): its call ends with it.
+                Thread.currentThread().interrupt();
+                return;
             }
             call.resolve();
         });

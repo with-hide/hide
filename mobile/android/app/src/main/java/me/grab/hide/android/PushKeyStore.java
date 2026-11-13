@@ -1,6 +1,7 @@
 package me.grab.hide.android;
 
 import android.content.Context;
+import android.util.Log;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -25,6 +26,7 @@ public final class PushKeyStore {
     /** The same limit as the host list on the web side ({@code MAX_HOSTS} in hosts.ts). */
     public static final int MAX_ITEMS = 16;
     public static final String KEY_ALIAS = "me.grab.hide.android.push";
+    private static final String TAG = "HidePush";
 
     /** One computer's key. */
     public static final class Key {
@@ -55,10 +57,19 @@ public final class PushKeyStore {
         return new PushKeyStore(new File(context.getNoBackupFilesDir(), "push"), KEY_ALIAS);
     }
 
-    /** This computer's key, made and kept now when it has none. */
+    /**
+     * This computer's key, made and kept now when it has none or when the one kept no longer opens ({@code corrupt}, as
+     * after the Keystore lost its key): unlike a credential a push key is replaceable, and the computer gets the new one
+     * in the registration this answers.
+     */
     public synchronized Key readOrCreate(String room) throws SealedFiles.Failure {
-        Key kept = read(room);
-        if (kept != null) return kept;
+        try {
+            Key kept = read(room);
+            if (kept != null) return kept;
+        } catch (SealedFiles.Failure failure) {
+            if (!failure.code.equals("corrupt")) throw failure;
+            files.remove(room);
+        }
         if (files.rooms().size() >= MAX_ITEMS) throw new SealedFiles.Failure("too_many");
         PushCipher.Pair pair = PushCipher.generate();
         byte[] auth = new byte[16];
@@ -82,12 +93,21 @@ public final class PushKeyStore {
         return opened == null ? null : key(room, opened);
     }
 
-    /** Every key, for the message service to try in turn: nothing in a notice names its computer to Google. */
+    /**
+     * Every key that opens, for the message service to try in turn: nothing in a notice names its computer to Google. A key
+     * that no longer opens is left out, so the other computers' notices still open and that computer's show the fixed text
+     * until its next registration replaces the key ({@link #readOrCreate}).
+     */
     public synchronized List<Key> all() throws SealedFiles.Failure {
         List<Key> keys = new ArrayList<>();
         for (String room : files.rooms()) {
-            byte[] opened = files.open(room);
-            if (opened != null) keys.add(key(room, opened));
+            try {
+                byte[] opened = files.open(room);
+                if (opened != null) keys.add(key(room, opened));
+            } catch (SealedFiles.Failure failure) {
+                if (!failure.code.equals("corrupt")) throw failure;
+                Log.w(TAG, "a notice key no longer opens");
+            }
         }
         return keys;
     }

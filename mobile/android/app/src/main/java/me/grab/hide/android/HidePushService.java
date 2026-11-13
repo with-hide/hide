@@ -25,6 +25,10 @@ public class HidePushService extends FirebaseMessagingService {
                 notice = NoticeOpener.open(hide, keys);
             } catch (SealedFiles.Failure failure) {
                 Log.w(TAG, "notice keys unreadable: " + failure.code);
+            } catch (RuntimeException failure) {
+                // The Keystore reports some system failures unchecked (ProviderException); they end in the fixed text too,
+                // as the iOS extension's every failure does.
+                Log.w(TAG, "notice not opened: " + failure.getClass().getSimpleName());
             }
         }
         if (notice != null) {
