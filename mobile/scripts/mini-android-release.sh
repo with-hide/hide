@@ -15,7 +15,7 @@
 # them. They are kept in variables of this shell that are never exported. Every key is checked before anything is built,
 # and a problem names the key and the kind of problem, never a value. The keystore password reaches keytool and jarsigner
 # through a pipe (`-storepass:file /dev/fd/N`); the service account's private key reaches openssl the same way, and the
-# signed assertion and the access token reach curl through a pipe too: none is ever an argument, a file or an
+# signed assertion and the access token reach curl on its standard input: none is ever an argument, a file or an
 # environment variable. Gradle is given no secret at all, since it builds the bundle unsigned and jarsigner signs it.
 #
 # What a run owns is listed once, in "What a release owns" below, and `cleanup` removes exactly that on every way out:
@@ -241,15 +241,21 @@ logged() {
 
 # ---- Play's publishing API -----------------------------------------------------------------------------------------
 # One call: `play <name> <seconds> <method> <path> [curl arguments...]`, the answer in $work/answer.json and, redacted, in
-# the log. The access token reaches curl as a header file that is a pipe.
+# the log. The access token reaches curl as a header read from its standard input, a pipe. curl runs as a job this shell
+# waits for, since a signal reaches a waiting shell at once but a shell running a command only once it ends; cleanup
+# ends the job.
+play_job=
 play() {
     local name=$1 limit=$2 method=$3 path=$4 status=0
     shift 4
     current_step=$name
     printf '\n== %s\n' "$name" >> "$log"
     printf '== %s\n' "$name"
-    curl -sS --max-time "$limit" --fail-with-body -X "$method" -H @<(printf 'Authorization: Bearer %s\n' "$access_token") \
-        -o "$work/answer.json" "$@" "$play_api$path" < /dev/null 2> "$work/curl.err" || status=$?
+    printf 'Authorization: Bearer %s\n' "$access_token" | curl -sS --max-time "$limit" --fail-with-body -X "$method" -H @- \
+        -o "$work/answer.json" "$@" "$play_api$path" 2> "$work/curl.err" 9>&- &
+    play_job=$!
+    wait "$play_job" || status=$?
+    play_job=
     { cat "$work/answer.json" "$work/curl.err" 2> /dev/null || true; printf '\n'; } | redact >> "$log"
     rm -f "$work/curl.err"
     (( status == 0 )) && return 0
@@ -285,6 +291,7 @@ play_sign_in() {
 #   the machine lock   $lock, held on fd 9 (owns_lock); its text is emptied and the descriptor closed
 #   the work folder    $base/release (owns_work): the unsigned and the signed bundle, the unpacked bundle, the signers,
 #                      the API's answers, the temporary folder and the step's pipe
+#   the Play call      (play_job): a curl still running is ended
 #   a Play edit        (edit): an edit this run opened and did not commit is deleted, so nothing it uploaded reaches a
 #                      track; the record says so
 # What stays is not the run's: release.log (redacted and searched), the machine's uploads.log, the empty lock file, and
@@ -297,9 +304,13 @@ cleanup() {
     trap - ERR
     trap '' TERM HUP INT
     end_step
+    if [[ -n "$play_job" ]]; then
+        kill "$play_job" 2> /dev/null || true
+        wait "$play_job" 2> /dev/null || true
+    fi
     if [[ -n "$edit" && "$upload_ended" == 0 && -n "$access_token" ]]; then
-        if curl -sS --max-time 60 --fail -X DELETE -H @<(printf 'Authorization: Bearer %s\n' "$access_token") \
-                "$play_api/androidpublisher/v3/applications/$package/edits/$edit" < /dev/null > /dev/null 2>&1; then
+        if printf 'Authorization: Bearer %s\n' "$access_token" | curl -sS --max-time 60 --fail -X DELETE -H @- \
+                "$play_api/androidpublisher/v3/applications/$package/edits/$edit" > /dev/null 2>&1; then
             say "deleted the uncommitted Play edit $edit: nothing this run uploaded reached a track"
             printf '%s %s %s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$commit" "$version" "$code_number" deleted "$slug" >> "$records" 2> /dev/null
         else
@@ -372,9 +383,20 @@ logged "$limit_bundle" "bundle" "$project/gradlew" -p "$project" --no-daemon --c
 [[ -f "$outputs/app-release.aab" ]] || die "Gradle made no app-release.aab"
 cp "$outputs/app-release.aab" "$work/unsigned.aab"
 
-logged "$limit_sign" "sign with the upload key" "$JAVA_HOME/bin/jarsigner" -keystore "$HIDE_ANDROID_UPLOAD_KEYSTORE" \
-    -storepass:file <(printf '%s\n' "$HIDE_ANDROID_UPLOAD_PASSWORD") -sigalg SHA256withRSA -digestalg SHA-256 \
-    -signedjar "$work/app.aab" "$work/unsigned.aab" "$HIDE_ANDROID_UPLOAD_KEY_ALIAS"
+# Signing runs in the foreground, not through run_step: the pipe that carries the password is open only in this shell,
+# and a step's background job does not inherit it. perl's alarm bounds it, and jarsigner starts nothing that outlives it.
+current_step="sign with the upload key"
+printf '\n== %s\n' "$current_step" >> "$log"
+printf '== %s\n' "$current_step"
+signed=0
+perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot start $ARGV[0]: $!\n"' -- "$limit_sign" "$JAVA_HOME/bin/jarsigner" \
+    -keystore "$HIDE_ANDROID_UPLOAD_KEYSTORE" -storepass:file <(printf '%s\n' "$HIDE_ANDROID_UPLOAD_PASSWORD") \
+    -sigalg SHA256withRSA -digestalg SHA-256 -signedjar "$work/app.aab" "$work/unsigned.aab" "$HIDE_ANDROID_UPLOAD_KEY_ALIAS" \
+    < /dev/null 2>&1 9>&- | redact >> "$log" || signed=$?
+if (( signed != 0 )); then
+    printf 'release stopped at "%s" (status %s)\n' "$current_step" "$signed" >&2
+    stop_with_log
+fi
 rm -f "$work/unsigned.aab"
 
 step "verify the signature"
