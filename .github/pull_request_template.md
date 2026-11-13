@@ -1,7 +1,7 @@
 <!--
-Write in the order a reviewer reads: what changed, what needs a human, what is proven.
-Keep the text above the folded blocks under about 40 lines, one fact per bullet (120 characters). Longer material goes in a folded block.
-Delete a line or section that does not apply; do not fill it with "N/A". The gates are listed in CONTRIBUTING.md.
+Above the fold, only what a person decides; below it, folded, what a reviewer opens when needed.
+Keep the text above the folded blocks under about 30 lines, one fact per bullet (120 characters).
+Delete a line, section or block that does not apply; do not fill it with "N/A". The gates are listed in CONTRIBUTING.md.
 Title: `<type>: <imperative sentence>` in English, like the commits (types: CONTRIBUTING.md, Commit messages and attribution).
 -->
 
@@ -10,58 +10,84 @@ Related: <!-- PRD path, prerequisite or dependent PRs. Delete the line if none. 
 
 ## Summary
 
-<!-- 3-5 lines: the problem, then the change, in words a first-time reader can follow. -->
+### Problem
 
 <!--
-Screen change: one before/after image and one caption line saying where to look. Further images go in the folded block under Evidence.
-Upload command: AGENTS.md, Before Opening A Pull Request. Only GitHub user-attachments or committed repo paths render; crop out workstation names.
-A screen change with no image needs one line `No screenshot: <reason>`; verify's policy check blocks the PR without either.
-No screen change: no screenshot. Optionally one short code block with the changed behavior, request/response or repro.
+3-5 lines in words a first-time reader can follow:
+the situation (who was doing what, and what went wrong), why it matters (who it reaches, how often, what it costs them),
+how you know it is real (reproduced, with the version and steps, or who asked for it), and any context a reader needs (an earlier attempt, a related decision or pull request).
 -->
 
-## Review
+### Before → After
 
-<!-- Where the reviewer's time should go. A test already proves the rest; delete a line with nothing to decide. -->
+| | Before | After |
+| --- | --- | --- |
+| What the user gets | | |
+| Screen | | |
+| Flow | | |
 
-- **Decide**: <!-- product, copy and tradeoff calls only a human makes, one per line. For a screen change, the one visual judgment the image asks for. -->
-- **Risky files**: <!-- `path` - why. Pick from where this repository was burned: work under the runtime mutex, snapshot wire, engine/core ownership, calls outside the engine contract, failure path, high-frequency path. -->
-- **Cost**: <!-- Resident or hot-path change: added work per input or tick, notification fan-out, wait bounds and missing caps, owner and teardown (PERFORMANCE_TESTING.md#resident-work-cost-review). -->
-- **Questions**: <!-- Only ones that need an answer. Delete the line if none. -->
+<!--
+Before and After side by side; keep the rows that changed, delete the others, and add one line under the table saying where to look.
+What the user gets: one line per side. A change only to the CLI, an API or saved data: a short output or request/response per side.
+Screen: one image per side, both with the same crop, size, data and state, one box around what changed; up to three image rows, further captures in the folded Evidence block.
+An image is required only when the diff touches a screen (web/src, site/, design/); a reason to show none goes in one line `No screenshot: <reason>`, or verify's policy check blocks the PR.
+Upload command: AGENTS.md, Before Opening A Pull Request. Only GitHub user-attachments or committed repo paths render; crop out workstation names.
+Flow: the steps joined by →, the changed step in bold.
+Nothing a user notices changes (a refactor, tests, CI): delete the table and write one line `Same for the user: <reason>`.
+-->
 
-## Tests
+## Decide
 
-<!-- Delete this section if the diff adds or changes no test. Criteria: docs/CODE_REVIEW.md perspective 6 and docs/TESTING.md, Reviewing a pull request that adds or changes a test. -->
+<!-- Calls only a person makes, one question per line: product, copy, a tradeoff, and for a screen change the one visual judgment the image asks for. Delete the section if none. -->
+
+## Hard to undo
+
+<!--
+What is hard to take back once it ships or reaches every user, in plain words, and what the operator must do:
+a saved state, settings or install format; a public contract; security or permissions; a place code cannot clean up (shell profile, installed clones, the user's home);
+resident or hot-path work every user pays for (added work per input or tick, notification fan-out, wait bounds and caps, owner and teardown: PERFORMANCE_TESTING.md#resident-work-cost-review).
+Delete the section if none.
+-->
+
+## Not verified
+
+<!-- What you did not check, and why. Never empty. Failed checks, required checks not run and major risks stay here, not folded. -->
+
+## Accountability
+
+<!-- Asked of a contributor outside the maintainers; maintainers delete this section. Check a box only when it is true: a box left empty tells the reviewer where to look. -->
+
+- [ ] The problem is real: I hit it, or Summary links who asked for the change.
+- [ ] I tried the After myself, in the app or the CLI, not only through tests.
+- [ ] This description says only what I saw; what I did not see is under Not verified.
+
+<details><summary>Evidence</summary>
+
+<!-- Name what was measured and how; `agents/runs/<slug>/` stays local, so do not link it. -->
+
+- **Verified**: <!-- Not "tests pass": what, how many, under which conditions. -->
+- **Generated**: <!-- A large script-made diff such as `design/hide.pen`: one line, pointing at the result image. Delete the line if none. -->
+
+<!-- Pen comparisons, per-state captures, technical logs, long command output, one caption line each. -->
+
+</details>
+
+<details><summary>Tests</summary>
+
+<!-- Delete this block if the diff adds or changes no test. Criteria: docs/CODE_REVIEW.md perspective 6 and docs/TESTING.md, Reviewing a pull request that adds or changes a test. -->
 
 - **Layer**: <!-- unit / integration / e2e. For e2e: the user flow it protects and why a lower layer cannot observe it. -->
 - **Catches**: <!-- The plausible bug that makes it fail, and the planted defect you made to see it fail. -->
 - **Repeat**: <!-- Changed tests x runs, all green, with the link to the repeat job. -->
 - **Waits**: <!-- Each new wait, timeout or poll and the state it waits for, or "none". -->
 
-## Evidence
-
-<!-- Name what was measured and how; `agents/runs/<slug>/` stays local, so do not link it. -->
-
-- **Verified**: <!-- Not "tests pass": what, how many, under which conditions. -->
-- **Not verified**: <!-- What and why. Never empty. Failed checks, required checks not run and major risks stay here, not folded. -->
-- **Generated**: <!-- A large script-made diff such as `design/hide.pen`: one line, pointing at the result image. Delete the line if none. -->
-
-<details><summary>More evidence</summary>
-
-<!-- Pen comparisons, per-state captures, technical logs, long command output, one caption line each. Delete the block if none. -->
-
 </details>
 
-## AI use
+<details><summary>Risky files</summary>
 
-<!-- Required from a contributor outside the maintainers: the agent or model you used, or `none`, and that you read and ran every line. Maintainers delete this section. -->
+<!-- `path` - why, one per line. Pick from where this repository was burned: work under the runtime mutex, snapshot wire, engine/core ownership, calls outside the engine contract, failure path, high-frequency path. Delete the block if none. -->
 
-## Breaking change
-
-<!--
-What breaks (install, state folder, saved settings, public contract) and what the operator must do.
-List any place code cannot clean up (shell profile, installed clones, the user's home).
-Delete the section if nothing breaks.
--->
+</details>
 
 <details><summary>Verification record</summary>
 

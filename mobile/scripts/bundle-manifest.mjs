@@ -1,8 +1,9 @@
 // The list of files the app's `public/` folder may hold, with their digests, made after `cap sync` and checked
-// again on the signed app (check-release-app.sh): the app that ships is the app that was assembled.
+// again on the signed app (check-release-app.sh for iOS, check-release-aab.py for Android): the app that ships is the
+// app that was assembled.
 //
 // `assemble.mjs` fills `mobile/www/` and holds every retained file to `retained-bundles.json`; `cap sync` copies that
-// folder into the Xcode project and adds the two Cordova files Capacitor always writes. This script reads the copy
+// folder into the Xcode project (or the Android project's assets) and adds the two Cordova files Capacitor always writes. This script reads the copy
 // the build compiles, requires it to be that folder plus exactly those two files, requires every pinned file in it to
 // match its pin, and writes `{schema: 1, files: {"<path>": "<sha256>"}}`.
 import { readFile, readdir, writeFile } from 'node:fs/promises';
@@ -14,6 +15,8 @@ import { PINS, parsePins } from './assemble.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 /** What `cap sync` adds to a copy of the web folder, whatever the web folder holds. */
 export const ADDED_BY_CAPACITOR = ['cordova.js', 'cordova_plugins.js'];
+/** Where `cap sync` copies the web folder in each app's project. */
+const PUBLIC_DIRS = { ios: 'mobile/ios/App/App/public', android: 'mobile/android/app/src/main/assets/public' };
 
 async function files(root, prefix = '') {
   const found = [];
@@ -57,11 +60,11 @@ export async function buildManifest({ www, publicDir, pins }) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const out = process.argv[2];
+  const [out, platform = 'ios'] = process.argv.slice(2);
   try {
-    if (!out) throw new Error('usage: bundle-manifest.mjs <manifest.json>');
+    if (!out || !(platform in PUBLIC_DIRS)) throw new Error('usage: bundle-manifest.mjs <manifest.json> [ios | android]');
     const pins = parsePins(JSON.parse(await readFile(PINS, 'utf8')));
-    const manifest = await buildManifest({ www: resolve(ROOT, 'mobile/www'), publicDir: resolve(ROOT, 'mobile/ios/App/App/public'), pins });
+    const manifest = await buildManifest({ www: resolve(ROOT, 'mobile/www'), publicDir: resolve(ROOT, PUBLIC_DIRS[platform]), pins });
     await writeFile(out, `${JSON.stringify(manifest, null, 1)}\n`);
     console.log(`bundle manifest: ${Object.keys(manifest.files).length} files`);
   } catch (error) {

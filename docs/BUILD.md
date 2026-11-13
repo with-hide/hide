@@ -881,7 +881,7 @@ Raising a protocol number for an addition is not needed ([ARCHITECTURE.md](ARCHI
 
 `mobile/android/` is the Capacitor host that carries the phone web app inside an Android app (`me.grab.hide.android`, Android 9 or later, compiled for and targeting API 36); [ARCHITECTURE.md](ARCHITECTURE.md#the-android-app-host) owns what it is.
 It builds with the same web folder as the iOS app, and its emulator runs on the Mac mini, beside the iOS simulator, so nothing about the build needs node or Rust there.
-Its version is `mobile/android/version.json`, which `app/build.gradle` reads and checks as `X.Y.Z`; signing, the version code for the store and the upload are not part of this build yet.
+Its version is `mobile/android/version.json`, which `app/build.gradle` reads and checks as `X.Y.Z`; the version code is 1 in a debug build and the Unix minute of the run in a release ([The release build](#the-android-release-build)).
 
 ### Setting up the build machine
 
@@ -937,6 +937,75 @@ An `--allowed-application` list replaces the earlier one, so an update names eve
 The relay's own access to FCM is its service account's, not this key ([RELAY_PROTOCOL.md](RELAY_PROTOCOL.md)).
 An emulator gets a token only once Google Play services has checked it in with Google; one whose check-in keeps failing (`AUTHENTICATION_FAILED` or `bad security token` in its log, `token_unavailable` on the switch) checks in again after `adb shell pm clear com.google.android.gsf` and `adb shell pm clear com.google.android.gms`, which leaves the Hide app's data alone.
 
+### The upload key
+
+Play App Signing holds the app signing key, which Google made and keeps; ours is the upload key, which only proves to Play that a bundle came from us, and which Play can replace on request.
+It lives on the mini in `~/.config/hide-android/` (mode 700), beside nothing else of Hide's:
+
+| File (mode 600) | What it is |
+| --- | --- |
+| `upload.p12` | the PKCS12 keystore: alias `upload`, RSA 4096, self-signed `CN=Hide Android upload key`, valid until 2054-03-31; made 2026-11-13 |
+| `upload-certificate.pem` | its certificate; SHA-256 `12:F9:F3:EF:BA:C0:09:AA:76:4B:DC:6E:F7:D0:DC:98:B5:69:B4:82:B8:5E:40:29:DA:C6:B8:80:24:7A:9B:0C`, the `uploadCertificateSha256` of `mobile/android-release-expect.json` |
+| `release.env` | the release's secrets as `KEY=VALUE` lines ([The release's secrets](#the-android-releases-secrets)) |
+| `play-service-account.json` | the Play service account's key, once the Play account exists |
+
+The backup is the keystore and its certificate in the encrypted disk image `hide-android-keys-backup-2026-11-13.dmg` (AES-256) in the operator's iCloud Drive, and two entries in the Passwords app (iCloud Keychain): `Hide Android upload key` (the keystore's password, which PKCS12 makes the key's too) and `Hide Android keys backup dmg` (the image's passphrase).
+The image was read back after it was made and its keystore compared equal to the mini's.
+To restore the key to a build machine: open the image with its passphrase, copy `upload.p12` and `upload-certificate.pem` into `~/.config/hide-android/` (`chmod 700` the folder, `600` the files), and write `release.env` from `mobile/android-release.env.example` with the password from the Passwords app.
+A key that is lost or leaked does not lose the app: make a new upload key (`keytool -genkeypair -storetype PKCS12 -keyalg RSA -keysize 4096 -validity 10000 -alias upload`, the password through `-storepass:file`), ask for an upload key reset in Play Console (Setup, App signing) with its certificate, back it up the same way, and change `uploadCertificateSha256` in a pull request.
+
+### The Android release build
+
+`bash mobile/scripts/build-android.sh release` makes a signed release bundle (AAB) and uploads it to Play's internal testing track.
+It refuses tracked changes, a commit that is not on `origin/main`, a commit that already has an upload record (the mini's `~/hide-android-build/uploads.log`, whose last line for the commit decides; `HIDE_ANDROID_RELEASE_AGAIN=1` uploads it again on purpose), `HIDE_ANDROID_SKIP_PHONE_BUILD` and `HIDE_ANDROID_RELAY_PORT`; it runs everything `build` runs (the phone build, the pin check, `cap sync`, the JVM tests and the instrumented tests on the mini's emulator, and a failing test stops it before anything is signed), and then, on the mini (`mobile/scripts/mini-android-release.sh`, piped over `ssh`):
+
+1. takes the machine's Android release lock (`~/hide-android-build/.release.lock`, a kernel lock like the iOS release's, refused naming the holder) and reads the secrets, checking all of them, the keystore's password against the keystore among them;
+2. builds the bundle unsigned with `./gradlew bundleRelease -PhideVersionCode=<code>`: Gradle is handed no secret;
+3. signs it with `jarsigner` and the upload key, verifies the signature (no entry it does not cover) and reads its signer's certificate with `keytool -printcert -jarfile`;
+4. unpacks the signed bundle and runs `mobile/scripts/check-release-aab.py` on it ([Release checks](#android-release-checks)); one failed check stops the command with every failure named;
+5. uploads it with Play's publishing API through one edit: the bundle (Play's answer must name the same version code and SHA-256), the internal track's release with status `completed`, and the commit of the edit; the upload record gets a line when the bundle starts to go and another when the edit is committed.
+
+`HIDE_ANDROID_NO_UPLOAD=1` stops after the release checks, before anything is sent to Play, and keeps the checked bundle on the mini as `~/hide-android-build/<branch>/signed.aab` (`HIDE_ANDROID_BUNDLE_OUT=<file.aab>` copies it back); it may run from a branch, so a change to the command is proven before it merges, and it is how Play's first build is made, since Play's API cannot upload a new app's first build and it goes up by hand in Play Console (the `android-release` skill in with-hide/hide-private has Play's steps in order).
+On the mini (2026-11-13) a whole no-upload run took about 8 minutes, most of it the phone build and the emulator's tests; the bundle is about 34 MB.
+
+**Version and version code.**
+The version name is `mobile/android/version.json`; Play orders builds by the version code alone, which is the Unix minute the command takes after the tests (`node mobile/scripts/release-version.mjs android`): it rises with every run, a second run on the same commit takes a new one, it stays under Play's limit of 2100000000 until the year 5962, and nothing is edited by hand.
+
+**What a release owns.**
+`mini-android-release.sh` lists, in one place, what a run creates, and one cleanup removes exactly that on a normal end, a failed step, TERM, HUP or INT, and a closed standard output: the lock (its text emptied), the work folder `~/hide-android-build/<branch>/release/` (the unsigned and the signed bundle, the unpacked bundle, the signers, the API's answers, the temporary folder), a curl still talking to Play, and a Play edit it opened and did not commit, which it deletes so nothing it uploaded reaches a track (the record gets a `deleted` line, and that commit may run again).
+Gradle runs in a process group of its own with a 20-minute bound, so a bound or a signal ends it with every process it started; signing is bounded at 5 minutes, each API call at 2 and the upload at 30.
+What stays: `release.log` (redacted and searched), the machine's `uploads.log`, the empty lock file, Gradle's unsigned release outputs in the branch's project, and after a no-upload run `signed.aab`; `clean` removes the branch folder.
+A `build`, `store-shots` or `clean` of the branch a release is running from, and a second release of any branch, are refused while the lock is held.
+
+#### The Android release's secrets
+
+Four values, registered in `mobile/android-release-env.json` (each key, its shape, and what it is for), shown by `mobile/android-release.env.example`, and held equal by a test: the keystore's path, the key's alias, the keystore's password, and the path of the Play service account's key file, which only an upload needs.
+They are read from `~/.config/hide-android/release.env` (mode 600) as `KEY=VALUE` lines, never run, and never from the environment: a value in the environment would reach every program the run starts, Gradle among them, so one found there stops the command.
+They stay in variables of the script's shell that are never exported.
+The password reaches `keytool` and `jarsigner` through a pipe (`-storepass:file /dev/fd/N`); signing runs in the foreground for that reason, since a background step does not inherit the pipe.
+The service account's private key reaches `openssl` through a pipe to sign a one-hour assertion, which reaches curl on its standard input and is traded for an access token, which reaches each API call as a header read from curl's standard input; none of them is ever an argument, a file or an environment variable.
+Every line the tools print passes through a filter that replaces the password and the token values with their names and anything shaped like an access token (`ya29.`) or an assertion with `<token>`; before a failed step shows the end of its log, and at every exit, the log is searched for those values and shapes and for a PEM private key header, and a log that holds one is deleted and the command fails.
+The command checks every value before it builds, in one report naming the key and the kind of problem, never a value: a missing key, a wrong shape, a file another account can read, a password that does not open the keystore, a service account file that is not one.
+`mobile/scripts/mini-android-release.test.mjs` runs the script with stand-ins for Gradle, keytool, jarsigner, unzip and curl (and the real openssl): it proves that no secret reaches an argument, an environment, the output or the log, that the token reaches Play only as a header, that the edit is deleted when the commit fails, the bundle's version code differs or the upload is interrupted, and that a run leaves no work folder or held lock after a failure or a TERM.
+
+#### Android release checks
+
+`mobile/scripts/check-release-aab.py` reads the signed bundle, not the project: the manifest and the XML resources in the compiled form the build wrote (aapt2's XmlNode protocol buffers, read with Python's standard library, the `python3` macOS's command line tools carry), so a setting that never reached the bundle cannot pass.
+It lists every failed check, and the upload never starts after one; `mobile/scripts/check-release-aab.test.mjs` writes a bundle in that form, spoils each fact in turn and requires its check to fail.
+
+| The signed bundle | Must be |
+| --- | --- |
+| Identity | package `me.grab.hide.android`, the version and version code the command passed, minimum SDK 28, target SDK 36, the base module only |
+| Debug left out | not debuggable, not test-only, no class or string of the debug build's inputs (`hide_debug_`, `hide-debug-`, `ShellTestActivity`) in its code |
+| No cleartext | no `usesCleartextTraffic`; the network security configuration the app names refuses cleartext in its base and in every part, has no debug overrides, trusts no user certificates, and has no qualified copy that would replace it on some phones |
+| Nothing leaves the phone | `allowBackup` false, and data extraction rules that exclude every domain from both cloud backup and device transfer and include nothing |
+| Permissions | exactly the list in `mobile/android-release-expect.json`: today `INTERNET` and `POST_NOTIFICATIONS` (asked only when notifications are turned on), and from the libraries `ACCESS_NETWORK_STATE` (ML Kit's code scanner and Firebase), `WAKE_LOCK` and `com.google.android.c2dm.permission.RECEIVE` (Firebase Cloud Messaging, [The Android app's notifications](#the-android-apps-notifications)) and the app's own `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` (AndroidX), which it also declares; no camera (the scanner runs in Google Play services) and no advertising id; a node that adds a permission adds it there in the same change |
+| Exported components | exactly the list: the app's `ShellActivity` (the launcher and the pairing link), Firebase's `FirebaseInstanceIdReceiver`, which only a holder of `com.google.android.c2dm.permission.SEND` (Google Play services) can reach, and AndroidX's `ProfileInstallReceiver`, which only a holder of `android.permission.DUMP` can reach |
+| Web view | Capacitor's configuration: web view inspection off, logging none, no server url or cleartext, no allowed navigation, no mixed content |
+| Native libraries | none |
+| Web bundle | every file of `assets/public/` is in the manifest `bundle-manifest.mjs` made after `cap sync` (`android`), with its SHA-256, and none is missing |
+| Signature | signed by the upload key alone (the certificate's SHA-256 is `uploadCertificateSha256`); `jarsigner -verify` finds no entry the signature does not cover |
+
 ### The store page of the Android app
 
 `mobile/store/android/` is the Google Play page as source: the text in `metadata/` (the layout fastlane's `supply` reads: one folder each for `en-US` and `ko-KR` with `title`, `short_description`, `full_description` and `changelogs/default`), `play-forms.md` (the answers for the Play Console forms that are not text, with the reason for each: data safety, content rating, target audience, ads, app access, countries and store settings) and `shots.json` (which of the iOS shots Play shows, in which order, the sizes, and the Play locale of each language).
@@ -954,6 +1023,7 @@ The images are run artifacts and are never committed ([AGENTS.md](../AGENTS.md#e
 
 ### In CI
 
+The release gate's own tests (the check, the release command, the secrets registry) are node tests in `mobile/` and run in the `checks` lane.
 The `Android app` lane of `pr.yml` runs the JVM tests and a debug build on Linux, on the runner's own Android SDK, for a change under `mobile/android/` ([TESTING.md](TESTING.md#how-many-jobs-a-run-starts)); the instrumented tests need an emulator and run only through `build` above.
 
 ## Mobile relay server

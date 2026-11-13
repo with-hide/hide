@@ -1,0 +1,25 @@
+{
+  "package": "me.grab.hide.android",
+  "minSdk": 28,
+  "targetSdk": 36,
+  "uploadCertificateSha256": "12:F9:F3:EF:BA:C0:09:AA:76:4B:DC:6E:F7:D0:DC:98:B5:69:B4:82:B8:5E:40:29:DA:C6:B8:80:24:7A:9B:0C",
+  "permissions": [
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.INTERNET",
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.WAKE_LOCK",
+    "com.google.android.c2dm.permission.RECEIVE",
+    "me.grab.hide.android.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+  ],
+  "declaredPermissions": [
+    "me.grab.hide.android.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+  ],
+  "exported": [
+    { "kind": "activity", "name": "me.grab.hide.android.ShellActivity", "permission": null },
+    { "kind": "receiver", "name": "com.google.firebase.iid.FirebaseInstanceIdReceiver", "permission": "com.google.android.c2dm.permission.SEND" },
+    { "kind": "receiver", "name": "androidx.profileinstaller.ProfileInstallReceiver", "permission": "android.permission.DUMP" }
+  ],
+  "excludedDomains": ["root", "file", "database", "sharedpref", "external", "device_root", "device_file", "device_database", "device_sharedpref"],
+  "forbiddenDexStrings": ["hide_debug_", "hide-debug-", "ShellTestActivity"],
+  "nativeLibraries": []
+}
