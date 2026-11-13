@@ -246,6 +246,12 @@ pub struct PhoneNode {
     /// Where the work is on its way to main.
     pub landing: Option<PhoneLanding>,
     pub agent_runtime: Option<String>,
+    /// Whether a step in progress is worked now (`NodeWork`), its state
+    /// alone, which the step's ring and frame draw: the phone draws no time
+    /// or cause. Absent for a step not in progress, while Hide cannot see
+    /// its worker's row and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<PhoneWork>,
     /// The agent kind of the node's worker.
     pub worker_agent: Option<String>,
     /// The worker's row in the phone's list, when it has one, so the step opens it (B36).
@@ -266,6 +272,13 @@ pub struct PhoneNode {
 
 /// A step's merge as the map reads it (`NodeMerge`), copied field by field:
 /// a field the core adds stays on the Mac until it is named here.
+/// A step's `NodeWork` as the phone frame carries it: `working`,
+/// `waiting`, `stopped` or `no_worker`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneWork {
+    pub state: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PhoneMerge {
     pub by: String,
@@ -440,6 +453,8 @@ struct NodeIn {
     landing: Option<PhoneLanding>,
     #[serde(default)]
     agent_runtime: Option<String>,
+    #[serde(default)]
+    work: Option<PhoneWork>,
     #[serde(default)]
     worker: Option<WorkerIn>,
     #[serde(default)]
@@ -674,6 +689,7 @@ fn phone_mission(
                 attention: source.attention,
                 landing: source.landing,
                 agent_runtime: source.agent_runtime,
+                work: source.work,
                 worker_agent: source.worker.map(|worker| worker.agent),
                 agent: pane.and_then(listed),
                 escalation,
@@ -898,6 +914,40 @@ mod tests {
             missions.items[0].nodes[0].worker_agent.as_deref(),
             Some("codex")
         );
+    }
+
+    #[test]
+    fn a_steps_work_reaches_the_phone_as_its_state_alone() {
+        let stopped = json!({"state": "stopped", "since_unix_ms": 5, "cause": {"kind": "limit", "line": "private limit line"}});
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node("a", json!({"work": stopped})),
+                    node(
+                        "b",
+                        json!({"work": {"state": "no_worker", "since_unix_ms": 7}}),
+                    ),
+                    node("c", json!({})),
+                ],
+            )],
+            json!({}),
+        );
+        let missions = projected(&rest);
+        let states: Vec<Option<&str>> = missions.items[0]
+            .nodes
+            .iter()
+            .map(|node| node.work.as_ref().map(|work| work.state.as_str()))
+            .collect();
+        assert_eq!(states, [Some("stopped"), Some("no_worker"), None]);
+        let sent = serde_json::to_string(&missions).unwrap();
+        assert!(
+            !sent.contains("private limit line"),
+            "the cause stays on the Mac"
+        );
+        assert!(!sent.contains("since_unix_ms"), "the phone draws no time");
     }
 
     #[test]

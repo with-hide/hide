@@ -53,10 +53,13 @@ import {
   missionOpen,
   nodeHold,
   nodeLook,
+  nodePace,
   nodeSteps,
   nodeWork,
   nodeWorkWords,
+  pacedSteps,
   stopCauseWords,
+  stoppedSince,
   reportLine,
   stackWaiting,
   warningWords,
@@ -335,9 +338,10 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
-  // What its worker does now (hide-private issue 680): a resting or absent worker stops the ring and says so under the title; a working one needs no words.
+  // What its worker does now (hide-private issue 680) and so how the card moves (`nodePace`): a resting worker cuts the ring into dashes and says what it waits on under the title; a stopped or absent one turns the card the stopped colour and says why; a working one needs no words.
   const doing = nodeWork(mission, node);
-  const doingLine = doing && doing.state !== "working" && doing.state !== "stopped" ? nodeWorkWords(doing, t) : null;
+  const pace = nodePace(mission, node);
+  const doingLine = doing?.state === "waiting" ? nodeWorkWords(doing, t) : null;
   const stopLine = useStopWords(doing);
   const hold = nodeHold(mission, node);
   const holdLine = useHoldWords(hold);
@@ -350,7 +354,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const run = worker?.run ?? null;
   // How long it has been worked, `n째` while it runs and `n 걸림` once it ended (D-51, B58); a planned node has no time.
   const times = useNodeTimes(mission, node, events, end);
-  const took = times?.took ? t(times.running ? "mission.elapsed.running" : "mission.elapsed.total", { elapsed: times.took }) : null;
+  // A stopped node counts how long it has stood since it stopped, not how long it ran (operator decision 2026-11-13).
+  const took = stopLine ? (stopLine.age ? t("mission.elapsed.stopped", { elapsed: stopLine.age }) : null) : times?.took ? t(times.running ? "mission.elapsed.running" : "mission.elapsed.total", { elapsed: times.took }) : null;
   // How the node's work goes is one bar of cells under its title, from the worker's plan once it exists, else the Conductor's steps; its count is in the card's name, never a second number on the card.
   const work = nodeSteps(node);
   // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
@@ -388,7 +393,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const card = (
     <MissionGraphCard
       node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failed}
-      still={doing != null && doing.state !== "working"}
+      pace={pace}
       title={titleText}
       accessory={hide ? <HideMark words={hide} /> : null}
       tab={device ? <DeviceChip label={device} variant="remote" className="max-w-full rounded-b-none" /> : null}
@@ -423,19 +428,18 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {worker?.agent ? <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={worker.agent} profile={run?.profile} /></span> : null}
           {worker?.model ? <span className="min-w-0 truncate text-subtle-foreground" data-node-model={run?.from}>{worker.model}</span> : null}
           {run?.mark ? <span className="shrink-0" data-run-planned="true">{run.mark}</span> : null}
-          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={times?.running ? "running" : "total"}>{worker?.model || worker?.agent || waits ? "· " : ""}{took}</span> : null}
+          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={stopLine ? "stopped" : times?.running ? "running" : "total"}>{worker?.model || worker?.agent || waits ? "· " : ""}{took}</span> : null}
         </span>
       ) : null}
       {doingLine ? (
-        <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
+        <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-work={doing?.state}>
           {doingLine}
         </span>
       ) : null}
-      {/* A worker stopped with nothing to wait on says why as a held node does, the cause cut when it runs long and how long ago whole at the line's end; its Conductor, not the operator, is told (operator decision 2026-11-11). */}
+      {/* A worker stopped with nothing to wait on, or no worker at all, says why in the stopped colour, cut when it runs long; how long ago is the worker row's (`멈춘 지 n분`). Its Conductor, not the operator, is told (operator decisions 2026-11-11, 2026-11-13). */}
       {stopLine ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={stopLine.full} data-node-work="stopped">
-          <span className="min-w-0 truncate">{stopLine.why}</span>
-          {stopLine.age ? <span className="shrink-0 whitespace-nowrap" data-node-stopped-age="true">· {stopLine.age}</span> : null}
+        <span className="min-w-0 truncate text-caption text-mission-stopped" title={stopLine.full} data-node-work={doing?.state}>
+          {stopLine.why}
         </span>
       ) : null}
       {/* A node its Conductor holds back says why in grey, cut when it runs long, and keeps how long it still holds whole at the line's end (operator decision 2026-11-11). */}
@@ -454,9 +458,9 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       ) : null}
       {work ? (
         <span className="flex min-w-0 flex-col gap-xxs" data-node-steps={work.source}>
-          <ProgressCells tones={work.steps.map((step) => step.tone)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) flex-none" />
+          <ProgressCells tones={pacedSteps(work.steps, pace)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) flex-none" />
           {work.now && node.status === "working" ? (
-            <span className="min-w-0 truncate text-caption text-subtle-foreground" data-node-steps-now="true">{t("mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span>
+            <span className="min-w-0 truncate text-caption text-subtle-foreground" data-node-steps-now={pace === "stopped" ? "stopped" : "true"}>{t(pace === "stopped" ? "mission.steps.stoppedAt" : "mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span>
           ) : null}
           {work.source === "plan" && node.status === "planned" ? (
             <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-steps-waiting="true">{t("mission.steps.planned", { count: work.steps.length })} · {t("mission.steps.notStarted")}</span>
@@ -477,7 +481,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     </MissionGraphCard>
   );
   const hovered = (
-    <MissionNodeHover mission={mission} node={node} facts={{ look, word, still: doing != null && doing.state !== "working", failed, doing: doingLine, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, pace, failed, doing: doingLine ?? stopLine?.why ?? null, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
       {card}
     </MissionNodeHover>
   );
@@ -531,13 +535,13 @@ function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) 
   return <MissionGraphReport status={mission.status} note={note} look={look} dimmed={dimmed} />;
 }
 
-/** A stopped worker's line: why first, then how long ago it stopped; `full` is the whole sentence, the agent's own line included, for the hover and the card's name. */
+/** A stopped node's words (operator decision 2026-11-13): why it stopped, its worker's cause or no worker, for its line, and how long ago for its worker row; `full` is the whole sentence, the agent's own line included, for the hover and the card's name. */
 function useStopWords(work: MissionNodeWork | null): { why: string; age: string | null; full: string } | null {
   const { t } = useInterfaceTranslation();
-  const stopped = work?.state === "stopped" ? work : null;
-  const age = useElapsed(stopped?.since_unix_ms);
+  const stopped = work?.state === "stopped" || work?.state === "no_worker" ? work : null;
+  const age = useElapsed(stoppedSince(stopped));
   if (!stopped) return null;
-  const why = stopCauseWords(stopped.cause, t, true);
+  const why = stopped.state === "stopped" ? stopCauseWords(stopped.cause, t, true) : t("mission.work.stop.noWorker");
   return {
     why: nodeWorkWords(stopped, t),
     age,

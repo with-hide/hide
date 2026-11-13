@@ -1,9 +1,9 @@
 import { useMemo, type ReactNode } from "react";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
-import { missionOpen, neighbours } from "./missions";
+import { missionOpen, neighbours, nodePace } from "./missions";
 import { layerDependencies } from "./projectBoard";
-import type { Mission, MissionMapFlow, MissionNode } from "./snapshot";
+import type { Mission, MissionMapFlow, MissionNode, MissionNodeBrief } from "./snapshot";
 
 const REPORT = "#report";
 const NO_DEFECTS: GraphEdge[] = [];
@@ -11,7 +11,7 @@ const NO_DEFECTS: GraphEdge[] = [];
 // The desktop and phone share the nodes, dependency layout, report sink and edge styling.
 type GraphCard<N> = { key: string; node: N | null };
 
-type GraphNode = Pick<MissionNode, "key" | "depends_on" | "status" | "base_pr"> & { prs: { number: number }[] };
+type GraphNode = Pick<MissionNodeBrief, "key" | "depends_on" | "status" | "kind" | "blocked" | "agent_runtime" | "work"> & Pick<MissionNode, "base_pr"> & { prs: { number: number }[] };
 
 export function MissionGraph<N extends GraphNode>({ mission, flow, selected, onSelect, defects = NO_DEFECTS, drawNode, report }: {
   mission: Pick<Mission, "status"> & { nodes: N[] };
@@ -45,8 +45,8 @@ export function MissionGraph<N extends GraphNode>({ mission, flow, selected, onS
     const dimmed = away(edge);
     // A stack is the one purple dashed edge: the pull request below is the one above's base (B27).
     if (from && to && to.base_pr != null && from.prs.some((pr) => pr.number === to.base_pr)) return { tone: "text-mission-review", dashed: true, dimmed };
-    // A line from a node at work is lit only while the mission is open; a cancelled mission's work stopped.
-    if (from && from.status === "working" && missionOpen(mission)) return { tone: "text-mission-working", dimmed };
+    // A line from a node at work is lit only while the mission is open and someone moves the node; a cancelled mission's work, and a stopped node's, stopped.
+    if (from && from.status === "working" && missionOpen(mission) && nodePace(mission, from) !== "stopped") return { tone: "text-mission-working", dimmed };
     return { tone: "text-border", dimmed };
   };
   // A defect a later node found is a red dashed edge back to the node it opened, until its line passes (B21).

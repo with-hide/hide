@@ -12,7 +12,8 @@ import { Hint } from "./ui/tooltip";
  * colours: the operator's turn is a `!` in a warning badge, a View to look
  * at the same badge with an eye (PRD unseen-agent-views D-15), a person's turn
  * the agent declared the same badge with a key (`human`, PRD ask-human D-09), in progress is a
- * static three-quarter ring (dashed while it waits on proven work, D-25), to read is a small dot (green only when the label
+ * three-quarter ring that turns while the agent works (operator decision 2026-11-13, replacing
+ * D-02) and stands cut into dashes while it waits on proven work (D-25), to read is a small dot (green only when the label
  * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
  * smaller and thinner than the in-progress one (sidebar-quiet-mark-indent D-02).
  * An agent Hide put to sleep keeps a grey moon, the one shape outside the four
@@ -62,8 +63,8 @@ export function StatusMark({ mark, label, read = false, human = false, className
           <circle cx="6" cy="6" r="1.25" className="fill-warning" />
         </svg>
       ) : mark === "going" || mark === "waiting" ? (
-        <svg viewBox="0 0 12 12" className="size-full">
-          {/* Three quarters from three o'clock round to twelve; it does not turn (D-02). Waiting cuts it into five dashes (D-25). */}
+        <svg viewBox="0 0 12 12" className={cn("size-full", mark === "going" && "motion-safe:animate-spin")}>
+          {/* Three quarters from three o'clock round to twelve; it turns while the agent works, a reduced-motion setting holding it still. Waiting cuts it into five dashes and stands still (D-25). */}
           <path d="M10.05 6A4.05 4.05 0 1 1 6 1.95" fill="none" strokeWidth="1.9" className="stroke-agent-working" {...(mark === "waiting" ? { pathLength: 19, strokeDasharray: "2.2 2" } : {})} />
         </svg>
       ) : mark === "done" || mark === "unread" ? (

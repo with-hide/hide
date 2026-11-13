@@ -113,6 +113,7 @@
   --color-mission-failed: var(--mission-failed);
   --color-mission-waiting: var(--mission-waiting);
   --color-mission-cancelled: var(--mission-cancelled);
+  --color-mission-stopped: var(--mission-stopped);
   --color-diff-added: var(--diff-added);
   --color-diff-removed: var(--diff-removed);
   --color-qr-foreground: var(--qr-foreground);
@@ -590,6 +591,7 @@
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
+  --mission-stopped: var(--status-seen);
   --diff-added: var(--green-53);
   --diff-removed: var(--red-56);
   --qr-foreground: #000000;
@@ -707,6 +709,7 @@
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
+  --mission-stopped: var(--status-seen);
   --diff-added: var(--green-83);
   --diff-removed: var(--red-69);
   --qr-foreground: #000000;
