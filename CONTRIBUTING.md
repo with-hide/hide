@@ -20,6 +20,27 @@ Say which one you used and that you read and ran every line, in the `AI use` sec
 - It is one change that a reader can follow.
   A maintainer may ask for an issue or a Discussion first when the change is large or decides how hide behaves; the pull request waits, labeled `needs-issue`, until there is one.
 
+### Open a pull request from a fork
+
+A pull request comes from your own fork, which you make once and keep for every change.
+You need no permission on this repository for it.
+
+```sh
+gh repo fork with-hide/hide --clone     # once: your fork as `origin`, this repository as `upstream`
+cd hide
+git fetch upstream
+git worktree add ../hide-fix -b fix/short-name upstream/main   # one worktree per change, as AGENTS.md asks; the root stays on main
+cd ../hide-fix
+# change the code and run the lanes under "Before you open a pull request"
+git commit -am "fix: keep a named tab when its last agent closes"
+git push -u origin fix/short-name
+cp .github/pull_request_template.md /tmp/body.md   # fill every section, then:
+gh pr create --repo with-hide/hide --title "fix: keep a named tab when its last agent closes" --body-file /tmp/body.md
+```
+
+For the next change, run `git fetch upstream` and add another worktree from `upstream/main`; the fork needs no cleaning.
+`gh pr create` opens the pull request on this repository's `main`, not on your fork.
+
 ### How the repository treats a pull request
 
 `.github/workflows/contribution-gate.yml` applies these rules and nothing else.
