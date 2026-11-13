@@ -365,6 +365,7 @@ code, .mono { font-family: var(--font-mono); }
 /* Every machine: the core's devices and a phone as a small map, a letter running between their agents.
    `data-step` 4 is the phone's ask (the notification and the Needs You group), 5 the reply in the agent's conversation. */
 .phone-pill { display: inline-flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 6px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.04em; color: var(--ink); }
+.phone-pill a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .section-head p.phone-pill { margin-top: 24px; font-size: var(--t-label); line-height: 1.4; color: var(--ink); }
 .pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px color-mix(in srgb, var(--lime) 20%, transparent); }
 .pill-sep { color: var(--faint); }
