@@ -113,3 +113,16 @@ test("the policy's relay journal retention is not shorter than what the deploy k
   assert.equal((privacy.match(/at most seven days/g) ?? []).length, 1);
   assert.equal((privacy.match(/최대 7일/g) ?? []).length, 1);
 });
+
+test("the policy names what Google sees through FCM and that the relay passes the token, in each language", () => {
+  // The Android app's notifications go through Google's FCM; the Play data safety form declares the same facts (mobile/store/android/play-forms.md).
+  const claims = {
+    en: [/<h4>4\.4 The Android app and Google<\/h4>/, /Firebase Cloud Messaging \(FCM\)/, /Firebase installation ID/, /The relay passes both to Google/, /does not store the token/, /not even a fixed general line/, /code scanner[\s\S]*diagnostics/],
+    ko: [/<h4>4\.4 Android 앱과 구글<\/h4>/, /Firebase Cloud Messaging\(FCM\)/, /Firebase 설치 ID/, /중계 서버는[^<]*둘을 구글에 전달/, /토큰도 알림도 저장하거나 로그에 남기지 않습니다/, /고정된 일반 문구도 없으므로/, /코드 스캐너[\s\S]*진단 정보/],
+  };
+  for (const [id, patterns] of Object.entries(claims)) {
+    const body = section(privacy, id);
+    for (const re of patterns) assert.match(body, re, `${id}: the policy carries ${re}`);
+    assert.match(body, /<li>[^<]*FCM[^<]*<\/li>/, `${id}: the relay's list of what it sees names FCM`);
+  }
+});
