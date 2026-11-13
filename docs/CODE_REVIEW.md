@@ -56,7 +56,7 @@ So every review covers the perspectives below, and names the perspective of each
 - A bug fix comes with a test that fails without it and covers the kind of bug, not only the reported case, so the same bug cannot come back unseen; a fix without one is a finding.
 - A change that stores a device or machine id adds a step to the release-state scenario (`scripts/release_state/scenario.py`) and regenerates the folders it applies to ([TESTING.md, Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)); without one, the first start after an upgrade can hold the device unconnected and no test sees it, which is an ordinary finding.
 - An end-to-end test names the user flow it protects and why a cheaper layer cannot observe it; a spec without both is an ordinary finding.
-- A new or changed test comes with its repeat result in the pull request's `Tests` section (changed tests times runs, linked to the repeat job); a test with none is an ordinary finding, because a single green run does not show a test is stable.
+- A new or changed test comes with its repeat result in the pull request's folded `Tests` block (changed tests times runs, linked to the repeat job); a test with none is an ordinary finding, because a single green run does not show a test is stable.
 - A new fixed wait, `sleep` or `timeout:` override names the state it waits for, as [Wait for state, not time](TESTING.md#wait-for-state-not-time) requires; one without it is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at, how to keep a test deterministic and the checklist for a test change ([Reviewing a pull request that adds or changes a test](TESTING.md#reviewing-a-pull-request-that-adds-or-changes-a-test)).
 
@@ -79,6 +79,6 @@ When one piece of work lands as a series, such as a mission's nodes or a stack, 
 ## Where reviews start from
 
 - `AGENTS.md` routes every reviewer here.
-- The file list a pull request's `Review` section names (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
-- The `Tests` section of a pull request that adds or changes a test (layer, what the test catches, repeat result, waits) is where a reviewer starts perspective 6; the reviewer checks each line against the diff rather than taking it as written.
+- The file list in a pull request's folded `Risky files` block (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
+- The folded `Tests` block of a pull request that adds or changes a test (layer, what the test catches, repeat result, waits) is where a reviewer starts perspective 6; the reviewer checks each line against the diff rather than taking it as written.
 - `docs/TESTING.md`, `docs/VERIFICATION.md` and `docs/PERFORMANCE_TESTING.md` own the detail behind perspectives 5 and 6.

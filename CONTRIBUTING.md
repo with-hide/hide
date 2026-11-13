@@ -11,12 +11,12 @@ A pull request asks a maintainer to find out whether the problem is real, whethe
 The template and the limits exist so that a maintainer can answer those questions from the pull request itself.
 
 Using an agent is not the problem; hide is built for running them, and its maintainers use them every day.
-Say which one you used and that you read and ran every line, in the `AI use` section of the template.
+No one is asked to read every line an agent wrote; in the template's `Accountability` section you say that the problem is real, that you tried the result yourself, and that the description says only what you saw.
 
 ### What a pull request needs
 
 - The title is `<type>: <sentence>` ([Commit messages and attribution](#commit-messages-and-attribution)).
-- The body follows [the template](.github/pull_request_template.md) and fills `Summary` (the problem and the change, `Closes #<issue>` when there is one), `Evidence` (what you ran and saw, and what you did not verify), `Review` (where a reviewer should look) and `AI use`.
+- The body follows [the template](.github/pull_request_template.md) and fills `Summary` (the problem, how you know it is real, and a Before and After table; `Closes #<issue>` when there is one), `Not verified` (what you did not check, and why) and `Accountability`.
 - It is one change that a reader can follow.
   A maintainer may ask for an issue or a Discussion first when the change is large or decides how hide behaves; the pull request waits, labeled `needs-issue`, until there is one.
 
@@ -52,7 +52,7 @@ For the next change, run `git fetch upstream` and add another worktree from `ups
 | The template | checked | checked | not checked |
 | CI | waits for a maintainer to approve each run | runs by itself: the gate approves it | runs by itself |
 
-- A pull request that misses the title or a template section gets the label `needs-template` and one comment naming what is missing.
+- A pull request whose title is not `<type>: <sentence>`, or whose `Summary` or `Not verified` is empty, gets the label `needs-template` and one comment naming what is missing; the rest of the template is the reviewer's to judge.
   Fix it by editing the description; the label goes away on its own, and a pull request still missing it after 3 days is closed.
 - The label `needs-triage` marks a pull request from an account younger than 30 days. It closes nothing.
 - A person whose pull requests were closed by a maintainer three times without merging has their next pull request closed on opening.
@@ -104,7 +104,7 @@ Before opening a pull request on this repository:
 
 1. Read `AGENTS.md` and the template.
 2. Check that the problem is real: you or your human reproduced it, or the change was asked for.
-3. Fill every template section yourself from what you ran, and name yourself under `AI use`.
+3. Fill every template section yourself from what you ran, and check an `Accountability` box only when it is true.
    Never write `N/A` or a guess where the template asks for evidence.
 4. Open one pull request at a time for one change.
    Do not open several to see which one a maintainer takes.
@@ -412,7 +412,7 @@ Typing, drag, wheel, focus, project Tree/List and destructive cleanup review in 
 Cleanup deletion tests must use a private fixture root; never use an operator project as a cleanup target.
 The guide's maintenance policy requires affected app scenarios for input/rendering/lifecycle changes and matched measurements for performance claims; this is review-required evidence, not a branch-protection check today.
 The nightly measures one fixed fixture (`perf.yml`, [The nightly performance lane](docs/PERFORMANCE_TESTING.md#the-nightly-performance-lane)) and files a run that is invalid; its dated records are a trend to read, not a pull request's evidence.
-Record completed and unrun checks in the PR's Evidence section (`Verified` and `Not verified`); a green `verify` result alone does not prove responsiveness in the app.
+Record completed checks in the PR's folded `Evidence` block (`Verified`) and unrun ones under `Not verified`; a green `verify` result alone does not prove responsiveness in the app.
 
 ## Local harness transition
 

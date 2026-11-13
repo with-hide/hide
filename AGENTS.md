@@ -40,7 +40,7 @@ A gap, on a system or on a device, is allowed only as a cell in `docs/INSTALL.md
 ## Explaining To The Operator
 
 When you tell the operator about a problem and its fix, in a reply, a letter or a pull request's `Summary`, say in plain words what is wrong and what changes, core first and short.
-Leave out the technical detail and the comparison of alternatives unless the operator asks for them; a pull request keeps the files to watch and the proof in `Review` and `Evidence`.
+Leave out the technical detail and the comparison of alternatives unless the operator asks for them; a pull request keeps the files to watch and the proof in its folded `Risky files` and `Evidence` blocks.
 
 ## Private Design Documents
 
@@ -73,10 +73,10 @@ When main's push run fails, follow `CONTRIBUTING.md`, When main's push run fails
 `CONTRIBUTING.md` lists every gate with its local command; run the lanes the diff touches before opening the pull request, and change a gate that is wrong in the same pull request with the reason in the description.
 While you wait for CI, keep a background watch on the run and act when it ends; `CONTRIBUTING.md`, Waiting for CI, owns the commands.
 Commit subjects and pull request titles take the form `<type>: <imperative sentence>` in English, such as `fix: keep a named tab when its last agent closes`, even when the operator writes in Korean; `CONTRIBUTING.md`, Commit messages and attribution, owns the types and the rule.
-Write the template in English, in the order a reviewer reads it: `Summary` with screenshots, `Review` (`Decide`, `Risky files`, `Cost`, `Questions`), `Tests` (`Layer`, `Catches`, `Repeat`, `Waits`, only when the diff adds or changes a test), `Evidence` (`Verified` and `Not verified`), then `Breaking change` only when something breaks; answer from the diff, not from intent, and delete the lines that do not apply rather than filling them with "N/A".
-A pull request whose diff touches a screen (`web/src`, `site/`, `design/`) shows it: crop the candidate's panel, upload it with `node ~/.claude/skills/ship/scripts/prd_ship.js screenshots --no-run --file <png> --caption "<one line>"` (a PRD run drops `--no-run`), and put the image line it prints under `Summary`; when there is a reason to show nothing, write it as one line `No screenshot: <reason>` for the reviewer to judge.
+Write the template in English, in the order a reviewer reads it: above the fold `Summary` (`Problem`, then a `Before → After` table of what the user gets, the screen and the flow), `Decide`, `Hard to undo` and `Not verified`, plus `Accountability` from a contributor outside the maintainers; below it the folded `Evidence`, `Tests` (`Layer`, `Catches`, `Repeat`, `Waits`, only when the diff adds or changes a test), `Risky files` and `Verification record` blocks; answer from the diff, not from intent, and delete the lines that do not apply rather than filling them with "N/A".
+A pull request whose diff touches a screen (`web/src`, `site/`, `design/`) shows it: crop the candidate's panel, upload it with `node ~/.claude/skills/ship/scripts/prd_ship.js screenshots --no-run --file <png> --caption "<one line>"` (a PRD run drops `--no-run`), and put the image it prints in the `Screen` row of the `Before → After` table; when there is a reason to show nothing, write it as one line `No screenshot: <reason>` for the reviewer to judge.
 `scripts/check-pr-screenshots.py` runs in `verify` and refuses the silent omission, and a body edit reruns it; `CONTRIBUTING.md`, CI gates, owns the rule.
-The reasons this repository has been burned by stay behind `Review`'s file list (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path); machine facts such as SHAs, suite output and evidence hashes go in the folded `Verification record` block at the end, which `/ship` fills.
+The reasons this repository has been burned by stay behind the folded `Risky files` list (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path); machine facts such as SHAs, suite output and evidence hashes go in the folded `Verification record` block at the end, which `/ship` fills.
 
 ## Evidence Belongs Outside The Repository
 
@@ -136,7 +136,7 @@ Read `docs/ARCHITECTURE.md` in full before changing anything under `hide-core/`,
 ## Herdr Source
 
 Hide no longer runs Herdr: the core's own engine (`hide-core/src/engine/own/`, over each pane's holder) runs every pane.
-When the own engine is stuck, or behaves differently from what Herdr did, read Herdr's source at its last pinned release ([herdrdev/herdr](https://github.com/herdrdev/herdr), tag `v0.9.5`) before designing a fix, and follow it where it fits; a pull request that goes another way says why in `Review`.
+When the own engine is stuck, or behaves differently from what Herdr did, read Herdr's source at its last pinned release ([herdrdev/herdr](https://github.com/herdrdev/herdr), tag `v0.9.5`) before designing a fix, and follow it where it fits; a pull request that goes another way asks for that call in `Decide`.
 Read it with `gh api` or a shallow clone under your own `agents/runs/`, and delete the clone when done.
 
 ## Performance Guide

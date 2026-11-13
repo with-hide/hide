@@ -31,7 +31,7 @@ Hosted desktop automation and private hook fixtures do not establish physical IM
    When a scenario cannot be automated yet, exercise it manually against the packaged app and record that the check was manual.
 3. Changes to caching, scheduling, snapshots, locking, or claims of improved speed/memory require the affected controlled baseline/candidate measurement (`scripts/web-shell-measure/run.sh`) as well.
    Apply it only when making a memory or latency claim; do not impose it on unrelated documentation changes.
-4. The change author records those results in the PR's existing Evidence section, and the reviewer checks coverage and exclusions as well as CI.
+4. The change author records those results in the PR's folded `Evidence` block (what it did not run goes under `Not verified`), and the reviewer checks coverage and exclusions as well as CI.
 5. Keep the regression test beside its component, reusable measurement tools in `scripts/`, procedure and comparison policy here, and each run's raw evidence under `agents/runs/`.
    Never turn a one-off trace or historical number into a hardcoded universal latency limit.
 

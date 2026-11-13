@@ -1075,9 +1075,9 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - [ ] The expected answer comes from a requirement or contract outside the implementation; a changed expectation names that source.
 - [ ] It sits at the cheapest layer that can observe the result; an e2e spec covers a flow that crosses a boundary.
 - [ ] An e2e spec names the user flow it protects and why a unit or core test cannot observe it; without both, the spec belongs at a lower layer.
-- [ ] The pull request's `Tests` section shows the repeat result for each new or changed test (the tests, the number of runs, a link to the repeat job), and every run passed.
+- [ ] The pull request's folded `Tests` block shows the repeat result for each new or changed test (the tests, the number of runs, a link to the repeat job), and every run passed.
 - [ ] No fixed waits; every wait names the state it waits for, and polls only observe.
-- [ ] No new `sleep`, fixed delay or `timeout:` override appears without the state it waits for, and the `Tests` section's `Waits` line lists each one ([Wait for state, not time](#wait-for-state-not-time)).
+- [ ] No new `sleep`, fixed delay or `timeout:` override appears without the state it waits for, and the `Tests` block's `Waits` line lists each one ([Wait for state, not time](#wait-for-state-not-time)).
 - [ ] Nothing slow runs while the test holds a request the product will time out, and polls in that window set `intervals`.
 - [ ] An order the result depends on is fixed by a gate at a real boundary, with the barrier asserted before release.
 - [ ] The fixture copies the whole isolation environment, owns every process it starts on every exit path, and reports cleanup failures without replacing the original error.
