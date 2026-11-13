@@ -39,7 +39,7 @@ test("both pages carry an English and a Korean body, each labelled with its lang
 });
 
 test("the privacy policy states an effective date, a contact address and the policy sections", () => {
-  // The Conductor writes the launch date over the "from the day" form when the iOS app is released.
+  // The iOS app was released on 13 November 2026, and the policy states that day.
   assert.match(privacy, /<p class="meta">Effective (\d{1,2} [A-Z][a-z]+ \d{4}|from the day the iOS app is released on the App Store)<\/p>/);
   assert.match(privacy, /mailto:hello@withhide\.dev/);
   for (const heading of [

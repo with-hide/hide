@@ -538,8 +538,9 @@ If a folder cannot be removed, it stays, the diagnostic log records why, and the
 ## Connect your phone
 
 On macOS, Windows or Linux, open Settings > Mobile and turn on **폰에서 Hide 열기**.
-When the connection row says **연결됨 · Hide 중계 (도쿄)**, choose **QR 보기** and scan it with the phone camera.
-The phone opens `app.withhide.dev`; choose **연결** to see your agents and reply to them.
+When the connection row says **연결됨 · Hide 중계 (도쿄)**, choose **QR 보기** and scan it.
+On an iPhone, install the App Store app (Hide - Remote Coding Agents) and scan with its **Scan QR code** button; on another phone, scan with the camera, which opens `app.withhide.dev`.
+Choose **연결** to see your agents and reply to them.
 You need no Hide account, payment or Tailscale installation.
 The QR expires after five minutes or after one phone uses it.
 
