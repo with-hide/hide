@@ -11,12 +11,13 @@
 //  - Google Play's page is source too (mobile/store/android/metadata, the layout fastlane's `supply` reads) and is held
 //    to Play's limits (title 30, short description 80, full description 4000, release notes 500) and the same rules,
 //    plus Play's metadata policy where a file can show it (no emoji, no word in capitals);
-//  - the screenshots' words in mobile/store/shots.json follow the same naming rule (store-shots.mjs).
+//  - the screenshots' words in mobile/store/shots.json follow the same naming rule (store-shots.mjs), and the Play list
+//    (mobile/store/android/shots.json) names shots that exist, at Play's sizes.
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AGENT_NAMES, LIMITS, PLAY_LIMITS, REVIEW_NOTES_LIMIT, lengthOf, thirdPartyNamesIn } from './store-limits.mjs';
-import { loadShots, shotProblems } from './store-shots.mjs';
+import { androidShotProblems, loadAndroidShots, loadShots, shotProblems } from './store-shots.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -147,7 +148,8 @@ export async function check(root = ROOT) {
   const expected = [...LOCALES, 'review_information'].sort();
   if (locales.join() !== expected.join()) problems.push(`mobile/store/metadata holds ${locales.join(', ')}, expected ${expected.join(', ')}`);
 
-  return [...problems, ...(await checkPlay(root)), ...shotProblems(await loadShots(root))];
+  const shots = await loadShots(root);
+  return [...problems, ...(await checkPlay(root)), ...shotProblems(shots), ...androidShotProblems(await loadAndroidShots(root), shots)];
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
