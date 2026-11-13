@@ -178,7 +178,8 @@ A cap logs `cap_exceeded` once per window, not once per refused request: once pe
 | Requests in flight to Apple and Google together, as streams of their two HTTP/2 connections | 32 | `rate_limited` | `concurrent_pushes` |
 | One request to Apple or Google, its answer, its body and the one retry included, an access token fetch too | 10 seconds | `unavailable` | none |
 | Apple's answer body read | 4,096 bytes | `unavailable` | none |
-| Google's answer body read, and the metadata server's | 8,192 bytes | classified by status alone | none |
+| Google's answer body read | 8,192 bytes | past it, classified by status alone | none |
+| The metadata server's answer read | 8,192 bytes | `unavailable` (`fcm_metadata_unreadable`) | none |
 
 A room's push counters live in its byte record, start their day with it and are bounded by the same `room_records`, so a room's record expiring cannot open a second day's allowance inside one.
 The relay keeps no queue and makes no retry except the one below; a refused request is the sender's to drop.
@@ -207,14 +208,15 @@ Tests stand in for Apple with a local h2c server, so the production TLS and ALPN
 | Google answers | `result` |
 | --- | --- |
 | 2xx | `delivered` |
-| 404, or any answer whose FCM error code is `UNREGISTERED` | `token_gone`: the token names no install of the app any more, and the sender deletes it |
-| 400 `INVALID_ARGUMENT` whose field violation is `message.token` | `token_rejected`: Google refuses the token itself, so the sender keeps the registration and writes a configuration diagnostic, as for Apple |
+| any answer whose FCM error code is `UNREGISTERED` | `token_gone`: the token names no install of the app any more, and the sender deletes it |
+| 404 without that code | `failed` (`fcm_not_found`): a wrong `--fcm-project` or path, which must not make every computer delete its phones' registrations |
+| 400 with FCM error code `INVALID_ARGUMENT` and no field violation (Google's documented answer to an invalid token), or a field violation on `message.token` | `token_rejected`: Google refuses the token itself, so the sender keeps the registration and writes a configuration diagnostic, as for Apple |
 | 403 `SENDER_ID_MISMATCH` | `token_rejected`: the token belongs to another Firebase project |
 | 401 | the access token is fetched again once and the request sent once more, the only retry, inside the same 10 seconds; a 401 the fresh token does not fix is `unavailable`; any other answer to the retry is mapped by this table |
 | 429, 5xx, no answer within the deadline | `unavailable` |
-| anything else, a 400 on another field, a 403 without `SENDER_ID_MISMATCH` and every 3xx included | `failed` |
+| anything else, a 400 whose field violation names another field, a 403 without `SENDER_ID_MISMATCH` and every 3xx included | `failed` |
 
-The relay reads only the FCM error code (`google.firebase.fcm.v1.FcmError`'s `errorCode`, one of `UNREGISTERED`, `INVALID_ARGUMENT`, `SENDER_ID_MISMATCH`) and whether a `google.rpc.BadRequest` field violation names `message.token`; nothing else of Google's body is kept.
+The relay reads only the FCM error code, from the detail typed `type.googleapis.com/google.firebase.fcm.v1.FcmError` (`errorCode`, one of `UNREGISTERED`, `INVALID_ARGUMENT`, `SENDER_ID_MISMATCH`), and whether the fields a `type.googleapis.com/google.rpc.BadRequest` detail faults are `message.token` or another; nothing else of Google's body is kept or logged.
 The access token is the VM's own: the relay asks the GCE metadata server (`GET http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token`, `Host: metadata.google.internal`, `Metadata-Flavor: Google`) over a connection of its own that closes with the answer, and takes the answer only when it carries `Metadata-Flavor: Google`.
 One token serves every request and is fetched again once it has five minutes or less left (`FCM_ACCESS_TOKEN_MARGIN`), and the relay never keeps one past an hour whatever lifetime the answer names; one fetch serves every send waiting for it.
 A metadata server that cannot be reached, refuses or answers something else makes the request `unavailable` (`fcm_metadata_unreachable`, `fcm_metadata_refused`, `fcm_metadata_unreadable`).

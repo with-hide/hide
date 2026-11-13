@@ -407,3 +407,38 @@ fn an_fcm_request_is_bounded_in_every_field_it_carries() {
     let printed = format!("{:?}", fcm_request());
     assert!(!printed.contains(FCM_TOKEN) && !printed.contains(&fcm_request().payload[..16]));
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_push_result_names_one_outcome_and_keeps_its_request_id() {
+    for (text, result) in [
+        ("delivered", PushOutcome::Delivered),
+        ("token_gone", PushOutcome::TokenGone),
+        ("token_rejected", PushOutcome::TokenRejected),
+        ("rate_limited", PushOutcome::RateLimited),
+        ("unavailable", PushOutcome::Unavailable),
+        ("failed", PushOutcome::Failed),
+    ] {
+        let message = ServerMessage::PushResult(PushResult { id: 4, result });
+        assert_eq!(
+            ServerMessage::decode(&message.encode().unwrap()).unwrap(),
+            message
+        );
+        assert_eq!(
+            message.encode().unwrap(),
+            format!(r#"{{"type":"push_result","id":4,"result":"{text}"}}"#)
+        );
+    }
+    assert_eq!(
+        ServerMessage::decode(r#"{"type":"push_result","id":0,"result":"delivered"}"#),
+        Err(Error::InvalidMessage)
+    );
+    assert_eq!(
+        ServerMessage::decode(r#"{"type":"push_result","id":4,"result":"sent"}"#),
+        Err(Error::InvalidMessage)
+    );
+    assert_eq!(
+        ServerMessage::decode(r#"{"type":"push_result","id":4,"result":"delivered","token":"ab"}"#),
+        Err(Error::InvalidMessage)
+    );
+}

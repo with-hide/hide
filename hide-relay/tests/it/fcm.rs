@@ -104,17 +104,35 @@ async fn fcm_s_answers_land_on_the_documented_outcome() {
         "INVALID_ARGUMENT",
         Some("message.token"),
     );
-    let other_argument = Google::error("INVALID_ARGUMENT", "INVALID_ARGUMENT", None);
+    // Google's documented answer to an invalid token: no field named
+    // (firebase.google.com/docs/cloud-messaging/error-codes, Example 2).
+    let documented_invalid_token = r#"{"error":{"code":400,"message":"The registration token is not a valid FCM registration token","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}"#;
+    let other_field = Google::error("INVALID_ARGUMENT", "INVALID_ARGUMENT", Some("message.data"));
     let unregistered = Google::error("NOT_FOUND", "UNREGISTERED", None);
+    let not_found = Google::error("NOT_FOUND", "", None);
     let mismatch = Google::error("PERMISSION_DENIED", "SENDER_ID_MISMATCH", None);
     let denied = Google::error("PERMISSION_DENIED", "", None);
     let unavailable = Google::error("UNAVAILABLE", "UNAVAILABLE", None);
     for (status, body, expected, event) in [
+        // A 404 without Google's UNREGISTERED is a wrong project or path,
+        // never a reason to drop the phone's registration.
         (
             StatusCode::NOT_FOUND,
             "",
-            PushOutcome::TokenGone,
+            PushOutcome::Failed,
             "fcm_not_found",
+        ),
+        (
+            StatusCode::NOT_FOUND,
+            not_found.as_str(),
+            PushOutcome::Failed,
+            "fcm_not_found",
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            documented_invalid_token,
+            PushOutcome::TokenRejected,
+            "fcm_token_rejected",
         ),
         (
             StatusCode::NOT_FOUND,
@@ -160,7 +178,7 @@ async fn fcm_s_answers_land_on_the_documented_outcome() {
         ),
         (
             StatusCode::BAD_REQUEST,
-            other_argument.as_str(),
+            other_field.as_str(),
             PushOutcome::Failed,
             "fcm_bad_request",
         ),
@@ -189,6 +207,7 @@ async fn fcm_s_answers_land_on_the_documented_outcome() {
         // Google's answer body is never logged.
         let log = serde_json::to_string(&events).unwrap();
         assert!(!log.contains("secret-free text"), "{status}");
+        assert!(!log.contains("registration token is not"), "{status}");
         fixture.stop().await;
     }
 }

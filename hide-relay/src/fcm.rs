@@ -330,14 +330,31 @@ enum Answer {
     Unauthorized,
 }
 
-/// The parts of Google's error body the relay classifies: the FCM error code
-/// and whether the request's token is the field Google faults. Only codes in
-/// the allowlist are kept; nothing else of the body leaves this function.
+/// The parts of Google's error body the relay classifies: the code of the
+/// `google.firebase.fcm.v1.FcmError` detail, and which field a
+/// `google.rpc.BadRequest` detail faults. Only allowlisted codes are kept and
+/// only whether the field is the token; nothing else of the body leaves this
+/// function.
 #[derive(Debug, Default, Eq, PartialEq)]
 struct GoogleError {
     code: &'static str,
-    token_field: bool,
+    field: Fault,
 }
+
+/// What a `BadRequest` detail says about the request's fields.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum Fault {
+    /// No field violation.
+    #[default]
+    None,
+    /// `message.token`.
+    Token,
+    /// Some other field: the relay's own body, not the token.
+    Other,
+}
+
+const FCM_ERROR: &str = "type.googleapis.com/google.firebase.fcm.v1.FcmError";
+const BAD_REQUEST: &str = "type.googleapis.com/google.rpc.BadRequest";
 
 fn google_error(body: &[u8]) -> GoogleError {
     const CODES: [&str; 3] = ["UNREGISTERED", "INVALID_ARGUMENT", "SENDER_ID_MISMATCH"];
@@ -349,20 +366,29 @@ fn google_error(body: &[u8]) -> GoogleError {
         .and_then(serde_json::Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let code = details
-        .iter()
+    let of_type = |kind: &'static str| {
+        details.iter().filter(move |detail| {
+            detail.get("@type").and_then(serde_json::Value::as_str) == Some(kind)
+        })
+    };
+    let code = of_type(FCM_ERROR)
         .filter_map(|detail| detail.get("errorCode").and_then(serde_json::Value::as_str))
         .find_map(|code| CODES.into_iter().find(|allowed| *allowed == code))
         .unwrap_or("");
-    let token_field = details
-        .iter()
+    let fields: Vec<Option<&str>> = of_type(BAD_REQUEST)
         .filter_map(|detail| detail.get("fieldViolations"))
         .filter_map(serde_json::Value::as_array)
         .flatten()
-        .any(|violation| {
-            violation.get("field").and_then(serde_json::Value::as_str) == Some("message.token")
-        });
-    GoogleError { code, token_field }
+        .map(|violation| violation.get("field").and_then(serde_json::Value::as_str))
+        .collect();
+    let field = if fields.is_empty() {
+        Fault::None
+    } else if fields.iter().all(|field| *field == Some("message.token")) {
+        Fault::Token
+    } else {
+        Fault::Other
+    };
+    GoogleError { code, field }
 }
 
 /// The status-to-outcome table `docs/RELAY_PROTOCOL.md` documents.
@@ -370,9 +396,17 @@ fn classify(status: StatusCode, error: &GoogleError) -> Answer {
     let sent = |outcome, reason| Answer::Done(Sent { outcome, reason });
     match status.as_u16() {
         200..=299 => sent(PushOutcome::Delivered, "fcm_delivered"),
+        // Only Google's own code says the install is gone: a bare 404 is a
+        // wrong project or path, which must not make every computer drop its
+        // phones' registrations.
         _ if error.code == "UNREGISTERED" => sent(PushOutcome::TokenGone, "fcm_unregistered"),
-        404 => sent(PushOutcome::TokenGone, "fcm_not_found"),
-        400 if error.token_field && matches!(error.code, "" | "INVALID_ARGUMENT") => {
+        404 => sent(PushOutcome::Failed, "fcm_not_found"),
+        // Google's documented answer to a token it cannot read is
+        // `INVALID_ARGUMENT` with no field named; one that names the token is
+        // the same. One that names another field is the relay's own body.
+        400 if error.field == Fault::Token
+            || (error.code == "INVALID_ARGUMENT" && error.field == Fault::None) =>
+        {
             sent(PushOutcome::TokenRejected, "fcm_token_rejected")
         }
         400 => sent(PushOutcome::Failed, "fcm_bad_request"),
@@ -395,68 +429,98 @@ mod tests {
         google_error(body.as_bytes())
     }
 
+    /// Google's documented answer to an invalid token
+    /// (firebase.google.com/docs/cloud-messaging/error-codes, Example 2).
+    const DOCUMENTED_INVALID_TOKEN: &str = r#"{"error":{"code":400,"message":"The registration token is not a valid FCM registration token","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}"#;
+
     #[test]
-    fn google_s_error_body_yields_only_the_allowlisted_code_and_the_token_field() {
-        assert_eq!(
-            error(
-                r#"{"error":{"code":404,"status":"NOT_FOUND","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}"#
+    fn google_s_error_body_yields_only_the_typed_code_and_the_faulted_field() {
+        let fcm = |code: &str| format!(r#"{{"@type":"{FCM_ERROR}","errorCode":"{code}"}}"#);
+        let bad = |field: &str| {
+            format!(r#"{{"@type":"{BAD_REQUEST}","fieldViolations":[{{"field":"{field}"}}]}}"#)
+        };
+        let body =
+            |details: &[String]| format!(r#"{{"error":{{"details":[{}]}}}}"#, details.join(","));
+        for (body, code, field) in [
+            (
+                DOCUMENTED_INVALID_TOKEN.to_owned(),
+                "INVALID_ARGUMENT",
+                Fault::None,
             ),
-            GoogleError {
-                code: "UNREGISTERED",
-                token_field: false
-            }
-        );
-        assert_eq!(
-            error(
-                r#"{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"},{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"message.token","description":"Invalid registration token"}]}]}}"#
+            (body(&[fcm("UNREGISTERED")]), "UNREGISTERED", Fault::None),
+            (
+                body(&[fcm("INVALID_ARGUMENT"), bad("message.token")]),
+                "INVALID_ARGUMENT",
+                Fault::Token,
             ),
-            GoogleError {
-                code: "INVALID_ARGUMENT",
-                token_field: true
-            }
-        );
-        // A code outside the allowlist, free text and junk are all dropped.
-        for body in [
-            r#"{"error":{"details":[{"errorCode":"SOMETHING_NEW"}]}}"#,
-            r#"{"error":{"message":"UNREGISTERED"}}"#,
-            "<html>",
-            "",
+            (
+                body(&[fcm("INVALID_ARGUMENT"), bad("message.data")]),
+                "INVALID_ARGUMENT",
+                Fault::Other,
+            ),
+            // A code outside the allowlist, or under another detail type, is
+            // dropped, and so are free text and junk.
+            (body(&[fcm("SOMETHING_NEW")]), "", Fault::None),
+            (
+                r#"{"error":{"details":[{"errorCode":"UNREGISTERED"}]}}"#.to_owned(),
+                "",
+                Fault::None,
+            ),
+            (
+                r#"{"error":{"message":"UNREGISTERED"}}"#.to_owned(),
+                "",
+                Fault::None,
+            ),
+            ("<html>".to_owned(), "", Fault::None),
+            (String::new(), "", Fault::None),
         ] {
-            assert_eq!(error(body), GoogleError::default(), "{body}");
+            assert_eq!(error(&body), GoogleError { code, field }, "{body}");
         }
     }
 
     #[test]
     fn each_status_and_code_lands_on_one_outcome() {
         use StatusCode as S;
+        let with = |code, field| GoogleError { code, field };
         let none = GoogleError::default();
-        let code = |code| GoogleError {
-            code,
-            token_field: false,
-        };
-        let on_token = GoogleError {
-            code: "INVALID_ARGUMENT",
-            token_field: true,
-        };
         for (status, error, outcome) in [
             (S::OK, &none, PushOutcome::Delivered),
-            (S::NOT_FOUND, &none, PushOutcome::TokenGone),
-            (S::NOT_FOUND, &code("UNREGISTERED"), PushOutcome::TokenGone),
             (
-                S::BAD_REQUEST,
-                &code("UNREGISTERED"),
+                S::NOT_FOUND,
+                &with("UNREGISTERED", Fault::None),
                 PushOutcome::TokenGone,
             ),
-            (S::BAD_REQUEST, &on_token, PushOutcome::TokenRejected),
             (
                 S::BAD_REQUEST,
-                &code("INVALID_ARGUMENT"),
+                &with("UNREGISTERED", Fault::None),
+                PushOutcome::TokenGone,
+            ),
+            // A 404 without Google's code is a wrong project or path.
+            (S::NOT_FOUND, &none, PushOutcome::Failed),
+            (
+                S::BAD_REQUEST,
+                &with("INVALID_ARGUMENT", Fault::None),
+                PushOutcome::TokenRejected,
+            ),
+            (
+                S::BAD_REQUEST,
+                &with("INVALID_ARGUMENT", Fault::Token),
+                PushOutcome::TokenRejected,
+            ),
+            (
+                S::BAD_REQUEST,
+                &with("", Fault::Token),
+                PushOutcome::TokenRejected,
+            ),
+            (
+                S::BAD_REQUEST,
+                &with("INVALID_ARGUMENT", Fault::Other),
                 PushOutcome::Failed,
             ),
             (S::BAD_REQUEST, &none, PushOutcome::Failed),
             (
                 S::FORBIDDEN,
-                &code("SENDER_ID_MISMATCH"),
+                &with("SENDER_ID_MISMATCH", Fault::None),
                 PushOutcome::TokenRejected,
             ),
             (S::FORBIDDEN, &none, PushOutcome::Failed),
