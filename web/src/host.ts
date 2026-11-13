@@ -239,6 +239,8 @@ export type UpdateStatus = {
   installOnQuit: boolean;
   /** The ready version whose card the operator closed, kept across launches; a newer ready version shows the card again. */
   dismissed: string | null;
+  /** Whether a release names a minimum version above this app (`<!-- hide-min-version: X.Y.Z -->`): the card stays open with no close until the restart. */
+  required: boolean;
 };
 
 export type UpdatesBridge = {

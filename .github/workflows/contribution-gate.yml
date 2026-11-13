@@ -3,7 +3,9 @@ name: contribution gate
 # Applies CONTRIBUTING.md, Pull requests are open, to a pull request: the
 # template, the number open at once, the label for a young account, and the
 # strike rule on opening, and a daily sweep that closes what sat idle or stayed
-# without its template. It also closes an issue that runs past its length limit.
+# without its template, approves CI for a person on the approved list, and applies the same template rule to an issue (a form's
+# headings), which it closes only after a week. It also closes an issue that runs
+# past its length limit.
 # A maintainer is never gated, and one who reopens an item keeps it open.
 # CONTRIBUTING.md owns the policy and its reasons.
 #
@@ -12,9 +14,9 @@ name: contribution gate
 
 on:
   pull_request_target:
-    types: [opened, reopened, edited]
+    types: [opened, reopened, edited, synchronize]
   issues:
-    types: [opened, reopened]
+    types: [opened, reopened, edited]
   schedule:
     - cron: "17 3 * * *"
 
@@ -32,6 +34,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/github-script@v9
         with:
@@ -43,6 +46,12 @@ jobs:
             const YOUNG_ACCOUNT_DAYS = 30;
             const IDLE_DAYS = 14;
             const TEMPLATE_GRACE_DAYS = 3;
+            const ISSUE_TEMPLATE_GRACE_DAYS = 7;
+            // The headings the two issue forms write (.github/ISSUE_TEMPLATE); an issue needs every heading of one form.
+            const ISSUE_FORMS = [
+              ['What happened', 'Steps to reproduce'],
+              ['What are you trying to do?', 'What would help'],
+            ];
             const DAY = 24 * 60 * 60 * 1000;
             const TYPES = ['feat', 'fix', 'perf', 'refactor', 'test', 'docs', 'build', 'ci', 'chore', 'revert'];
             const SECTIONS = ['Summary', 'Evidence', 'Review', 'AI use'];
@@ -136,12 +145,28 @@ jobs:
               return problems;
             }
 
+            // CI of a fork's pull request waits for a maintainer ("all external contributors" in the repository's
+            // settings); for a person on the approved list the gate is that approval. The runs appear a moment
+            // after the event, so it looks a few times, and it approves only runs of this pull request's head commit.
+            async function approveRuns(pull, attempts) {
+              for (let attempt = 0; attempt < attempts; attempt++) {
+                const { data } = await github.rest.actions.listWorkflowRunsForRepo({ owner, repo, head_sha: pull.head.sha, status: 'action_required', per_page: 50 });
+                const runs = data.workflow_runs.filter(run => run.pull_requests.some(p => p.number === pull.number) || run.head_repository?.full_name === pull.head.repo?.full_name);
+                for (const run of runs) await github.rest.actions.approveWorkflowRun({ owner, repo, run_id: run.id });
+                if (runs.length) return core.info(`approved ${runs.length} run(s) for ${pull.user.login}`);
+                if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, 10000));
+              }
+              core.info('no run is waiting for approval');
+            }
+
             async function gatePull(pull, action, sender) {
               if (pull.state !== 'open') return core.info('pull request is closed');
               const author = pull.user.login;
               if (BOTS.has(author) || await isMaintainer(author)) return core.info(`${author} is not gated`);
               if (action === 'reopened' && await isMaintainer(sender)) return core.info(`reopened by maintainer ${sender}`);
               const isApprovedAuthor = await isApproved(author);
+              if (isApprovedAuthor) await approveRuns(pull, action === 'edited' ? 1 : 6);
+              if (action === 'synchronize') return core.info('a push needs no other check');
 
               if (action === 'opened' || action === 'reopened') {
                 if (!isApprovedAuthor) {
@@ -181,15 +206,42 @@ jobs:
               }
             }
 
-            async function gateIssue(issue) {
-              if ((issue.body ?? '').length <= ISSUE_LIMIT) return core.info('issue is within its length limit');
+            // The form headings an issue still lacks: none when it carries every heading of one form, with text under each.
+            function issueProblems(issue) {
+              const body = (issue.body ?? '').replace(/<!--[\s\S]*?-->/g, '');
+              const parts = body.split(/^###\s+/m).slice(1);
+              const filled = (heading) => {
+                const part = parts.find(p => p.split('\n')[0].trim().toLowerCase() === heading.toLowerCase());
+                return (part ?? '').split('\n').slice(1).join('').replace(/\s/g, '').length >= 3;
+              };
+              const missing = ISSUE_FORMS.map(form => form.filter(heading => !filled(heading)));
+              return missing.some(list => list.length === 0) ? [] : missing[0];
+            }
+
+            async function gateIssue(issue, action) {
+              if (issue.state !== 'open') return core.info('issue is closed');
               const author = issue.user.login;
               if (BOTS.has(author) || await isMaintainer(author)) return core.info(`${author} is not gated`);
-              await say(issue.number, MARKERS.closed, [
-                `Hi @${author}, thanks for your interest in hide.`, '',
-                `This issue is longer than ${ISSUE_LIMIT} characters, so it was closed automatically. Keep it to one screen in your own words, using the bug or feature request form.`, '',
-                'A maintainer can reopen this if they want it.', '', `The policy: ${policy}`]);
-              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'not_planned' });
+              if ((issue.body ?? '').length > ISSUE_LIMIT) {
+                await say(issue.number, MARKERS.closed, [
+                  `Hi @${author}, thanks for your interest in hide.`, '',
+                  `This issue is longer than ${ISSUE_LIMIT} characters, so it was closed automatically. Keep it to one screen in your own words, using the bug or feature request form.`, '',
+                  'A maintainer can reopen this if they want it.', '', `The policy: ${policy}`]);
+                return await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'not_planned' });
+              }
+              const problems = issueProblems(issue);
+              const labelled = issue.labels?.some(l => l.name === 'needs-template');
+              if (problems.length) {
+                await say(issue.number, MARKERS.template, [
+                  `Hi @${author}, thanks for the report. It does not use one of the issue forms, so a maintainer cannot read it quickly:`, '',
+                  `- Use [the bug form](https://github.com/${owner}/${repo}/issues/new?template=bug.yml) or [the feature request form](https://github.com/${owner}/${repo}/issues/new?template=feature_request.yml), or keep their headings (${problems.map(h => `\`### ${h}\``).join(', ')}).`, '',
+                  `Edit the description to fix it; this label goes away on its own. An issue still missing it after ${ISSUE_TEMPLATE_GRACE_DAYS} days is closed.`, '',
+                  `The policy: ${policy}`]);
+                if (!labelled) await addLabel(issue.number, 'needs-template');
+              } else if (labelled) {
+                await removeLabel(issue.number, 'needs-template');
+                await say(issue.number, MARKERS.template, ['The description now follows an issue form. Thank you.']);
+              }
             }
 
             // The daily sweep: a pull request that stayed without its template, or without any commit or comment.
@@ -221,6 +273,21 @@ jobs:
               }
             }
 
-            if (context.eventName === 'schedule') await sweep();
+            async function sweepIssues() {
+              const issues = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'open', labels: 'needs-template', per_page: 100 });
+              for (const issue of issues) {
+                if (issue.pull_request) continue;
+                const events = await github.paginate(github.rest.issues.listEvents, { owner, repo, issue_number: issue.number, per_page: 100 });
+                const since = events.filter(e => e.event === 'labeled' && e.label?.name === 'needs-template').map(e => Date.parse(e.created_at)).pop();
+                if (since && Date.now() - since > ISSUE_TEMPLATE_GRACE_DAYS * DAY) {
+                  await say(issue.number, MARKERS.closed, [
+                    `Closing this issue: it still does not use an issue form after ${ISSUE_TEMPLATE_GRACE_DAYS} days.`,
+                    'Open it again with the bug or feature request form, or a maintainer can reopen it.', '', `The policy: ${policy}`]);
+                  await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'not_planned' });
+                }
+              }
+            }
+
+            if (context.eventName === 'schedule') { await sweep(); await sweepIssues(); }
             else if (context.payload.pull_request) await gatePull(context.payload.pull_request, context.payload.action, context.payload.sender.login);
-            else await gateIssue(context.payload.issue);
+            else await gateIssue(context.payload.issue, context.payload.action);

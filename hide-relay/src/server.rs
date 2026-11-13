@@ -1,13 +1,15 @@
 use crate::{
-    apns::Apns,
+    apns::{Apns, Sent},
     event::Event,
+    fcm::Fcm,
     limits::*,
     state::{End, Outbound, PushCap, Rejection, State},
 };
 use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::admission::{
-    ADMISSION_TIMEOUT_MS, ClientMessage, PendingAdmission, PushAttempt, PushOutcome, PushRequest,
-    PushResult, Refusal, ServerMessage, decode_push,
+    ADMISSION_TIMEOUT_MS, ClientMessage, PendingAdmission, Push, PushAttempt, PushOutcome,
+    PushResult, REGISTERED_FIELD_FCM, REGISTERED_FIELDS_HEADER, Refusal, ServerMessage,
+    decode_push, registered_fields_name,
 };
 use http_body_util::Full;
 use hyper::{
@@ -28,7 +30,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{mpsc, watch},
+    sync::{Semaphore, mpsc, watch},
     task::JoinSet,
     time::{timeout, timeout_at},
 };
@@ -53,6 +55,11 @@ struct Shared {
     /// `None` until the relay is given Apple's key; every push request then
     /// answers `unavailable` (`docs/RELAY_PROTOCOL.md`, Push relay).
     apns: Option<Arc<Apns>>,
+    /// `None` until the relay is given an FCM project; every FCM request then
+    /// answers `unavailable`.
+    fcm: Option<Arc<Fcm>>,
+    /// Requests in flight to Apple and Google together (`concurrent_pushes`).
+    in_flight: Arc<Semaphore>,
     /// Set when `serve` ends, on every way out: each push send in flight
     /// stops at once rather than outliving the relay.
     stopping: tokio::sync::watch::Sender<bool>,
@@ -92,6 +99,8 @@ struct Admission {
     registration: Registration,
     output: mpsc::Receiver<Outbound>,
     end: watch::Receiver<Option<End>>,
+    /// Whether the device named `fcm` in `REGISTERED_FIELDS_HEADER`.
+    reads_fcm: bool,
 }
 struct Upgrade {
     on_upgrade: hyper::upgrade::OnUpgrade,
@@ -147,6 +156,8 @@ impl Relay {
                 events: Arc::new(events),
                 idle_timeout: limits.idle_timeout,
                 apns: apns.map(Arc::new),
+                fcm: None,
+                in_flight: Arc::new(Semaphore::new(push_limits.concurrent)),
                 stopping: tokio::sync::watch::Sender::new(false),
             }),
             limits,
@@ -164,6 +175,17 @@ impl Relay {
         let shared = Arc::get_mut(&mut self.shared)
             .ok_or_else(|| io::Error::other("relay already serving"))?;
         shared.state.get_mut().unwrap().set_push_limits(push);
+        shared.in_flight = Arc::new(Semaphore::new(push.concurrent));
+        Ok(self)
+    }
+    /// A relay that also forwards FCM requests to Google through `fcm`, under
+    /// the same push budgets as Apple's (`docs/RELAY_PROTOCOL.md`, Push
+    /// relay). Without it every FCM request answers `unavailable`.
+    pub fn with_fcm(mut self, fcm: Fcm) -> io::Result<Self> {
+        let shared = Arc::get_mut(&mut self.shared)
+            .ok_or_else(|| io::Error::other("relay already serving"))?;
+        shared.state.get_mut().unwrap().set_fcm_enabled();
+        shared.fcm = Some(Arc::new(fcm));
         Ok(self)
     }
 
@@ -247,6 +269,14 @@ async fn connection(stream: TcpStream, remote: IpAddr, proxy: Option<IpAddr>, sh
                                 .lock()
                                 .unwrap()
                                 .reserve(ip, (state.clock)(), tx, end_tx)?;
+                        // A device names the `registered` fields it reads; a
+                        // released one names none and gets the shape it knows.
+                        let reads_fcm = request
+                            .headers()
+                            .get_all(REGISTERED_FIELDS_HEADER)
+                            .iter()
+                            .filter_map(|value| value.to_str().ok())
+                            .any(|value| registered_fields_name(value, REGISTERED_FIELD_FCM));
                         Ok(Admission {
                             registration: Registration {
                                 shared: state.clone(),
@@ -254,6 +284,7 @@ async fn connection(stream: TcpStream, remote: IpAddr, proxy: Option<IpAddr>, sh
                             },
                             output,
                             end,
+                            reads_fcm,
                         })
                     });
                     if let Err(error) = admission.as_ref() {
@@ -366,7 +397,7 @@ async fn session(mut socket: Socket, mut admission: Admission) {
             }
             incoming = socket.next() => {
                 let result = match incoming {
-                    Some(Ok(Message::Text(text))) => control(&shared, id, &text, &mut pending, &mut admitted),
+                    Some(Ok(Message::Text(text))) => control(&shared, id, &text, &mut pending, &mut admitted, admission.reads_fcm),
                     Some(Ok(Message::Binary(bytes))) if admitted => {
                         let result = shared.state.lock().unwrap().forward(id, bytes.to_vec(), (shared.clock)());
                         result.map(|events| shared.emit(events))
@@ -404,6 +435,7 @@ fn control(
     text: &str,
     pending: &mut Option<PendingAdmission>,
     admitted: &mut bool,
+    reads_fcm: bool,
 ) -> Result<(), Rejection> {
     // A push message is read before the rest: one whose fields are wrong is
     // still answered under its own id, and the room stays connected
@@ -458,7 +490,11 @@ fn control(
             let hello = challenge
                 .verify(&signature, now_ms)
                 .map_err(crate::protocol_error)?;
-            shared.state.lock().unwrap().register(id, hello, now)?;
+            shared
+                .state
+                .lock()
+                .unwrap()
+                .register(id, hello, now, reads_fcm)?;
             *admitted = true;
         }
         ClientMessage::Proof { .. } => {
@@ -482,16 +518,17 @@ fn control(
     Ok(())
 }
 
-/// One push request from an admitted device socket: charged and counted,
-/// checked, then sent beside the socket loop so the room keeps reading. Every
-/// answer is a `push_result` under the request's id; only the room's byte
-/// budget, as for any frame, closes the socket.
+/// One push request from an admitted device socket, for Apple or for Google:
+/// charged and counted against the one set of push budgets, checked, then sent
+/// beside the socket loop so the room keeps reading. Every answer is a
+/// `push_result` under the request's id; only the room's byte budget, as for
+/// any frame, closes the socket.
 fn push(
     shared: &Arc<Shared>,
     id: u64,
     size: u64,
     push_id: u32,
-    request: Result<PushRequest, hide_relay_protocol::admission::PushField>,
+    request: Result<Push, hide_relay_protocol::admission::PushField>,
 ) -> Result<(), Rejection> {
     let now = (shared.clock)();
     // Only a room's device socket asks for a push; a phone socket keeps the
@@ -508,10 +545,14 @@ fn push(
             return answer_push_result(shared, id, push_id, PushOutcome::Failed);
         }
     };
-    let Some(apns) = shared.apns.clone() else {
+    let service = match request {
+        Push::Apns(request) => shared.apns.clone().map(|apns| Service::Apns(apns, request)),
+        Push::Fcm(request) => shared.fcm.clone().map(|fcm| Service::Fcm(fcm, request)),
+    };
+    let Some(service) = service else {
         return answer_push_result(shared, id, push_id, PushOutcome::Unavailable);
     };
-    let Some(slot) = apns.slot() else {
+    let Ok(slot) = Arc::clone(&shared.in_flight).try_acquire_owned() else {
         let log = shared.state.lock().unwrap().log_concurrent_cap(now);
         return answer_push_result(
             shared,
@@ -520,13 +561,17 @@ fn push(
             rate_limited(shared, "concurrent_pushes", log),
         );
     };
-    // Beside the socket loop: waiting out Apple must not stop the room from
-    // reading its next frame. The send ends with the relay.
+    // Beside the socket loop: waiting out Apple or Google must not stop the
+    // room from reading its next frame. The send, and its in-flight slot, end
+    // with the relay.
     let shared = Arc::clone(shared);
     let mut stopping = shared.stopping.subscribe();
     tokio::spawn(async move {
         tokio::select! {
-            sent = apns.send(&request, slot) => {
+            sent = service.send() => {
+                // The service has answered: the slot is free before the
+                // device reads the result.
+                drop(slot);
                 (shared.events)(Event::new(sent.reason, None));
                 let _ = answer_push_result(&shared, id, push_id, sent.outcome);
             }
@@ -534,6 +579,20 @@ fn push(
         }
     });
     Ok(())
+}
+
+/// The service one checked request goes to.
+enum Service {
+    Apns(Arc<Apns>, hide_relay_protocol::admission::PushRequest),
+    Fcm(Arc<Fcm>, hide_relay_protocol::admission::FcmRequest),
+}
+impl Service {
+    async fn send(&self) -> Sent {
+        match self {
+            Self::Apns(apns, request) => apns.send(request).await,
+            Self::Fcm(fcm, request) => fcm.send(request).await,
+        }
+    }
 }
 
 /// A refusal past a cap: logged once per window, answered every time.

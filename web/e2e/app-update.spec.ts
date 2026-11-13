@@ -25,7 +25,7 @@ type Calls = { check: number; restart: number; prerelease: boolean[]; dismiss: s
 
 declare global {
   interface Window {
-    updateTest?: { show: (phase: Phase, installOnQuit?: boolean) => void; calls: Calls };
+    updateTest?: { show: (phase: Phase, installOnQuit?: boolean, required?: boolean) => void; calls: Calls };
   }
 }
 
@@ -39,12 +39,15 @@ async function desktopBridge(page: Page): Promise<void> {
     let dismissed: string | null = null;
     let phase: Phase = { kind: "idle", checkedAt: null };
     let installOnQuit = true;
-    const send = () => listener?.({ phase, prerelease, installOnQuit, dismissed });
+    // Whether a release names a minimum version above this app, as `AppUpdates` reads it from the release list.
+    let required = false;
+    const send = () => listener?.({ phase, prerelease, installOnQuit, dismissed, required });
     window.updateTest = {
       calls,
-      show: (next, onQuit = true) => {
+      show: (next, onQuit = true, needed = false) => {
         phase = next;
         installOnQuit = onQuit;
+        required = needed;
         send();
       },
     };
@@ -94,7 +97,7 @@ async function desktopBridge(page: Page): Promise<void> {
   }, process.platform);
 }
 
-const show = (page: Page, phase: Phase, installOnQuit = true) => page.evaluate(([next, onQuit]) => window.updateTest!.show(next as Phase, onQuit as boolean), [phase, installOnQuit] as const);
+const show = (page: Page, phase: Phase, installOnQuit = true, required = false) => page.evaluate(([next, onQuit, needed]) => window.updateTest!.show(next as Phase, onQuit as boolean, needed as boolean), [phase, installOnQuit, required] as const);
 const calls = (page: Page) => page.evaluate(() => window.updateTest!.calls);
 
 async function openAbout(page: Page): Promise<void> {
@@ -270,6 +273,28 @@ test("a ready update shows the ↑ button, opens its card once per version, and 
     await expect(button).toHaveCount(0);
     await show(page, { kind: "ready", version: "0.5.1" });
     await expect(page.locator('[data-update-card="0.5.1"]')).toBeVisible();
+
+    // A required update opens its card even after its close, with no close or Later, says the work keeps
+    // running, and stays through Escape and a click elsewhere, still taking no key meant for a pane.
+    await page.locator('[data-update-card="0.5.1"] [data-update-card-later]').click();
+    await expect(page.locator('[data-update-card="0.5.1"]')).toHaveCount(0);
+    // The closed card hands the keyboard back to its ↑ button from a timer; wait for it, or it lands after the next focus.
+    await expect(page.locator('[data-update-button="0.5.1"]')).toBeFocused();
+    await trigger.focus();
+    await show(page, { kind: "ready", version: "0.5.1" }, true, true);
+    const required = page.locator('[data-update-card="0.5.1"][data-update-card-required]');
+    await expect(required).toBeVisible();
+    await expect(page.locator('[data-update-button="0.5.1"]')).toHaveAccessibleName("Required update · hide 0.5.1");
+    await expect(required).toContainText("Required update");
+    await expect(required.locator("[data-update-card-keeps]")).toHaveText("Your work won't stop: agents and panes keep running while hide restarts.");
+    await expect(required.locator("[data-update-card-close], [data-update-card-later]")).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press("Escape");
+    await page.locator("main").click({ position: { x: 200, y: 400 } });
+    await expect(required).toBeVisible();
+    await screenshot(page, "app-update-card-required");
+    await required.locator("[data-update-card-restart]").click();
+    expect((await calls(page)).restart).toBe(3);
   } finally {
     daemon?.stop();
     engine.stop();

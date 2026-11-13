@@ -57,7 +57,7 @@ If a new terminal does not find `hide`, add `~/.local/bin` to your shell's `PATH
 ## Updates
 
 hide updates itself.
-It checks shortly after it opens, then every six hours, and downloads in the background.
+It checks shortly after it opens, then every two hours, and downloads in the background.
 When an update is ready, a ↑ button appears and a card says **Update ready**: choose **Restart now** to install it, or **Later**.
 Without a restart, the update installs the next time you quit hide.
 Your agents and panes keep running through a restart.

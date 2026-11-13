@@ -3,6 +3,7 @@ use hide_relay::{
     apns::{load, unix_clock},
     config::{Config, HELP},
     event::Event,
+    fcm::Fcm,
     limits::{Limits, PushLimits},
 };
 use std::io::Write;
@@ -40,6 +41,24 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    let fcm = match config
+        .fcm
+        .map(|fcm| {
+            Fcm::new(
+                fcm.project,
+                fcm.endpoints,
+                PushLimits::default(),
+                unix_clock(),
+            )
+        })
+        .transpose()
+    {
+        Ok(fcm) => fcm,
+        Err(name) => {
+            log(Event::new(name, None));
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let Ok(listener) = tokio::net::TcpListener::bind(config.listen).await else {
         log(Event::new("bind_failed", None));
         return std::process::ExitCode::FAILURE;
@@ -53,6 +72,10 @@ async fn main() -> std::process::ExitCode {
         apns,
     )
     .expect("valid production limits");
+    let relay = match fcm {
+        Some(fcm) => relay.with_fcm(fcm).expect("a relay not yet serving"),
+        None => relay,
+    };
     log(Event::new("server_started", None));
     if relay.serve(listener, shutdown()).await.is_err() {
         log(Event::new("server_failed", None));

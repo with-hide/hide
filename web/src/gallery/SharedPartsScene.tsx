@@ -114,6 +114,7 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
         </Part>
         <Part name="Ready update · UpdateReadyCardBody">
           <State name="Card beside the ↑ button"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>
+          <State name="Required update: no close or Later, the work keeps running"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" required onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>
         </Part>
         <Part name="Plan steps · PlanChecklist">
           <State name="Running"><div className="text-caption"><PlanChecklist plan={plan} /></div></State>

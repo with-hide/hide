@@ -4,11 +4,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { UpdateStatus } from "../../../web/src/host";
 import type { HostLog } from "./log";
-import { AppUpdates, chooseRelease, CHECK_INTERVAL_MS, LOOK_AGAIN_AFTER_MS, FIRST_CHECK_DELAY_MS, macosLocation, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateChoices, type UpdaterLike, type UpdateSystem } from "./updater";
+import { AppUpdates, chooseRelease, CHECK_INTERVAL_MS, LOOK_AGAIN_AFTER_MS, FIRST_CHECK_DELAY_MS, macosLocation, minimumVersion, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateChoices, type UpdaterLike, type UpdateSystem } from "./updater";
 
 const uploaded = (name: string) => ({ name, state: "uploaded" });
 
-function release(tag: string, options: { prerelease?: boolean; draft?: boolean; files?: string[]; uploading?: string[] } = {}) {
+function release(tag: string, options: { prerelease?: boolean; draft?: boolean; files?: string[]; uploading?: string[]; body?: string } = {}) {
   const version = tag.slice(1);
   const files = options.files ?? [`latest-mac.yml`, `hide-v${version}-macos-arm64.zip`, `latest.yml`, `hide-v${version}-windows-x64-setup.exe`, `latest-linux.yml`, `hide-v${version}-linux-x64.deb`, `hide-v${version}-linux-x64.rpm`];
   return {
@@ -16,8 +16,12 @@ function release(tag: string, options: { prerelease?: boolean; draft?: boolean; 
     draft: options.draft ?? false,
     prerelease: options.prerelease ?? false,
     assets: [...files.map(uploaded), ...(options.uploading ?? []).map((name) => ({ name, state: "new" }))],
+    ...(options.body === undefined ? {} : { body: options.body }),
   };
 }
+
+/** A release body that requires every app below `version` to update, among its notes. */
+const requiring = (version: string) => `## What's new\n\n- A fix.\n\n<!-- hide-min-version: ${version} -->\n`;
 
 const choose = (releases: unknown[], current: string, prerelease = false, system: UpdateSystem = "macos") => chooseRelease(releases, { current, prerelease, system });
 
@@ -63,6 +67,28 @@ describe("the release an update takes (D-22, D-23)", () => {
 
   it("looks for nothing from a development build", () => {
     expect(choose([release("v9.0.0")], "0.1.0-main.6369ab")).toBeNull();
+  });
+});
+
+describe("the minimum version a release requires", () => {
+  it("is the highest minimum a published release of the channel names, from a line in its body", () => {
+    expect(minimumVersion([release("v1.2.9", { body: requiring("1.2.9") }), release("v1.2.8", { body: requiring("1.2.7") }), release("v1.2.7")], false)).toBe("1.2.9");
+    // A later release without the line keeps the requirement an earlier one set.
+    expect(minimumVersion([release("v1.3.0", { body: "## What's new" }), release("v1.2.9", { body: requiring("1.2.9") })], false)).toBe("1.2.9");
+  });
+
+  it("is none when no release names one, or the line is malformed", () => {
+    expect(minimumVersion([release("v1.2.9"), release("v1.2.8", { body: "hide-min-version: 1.2.8" })], false)).toBeNull();
+    expect(minimumVersion([release("v1.2.9", { body: requiring("latest") })], false)).toBeNull();
+    expect(minimumVersion("not a list", false)).toBeNull();
+  });
+
+  it("skips a line naming a version above its own release, a draft, and a release of another channel", () => {
+    expect(minimumVersion([release("v1.2.9", { body: requiring("1.3.0") })], false)).toBeNull();
+    expect(minimumVersion([release("v1.3.0", { draft: true, body: requiring("1.3.0") })], false)).toBeNull();
+    const rc = release("v1.3.0-rc.1", { prerelease: true, body: requiring("1.3.0-rc.1") });
+    expect(minimumVersion([rc, release("v1.2.9")], false)).toBeNull();
+    expect(minimumVersion([rc, release("v1.2.9")], true)).toBe("1.3.0-rc.1");
   });
 });
 
@@ -319,13 +345,15 @@ describe("the updater's states (D-17 to D-21)", () => {
     expect(updates.status().phase).toEqual({ kind: "ready", version: "0.5.0" });
   });
 
-  it("looks after launch and then every six hours, until stopped", async () => {
+  it("looks after launch and then every two hours, until stopped", async () => {
     const { updates, timers, events } = harness();
     updates.start();
     expect(timers.map((timer) => timer.ms)).toEqual([FIRST_CHECK_DELAY_MS]);
     timers[0]!.run();
     await settle(() => timers.length === 2);
+    // Two hours, so a required update reaches an app left open the same working session (operator decision 2026-11-13).
     expect(timers[1]!.ms).toBe(CHECK_INTERVAL_MS);
+    expect(CHECK_INTERVAL_MS).toBe(2 * 60 * 60 * 1000);
     expect(events[0]).toEqual(["update.check", { trigger: "launch", version: "0.4.0", prerelease: false }]);
     updates.stop();
     expect(timers[1]!.cancelled).toBe(true);
@@ -460,6 +488,43 @@ describe("the ready card's close", () => {
     updates.dismiss("0.5.0");
     expect(updates.status().dismissed).toBe("0.5.0");
     expect(events.slice(-2)).toEqual([["update.choices_save_failed", { detail: "EACCES" }], ["update.card_dismissed", { version: "0.5.0" }]]);
+  });
+});
+
+describe("a required update", () => {
+  it("is required while a release names a minimum above this app: its card cannot be closed until the line is lifted", async () => {
+    const subject = harness();
+    const { updates, updater, saved, events } = subject;
+    subject.setReleases([release("v0.5.0", { body: requiring("0.5.0") })]);
+    updater.available = "0.5.0";
+    const check = updates.check("operator");
+    await settle(() => updater.download !== null);
+    // Known from the release list, before the download ends.
+    expect(updates.status().required).toBe(true);
+    updater.download!.resolve([]);
+    await check;
+    expect(updates.status()).toMatchObject({ phase: { kind: "ready", version: "0.5.0" }, required: true });
+    expect(events).toContainEqual(["update.required", { version: "0.4.0", minimum: "0.5.0" }]);
+    updates.dismiss("0.5.0");
+    expect(updates.status().dismissed).toBeNull();
+    expect(saved).toEqual([]);
+    // The line taken out of the release lifts it at the next look, and the card can be closed again.
+    subject.setReleases([release("v0.5.0")]);
+    await updates.check("operator");
+    expect(updates.status()).toMatchObject({ phase: { kind: "ready", version: "0.5.0" }, required: false });
+    expect(events).toContainEqual(["update.no_longer_required", { version: "0.4.0", minimum: null }]);
+    updates.dismiss("0.5.0");
+    expect(updates.status().dismissed).toBe("0.5.0");
+  });
+
+  it("is not required of an app at the minimum, nor when the list cannot be read", async () => {
+    const atMinimum = harness({ releases: [release("v0.5.0", { body: requiring("0.4.0") })] });
+    await atMinimum.updates.check("operator");
+    expect(atMinimum.updates.status().required).toBe(false);
+    const unread = harness();
+    unread.failReleases(new Error("HTTP 503"));
+    await unread.updates.check("operator");
+    expect(unread.updates.status().required).toBe(false);
   });
 });
 

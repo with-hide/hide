@@ -56,7 +56,7 @@ Run `hide status --json` to check.
 ## Updates
 
 hide updates itself when it was installed from the deb or rpm.
-It checks shortly after it opens, then every six hours, and downloads in the background.
+It checks shortly after it opens, then every two hours, and downloads in the background.
 When an update is ready, a ↑ button appears and a card says **Update ready**.
 On Linux an update installs only when you choose **Restart now**, because the package manager asks for your password; if you cancel the prompt, the update stays ready.
 Your agents and panes keep running through a restart.

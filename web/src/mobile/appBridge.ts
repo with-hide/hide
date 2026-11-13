@@ -78,15 +78,23 @@ export async function setAppearance(scheme: "light" | "dark" | "system"): Promis
   await bridge().nativePromise("HideApp", "appearance", { scheme });
 }
 
-/** What the computer needs to encrypt a notice for this phone; the private half never leaves the Keychain (`HidePush`). */
-export interface PushRegistration { token: string; environment: "sandbox" | "production"; p256dh: string; auth: string }
+/**
+ * What the computer needs to encrypt a notice for this phone; the private half never leaves the app's key store
+ * (`HidePush`). The iOS app answers Apple's token and its environment; the Android app answers `service: "fcm"` and
+ * Google's token, with no environment.
+ */
+export type PushRegistration =
+  | { service: "apns"; token: string; environment: "sandbox" | "production"; p256dh: string; auth: string }
+  | { service: "fcm"; token: string; p256dh: string; auth: string };
 export type PushPermission = "unknown" | "granted" | "denied";
 
-function registrationOf(answer: { found?: boolean; token?: unknown; environment?: unknown; p256dh?: unknown; auth?: unknown }): PushRegistration | null {
+function registrationOf(answer: { found?: boolean; service?: unknown; token?: unknown; environment?: unknown; p256dh?: unknown; auth?: unknown }): PushRegistration | null {
   if (!answer.found) return null;
-  const { token, environment, p256dh, auth } = answer;
-  if (typeof token !== "string" || typeof p256dh !== "string" || typeof auth !== "string" || (environment !== "sandbox" && environment !== "production")) throw new Error("push_registration_invalid");
-  return { token, environment, p256dh, auth };
+  const { service, token, environment, p256dh, auth } = answer;
+  if (typeof token !== "string" || typeof p256dh !== "string" || typeof auth !== "string") throw new Error("push_registration_invalid");
+  if (service === "fcm") return { service, token, p256dh, auth };
+  if (service !== undefined || (environment !== "sandbox" && environment !== "production")) throw new Error("push_registration_invalid");
+  return { service: "apns", token, environment, p256dh, auth };
 }
 
 /** The app's notifications: allowed or not, one computer's key and registration, and the agent a tap named. There is no call that reads a private key or sends an action. */

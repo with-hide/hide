@@ -57,7 +57,7 @@ Then `hide .` in a folder opens it as a project.
 ## Updates
 
 hide updates itself.
-It checks shortly after it opens, then every six hours, and downloads in the background.
+It checks shortly after it opens, then every two hours, and downloads in the background.
 When an update is ready, a ↑ button appears and a card says **Update ready**: choose **Restart now** to install it, or **Later**.
 Without a restart, the update installs when you quit hide.
 Your agents and panes keep running through an update.
