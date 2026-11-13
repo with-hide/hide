@@ -63,7 +63,7 @@ export function StatusMark({ mark, label, read = false, human = false, className
           <circle cx="6" cy="6" r="1.25" className="fill-warning" />
         </svg>
       ) : mark === "going" || mark === "waiting" ? (
-        <svg viewBox="0 0 12 12" className={cn("size-full", mark === "going" && "motion-safe:animate-spin")}>
+        <svg viewBox="0 0 12 12" className={cn("size-full", mark === "going" && "motion-safe:animate-working-turn")}>
           {/* Three quarters from three o'clock round to twelve; it turns while the agent works, a reduced-motion setting holding it still. Waiting cuts it into five dashes and stands still (D-25). */}
           <path d="M10.05 6A4.05 4.05 0 1 1 6 1.95" fill="none" strokeWidth="1.9" className="stroke-agent-working" {...(mark === "waiting" ? { pathLength: 19, strokeDasharray: "2.2 2" } : {})} />
         </svg>

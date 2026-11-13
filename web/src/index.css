@@ -58,6 +58,15 @@
  * from a hovered row's neutral accent. Inline, so it follows Settings >
  * Appearance's accent and theme where the row is drawn.
  */
+/*
+ * The working ring (StatusMark, MissionNodeMark) turns once every
+ * --motion-working-turn seconds, slower than Tailwind's one-second spin so a
+ * list of working agents reads as busy rather than hurried.
+ */
+@theme inline {
+  --animate-working-turn: spin calc(var(--motion-working-turn) * 1s) linear infinite;
+}
+
 @theme inline {
   --color-selected: color-mix(in oklab, var(--primary) calc(var(--opacity-selected-fill) * 100%), transparent);
 }
