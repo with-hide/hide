@@ -85,7 +85,8 @@ public class HidePushServiceTest {
     }
 
     private static RemoteMessage message(String hide) {
-        return new RemoteMessage.Builder("relay@fcm.googleapis.com").addData("hide", hide).build();
+        // The builder's address is the message's `to`, which the service never reads; the relay's real messages carry none.
+        return new RemoteMessage.Builder("hide-relay").addData("hide", hide).build();
     }
 
     private static String seal(JSONObject notice, PushKeyStore.Key key) throws Exception {
