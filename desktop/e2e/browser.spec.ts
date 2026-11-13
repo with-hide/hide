@@ -841,9 +841,9 @@ test("browser: Open in default browser hands a web page's address to the system 
   const button = page.locator("[data-browser-open-default]");
   await expect(button).toBeVisible({ timeout: 20_000 });
   await expect(button).toHaveAttribute("aria-label", "Open in default browser");
-  await windowShot("browser-open-default");
   await button.click();
   await expect.poll(handed).toEqual([address]);
+  await windowShot("browser-open-default");
   // The page stays where it was, and the log names the scheme and host, never the address.
   expect((await viewOf(address)).visible).toBe(true);
   const lines = hostLog(run.env).filter((line) => line.event === "link.external");
