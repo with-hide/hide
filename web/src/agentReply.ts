@@ -86,25 +86,57 @@ export const useReplyFields = create<ReplyFields>((set, get) => ({
     }),
 }));
 
-// The one timer: armed for the earliest reply still waiting on a receipt.
+// The one timer, armed for the earliest reply the core holds no receipt for
+// yet; a reply with a receipt, sending or settled, waits on the core instead.
+// It is armed again only when that set of deadlines changes (a send, a
+// receipt, a settlement, a field going), never on an edit of the words, and
+// once more after each firing for the next deadline still to come.
 let expiry: ReturnType<typeof setTimeout> | null = null;
+let armedFor = "";
+function deadlines(): number[] {
+  const section = useShellStore.getState().paneReplies;
+  return Object.values(useReplyFields.getState().fields)
+    .flatMap((field) => (field.sent && field.sentAt !== null && !replyReceipt(section, field.sent) ? [field.sentAt + REPLY_RECEIPT_WAIT_MS] : []))
+    .sort((a, b) => a - b);
+}
 function armExpiry(): void {
+  const due = deadlines();
+  const key = due.join(",");
+  if (key === armedFor) return;
+  armedFor = key;
   if (expiry) clearTimeout(expiry);
   expiry = null;
-  const waits = Object.values(useReplyFields.getState().fields).flatMap((field) => (field.sent && field.sentAt !== null ? [field.sentAt + REPLY_RECEIPT_WAIT_MS] : []));
-  if (waits.length === 0) return;
+  const next = due[0];
+  if (next === undefined) return;
   expiry = setTimeout(() => {
     expiry = null;
-    useReplyFields.getState().settle(useShellStore.getState().paneReplies, Date.now());
-  }, Math.max(0, Math.min(...waits) - Date.now()));
+    armedFor = "";
+    // Read at least the deadline it fired for, so the reply that set it is
+    // settled and the timer never fires again for it.
+    useReplyFields.getState().settle(useShellStore.getState().paneReplies, Math.max(Date.now(), next));
+    armExpiry();
+  }, Math.max(0, next - Date.now()));
+}
+/** Whether a change of fields moved a reply out (a send, a settlement, a field going), not only words. */
+function pendingMoved(fields: Record<string, ReplyField>, before: Record<string, ReplyField>): boolean {
+  for (const pane of new Set([...Object.keys(fields), ...Object.keys(before)])) {
+    const now = fields[pane];
+    const was = before[pane];
+    if ((now?.sent ?? null) !== (was?.sent ?? null) || (now?.sentAt ?? null) !== (was?.sentAt ?? null)) return true;
+  }
+  return false;
 }
 useReplyFields.subscribe((state, before) => {
-  if (state.fields !== before.fields) armExpiry();
+  if (state.fields !== before.fields && pendingMoved(state.fields, before.fields)) armExpiry();
 });
 
 useShellStore.subscribe((state, before) => {
   // A receipt settles its field whether or not the field is on screen.
-  if (state.paneReplies !== before.paneReplies) useReplyFields.getState().settle(state.paneReplies, Date.now());
+  if (state.paneReplies !== before.paneReplies) {
+    useReplyFields.getState().settle(state.paneReplies, Date.now());
+    // A receipt that arrived takes its reply off the timer.
+    armExpiry();
+  }
   // A pane that closed takes its field with it. Read only while the page is
   // live with agents listed, so a reconnect's empty first frame keeps the drafts.
   if (state.agents === before.agents && state.rest?.status?.remote === before.rest?.status?.remote) return;

@@ -129,6 +129,36 @@ describe("useAgentReply", () => {
     view.unmount();
   });
 
+  it("reads a later reply with no receipt as unknown at its own deadline, while an earlier one waits on its sending receipt", () => {
+    vi.useFakeTimers();
+    useShellStore.setState({ paneReplies: null });
+    const { change } = useReplyFields.getState();
+    change("a", null, { text: "에이", sent: "req-a", sentAt: Date.now() });
+    useShellStore.setState({ paneReplies: { receipts: [{ request_id: "req-a", pane_id: "a", state: "sending" }] } });
+    act(() => vi.advanceTimersByTime(1_000));
+    change("b", null, { text: "비", sent: "req-b", sentAt: Date.now() });
+    act(() => vi.advanceTimersByTime(REPLY_RECEIPT_WAIT_MS - 1));
+    expect(useReplyFields.getState().fields.b?.sent).toBe("req-b");
+    act(() => vi.advanceTimersByTime(1));
+    expect(useReplyFields.getState().fields.b).toMatchObject({ text: "비", sent: null, refused: "unknown" });
+    // The one with a sending receipt waits on the core, whatever the time.
+    act(() => vi.advanceTimersByTime(REPLY_RECEIPT_WAIT_MS * 4));
+    expect(useReplyFields.getState().fields.a?.sent).toBe("req-a");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("touches no timer when only the words of a draft change", () => {
+    vi.useFakeTimers();
+    useShellStore.setState({ paneReplies: null });
+    useReplyFields.getState().change("a", null, { text: "가는 중", sent: "req-a", sentAt: Date.now() });
+    const set = vi.spyOn(globalThis, "setTimeout");
+    const clear = vi.spyOn(globalThis, "clearTimeout");
+    for (const text of ["새", "새 답", "새 답을", "새 답을 써", "새 답을 써요"]) useReplyFields.getState().change("b", null, { text });
+    expect(set).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
   it("holds no more words than the core takes in one reply", () => {
     const view = mount(() => null);
     act(() => view.reply().setText("가".repeat(REPLY_MAX_LENGTH + 10)));
