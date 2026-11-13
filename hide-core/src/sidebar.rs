@@ -274,6 +274,11 @@ pub struct SessionAgentPayload {
     /// Why the provider refused the turn `hook` says ended; laid with it.
     #[serde(skip)]
     pub(crate) hook_refused: Option<crate::agent_hooks::facts::TurnRefused>,
+    /// Every call the hook says waits on the operator is the agent's own
+    /// question dialog (`hide_session::calls::asks_question`), so `hook`'s
+    /// wait is a question, not a permission; laid with `hook`.
+    #[serde(skip)]
+    pub(crate) hook_question: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize, Eq, PartialEq)]
@@ -744,6 +749,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
     let activity = agent_activity(&agent);
     let completed = agent_completed(&agent);
     let blocked = agent_blocked(&agent);
+    let user_turn = crate::agent_state::native_user_turn(&agent);
     let workspace_label = non_empty(agent.workspace_label.as_deref())
         .or_else(|| {
             agent
@@ -848,10 +854,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         expected_reply,
         detail: None,
         message,
-        user_turn: agent
-            .facts
-            .as_ref()
-            .and_then(|facts| facts.user_turn.clone()),
+        user_turn,
         ask_subject: None,
         laid_since_unix_ms: None,
         blocked_since_unix_ms: None,

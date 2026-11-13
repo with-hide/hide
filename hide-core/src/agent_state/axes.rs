@@ -1275,11 +1275,30 @@ fn session_wait(agent: &SessionAgentPayload) -> bool {
 /// `request_user_input_async`), and the demand axis shows it so.
 fn native_question(agent: &SessionAgentPayload) -> bool {
     !reports_nothing(agent)
-        && agent
-            .facts
-            .as_ref()
-            .and_then(|facts| facts.user_turn.as_ref())
+        && native_user_turn(agent)
             .is_some_and(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)
+}
+
+/// The agent's own native question or plan: the one the session read holds
+/// for the engine's current state, else, while the hook's open wait is on the
+/// agent's question dialog (`hook_question`), a question no read has worded.
+/// The engine's state moves as the operator answers, before the session read
+/// of that state and the call's end reach the core.
+pub(crate) fn native_user_turn(
+    agent: &SessionAgentPayload,
+) -> Option<hide_session::turns::UserTurnFact> {
+    agent
+        .facts
+        .as_ref()
+        .and_then(|facts| facts.user_turn.clone())
+        .or_else(|| {
+            agent
+                .hook_question
+                .then_some(hide_session::turns::UserTurnFact {
+                    kind: hide_session::turns::UserTurnKind::Question,
+                    content: None,
+                })
+        })
 }
 
 /// The turn and approval the core decides for one agent, from the same ranks

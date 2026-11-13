@@ -370,6 +370,7 @@ impl SleepRecord {
             record: None,
             hook: None,
             hook_refused: None,
+            hook_question: false,
             telemetry_stale: false,
             terminal_failed: false,
             launch_pending: false,

@@ -34,6 +34,19 @@ pub fn key_by_name(name: &str) -> Option<String> {
         .then(|| format!("{name}:"))
 }
 
+/// Claude Code's question tool. Its dialog asks the operator a question,
+/// yet Claude Code opens it with the same permission request as any call
+/// that needs approval.
+pub const CLAUDE_QUESTION_TOOL: &str = "AskUserQuestion";
+
+/// Whether the call a key names ([`key`], [`key_by_name`]) asks the
+/// operator a question rather than for a permission.
+pub fn asks_question(waited: &str) -> bool {
+    waited
+        .split_once(':')
+        .is_some_and(|(name, _)| name == CLAUDE_QUESTION_TOOL)
+}
+
 /// Whether a call known by `name` and, when read whole, the digest `input`
 /// is the call `waited` names: the same tool, with the same input when both
 /// sides have one.
