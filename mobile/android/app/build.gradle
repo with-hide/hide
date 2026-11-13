@@ -42,20 +42,33 @@ android {
         // Capacitor's pattern: aapt's default without `<dir>_*`, which would drop a bundle folder whose name starts with `_`.
         ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+    sourceSets {
+        // The notice sealer both kinds of tests encrypt with, as hided does.
+        test.java.srcDirs += 'src/sharedTest/java'
+        androidTest.java.srcDirs += 'src/sharedTest/java'
+    }
     testOptions {
         unitTests.returnDefaultValues = false
+        unitTests.all {
+            // The iOS app's notice words, which NoticeWordsTest holds the Android table equal to.
+            systemProperty 'hide.iosNoticeWords', rootProject.file('../ios/App/HidePushCore/Sources/HidePushCore/NoticeWords.swift').path
+        }
     }
 }
 
-// The whole list of what the app links: Capacitor's library, the AndroidX parts the shell calls, and Google's code
-// scanner. mobile/scripts/check-versions.mjs holds this list too, so a new dependency is a change to both, and the
-// app does not apply `capacitor.build.gradle`, the file through which `cap sync` would link an npm plugin.
+// The whole list of what the app links: Capacitor's library, the AndroidX parts the shell calls, Google's code scanner
+// and Firebase Cloud Messaging (no analytics, no advertising id). mobile/scripts/check-versions.mjs holds this list too,
+// so a new dependency is a change to both, and the app does not apply `capacitor.build.gradle`, the file through which
+// `cap sync` would link an npm plugin. The JVM tests read JSON with the reference org.json, which a phone has built in
+// (android.jar's copy is a stub).
 dependencies {
     implementation project(':capacitor-android')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
     implementation "com.google.android.gms:play-services-code-scanner:$codeScannerVersion"
+    implementation "com.google.firebase:firebase-messaging:$firebaseMessagingVersion"
     testImplementation "junit:junit:$junitVersion"
+    testImplementation "org.json:json:$orgJsonVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test:runner:$androidxTestRunnerVersion"
 }

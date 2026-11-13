@@ -898,7 +898,8 @@ The scripts name these paths themselves (`mobile/scripts/mini-android.sh`), so n
 
 `bash mobile/scripts/build-android.sh` is the one command.
 It runs, on this machine, the phone build, `check-versions.mjs` and `assemble.mjs` as the iOS build does, then `cap sync android`, and copies `mobile/android/` and the Capacitor library it names (from `node_modules`, at the same place relative to it) to `~/hide-android-build/<branch>/` on the machine named by `HIDE_ANDROID_BUILD_HOST` (default `mini`).
-There `mini-android.sh`, piped over `ssh`, runs `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` (the JVM tests and the debug app), boots the emulator, installs the app and its instrumented tests and runs them in the app's own process with its real web view (`BridgeGateWebViewTest`, `ShellNavigationWebViewTest`, `PairingStoreKeystoreTest`, through the debug build's `ShellTestActivity`); a failing test fails the command.
+There `mini-android.sh`, piped over `ssh`, runs `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` (the JVM tests and the debug app), boots the emulator, installs the app and its instrumented tests and runs them in the app's own process with its real web view (`BridgeGateWebViewTest`, `ShellNavigationWebViewTest`, `PairingStoreKeystoreTest`, `PushKeyStoreKeystoreTest`, `HidePushServiceTest`, through the debug build's `ShellTestActivity`); a failing test fails the command.
+It also copies the iOS app's `NoticeWords.swift` to the same place relative to the project, which `NoticeWordsTest` holds the Android words equal to; the JVM tests fail without it rather than pass on nothing.
 `HIDE_ANDROID_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`.
 
 `bash mobile/scripts/build-android.sh run` installs the built debug app, launches it, waits `HIDE_ANDROID_SETTLE` seconds (default 15) and captures the screen; `HIDE_ANDROID_CAPTURE=<file.png>` copies the capture back, with the app's log beside it as `<file>.log`.
@@ -918,6 +919,23 @@ A command killed before it could (a `SIGKILL`, a lost connection) is cleaned by 
 The app's data stays in the emulator between runs, so a pairing survives a restart of the app and of the emulator; the instrumented tests of a `build` remove the pairing items they test, so pair again after a `build`.
 Each branch's state is one folder of about 0.25 GB; once 4 other branches hold a folder there, the build refuses and prints them, as the iOS build does.
 Gradle's download cache is the mini account's own `~/.gradle`, shared by every branch, and Gradle runs without its daemon, so nothing of a build stays running.
+
+### The Android app's notifications
+
+The app receives notices through Firebase Cloud Messaging ([ARCHITECTURE.md](ARCHITECTURE.md#the-android-app-host)), on the Firebase project of the relay's Google Cloud project, `dependable-data-513506-p7`, where the Android app `me.grab.hide.android` is registered.
+The build applies no Google services Gradle plugin and holds no `google-services.json`: the four values Firebase reads when the app starts (app id, project id, sender id and API key) are `mobile/android/app/src/main/res/values/firebase.xml`, copied from that project's `google-services.json` for the app, and a new Firebase app or key is a change to that file.
+They ship inside every APK, so they are public by design; the API key (`Android key (auto created by Firebase)`) is restricted in Google Cloud to Android apps with package `me.grab.hide.android` signed by one of the listed certificates and to two APIs, Firebase Installations and FCM registration:
+
+```bash
+gcloud services api-keys update <key id> --project dependable-data-513506-p7 \
+  --allowed-application=sha1_fingerprint=<SHA-1>,package_name=me.grab.hide.android \
+  --api-target=service=firebaseinstallations.googleapis.com --api-target=service=fcmregistrations.googleapis.com
+```
+
+The certificates listed are the build machine's debug key (`~/.android/debug.keystore` on the mini, which signs the emulator's debug app) and the release upload key (`~/.config/hide-android/upload-certificate.pem`); Google Play's app signing certificate is added once Play signs the app, since a phone installs the app Play signed.
+An `--allowed-application` list replaces the earlier one, so an update names every certificate, and a build signed by a certificate not listed gets no token (`token_unavailable` on the switch).
+The relay's own access to FCM is its service account's, not this key ([RELAY_PROTOCOL.md](RELAY_PROTOCOL.md)).
+An emulator gets a token only once Google Play services has checked it in with Google; one whose check-in keeps failing (`AUTHENTICATION_FAILED` or `bad security token` in its log, `token_unavailable` on the switch) checks in again after `adb shell pm clear com.google.android.gsf` and `adb shell pm clear com.google.android.gms`, which leaves the Hide app's data alone.
 
 ### The upload key
 
@@ -981,12 +999,13 @@ It lists every failed check, and the upload never starts after one; `mobile/scri
 | Debug left out | not debuggable, not test-only, no class or string of the debug build's inputs (`hide_debug_`, `hide-debug-`, `ShellTestActivity`) in its code |
 | No cleartext | no `usesCleartextTraffic`; the network security configuration the app names refuses cleartext in its base and in every part, has no debug overrides, trusts no user certificates, and has no qualified copy that would replace it on some phones |
 | Nothing leaves the phone | `allowBackup` false, and data extraction rules that exclude every domain from both cloud backup and device transfer and include nothing |
-| Permissions | exactly the list in `mobile/android-release-expect.json`: today `INTERNET`, and from the libraries `ACCESS_NETWORK_STATE` (ML Kit's code scanner) and the app's own `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` (AndroidX), which it also declares; no camera (the scanner runs in Google Play services) and no advertising id; a node that adds a permission adds it there in the same change |
-| Exported components | exactly the list: the app's `ShellActivity` (the launcher and the pairing link) and AndroidX's `ProfileInstallReceiver`, which only a holder of `android.permission.DUMP` can reach |
+| Permissions | exactly the list in `mobile/android-release-expect.json`: today `INTERNET` and `POST_NOTIFICATIONS` (asked only when notifications are turned on), and from the libraries `ACCESS_NETWORK_STATE` (ML Kit's code scanner and Firebase), `WAKE_LOCK` and `com.google.android.c2dm.permission.RECEIVE` (Firebase Cloud Messaging, [The Android app's notifications](#the-android-apps-notifications)) and the app's own `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` (AndroidX), which it also declares; no camera (the scanner runs in Google Play services) and no advertising id; a node that adds a permission adds it there in the same change |
+| Exported components | exactly the list: the app's `ShellActivity` (the launcher and the pairing link), Firebase's `FirebaseInstanceIdReceiver`, which only a holder of `com.google.android.c2dm.permission.SEND` (Google Play services) can reach, and AndroidX's `ProfileInstallReceiver`, which only a holder of `android.permission.DUMP` can reach |
 | Web view | Capacitor's configuration: web view inspection off, logging none, no server url or cleartext, no allowed navigation, no mixed content |
-| Native libraries | none |
+| Native libraries | exactly the four in `mobile/android-release-expect.json`: `libdatastore_shared_counter.so` for arm64-v8a, armeabi-v7a, x86 and x86_64, from AndroidX DataStore (`androidx.datastore` 1.1.7, which `firebase-common` brings with Firebase Messaging); they are aligned to 16 KB pages as Play requires, and only multi-process DataStore loads them, which Firebase does not use; a Firebase or DataStore update that changes them changes this list, and any other native library fails |
 | Web bundle | every file of `assets/public/` is in the manifest `bundle-manifest.mjs` made after `cap sync` (`android`), with its SHA-256, and none is missing |
 | Signature | signed by the upload key alone (the certificate's SHA-256 is `uploadCertificateSha256`); `jarsigner -verify` finds no entry the signature does not cover |
+
 ### The store page of the Android app
 
 `mobile/store/android/` is the Google Play page as source: the text in `metadata/` (the layout fastlane's `supply` reads: one folder each for `en-US` and `ko-KR` with `title`, `short_description`, `full_description` and `changelogs/default`), `play-forms.md` (the answers for the Play Console forms that are not text, with the reason for each: data safety, content rating, target audience, ads, app access, countries and store settings) and `shots.json` (which of the iOS shots Play shows, in which order, the sizes, and the Play locale of each language).

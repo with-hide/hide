@@ -38,12 +38,12 @@ public final class BridgeGate implements WebViewCompat.WebMessageListener {
     public static final String ORIGIN = "https://localhost";
 
     /**
-     * The plugins the web side may call: the app's own three ({@code @CapacitorPlugin(name = ...)}). A plugin is added
+     * The plugins the web side may call: the app's own four ({@code @CapacitorPlugin(name = ...)}). A plugin is added
      * here in the same change that links it; {@code mobile/scripts/check-versions.mjs} compares this list with the plugin
      * classes of the app and fails when they differ. Unlike iOS there is no {@code Console}: Capacitor's Android bridge
-     * hands the page's console to the system log without a plugin, and no {@code HidePush} yet.
+     * hands the page's console to the system log without a plugin.
      */
-    public static final Set<String> APP_PLUGINS = Set.of("HideKeychain", "HideScanner", "HideApp");
+    public static final Set<String> APP_PLUGINS = Set.of("HideKeychain", "HideScanner", "HideApp", "HidePush");
 
     private static final String TAG = "HideBridge";
 

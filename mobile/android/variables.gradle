@@ -17,4 +17,6 @@ ext {
     androidxEspressoCoreVersion = '3.7.0'
     cordovaAndroidVersion = '14.0.1'
     codeScannerVersion = '16.1.0'
+    firebaseMessagingVersion = '26.0.1'
+    orgJsonVersion = '20250517'
 }

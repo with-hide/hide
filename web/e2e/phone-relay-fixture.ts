@@ -85,7 +85,7 @@ export async function startPhoneRelay(port = 0) {
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device" };
+  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device", refuseAppRegistration: false };
   const wire = { binaryFrames: 0 };
   const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }], groups: [
     { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent & { kind: "agent" }] },
@@ -141,6 +141,11 @@ export async function startPhoneRelay(port = 0) {
       await send(id, { type: "look_chunk", request_id, seq: 0, data: bytes.toString("base64") });
       await send(id, { type: "look_end", request_id, view_id: "v-html" });
     } else if (data.type === "push_subscription") {
+      state.notifications = "on";
+      await send(id, { type: "push_state", notifications: "on" });
+    } else if (data.type === "apns_registration" || data.type === "fcm_registration") {
+      // A computer released before the app's registration refuses it and keeps the session (`refuseAppRegistration`).
+      if (state.refuseAppRegistration) { await send(id, { type: "refused_request", request: data.type, reason: "not_allowed" }); return; }
       state.notifications = "on";
       await send(id, { type: "push_state", notifications: "on" });
     } else if (data.type === "push_permission") state.notifications = data.state === "denied" ? "off" : "unasked";

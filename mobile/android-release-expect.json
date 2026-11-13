@@ -6,6 +6,9 @@
   "permissions": [
     "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.INTERNET",
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.WAKE_LOCK",
+    "com.google.android.c2dm.permission.RECEIVE",
     "me.grab.hide.android.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
   ],
   "declaredPermissions": [
@@ -13,9 +16,15 @@
   ],
   "exported": [
     { "kind": "activity", "name": "me.grab.hide.android.ShellActivity", "permission": null },
+    { "kind": "receiver", "name": "com.google.firebase.iid.FirebaseInstanceIdReceiver", "permission": "com.google.android.c2dm.permission.SEND" },
     { "kind": "receiver", "name": "androidx.profileinstaller.ProfileInstallReceiver", "permission": "android.permission.DUMP" }
   ],
   "excludedDomains": ["root", "file", "database", "sharedpref", "external", "device_root", "device_file", "device_database", "device_sharedpref"],
   "forbiddenDexStrings": ["hide_debug_", "hide-debug-", "ShellTestActivity"],
-  "nativeLibraries": []
+  "nativeLibraries": [
+    "arm64-v8a/libdatastore_shared_counter.so",
+    "armeabi-v7a/libdatastore_shared_counter.so",
+    "x86/libdatastore_shared_counter.so",
+    "x86_64/libdatastore_shared_counter.so"
+  ]
 }

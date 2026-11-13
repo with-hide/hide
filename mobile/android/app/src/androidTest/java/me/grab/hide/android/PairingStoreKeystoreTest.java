@@ -44,7 +44,7 @@ public class PairingStoreKeystoreTest {
     private static String code(ThrowingRunnable run) {
         try {
             run.run();
-        } catch (PairingStore.Failure failure) {
+        } catch (SealedFiles.Failure failure) {
             return failure.code;
         }
         fail("expected a refusal");
@@ -52,7 +52,7 @@ public class PairingStoreKeystoreTest {
     }
 
     private interface ThrowingRunnable {
-        void run() throws PairingStore.Failure;
+        void run() throws SealedFiles.Failure;
     }
 
     @Test
