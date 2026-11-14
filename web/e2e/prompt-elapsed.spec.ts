@@ -41,7 +41,7 @@ test("prompt elapsed survives state changes and restart, advances only on a prom
     // At a permission prompt the row is an ask in 내 차례, timed by how long it
     // has waited, the time the asks stand by (operator decision 2026-11-14).
     await setAgentState(daemon, pane, "blocked");
-    await expect(taskTime).toHaveText(/^\d+s$/, { timeout: 30_000 });
+    await expect(taskTime).toHaveText(/^\d+s$/);
     await setAgentState(daemon, pane, "idle");
     await expect(taskTime).toHaveText("7m", { timeout: 30_000 });
     // Metadata alone cannot manufacture a prompt time or inherit the old session's.
