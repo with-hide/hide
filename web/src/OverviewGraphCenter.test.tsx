@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // PRD hide-external-control B40: the map's centre is the operator on a device's
-// map and the tool, by its rail tile's monogram, on an external tool's map.
+// map, with its `+`, and the tool, by its rail tile's monogram and with no `+`,
+// on an external tool's map.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -46,13 +47,14 @@ async function centre(tool: ToolCell | null) {
   const root = createRoot(container);
   await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" tool={tool} actions={createActions(() => true)} /></TooltipProvider>));
   const node = container.querySelector<HTMLElement>("[data-graph-center]");
-  const drawn = node ? { center: node.dataset.graphCenter, glyph: node.textContent, name: node.getAttribute("aria-label") } : null;
+  const picture = node?.querySelector<HTMLElement>('[role="img"]');
+  const drawn = node && picture ? { center: node.dataset.graphCenter, glyph: picture.textContent, name: picture.getAttribute("aria-label"), start: node.querySelector("[data-graph-operator-start]") !== null } : null;
   await act(async () => root.unmount());
   return drawn;
 }
 
-it("centres a device's map on the operator and a tool's map on the tool, by its tile's monogram", async () => {
-  expect(await centre(null)).toEqual({ center: "operator", glyph: "You", name: "You" });
+it("centres a device's map on the operator and a tool's map on the tool, by its tile's monogram and with no start", async () => {
+  expect(await centre(null)).toEqual({ center: "operator", glyph: "You", name: "You", start: true });
   const tool: ToolCell = { connection: "c0ffee00c0ffee00", name: "nightly", turn: 0, devices: [] };
-  expect(await centre(tool)).toEqual({ center: "c0ffee00c0ffee00", glyph: "N", name: "nightly · External tool" });
+  expect(await centre(tool)).toEqual({ center: "c0ffee00c0ffee00", glyph: "N", name: "nightly · External tool", start: false });
 });

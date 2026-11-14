@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useReducedMotion } from "./lib/useReducedMotion";
-import type { OverviewGraphModel } from "./overviewGraphModel";
+import { ADD_PROJECT, type OverviewGraphModel } from "./overviewGraphModel";
 import { ForceMap, type MapPoint, type Point } from "./overviewMapLayout";
 import { useShellStore } from "./store";
 
@@ -105,13 +105,22 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       const input = latest.current;
       const keep = current.current && current.current.scale === scale && placedResets.current === resets ? current.current.map : undefined;
       placedResets.current = resets;
+      // Each project's start circle stands where its next session would, and the map's Add project
+      // place is a project of its own, so the physics keeps both clear of every session (issue 2514).
+      const adding = input.projects.length > 0;
       const map = new ForceMap({
-        projects: input.projects.map((group) => group.id),
-        sessions: input.projects.flatMap((group) => [
-          ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
-          ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
-        ]),
+        projects: [...input.projects.map((group) => group.id), ...(adding ? [ADD_PROJECT.project] : [])],
+        sessions: [
+          ...input.projects.flatMap((group) => [
+            ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
+            ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
+            // A start circle carries no words, so it needs only its circle's room.
+            { id: group.startSlot, projectId: group.id, parent: null, radius: room({ width: size.root.orb, height: size.root.orb, orb: size.root.orb }, size.gap), quiet: true },
+          ]),
+          ...(adding ? [{ id: ADD_PROJECT.slot, projectId: ADD_PROJECT.project, parent: null, radius: room(size.root, size.gap), quiet: true }] : []),
+        ],
         operator: size.operator + size.gap * 2,
+        ...(adding ? { free: ADD_PROJECT.project } : {}),
         remembered: forgetting.current ? undefined : { anchors: scaled(latestPlaces.current.anchors, scale), pins: scaled(latestPlaces.current.pins, scale) },
       }, keep);
       current.current?.map.stop();

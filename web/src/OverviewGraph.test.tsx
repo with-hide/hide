@@ -10,6 +10,8 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { missionFixture, withMissionAsk } from "./gallery/MissionScene";
 import { OverviewGraph } from "./OverviewGraph";
+import { AddProjectGraphNode, ClusterGraphNode, OperatorGraphNode, ProjectGraphNode, StartSlotGraphNode, type AddProjectNode, type ClusterNode, type OperatorNode, type ProjectNode, type StartSlotNode } from "./overviewGraphNodes";
+import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import type { BoardProject } from "./projectBoard";
 import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
 import type { Checkout, OverviewGraphChoices, SnapshotRest, Workspace } from "./snapshot";
@@ -26,10 +28,11 @@ vi.mock("./overviewGraphLayout", () => ({
 }));
 // The map's node budget is 400; what these tests claim holds for a project past any budget, and filling
 // 400 nodes made the overflow case take up to 5.8 s on the Windows runner (hide-private issue 145).
-// Every project takes its name and one access slot, so BUDGET / 2 projects fill the map and one more is left out.
-const { BUDGET } = vi.hoisted(() => ({ BUDGET: 8 }));
+// Every project takes its name, its start circle and one access slot after the map's two-node Add project
+// place, so (BUDGET - 2) / 3 projects fill the map and one more is left out.
+const { BUDGET } = vi.hoisted(() => ({ BUDGET: 14 }));
 vi.mock("./dependencyLayout", async (importOriginal) => ({ ...await importOriginal<typeof import("./dependencyLayout")>(), LAYOUT_NODE_LIMIT: BUDGET }));
-const OUTSIDE = BUDGET / 2;
+const OUTSIDE = (BUDGET - 2) / 3;
 const OUTSIDE_PROJECT = `project-${String(OUTSIDE).padStart(3, "0")}`;
 const savedShell = useShellStore.getState();
 const savedUi = useUiStore.getState();
@@ -535,4 +538,88 @@ it("with no session awake, offers New agent in the one project in scope and keep
     await render([...draw([]), { workspace: { ...workspace, id: "other", label: "Other" }, agents: [], device: null } as BoardProject]);
     expect(container.querySelector("[data-graph-welcome] p")).toBeNull();
   } finally { await act(async () => root.unmount()); }
+});
+
+it("opens the start panel on a project from its row's +, its start circle and a folded name's +, on no project from You's +, and Add project from its place (issue 2514)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+  const agent = legacyAgentRow({ id: "p1", pane_id: "p1", identity_label: "Map work", agent_kind: "claude", session_id: "native-p1", group: "working", activity: "working" });
+  const workspace: Workspace = { id: "project", label: "Project", device_id: "local", path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: "p1", project_id: "project", checkout_id: checkout.id }] } };
+  const projects: BoardProject[] = [{ workspace, agents: [agent], device: null }];
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: [workspace], focused_device_id: "local" }, status: {}, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [] } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: [agent], focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  useUiStore.setState({ overviewOpen: true, opening: null, screen: { kind: "workspace" } });
+  const savedPanel = useStartPanel.getState();
+  useStartPanel.setState({ isOpen: false, preset: null });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    const row = container.querySelector('[data-graph-project-row="project"]')!;
+    // The row's own press still moves the camera and opens nothing.
+    await act(async () => row.querySelector<HTMLButtonElement>('button[aria-label="Locate Project"]')!.click());
+    expect(useStartPanel.getState().isOpen).toBe(false);
+    // Its `+` opens the start panel on the project, asking the start to keep the Overview in front.
+    const plus = row.querySelector<HTMLButtonElement>('[data-graph-project-row-start="project"]')!;
+    expect(plus.getAttribute("aria-label")).toBe("Start agent in Project");
+    await act(async () => plus.click());
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, preset: { projectId: "project" }, stay: true });
+    expect(useUiStore.getState()).toMatchObject({ overviewOpen: true, opening: null });
+    expect(events).toHaveLength(0);
+    await act(async () => root.unmount());
+
+    // On the map: an unfolded name is only the drag handle and its fold; the project's start circle and a
+    // folded project's `+` beside its name start there; You's `+` starts on no project; the Add project place adds one.
+    const start = vi.fn();
+    const fold = vi.fn();
+    const anywhere = vi.fn();
+    const add = vi.fn();
+    const group = { id: "project", project: { workspace } } as unknown as ProjectNode["data"]["group"];
+    const summary = { id: "project", project: { workspace }, sessions: 1, turn: 0, working: 1, results: 0 } as unknown as ClusterNode["data"]["summary"];
+    const map = createRoot(container);
+    await act(async () => map.render(<TooltipProvider><ReactFlowProvider>
+      <ProjectGraphNode {...{ data: { group, accent: "sky", current: false, emphasized: false, muted: false, fold, point: () => {} } } as unknown as NodeProps<ProjectNode>} />
+      <StartSlotGraphNode {...{ data: { workspaceId: "project", label: "Start agent in Project", accent: "sky", muted: false, start } } as unknown as NodeProps<StartSlotNode>} />
+      <ClusterGraphNode {...{ data: { summary, accent: "sky", orb: 40, emphasized: false, muted: false, unfold: fold, point: () => {}, start } } as unknown as NodeProps<ClusterNode>} />
+      <OperatorGraphNode {...{ data: { label: "You", startLabel: "New agent", start: anywhere } } as unknown as NodeProps<OperatorNode>} />
+      <AddProjectGraphNode {...{ data: { label: "Add project", add } } as unknown as NodeProps<AddProjectNode>} />
+    </ReactFlowProvider></TooltipProvider>));
+    expect(container.querySelector(".og-project button[aria-label='Start agent in Project']")).toBeNull();
+    // A drag from a control must never end in its click: the start circle leaves the drag to the map's pan,
+    // the folded name's `+` is one of the folded project's drag handles (as its circle is).
+    const slot = container.querySelector<HTMLButtonElement>('[data-graph-start-slot="project"]')!;
+    const folded = container.querySelector<HTMLButtonElement>('.og-cluster [data-graph-project-start="project"]')!;
+    expect(slot.closest(".og-project-drag, .og-cluster-drag")).toBeNull();
+    expect([slot.classList.contains("nodrag"), slot.classList.contains("nopan")]).toEqual([true, false]);
+    expect([folded.classList.contains("og-cluster-drag"), folded.classList.contains("nodrag")]).toEqual([true, false]);
+    for (const button of [slot, folded]) {
+      expect(button.getAttribute("aria-label")).toBe("Start agent in Project");
+      await act(async () => button.click());
+    }
+    expect(start.mock.calls).toEqual([["project"], ["project"]]);
+    const operator = container.querySelector<HTMLButtonElement>("[data-graph-operator-start]")!;
+    expect(operator.getAttribute("aria-label")).toBe("New agent");
+    expect(operator.classList.contains("nopan")).toBe(false);
+    await act(async () => operator.click());
+    expect(anywhere).toHaveBeenCalledTimes(1);
+    const adding = container.querySelector<HTMLButtonElement>("[data-graph-add-project]")!;
+    expect(adding.textContent).toBe("Add project");
+    expect(adding.classList.contains("nopan")).toBe(false);
+    await act(async () => adding.click());
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(fold).not.toHaveBeenCalled();
+    await act(async () => map.unmount());
+
+    // You's `+` through the map's own action: the panel names no project and the start keeps the Overview.
+    useStartPanel.setState({ isOpen: false, preset: null, stay: false });
+    actions.openStartPanel(undefined, { stay: true });
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, preset: null, stay: true });
+  } finally {
+    useStartPanel.setState(savedPanel, true);
+  }
 });
