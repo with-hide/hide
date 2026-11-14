@@ -301,12 +301,21 @@ jobs:
           fi
           # What the server did with the sessions a failed walk could not
           # start, kept only when one failed (with-hide/hide-private#2564).
-          if [ "$status" -ne 0 ] && [ -n "${HIDE_E2E_WINDOWS_SSHD_LOG:-}" ] && [ -f "$HIDE_E2E_WINDOWS_SSHD_LOG" ]; then
-            echo "::group::sshd's log for the failed walks"
-            tail -c 65536 "$HIDE_E2E_WINDOWS_SSHD_LOG"
-            echo "::endgroup::"
+          # A log that was never written is said so: an empty group would
+          # read as a server that did nothing.
+          if [ "$status" -ne 0 ]; then
+            log=${HIDE_E2E_WINDOWS_SSHD_LOG:-}
+            if [ -z "$log" ]; then
+              echo "sshd's log was not named in this run"
+            elif [ ! -f "$log" ]; then
+              echo "sshd wrote no log at $log"
+            else
+              echo "::group::sshd's log for the failed walks ($(wc -c < "$log") bytes)"
+              tail -c 65536 "$log"
+              echo "::endgroup::"
+            fi
             echo "::group::connections at the end"
-            netstat.exe -ano | grep -E "47623|ESTABLISHED" | head -50 || true
+            netstat.exe -ano | grep -E ":47623" | head -50 || true
             echo "::endgroup::"
           fi
           exit "$status"
