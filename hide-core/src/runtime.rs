@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+pub(crate) mod access;
 mod account_reports;
 mod agent_areas;
 mod agent_catalog;
@@ -1464,6 +1465,8 @@ pub struct Runtime {
     herdr_import: herdr_import::Import,
     /// The Desk room and its one Desk process (`runtime/desk.rs`).
     desk: desk::Desk,
+    /// External tools' connections (PRD hide-external-control).
+    access: access::AccessRuntime,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -2506,6 +2509,7 @@ impl Runtime {
             first_run_apply: None,
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
+            access: access::AccessRuntime::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),

@@ -20,15 +20,25 @@ impl Runtime {
         command: PaneCommand,
     ) -> Result<Prepared, String> {
         command.check()?;
-        let Caller::Pane(caller_pane) = Caller::parse(caller) else {
-            return Err("pane_required".into());
+        // An external tool reads panes and, at Act, types into them as the
+        // operator does (PRD hide-external-control B20, B21, B28); it has
+        // no pane to open another beside or a checkout to name.
+        let (caller_pane, context) = match Caller::parse(caller) {
+            Caller::Pane(caller_pane) => {
+                let context = self
+                    .resolve_caller(device, Caller::Pane(caller_pane))
+                    .map_err(|refusal| refusal.reason.to_owned())?;
+                if context != *expected {
+                    return Err("caller_context_changed".into());
+                }
+                (caller_pane, context)
+            }
+            Caller::Access { connection, .. } => {
+                self.access_authority(device, connection, crate::access::pane_need(&command))?;
+                ("", expected.clone())
+            }
+            _ => return Err("pane_required".into()),
         };
-        let context = self
-            .resolve_caller(device, Caller::Pane(caller_pane))
-            .map_err(|refusal| refusal.reason.to_owned())?;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
         let node = self.node.as_str();
         // A pane named in full stays on the machine it names; a bare one is
         // the caller's.

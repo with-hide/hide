@@ -1036,9 +1036,10 @@ fn run(
                     guard.delivery_asleep(),
                     guard.delivery_wakes_started(),
                     guard.delivery_undeliverable(),
+                    guard.delivery_tool_connections(),
                 ))
             });
-        let (state, gone, rebinds, reach, asleep, woken, undeliverable) = match state {
+        let (state, gone, rebinds, reach, asleep, woken, undeliverable, tools) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -1060,6 +1061,9 @@ fn run(
             maintenance_at = now;
             if gone.is_empty()
                 && rebinds.is_empty()
+                && !tools
+                    .as_deref()
+                    .is_some_and(|tools| crate::coordination::tools_left_behind(&state, tools))
                 && !state.reach_moves(&reach, now)
                 && !state.letters.iter().any(|letter| {
                     (letter.intake_overdue(&state.node_clocks, now)
@@ -1083,6 +1087,7 @@ fn run(
             woke,
             woken,
             undeliverable,
+            tools,
         };
         let Settled {
             ledger: candidate,
@@ -1217,10 +1222,10 @@ fn settle(
     // The batch's one copy of the ledger; a request applies to it in place.
     let mut candidate = state.clone();
     let holds = BookHolds::new(runtime);
-    let (moved, ended) = upkeep.apply(&mut candidate, now);
+    let (moved, ended, tools_ended) = upkeep.apply(&mut candidate, now);
     let mut results = Vec::with_capacity(batch.len());
     let mut accepted = vec![false; batch.len()];
-    let mut transitions = false;
+    let mut transitions = tools_ended;
     for (index, request) in batch.iter().enumerate() {
         let result = match current(runtime, request, &candidate, now) {
             Err(code) => Err(code),
@@ -1443,6 +1448,10 @@ struct Upkeep {
     /// leaves them (D-16), or no bell can bring them
     /// (`runtime::spent_bells`).
     undeliverable: std::collections::BTreeMap<String, String>,
+    /// The external tools' connections the core holds, by id, once its list
+    /// is restored: what a tool not among them keeps ends
+    /// (`coordination::end_gone_tools`).
+    tools: Option<Vec<String>>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1452,8 +1461,9 @@ type Ended = Vec<(
 )>;
 
 impl Upkeep {
-    /// Brings `ledger` to `now` as every batch does before its requests.
-    fn apply(&self, ledger: &mut Ledger, now: u64) -> (Moved, Ended) {
+    /// Brings `ledger` to `now` as every batch does before its requests;
+    /// with whether it ended what a gone tool kept, which the screens show.
+    fn apply(&self, ledger: &mut Ledger, now: u64) -> (Moved, Ended, bool) {
         // First, so a deadline and a letter sent in this batch read the
         // machines' clocks as they are now.
         ledger.observe_reach(&self.reach, now);
@@ -1463,7 +1473,11 @@ impl Upkeep {
         ledger.end_overdue_answer_waits(now);
         let moved = crate::coordination::rebind(ledger, &self.rebinds);
         let ended = crate::coordination::end_gone(ledger, &self.gone, now);
-        (moved, ended)
+        let tools = self
+            .tools
+            .as_deref()
+            .is_some_and(|tools| crate::coordination::end_gone_tools(ledger, tools, now));
+        (moved, ended, tools)
     }
 }
 
@@ -1484,8 +1498,7 @@ fn rebuild(
 ) -> (Ledger, bool) {
     'again: loop {
         let mut ledger = state.clone();
-        let mut transitions = false;
-        upkeep.apply(&mut ledger, now);
+        let (_, _, mut transitions) = upkeep.apply(&mut ledger, now);
         for (index, request) in batch.iter().enumerate() {
             if !accepted[index] {
                 continue;
@@ -2516,7 +2529,42 @@ mod tests {
             reach: ledger::Reach::new(),
             gone: Default::default(),
             rebinds: Default::default(),
+            tools: None,
         }
+    }
+
+    /// D-23: the upkeep ends what a tool the list no longer holds kept, and
+    /// says so for the screens; before the list is restored it ends nothing,
+    /// and a connection the list holds, at either level, keeps its watch.
+    #[test]
+    fn the_upkeep_ends_a_gone_tools_watch_once_the_list_is_known() {
+        let mut ledger = Ledger::default();
+        let tool = Actor::access("00000000000000a1", "nightly", crate::node::TEST_NODE);
+        let target = Actor {
+            pane_id: "worker".into(),
+            name: "worker".into(),
+            kind: "codex".into(),
+            device_id: crate::node::TEST_NODE.into(),
+            session: Some("worker-session".into()),
+        };
+        watch::start(&mut ledger, &tool, &target, 1).unwrap();
+        assert!(
+            !upkeep().apply(&mut ledger, 2).2,
+            "the list is not restored yet"
+        );
+        let held = Upkeep {
+            tools: Some(vec!["00000000000000a1".into()]),
+            ..upkeep()
+        };
+        assert!(!held.apply(&mut ledger, 3).2);
+        assert_eq!(ledger.watches.len(), 1);
+        let gone = Upkeep {
+            tools: Some(Vec::new()),
+            ..upkeep()
+        };
+        assert!(gone.apply(&mut ledger, 4).2);
+        assert!(ledger.watches.is_empty());
+        assert!(!gone.apply(&mut ledger, 5).2, "nothing left to end");
     }
 
     #[test]

@@ -45,6 +45,8 @@ pub(super) struct DeltaState {
     last_desk_jobs: Option<Arc<crate::model::DeskJobsSnapshot>>,
     desk_mentions_revision: u64,
     last_desk_mentions: Option<Arc<crate::model::DeskMentionsSnapshot>>,
+    access_revision: u64,
+    last_access: Option<Arc<crate::model::AccessSnapshot>>,
     link_summaries_revision: u64,
     last_link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     link_panel_revision: u64,
@@ -173,6 +175,9 @@ impl Runtime {
         // A mission's map follows its workers, its Conductor's pane and its
         // pull requests; the section is sent again only when it moved.
         self.refresh_missions();
+        // The external tools' section counts the missions their agents
+        // conduct, so it follows the book.
+        self.refresh_access();
         // A mission no row carries is its device's own Needs You item, in
         // the same count as its agents (B14).
         self.publish_mission_asks();
@@ -289,6 +294,17 @@ impl Runtime {
             self.delta.revision += 1;
             self.delta.desk_mentions_revision = self.delta.revision;
             self.delta.last_desk_mentions = Some(Arc::clone(mentions));
+        }
+        if let Some(access) = &self.snapshot.access
+            && self
+                .delta
+                .last_access
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, access))
+        {
+            self.delta.revision += 1;
+            self.delta.access_revision = self.delta.revision;
+            self.delta.last_access = Some(Arc::clone(access));
         }
         if let Some(summaries) = &self.snapshot.link_summaries
             && self.delta.last_link_summaries.as_deref() != Some(summaries)
@@ -436,6 +452,12 @@ impl Runtime {
                 .last_desk_mentions
                 .as_ref()
                 .filter(|_| self.delta.desk_mentions_revision > have_revision)
+                .map(Arc::clone),
+            access: self
+                .delta
+                .last_access
+                .as_ref()
+                .filter(|_| self.delta.access_revision > have_revision)
                 .map(Arc::clone),
             link_summaries: self
                 .delta

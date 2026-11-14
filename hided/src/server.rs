@@ -1554,6 +1554,11 @@ pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
 /// devices the caller could have used says so in its next action, and its
 /// reason stays the code.
 fn refusal_answer(reason: String, next_action: &'static str) -> (String, String) {
+    // An external tool's refusal says what the tool does next, whichever
+    // owner refused it (PRD hide-external-control B20-B23).
+    if let Some(next_action) = crate::access::next_action(&reason) {
+        return (reason, next_action.to_owned());
+    }
     match hide_core::coordination::split_refusal(&reason) {
         (code @ "shell_starting", detail) => {
             let (seconds, screen) =
@@ -1676,6 +1681,9 @@ enum ScopedRequest {
     /// `hide workspace remove`: the delete dialog's removal of a worktree,
     /// run by the core, which needs no shell.
     WorktreeRemove(hide_core::worktree_command::WorktreeRemove),
+    /// `hide access list`: an external tool reads the tools connected and
+    /// the requests waiting (PRD hide-external-control B17).
+    AccessList,
 }
 
 impl ScopedRequest {
@@ -1700,7 +1708,37 @@ impl ScopedRequest {
                 | Self::Pane(..)
                 | Self::ProjectOpen(..)
                 | Self::WorktreeRemove(..)
+                | Self::AccessList
         )
+    }
+
+    /// What an external tool's level must allow for this command (PRD
+    /// hide-external-control B20-B23). A command family the core also runs
+    /// for a tool takes its need from the core's one table
+    /// (`hide_core::access`), which the core judges again; the rest are
+    /// this boundary's alone.
+    fn access_need(&self) -> hide_core::access::Need {
+        use hide_core::access::{self, Need};
+        match self {
+            Self::Delivery(command, _) => access::delivery_need(command),
+            Self::Pane(command) => access::pane_need(command),
+            Self::Mission(command) => access::mission_need(command),
+            Self::Device(command) => access::device_need(command),
+            Self::Ps { .. } | Self::AccessList => Need::View,
+            Self::Plan(..) | Self::Memory(..) | Self::MemoryHook(..) => Need::Agent,
+            Self::AgentSleep { .. }
+            | Self::AgentArchive { .. }
+            | Self::Query(..)
+            | Self::Action(..)
+            | Self::BrowserConnect(..)
+            | Self::BrowserRelay(..)
+            | Self::Links(..)
+            | Self::Session(..)
+            | Self::AgentCatalog(..)
+            | Self::AgentProfile(..)
+            | Self::ProjectOpen(..)
+            | Self::WorktreeRemove(..) => Need::Act,
+        }
     }
 }
 
@@ -1879,6 +1917,7 @@ async fn scoped_client_loop(
                             .as_str()
                             .filter(|path| hide_core::project_open::valid_path(path))
                             .map(|path| ScopedRequest::ProjectOpen(path.to_owned())),
+                        Some("access_list") => Some(ScopedRequest::AccessList),
                         _ => None,
                     };
                     // A plan carries its whole node list, so a mission
@@ -1926,6 +1965,13 @@ async fn scoped_client_loop(
                             tokio::task::spawn_blocking(move || {
                             let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
+                            // An external tool runs what its level allows,
+                            // judged here for every command (B20-B23).
+                            if let Some(level) = cap.access_level() {
+                                hide_core::access::admit(level, command.access_need()).map_err(|reason| {
+                                    (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
+                                })?;
+                            }
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
                                     "renderer_unavailable".to_owned(),
@@ -1967,8 +2013,31 @@ async fn scoped_client_loop(
                                 ScopedRequest::Delivery(command, hint) => {
                                     crate::hook_request::delivery(&core, &cap, *command, hint)?
                                 }
+                                ScopedRequest::AccessList => {
+                                    if cap.access_level().is_none() {
+                                        return Err((
+                                            "access_not_connected".to_owned(),
+                                            crate::pane_auth::refusal_next_action("access_not_connected"),
+                                        ));
+                                    }
+                                    core.access(hide_core::access::Call::List).map_err(|code| {
+                                        let next = crate::pane_auth::refusal_next_action(&code);
+                                        (code, next)
+                                    })?
+                                }
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
+                                }
+                                // A tool outside every checkout has none to
+                                // read: it asks from inside one (B25).
+                                ScopedRequest::Links(_) | ScopedRequest::Session(_)
+                                    if cap.access_level().is_some()
+                                        && cap.context.checkout_path.is_empty() =>
+                                {
+                                    return Err((
+                                        "checkout_not_registered".to_owned(),
+                                        crate::pane_auth::CHECKOUT_NEXT_ACTION,
+                                    ));
                                 }
                                 ScopedRequest::Links(query) => {
                                     let scope = core.links_scope(&cap.context).ok_or((
@@ -2646,6 +2715,12 @@ fn handle_client_text(
                 return Err("View feedback is an operator window's".to_owned());
             }
             return Ok(ClientAction::BrowserComment(event));
+        }
+        // Approving, refusing, changing the level of and disconnecting an
+        // external tool are the operator's, in a window's Settings (PRD
+        // hide-external-control B8): no `hide` command and no pane sends them.
+        Some(kind) if kind.starts_with("access_") && !renderer => {
+            return Err("External tools are approved in an operator window".to_owned());
         }
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.
@@ -5810,6 +5885,34 @@ mod tests {
         assert!(!ScopedRequest::MemoryHook(hook).needs_renderer());
         assert!(ScopedRequest::Query(hide_core::workspace_control::Query::Info).needs_renderer());
         assert!(ScopedRequest::BrowserConnect(None).needs_renderer());
+        // C25: the rest of the daemon's own answers, a tool's list among them.
+        for request in [
+            ScopedRequest::Ps { all: false },
+            ScopedRequest::AccessList,
+            ScopedRequest::AgentCatalog(None),
+            ScopedRequest::AgentSleep {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            ScopedRequest::AgentArchive {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            ScopedRequest::Device(hide_core::device_command::DeviceCommand::List),
+            ScopedRequest::ProjectOpen("/srv/project".into()),
+            ScopedRequest::Pane(hide_core::pane_command::PaneCommand::Read {
+                pane: "w1:p1".into(),
+                lines: 10,
+            }),
+        ] {
+            assert!(!request.needs_renderer());
+        }
+        assert!(
+            ScopedRequest::Action(hide_core::workspace_control::Action::OpenFile {
+                path: "/srv/a".into(),
+            })
+            .needs_renderer()
+        );
     }
 
     #[test]

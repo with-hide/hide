@@ -41,6 +41,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         search_path: None,
         install: None,
+        access: None,
     }
 }
 

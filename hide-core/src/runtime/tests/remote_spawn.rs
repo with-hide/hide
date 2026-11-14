@@ -614,7 +614,20 @@ fn desk_ask(spawner: &Spawner, intent: &str) -> Result<Value, String> {
 
 /// `desk_ask` with `--machine <machine>`.
 fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, String> {
-    let command = crate::delivery::Command::Agents {
+    let command = desk_command(machine, intent);
+    let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
+        crate::node::TEST_NODE,
+        crate::workspace_control::DESK_CALLER,
+        &crate::desk::desk_context(crate::node::TEST_NODE),
+        None,
+        command,
+    );
+    prepared.and_then(|prepared| prepared.run(Duration::from_secs(30)))
+}
+
+/// The spawn Desk asks for, on `machine`, under `intent`.
+fn desk_command(machine: &str, intent: &str) -> crate::delivery::Command {
+    crate::delivery::Command::Agents {
         command: Command::Spawn {
             pick: None,
             mission: None,
@@ -636,15 +649,7 @@ fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, 
             beside: false,
             profile: None,
         },
-    };
-    let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
-        crate::node::TEST_NODE,
-        crate::workspace_control::DESK_CALLER,
-        &crate::desk::desk_context(crate::node::TEST_NODE),
-        None,
-        command,
-    );
-    prepared.and_then(|prepared| prepared.run(Duration::from_secs(30)))
+    }
 }
 
 /// Desk's own spawn (PRD Desk 1차 B20, B21), asked as the Desk process asks
@@ -706,6 +711,103 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
     assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
     drop(runtime);
     assert_eq!(spawner.count("start_agent"), 1);
+}
+
+/// An external tool's spawn (PRD hide-external-control B21, B31, c3),
+/// asked as hided hands a tool's command over: it starts on the device
+/// with no parent, under the record the tool's connection registers, and
+/// the start record, the agent's own view, `hide ps` and the snapshot's
+/// connection all name the tool.
+#[test]
+fn a_spawn_a_tool_asks_for_starts_as_its_connection_and_names_the_tool_as_origin() {
+    use crate::access::{Call as AccessCall, Level, key_hash};
+    use crate::runtime::access::AccessEvent;
+    let spawner = spawner();
+    let connection = {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        let (asked, _) = runtime.access_call(AccessCall::Request {
+            name: "nightly".into(),
+            key_sha256: key_hash(&"7".repeat(64)),
+            program: None,
+            id: "00000000000000a7".into(),
+        });
+        let id = asked.unwrap()["id"].as_str().unwrap().to_owned();
+        assert!(runtime.access_event(AccessEvent::Approve {
+            id: id.clone(),
+            level: Level::Act,
+        }));
+        id
+    };
+    let mut command = match desk_command(DEVICE, "nightly-run") {
+        crate::delivery::Command::Agents { command } => command,
+        _ => unreachable!(),
+    };
+    if let Command::Spawn { machine, .. } = &mut command {
+        *machine = Some(DEVICE.into());
+    }
+    let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
+        crate::node::TEST_NODE,
+        &crate::workspace_control::access_caller_id(&connection, None),
+        &crate::access::access_context(crate::node::TEST_NODE, &connection),
+        None,
+        crate::delivery::Command::Agents { command },
+    );
+    let started = prepared
+        .and_then(|prepared| prepared.run(Duration::from_secs(30)))
+        .unwrap();
+    assert_eq!(started["machine"], DEVICE);
+    assert_eq!(
+        started["parent"],
+        Value::Null,
+        "a tool's start is a handoff"
+    );
+    assert_eq!(started["origin_tool"], "nightly");
+
+    let ledger = spawner.published();
+    let tool = Actor::access(&connection, "nightly", crate::node::TEST_NODE);
+    let origin = ledger
+        .agents
+        .iter()
+        .find(|agent| agent.actor.same_identity(&tool))
+        .expect("the tool's record, registered by its spawn");
+    let child = ledger
+        .agents
+        .iter()
+        .find(|agent| Some(agent.id.as_str()) == started["id"].as_str())
+        .expect("the child's record");
+    assert_eq!(child.origin.as_deref(), Some(origin.id.as_str()));
+    let hide_started = crate::coordination::started::hide_started(&ledger);
+    assert!(
+        hide_started
+            .access
+            .iter()
+            .any(|start| start.connection == connection && start.agent.agent_id == child.id),
+        "the start record names the connection"
+    );
+
+    let mut runtime = spawner.runtime.lock().unwrap();
+    let ps = runtime
+        .ps_rows(crate::node::TEST_NODE, "sender")
+        .unwrap()
+        .answer(false);
+    let row = ps
+        .panes
+        .iter()
+        .filter_map(|pane| pane.agent.as_ref())
+        .chain(&ps.agents)
+        .find(|agent| agent.id.as_deref() == Some(child.id.as_str()))
+        .expect("the child's row");
+    assert_eq!(row.origin_tool.as_deref(), Some("nightly"));
+
+    runtime.refresh_access();
+    let access = runtime.snapshot.access.clone().unwrap();
+    let shown = &access.connections[0];
+    assert_eq!(
+        (shown.id.as_str(), shown.agent_count),
+        (connection.as_str(), 1)
+    );
+    assert_eq!(shown.agents, std::slice::from_ref(&child.id));
 }
 
 /// `--machine` may name a dialed device by the SSH alias it was added with,
