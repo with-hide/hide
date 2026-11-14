@@ -641,7 +641,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let folder = hide_kit::layout::access_keys(home.path());
         let mut env = crate::env::load_from(|key| match key {
-            "HOME" => Some(home.path().to_string_lossy().into_owned()),
+            crate::env::HOME => Some(home.path().to_string_lossy().into_owned()),
             _ => None,
         })
         .unwrap();

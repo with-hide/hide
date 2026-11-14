@@ -208,7 +208,8 @@ impl Tool {
         command
             .args(args)
             .current_dir(&self.home)
-            .env("HOME", &self.home)
+            // The home the platform names: `USERPROFILE` on Windows.
+            .env(hided::env::HOME, &self.home)
             .env_remove("XDG_STATE_HOME")
             .env("HIDE_STATE_DIR", &self.state)
             .stdin(Stdio::null());

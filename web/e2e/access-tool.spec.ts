@@ -31,7 +31,8 @@ function toolRunner(daemon: Daemon, home: string): (args: string[]) => Answer {
   for (const [key, value] of Object.entries(process.env)) {
     if (!key.toUpperCase().startsWith("HIDE_") && key !== "XDG_STATE_HOME") env[key] = value;
   }
-  Object.assign(env, { HOME: home, HIDE_STATE_DIR: daemon.stateDir });
+  // The home the platform names: `USERPROFILE` on Windows.
+  Object.assign(env, { [process.platform === "win32" ? "USERPROFILE" : "HOME"]: home, HIDE_STATE_DIR: daemon.stateDir });
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
   return (args) => {
     const ran = spawnSync(hide, args, { cwd: home, env, encoding: "utf8", timeout: 30_000 }); // wait-ok: one hide command's answer, bounded so a hung daemon fails the spec
@@ -64,7 +65,7 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
     const window = await connectControl({ origin: live.origin, token: live.token, clientKind: "web" });
     try {
       window.send("access_approve", { id: asked.id as string, level: "act" });
-      await window.until((rest) => (rest as { access?: { connections?: { id: string }[] } }).access?.connections?.some((connection) => connection.id === asked.id), "the tool connected");
+      await expect.poll(() => tool(["access", "status", "--json"]).value?.state, { message: "the tool connected", timeout: 20_000 }).toBe("connected"); // wait-ok: the window's approval reached the core; the tool's next status reads it
     } finally {
       window.close();
     }
