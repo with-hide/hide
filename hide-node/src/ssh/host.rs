@@ -1366,6 +1366,9 @@ pub(super) struct ChildLink {
     arrivals: tokio::sync::mpsc::Receiver<Arrival>,
     input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
     ending: ChildEnding,
+    /// The child's pid, for a failure that says what it was doing when the
+    /// start script never answered.
+    pid: u32,
     /// Standard output read past the last whole line.
     stdout: Vec<u8>,
     /// Standard error read past the last whole line.
@@ -1384,6 +1387,35 @@ impl ChildLink {
     /// as it does when it exits, rather than this side stopping it.
     pub(super) fn output_ended(&self) -> bool {
         self.stdout_ended.is_some()
+    }
+
+    /// What the child was doing when its start script never answered, for a
+    /// failure to name: each process of its tree, the processor time it used,
+    /// against the time the attempt ran. A `cmd.exe` or PowerShell login
+    /// shell whose wrapper never started reads apart from one whose wrapper
+    /// is busy, which is the question an unanswered probe leaves
+    /// (with-hide/hide-private#2564, #874).
+    ///
+    /// Called only on a failure, so a connection that answers costs nothing.
+    pub(super) fn silent_state(&self, ran: Duration) -> String {
+        use hide_platform::process::{cpu_time, descendants, name_of};
+        let mut pids = vec![self.pid];
+        pids.extend(descendants(self.pid).unwrap_or_default());
+        let processes: Vec<String> = pids
+            .into_iter()
+            .map(|pid| {
+                let name = name_of(pid).unwrap_or_else(|error| format!("unnamed ({error})"));
+                let worked = cpu_time(pid).map_or_else(
+                    |error| format!("an unread processor time ({error})"),
+                    |time| format!("{time:.1?} of processor"),
+                );
+                format!("{name} {pid} used {worked}")
+            })
+            .collect();
+        format!(
+            "{} in {ran:.1?} since the start script was sent",
+            processes.join(", ")
+        )
     }
 
     pub(super) fn start(
@@ -1448,6 +1480,7 @@ impl ChildLink {
             })?;
         let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
             Arc::new(Mutex::new(Some(Box::new(stdin))));
+        let pid = child.id();
         let ending = ChildEnding::start(
             target,
             child,
@@ -1463,6 +1496,7 @@ impl ChildLink {
             arrivals,
             input,
             ending,
+            pid,
             stdout: Vec::new(),
             stderr: Vec::new(),
             stdout_ended: None,

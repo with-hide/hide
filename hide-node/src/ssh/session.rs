@@ -338,6 +338,7 @@ pub(super) fn sign_in(
     };
     // From here a cancel ends ssh at once, and the attempt has ended only
     // once ssh is reaped.
+    let linked = Instant::now();
     let link = ChildLink::start(dial.target, child, Some(cancel))
         .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
     let mut pipe = SigningIn::new(link, desk, sign_in, wake, cancel);
@@ -349,8 +350,11 @@ pub(super) fn sign_in(
             return Err(EstablishError::Unsupported(reason));
         }
         Err(ProbeError::Stopped(stop)) => {
-            // Read before the kill below ends ssh's output itself.
+            // Read before the kill below ends ssh's output itself, and before
+            // the kill's own reap makes the tree unreadable.
             let closed = pipe.link.output_ended();
+            let ran = Instant::now().saturating_duration_since(linked);
+            let silent = pipe.link.silent_state(ran);
             pipe.link.kill();
             if cancel.is_cancelled() {
                 return Err(EstablishError::Helper(ENDED.to_owned()));
@@ -388,6 +392,10 @@ pub(super) fn sign_in(
                 "target": dial.target,
                 "problem": failure.problem.code(),
                 "stderr_tail": stderr,
+                // What the start script's child was doing when it never
+                // answered, so a shell that ran no wrapper reads apart from
+                // one whose wrapper was busy.
+                "silent": silent,
             }));
             return Err(EstablishError::Ssh(failure));
         }
@@ -861,5 +869,35 @@ mod tests {
             pipe.stderr,
             ["Log in with your Cloudflare account: https://team.cloudflareaccess.com/…"]
         );
+    }
+
+    /// A start script that never answers names what its child was doing
+    /// (with-hide/hide-private#2564, #874): the probe's failure says how long
+    /// the script went unanswered and which processes were still running. A
+    /// login shell whose wrapper never started is what the question asks
+    /// about, so the dump names the process the attempt still held.
+    #[test]
+    fn a_start_script_that_never_answers_names_the_process_that_was_running() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "exec sleep 60"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child = hide_platform::process::OwnedChild::spawn_tied(&mut command).unwrap();
+        let pid = child.id();
+        let cancel = Cancel::default();
+        let ssh = ChildLink::start("ssh:studio", child, Some(&cancel)).unwrap();
+        let ran = Duration::from_millis(7);
+        let silent = ssh.silent_state(ran);
+        // Nothing was read of its error output, and the sentence says so by
+        // naming the process rather than an answer.
+        assert!(silent.contains(&format!("{pid}")), "{silent}");
+        assert!(silent.contains("7.0ms"), "{silent}");
+        assert!(
+            silent.contains("sleep") || silent.contains("sh"),
+            "{silent}"
+        );
+        drop(ssh);
     }
 }
