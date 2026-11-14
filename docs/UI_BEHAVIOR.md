@@ -832,7 +832,8 @@ They are still found by ⌘K, the recent panel, the tab strip and `hide agent li
 
 A mission such an agent conducts is the tool's too (B30, D-36): a device's mission screen, the sidebar's `미션` number, its 내 차례 rows, its decision, gate and safety-net cards, the device's Needs You, its notices and the phone's mission list leave it out, and the tool's cell lists it.
 
-Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen and the Overview in place of a device's (B40), with this window's own machine in front under it; the selection is the window's alone, and a cell that goes is forgotten at once, so Act again on the same tool brings its tile back without taking the window into it (B44):
+Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen and the Overview in place of a device's (B40), with this window's own machine in front under it; the selection is the window's alone, and a cell that goes is forgotten at once, so Act again on the same tool brings its tile back without taking the window into it (B44).
+A device the Overview named, its own switch's or the page's, gives way on both moves, so once the cell goes the Overview, the rail and the sidebar show the same machine:
 
 - The sidebar draws the 태스크 list of the tool's work by state, `도구가 답할 차례` first, then `작업 중` and `끝남`, then the folds, with no lens switch, since the cell has one list.
   `도구가 답할 차례` is what waits on the tool's answer: its agent's question, approval or block, read or not.

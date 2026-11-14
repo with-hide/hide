@@ -1689,10 +1689,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     focusTool(connection: string) {
       const screen = ui().screen;
       if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
-      if (screen?.kind === "main") ui().setOverview({ deviceId: null, projectId: null, panel: null });
-      ui().setToolCell(connection);
       // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
       const own = windowDeviceId(rest()?.navigator?.devices);
+      if (screen?.kind === "main") {
+        // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
+        ui().setOverview({ deviceId: null, projectId: null, panel: null });
+        if (screen.deviceId !== undefined && screen.deviceId !== own) useUiStore.setState({ screen: { kind: "main", deviceId: own } });
+      }
+      ui().setToolCell(connection);
       if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 

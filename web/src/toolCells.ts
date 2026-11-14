@@ -26,10 +26,15 @@ export function frontTool(rest: SnapshotRest | null, picked: string | null): Too
 
 // A cell that goes (disconnect, leave, View only) is forgotten at once: the
 // window shows the device under it (B44), and Act again on the same tool does
-// not take the window back into its cell unasked.
+// not take the window back into its cell unasked. A device the Overview named
+// while the cell stood gives way too, so the Overview, the rail and the
+// sidebar show the same machine.
 useShellStore.subscribe((state) => {
-  const picked = useUiStore.getState().toolCell;
-  if (picked !== null && state.rest !== null && frontTool(state.rest, picked) === null) useUiStore.getState().setToolCell(null);
+  const ui = useUiStore.getState();
+  if (ui.toolCell === null || state.rest === null || frontTool(state.rest, ui.toolCell) !== null) return;
+  ui.setToolCell(null);
+  if (ui.overview.deviceId !== null) ui.setOverview({ deviceId: null });
+  if (ui.screen?.kind === "main" && ui.screen.deviceId !== undefined) useUiStore.setState({ screen: { kind: "main" } });
 });
 
 /** The tool cell this window shows, or null while it shows a device. */
