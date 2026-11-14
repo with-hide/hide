@@ -8,13 +8,38 @@
 // the desktop suite's isolated sshd (`desktop/e2e/device-kit.spec.ts`).
 
 import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { startHided, writeSshHost, type Daemon } from "./hided-fixture";
+import { fixtureExecutable } from "./platform-fixture";
+import { copyFixtureShim } from "./shims/build";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
 const ALIAS = "unreachable-e2e";
+
+/**
+ * A `bin` holding this spec's stand-in `ssh`, for the daemon's PATH.
+ *
+ * Hide reads an alias with `ssh -G` under a three-second deadline, and reading
+ * the runner's own `ssh` made this spec depend on the runner finishing inside
+ * it: a loaded one did not, the row read `unresolved` (`timed_out`), and it
+ * stays that way until the dialog is opened again, which is what made the
+ * press in this spec wait out its whole limit (with-hide/hide-private#842).
+ * The parser and that deadline keep their own tests in
+ * `hide-node/src/ssh/hosts.rs`; what this spec checks is that a Host reaches
+ * the list and can be chosen. The stand-in answers `ssh -G` and nothing else,
+ * and only this spec's daemon gets it (a spec that dials a device keeps the
+ * system's `ssh`).
+ */
+function sshStandIn(dir: string): string {
+  const bin = path.join(dir, "ssh-bin");
+  fs.mkdirSync(bin, { recursive: true });
+  copyFixtureShim("ssh-shim", path.join(bin, fixtureExecutable("ssh")));
+  return bin;
+}
 
 async function openDevices(page: Page, daemon: Daemon) {
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -29,7 +54,7 @@ test("a device row is one line with Test and a menu, Add device is one button, a
   const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(engine, "devices-settings");
+    daemon = await startHided(engine, "devices-settings", undefined, { PATH: `${sshStandIn(engine.root)}${path.delimiter}${engine.fixturePath}` });
     writeSshHost(daemon, ALIAS);
     const sent = countSent(page);
     const sheet = await openDevices(page, daemon);
@@ -115,7 +140,7 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
   const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(engine, "devices-add-dialog");
+    daemon = await startHided(engine, "devices-add-dialog", undefined, { PATH: `${sshStandIn(engine.root)}${path.delimiter}${engine.fixturePath}` });
     const sheet = await openDevices(page, daemon);
 
     // B52: with no Host in the config the dialog is only what to add, and there is no form.
