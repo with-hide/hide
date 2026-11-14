@@ -860,10 +860,11 @@ Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`;
 An agent's own subagents, the ones it runs inside its session, are drawn on every screen that lists agents, so a pane running six of them never looks like one working alone and a resting agent whose subagents still run never looks idle (operator decision 2026-11-14, reversing issue #810).
 A subagent has no pane and no row of its own, so it is not a delegated child: nothing about it opens anything, and its marks stay smaller and lighter than the child chip (`1/5`) and a child's circle.
 
-- A row, wherever the sidebar row is drawn (the project tree, the 태스크 list and its children, the child popover): one small blue dot per running subagent right after the title, three at most and then `+N` (`SubagentDots`, `web/src/components/subagent-dots.tsx`); the row's hover card and accessible name say `서브에이전트 N개 작업 중` while the agent works.
+- A row, wherever the sidebar row is drawn (the project tree, the 태스크 list and its children, the child popover): right after the title, an orbit icon (a faint ring with one filled dot on it) and how many run, in the working blue, `◌3` (`SubagentMark`, `web/src/components/subagent-mark.tsx`).
+  It keeps one width whatever the count, so it never reads as an ellipsis, a "more" menu or the unread dot, and a narrow row shortens the title rather than dropping the count; the row's hover card and accessible name say `서브에이전트 N개 작업 중` while the agent works.
 - The Overview work map: one small blue dot per running subagent, eight at most, slowly circling just outside the session's circle, which itself stays as it is (`SubagentOrbit`, `web/src/overviewGraphNodes.tsx`); a reduced-motion setting holds them still.
 - The pane head: a light chip, `서브 N`, after the title's marks, whose hover says `서브에이전트 N개 작업 중`; it has nothing to press (`PaneSubagentChip`, `web/src/PaneHeaderBand.tsx`).
-- The phone: the same dots after the title, and the same lines.
+- The phone: the same orbit mark after the title, and the same lines.
 - Nothing is drawn for none, nor for a count Hide cannot read: an agent that declares none, a hook that is not in or switched off, a session older than the hook (the reasons the core keeps in `PaneChildren.instrumented`), each exactly as none.
   The done count is drawn nowhere.
 

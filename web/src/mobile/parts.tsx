@@ -16,7 +16,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { finishHumanTurn } from "./connection";
 import type { PhoneAgent } from "./protocol";
 import { usePhone } from "./store";
-import { SubagentDots } from "../components/subagent-dots";
+import { SubagentMark } from "../components/subagent-mark";
 
 /** The phone's own clipboard, which Copy of a person's turn's place writes; a refusal is the log's. */
 const clipboard = browserClipboard((message) => console.warn("phone.copy_failed", { message }));
@@ -42,7 +42,7 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
         {agent.title}
       </span>
       {/* The subagents its session runs, right after the title as on the desktop row; the row's name says them. */}
-      <SubagentDots count={agent.subagents} inRow={!large} className={large ? "mt-sm" : undefined} />
+      <SubagentMark count={agent.subagents} inRow={!large} className={large ? "mt-sm" : undefined} />
       {/* Anywhere else the ★ is small after the title. */}
       {agent.starred && agent.group !== "revisit" ? <RevisitStarShape className={large ? "mt-sm" : undefined} /> : null}
     </span>
