@@ -68,6 +68,7 @@ const words = {
   "overviewProjects.colActivity": ["Last activity", "마지막 활동", "最終アクティビティ", "最近活动"],
   "overviewProjects.folder": ["Folder", "폴더", "フォルダ", "文件夹"],
   "overviewProjects.now.needs": ["Needs You {{count}}", "내 차례 {{count}}", "自分の番 {{count}}", "轮到你 {{count}}"],
+  "overviewProjects.now.toolTurn": ["Tool's turn {{count}}", "도구 차례 {{count}}", "ツールの番 {{count}}", "轮到工具 {{count}}"],
   "overviewProjects.now.working": ["Working {{count}}", "작업 중 {{count}}", "作業中 {{count}}", "工作中 {{count}}"],
   "overviewProjects.now.waiting": ["Waiting {{count}}", "대기 {{count}}", "待機 {{count}}", "等待 {{count}}"],
   "overviewProjects.now.done": ["Unread {{count}}", "읽을 것 {{count}}", "未読 {{count}}", "待读 {{count}}"],

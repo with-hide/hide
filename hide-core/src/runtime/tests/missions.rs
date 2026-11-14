@@ -7435,6 +7435,125 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     );
 }
 
+/// PRD hide-external-control B30, D-36, D-46, B41: while an external tool
+/// keeps the mission its agent conducts, the mission asks the tool, in the
+/// tool's cell and its grey number, and not the operator: not in a device's
+/// Needs You, on the phone's list or in a notice. A disconnect hands it to
+/// the operator, who is told then, and the mission still names the tool.
+#[test]
+fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
+    use crate::access::{Call, Level, key_hash};
+    use crate::delivery::worker::HumanNoticeKind;
+    use crate::missions::AttentionReason;
+    use crate::runtime::access::AccessEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let (asked, _) = runtime.access_call(Call::Request {
+        name: "nightly".into(),
+        key_sha256: key_hash(&"7".repeat(64)),
+        program: None,
+        id: "00000000000000a7".into(),
+    });
+    let connection = asked.unwrap()["id"].as_str().unwrap().to_owned();
+    assert!(runtime.access_event(AccessEvent::Approve {
+        id: connection.clone(),
+        level: Level::Act,
+    }));
+    let conductor = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .conductor
+        .clone();
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: conductor.agent_id.clone().unwrap_or_default(),
+        pane_id: conductor.actor.pane_id.clone(),
+        session: conductor.actor.session.clone(),
+        ended: false,
+    }];
+    // A raise only the operator settles, with no row to lay it on.
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::ConductorFailed,
+            None,
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let reach = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let tool = runtime.snapshot.missions.items[0]
+            .tool
+            .as_ref()
+            .map(|tool| (tool.name.clone(), tool.owns));
+        let asks = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .flat_map(|device| device.agent_scope.mission_asks.clone())
+            .collect::<Vec<_>>();
+        let rest = serde_json::json!({ "missions": &runtime.snapshot.missions });
+        let phone = crate::agent_state::phone::PhoneMissions::project(
+            &rest,
+            crate::node::TEST_NODE,
+            &crate::agent_state::phone::project(&rest, crate::node::TEST_NODE),
+        )
+        .items
+        .len();
+        let notices = runtime
+            .claim_mission_notices()
+            .iter()
+            .map(|notice| notice.kind)
+            .collect::<Vec<_>>();
+        let cells = runtime
+            .snapshot
+            .navigator
+            .tools
+            .iter()
+            .map(|cell| (cell.name.clone(), cell.turn, cell.mission_asks.clone()))
+            .collect::<Vec<_>>();
+        (tool, asks, phone, notices, cells)
+    };
+    assert_eq!(
+        reach(&mut runtime),
+        (
+            Some(("nightly".to_owned(), true)),
+            Vec::new(),
+            0,
+            Vec::new(),
+            vec![("nightly".to_owned(), 1, vec!["mission-1".to_owned()])]
+        ),
+        "the tool keeps its mission, which asks the tool's cell alone"
+    );
+
+    assert!(runtime.access_event(AccessEvent::Revoke {
+        id: connection.clone(),
+    }));
+    assert_eq!(
+        reach(&mut runtime),
+        (
+            Some(("nightly".to_owned(), false)),
+            vec!["mission-1".to_owned()],
+            1,
+            vec![HumanNoticeKind::MissionAttention],
+            Vec::new()
+        ),
+        "a disconnect hands the mission to the operator, who is told, and keeps the tool's name"
+    );
+}
+
 /// PRD mission-node-simple B14, letter 19419: a mission whose node waits on
 /// the operator with no row to carry it is counted in its device's Needs You
 /// number, the one the Overview, the device rail and the sidebar read, and

@@ -71,7 +71,8 @@ import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
-import { SidebarLensSwitch, TaskLens } from "./TaskLens";
+import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
+import { toolCells, useFrontTool } from "./toolCells";
 import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
@@ -95,12 +96,17 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const rail = useShellStore((s) => railShown(s.rest));
   const body = useShellStore((s) => sidebarBody(s.rest));
   const lens = useShellStore((s) => s.rest?.ui_state?.sidebar_lens ?? "projects");
+  // A tool's cell in front lists the tool's work alone, with no lens of its own (PRD hide-external-control B40).
+  const tool = useFrontTool();
   // The switch has no chord of its own until the operator binds one (issue 170).
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
-  const overviewCount = useOverviewCount();
+  // The operator's counts are not the tool's: a tool's cell shows its grey number on its tile alone (B41).
+  const operatorOverviewCount = useOverviewCount();
+  const overviewCount = tool ? 0 : operatorOverviewCount;
   const overviewSelected = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main");
   const missionsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "missions");
-  const missionsCount = useMissionTurnCount();
+  const operatorMissionsCount = useMissionTurnCount();
+  const missionsCount = tool ? 0 : operatorMissionsCount;
   const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
   const storedWidth = useShellStore((s) => s.rest?.ui_state?.sidebar_width ?? null);
   const columns = useSidebarColumns();
@@ -130,7 +136,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
   // a device that is not connected shows its name and the way to reconnect, and no stale tree (quick device-rail-badges B3).
   // Under the head, the 프로젝트 | 태스크 | PR switch picks the list (PRD sidebar-task-lens B1, D-10;
   // lane-two-columns B41). The 태스크 list keeps an unresponsive device's last rows, dimmed, under its reason (B20).
-  const list = lens === "tasks" ? <TaskLens actions={actions} /> : lens === "prs" ? <SidebarPrs actions={actions} /> : body === "disconnected" ? <DisconnectedDevice actions={actions} /> : <ProjectList actions={actions} />;
+  const list = tool ? <ToolTaskLens tool={tool} actions={actions} /> : lens === "tasks" ? <TaskLens actions={actions} /> : lens === "prs" ? <SidebarPrs actions={actions} /> : body === "disconnected" ? <DisconnectedDevice actions={actions} /> : <ProjectList actions={actions} />;
 
   return (
     // The width is a CSS variable, set here and on the shell for the top row
@@ -162,7 +168,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           {status ? (
             <div className="border-b border-border px-md py-sm text-caption text-muted-foreground">{status}</div>
           ) : null}
-          <SidebarLensSwitch actions={actions} />
+          {tool ? null : <SidebarLensSwitch actions={actions} />}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-content="true">
             {list}
             <HerdrImportLine actions={actions} />
@@ -225,7 +231,10 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const frontId = useShellStore((s) => s.rest?.navigator?.focused_device_id);
   const remoteStatus = useShellStore((s) => s.rest?.status?.remote);
-  const title = useMemo(() => frontTitle(devices, frontId, t), [devices, frontId, t]);
+  const tools = useShellStore((s) => toolCells(s.rest));
+  const tool = useFrontTool();
+  // A tool's cell in front is named by the tool, an external tool (PRD hide-external-control B40).
+  const title = useMemo(() => (tool ? { name: tool.name, note: t("devices.rail.tool") } : frontTitle(devices, frontId, t)), [tool, devices, frontId, t]);
   const deviceMenu = useMemo<DeviceMenu>(() => {
     const list = windowFirst(devices);
     const localId = list.find((device) => device.kind !== "remote")?.id ?? "";
@@ -238,11 +247,14 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
         connected: device.id === localId || remoteStatus?.find((row) => row.target_id === device.id)?.state === "connected",
       })),
       frontId: frontId ?? localId,
+      tools: tools.map((cell) => ({ connection: cell.connection, name: cell.name, turn: cell.turn })),
+      toolFront: tool?.connection ?? null,
+      onSelectTool: actions.focusTool,
       onSelect: actions.focusDevice,
       onAddDevice: actions.openAddDevice,
       onShowRail: actions.showDeviceRail,
     };
-  }, [devices, frontId, remoteStatus, actions, t]);
+  }, [devices, frontId, remoteStatus, tools, tool, actions, t]);
   return { title, deviceMenu };
 }
 

@@ -185,7 +185,7 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
     ...links.prs.map((pr) => `#${pr.number}`),
     ...links.missions.map(({ mission }) => `${t("mobile.tab.missions")} ${mission.title}`),
   ];
-  const label = [words, agent.title, ...marks, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
+  const label = [words, agent.title, ...marks, agentProductName(agent.agent_kind), agent.tool, agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
   return (
     <RowButton
       aria-label={label}

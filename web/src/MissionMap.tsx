@@ -68,6 +68,7 @@ import {
 import { machineName } from "./screenMachine";
 import type { Mission, MissionEvent, MissionNode, MissionNodeHold, MissionNodeWork } from "./snapshot";
 import { useShellStore } from "./store";
+import { ToolMark } from "./components/tool-mark";
 
 // A mission's page in the lane's 보기 slot (PRD mission-map-git-criteria
 // D-01-D-06, B24-B35; PRD mission-tool B12-B25): the head (state, time, a
@@ -257,6 +258,8 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
       ) : null}
       {/* Where the results go and what the mission applies (PRD mission-destination D-18, D-50): a tag only while a node lands in the destination, the options in grey. */}
       {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} /> : null}
+      {/* The external tool whose agent conducts it (PRD hide-external-control B30, D-15), wherever the map is drawn: the mission screen, a detail panel, the Desk. */}
+      <ToolMark tool={mission.tool} className="max-w-2/5" />
       {/* The head stays one line (B24): the options take what room is left and truncate, moving to a line of their own only when less than their least width is left. */}
       <MissionOptionsLine options={options} className="min-w-(--size-mission-options-min) flex-1 basis-0" />
       {/* An end the Conductor was asked for says so until it closes the mission. */}

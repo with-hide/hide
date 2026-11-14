@@ -53,7 +53,7 @@ export const graphProjectKey = (workspace: Pick<BoardProject["workspace"], "devi
 export const graphProjectIdOf = (key: GraphProjectKey) => `project:${JSON.stringify([key.device_id, key.workspace_id])}`;
 export const graphSessionKey = (row: GraphAgent): GraphSessionKey => ({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest ?? row.agent.session_id ?? null });
 export const graphSessionIdOf = (key: GraphSessionKey) => graphSessionId(key.device_id, key.pane_id, key.session);
-export const sameGraphScope = (a: GraphScope, b: GraphScope) => a.kind === b.kind && a.device_id === b.device_id && (a.kind === "all" || b.kind === "all" || a.workspace_id === b.workspace_id);
+export const sameGraphScope = (a: GraphScope, b: GraphScope) => a.kind === b.kind && a.device_id === b.device_id && (a.tool ?? null) === (b.tool ?? null) && (a.kind === "all" || b.kind === "all" || a.workspace_id === b.workspace_id);
 /** What the core holds before the operator chose anything. */
 export const GRAPH_CHOICES_DEFAULTS: OverviewGraphChoices = { focus: "all", include_resting: false, hidden_projects: [], folded_projects: [], team_folds: [], project_places: [], session_places: [] };
 

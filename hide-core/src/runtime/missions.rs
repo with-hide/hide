@@ -51,6 +51,15 @@ pub struct MissionsSnapshot {
 pub struct MissionView {
     pub id: String,
     pub title: String,
+    /// The external tool whose agent conducts the mission (PRD
+    /// hide-external-control B30, D-15, D-36): while the tool keeps it
+    /// (`owns`) it is listed, asks and is counted in the tool's cell only,
+    /// never on the operator's mission screen, in their counts or notices;
+    /// once the tool lets go it is the operator's, and its row and map head
+    /// still name the tool as where the work came from. Absent for the
+    /// operator's and Hide AI's missions (B37).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<crate::model::ToolWorkSnapshot>,
     pub workspace_id: String,
     pub project: String,
     pub checkout_path: String,
@@ -845,6 +854,10 @@ struct ViewsMadeFrom {
     /// catalog lists it, which a mission that records no destination and
     /// an outside branch are drawn with, and which moves without the book.
     defaults: Vec<Option<String>>,
+    /// Per mission in book order: the external tool its Conductor works
+    /// for, whose keeping a disconnect or a level moves without the book
+    /// (B16).
+    tools: Vec<Option<crate::model::ToolWorkSnapshot>>,
     made: bool,
 }
 
@@ -4508,6 +4521,7 @@ impl Runtime {
         MissionView {
             id: mission.id.clone(),
             title: mission.title.clone(),
+            tool: self.mission_tool(mission),
             workspace_id: mission.workspace_id.clone(),
             project: mission.project.clone(),
             checkout_path: mission.checkout_path.clone(),
@@ -4706,6 +4720,13 @@ impl Runtime {
             .iter()
             .map(|mission| self.project_default_branch(&mission.device_id, &mission.project))
             .collect();
+        let tools: Vec<_> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.mission_tool(mission))
+            .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -4719,7 +4740,8 @@ impl Runtime {
             && before.stale == stale
             && before.sleeping == sleeping
             && before.laid == laid
-            && before.defaults == defaults;
+            && before.defaults == defaults
+            && before.tools == tools;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -4810,6 +4832,7 @@ impl Runtime {
             rows_and_holds,
             views_generation,
             defaults,
+            tools,
             made: true,
         };
     }
@@ -4825,8 +4848,16 @@ impl Runtime {
     /// mission's), waited on since its node was done. One per mission,
     /// however many nodes it holds. Run after the mission views, which
     /// decide `on_row`, the safety net and the merge.
+    ///
+    /// A mission an external tool keeps asks the tool, never the operator:
+    /// it is laid on the tool's cell instead, whose grey number counts it
+    /// (PRD hide-external-control B30, D-46), until the tool lets go of it.
+    /// Every tool connected at Act is named to the cells here too, after
+    /// the access section, so a tool with no work yet has its cell (D-47).
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
+            std::collections::BTreeMap::new();
+        let mut kept: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
         for mission in &self.snapshot.missions.items {
             let oldest = mission
@@ -4838,21 +4869,39 @@ impl Runtime {
                 .chain(mission.nodes.iter().filter_map(merge_due_since))
                 .chain(mission.safety_net.as_ref().map(|net| net.since_unix_ms))
                 .min();
-            if let Some(since) = oldest {
-                waiting
-                    .entry(mission.device_id.clone())
-                    .or_default()
-                    .push((since, mission.id.clone()));
-            }
+            let Some(since) = oldest else { continue };
+            let owner = match mission.tool.as_ref().filter(|tool| tool.owns) {
+                Some(tool) => kept.entry(tool.connection.clone()),
+                None => waiting.entry(mission.device_id.clone()),
+            };
+            owner.or_default().push((since, mission.id.clone()));
         }
-        let asks = waiting
-            .into_iter()
-            .map(|(device, mut missions)| {
-                missions.sort();
-                (device, missions.into_iter().map(|(_, id)| id).collect())
+        let oldest_first = |asks: std::collections::BTreeMap<String, Vec<(u64, String)>>| {
+            asks.into_iter()
+                .map(|(owner, mut missions)| {
+                    missions.sort();
+                    (owner, missions.into_iter().map(|(_, id)| id).collect())
+                })
+                .collect()
+        };
+        let tools = self
+            .snapshot
+            .access
+            .as_deref()
+            .map(|access| {
+                access
+                    .connections
+                    .iter()
+                    .filter(|connection| connection.level == crate::access::Level::Act)
+                    .map(|connection| (connection.id.clone(), connection.name.clone()))
+                    .collect()
             })
-            .collect();
-        self.agent_scope_cache.note_mission_asks(asks) && self.refresh_agent_scopes()
+            .unwrap_or_default();
+        let devices = self
+            .agent_scope_cache
+            .note_mission_asks(oldest_first(waiting));
+        let tools = self.agent_scope_cache.note_tools(tools, oldest_first(kept));
+        (devices || tools) && self.refresh_agent_scopes()
     }
 }
 

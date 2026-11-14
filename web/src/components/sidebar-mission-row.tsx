@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useAgentLogosShown } from "../agentLogoMode";
 import type { Actions } from "../actions";
-import { deviceScope } from "../agentScope";
+import { deviceScope, type ToolCell } from "../agentScope";
 import { frontDeviceId } from "../devices";
 import { machineName } from "../screenMachine";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -19,13 +19,17 @@ import { Hint } from "./ui/tooltip";
 import { FoldLane } from "./sidebar-agent-row";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
+import { ToolLabel } from "./tool-mark";
 
 /**
  * The missions `deviceId`'s scope names as its own Needs You items, the ones
- * its Needs You number counts; with `projectId`, only that project's.
+ * its Needs You number counts, or with `tool` the ones that wait on that
+ * external tool's answer, which its cell lists (PRD hide-external-control
+ * B40); with `projectId`, only that project's.
  */
-export function useMissionAsks(deviceId: string | null | undefined, projectId: string | null = null): MissionAsk[] {
-  const ids = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.mission_asks : undefined));
+export function useMissionAsks(deviceId: string | null | undefined, projectId: string | null = null, tool: ToolCell | null = null): MissionAsk[] {
+  const deviceIds = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.mission_asks : undefined));
+  const ids = tool ? tool.mission_asks : deviceIds;
   const missions = useShellStore((s) => (s.rest?.missions?.failed ? null : s.rest?.missions?.items) ?? null);
   return useMemo(() => (missions && ids ? projectAsks(missionAsks(missions, ids), projectId) : []), [missions, ids, projectId]);
 }
@@ -164,7 +168,7 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
           <FoldLane />
         </>}
       >
-        <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><MissionAskLine ask={ask} className="flex-1" /></span>
+        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs text-caption leading-(--size-sidebar-line-detail)"><ToolLabel tool={ask.mission.tool} /><MissionAskLine ask={ask} className="min-w-0 flex-1" /></span>
         {place ? (
           <span aria-hidden="true" data-mission-ask-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}

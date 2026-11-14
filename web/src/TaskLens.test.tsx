@@ -5,14 +5,14 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
-import type { AgentScope, TaskCardScope, TaskState } from "./agentScope";
+import type { AgentScope, TaskCardScope, TaskState, ToolCell } from "./agentScope";
 import { formatElapsed } from "./components/elapsed";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { withMissionAsk } from "./gallery/MissionScene";
 import { clientI18n } from "./i18n/translator";
 import type { AgentRow, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
-import { TaskLens } from "./TaskLens";
+import { TaskLens, ToolTaskLens } from "./TaskLens";
 import { useUiStore } from "./ui";
 
 // The sidebar's 태스크 list over a device scope the core already decided
@@ -54,7 +54,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | null = null) {
+async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | null = null, tool: ToolCell | null = null) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
@@ -66,7 +66,7 @@ async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | 
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><TaskLens actions={actions} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider>{tool ? <ToolTaskLens tool={tool} actions={actions} /> : <TaskLens actions={actions} />}</TooltipProvider>));
   cleanup = async () => {
     await act(async () => root.unmount());
     container.remove();
@@ -154,6 +154,21 @@ it("ends a mission decision's line with an eye and how many Views it links to lo
   expect(line("looks").querySelector("[data-ask-views]")?.textContent).toBe("2");
   expect(line("looks").textContent).toContain("화면을 보고 머지할까요?");
   expect(line("bare").querySelector("[data-ask-views]")).toBeNull();
+});
+
+it("says a View to look at as its line, ahead of a question the row's own mark does not lead with, and names the tool (PRD hide-external-control B29, D-15)", async () => {
+  // An external tool's agent opened a View for the operator while its Conductor's decision waits on the tool:
+  // the core draws the eye, and the line is the View's, not the tool's question.
+  const look = { group: "seen", count: 1, view_id: "v1", label: "tool-report.md", workspace_id: "hide", checkout_id: "hide-main" };
+  const agent = row("tool", { mark: "look", group: "needs_you", demand: "question", look, tool: { connection: "c0ffee00c0ffee00", name: "nightly", owns: true } } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" });
+  const withLine = { ...agent, state: { ...agent.state, asking: true, line: { text: "Which order?", mode: "request" } } } as AgentRow;
+  const { container } = await render(snapshot([withLine], [card("tool", "needs_you", "hide-main")]), [withLine]);
+  // The row names the tool, as the agent's pane head does (D-15).
+  expect(container.querySelector('[data-task-row="tool"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
+  const line = container.querySelector('[data-task-row="tool"] [data-task-line]')!;
+  expect(line.textContent).toContain("볼 것");
+  expect(line.textContent).toContain("tool-report.md");
+  expect(line.textContent).not.toContain("Which order?");
 });
 
 it("in 상태별 draws 내 차례 and 읽을 것 as the first sections of the one list, arrows crossing them, and only 상태별 does", async () => {
@@ -522,4 +537,51 @@ it("names a profile child's agent and profile in its hover and accessible name, 
   expect(named("plain").getAttribute("aria-label")).toContain("Claude Code");
   expect(named("plain").getAttribute("aria-label")).not.toContain(" · work");
   expect(named("plain").title).not.toContain(" · ");
+});
+
+/** A running mission `pane` conducts, whose decision waits; with `tool`, the tool keeps it. */
+function decidedBy(pane: string, tool: AgentRow["tool"] | null = null) {
+  return { id: "mission-tool", title: "API", workspace_id: "hide", project: "/hide", checkout_path: "/hide", device_id: "local", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: pane, name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: "Which order?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...(tool ? { tool } : {}) };
+}
+
+// Operator decision 2026-11-14: outside a tool's cell a Conductor row's chip keeps the operator's colour for a decision that waits.
+it("keeps the operator's colour on a Conductor row's mission chip outside a tool's cell", async () => {
+  const agents = [row("ask", { demand: "question" }, { group: "needs_you", line: "Which order?" })];
+  const { container } = await render({ ...snapshot(agents, [card("ask", "needs_you", "hide-main")]), missions: { items: [decidedBy("ask")], failed: null } } as unknown as SnapshotRest, agents);
+  const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
+  expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone]).toEqual(["decision", "hold"]);
+});
+
+it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the warning colour, names a task on another device and none by the tool, and says when it holds nothing (PRD hide-external-control B40, B42, B45)", async () => {
+  const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+  const agents = [
+    row("ask", { tool, demand: "question" } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" }),
+    row("works", { tool } as Partial<AgentRow>, { line: "테스트 돌리는 중" }),
+    row("finished", { tool } as Partial<AgentRow>),
+  ];
+  const away = row("away", { tool, device_id: "mini" } as Partial<AgentRow>);
+  const rest = snapshot(agents, []);
+  const withMini = { ...rest, navigator: { ...rest.navigator, devices: [...rest.navigator!.devices!, { id: "mini", kind: "remote", label: "mini", agent_scope: emptyScope() }] }, status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [away], workspaces: [] } }] } } as unknown as SnapshotRest;
+  const cell: ToolCell = {
+    connection: tool.connection, name: "nightly", turn: 1,
+    devices: [
+      { device_id: "local", tasks: { cards: [card("ask", "needs_you", "hide-main"), card("works", "working", "hide-main"), card("finished", "done", "hide-main")], needs_you: 1, recency: "" }, members: [] },
+      { device_id: "mini", tasks: { cards: [card("away", "working", "mini-main")], needs_you: 0, recency: "" }, members: [] },
+    ],
+  };
+  // `ask` conducts a mission whose decision waits: its chip keeps its `!` in the cell's grey, not the operator's colour.
+  const decided = decidedBy("ask", tool);
+  const withMission = { ...withMini, missions: { items: [decided], failed: null } } as unknown as SnapshotRest;
+  const { container } = await render(withMission, agents, null, cell);
+  expect(heads(container)).toEqual(["도구가 답할 차례1", "끝남1", "작업 중2"]);
+  const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
+  expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone, chip?.className.includes("text-mission-hold")]).toEqual(["decision", "waiting", false]);
+  expect(container.querySelector('[data-task-group-head="needs_you"] button')?.className).not.toContain("text-warning");
+  expect(container.querySelector('[data-task-row="ask"] [data-task-line]')?.className).not.toContain("text-warning");
+  expect(container.querySelector("[data-tool-mark]")).toBeNull();
+  expect(container.querySelector('[data-task-row="away"]')?.textContent).toContain("mini");
+  await cleanup?.();
+  cleanup = null;
+  const empty = await render(rest, [], null, { ...cell, turn: 0, devices: [] });
+  expect(empty.container.querySelector("[data-tool-cell-empty]")?.textContent).toBe("아직 맡은 일이 없어요");
 });

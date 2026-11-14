@@ -71,29 +71,40 @@ impl RowMark {
     pub(crate) fn awake(agent: &SidebarAgentSnapshot) -> Self {
         let ownership = ownership_of(agent);
         let (demand, activity, _) = axes_of(agent);
+        // A tool's agent calls the operator only for a person's turn, its
+        // own or raised to it, and a View it opened for them; its question,
+        // its block and every other raise are the tool's to answer, so they
+        // neither outrank the View nor take the mark (PRD
+        // hide-external-control B28, B29).
+        let tool = ownership == Ownership::Tool;
+        if tool && agent.human_turn.is_some() {
+            return Self::Turn;
+        }
         // A View to look at is the turn only when nothing else is asked:
         // a block, a question, an approval or a raise outranks it and takes
         // the mark (D-18).
         if agent.look.is_some()
-            && demand == AgentDemand::None
-            && !agent.blocked
-            && agent.raised.is_empty()
-            && agent.escalation.is_none()
-            && agent.declared_human_turn.is_none()
+            && (tool
+                || (demand == AgentDemand::None
+                    && !agent.blocked
+                    && agent.raised.is_empty()
+                    && agent.escalation.is_none()
+                    && agent.declared_human_turn.is_none()))
         {
             return Self::Look;
         }
         // The group already holds every call on the operator: an own unread
         // demand, a blocked prompt, a raise from below, an escalated child
         // and a home's turn.
-        if agent.group == "needs_you" || agent.escalation.is_some() {
+        if !tool && (agent.group == "needs_you" || agent.escalation.is_some()) {
             return Self::Turn;
         }
         // A demand the operator has read stays theirs until it is answered;
-        // a delegated child's is its parent's (B8, B24), so it waits on the
-        // parent's answer, in progress rather than at rest.
+        // a delegated child's is its parent's (B8, B24), and a tool's agent's
+        // is the tool's (PRD hide-external-control B28), so it waits on that
+        // answer, in progress rather than at rest.
         if demand != AgentDemand::None {
-            return if matches!(ownership, Ownership::Delegated) {
+            return if matches!(ownership, Ownership::Delegated | Ownership::Tool) {
                 Self::Waiting
             } else {
                 Self::Turn
@@ -389,6 +400,14 @@ pub mod phone {
         /// row carries none, so a phone that predates it reads nothing new.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         pub starred: bool,
+        /// The external tool whose work the row is, by its name, which the
+        /// phone leads the row's second line with as the desktop's sidebar
+        /// row does: the phone has no tool's cell, so a tool's person's turn
+        /// or View reaches its list named (PRD hide-external-control B46,
+        /// D-52). Absent on the operator's own rows, so a phone that predates
+        /// it reads nothing new.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tool: Option<String>,
         /// The row's mark (`RowMark`): `turn`, `going`, `waiting`, `done`, `unread`, `quiet` or `asleep`.
         pub mark: String,
         /// What an in-progress row waits on (`AgentWait`), which its line
@@ -967,18 +986,11 @@ pub mod phone {
             if pane_id.is_empty() {
                 continue;
             }
-            // `listed_for_operator` on the wire form: a row its home owns is
-            // on the phone only while it is in Needs You (PRD
-            // hide-ai-work-home B4); its detail stays reachable from there.
-            if agent
-                .pointer("/hide_ai/home")
-                .is_some_and(|home| !home.is_null())
-                && !agent
-                    .get("delegated")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                && str_of(agent, "group") != "needs_you"
-            {
+            // The core's `listed_for_operator`, as the row publishes it: a row
+            // Hide AI's home or an external tool keeps is on the phone only
+            // while it is in Needs You (PRD hide-ai-work-home B4, PRD
+            // hide-external-control B26); its detail stays reachable from there.
+            if agent.get("unlisted").and_then(Value::as_bool) == Some(true) {
                 continue;
             }
             let title = agent
@@ -1021,6 +1033,10 @@ pub mod phone {
                     .and_then(crate::agent_state::first_line_cut),
                 read: read_ask,
                 starred,
+                tool: agent
+                    .pointer("/tool/name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),
                 descendants_working: agent

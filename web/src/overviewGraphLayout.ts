@@ -76,9 +76,12 @@ function useGraphScale(): number {
  * interface scale, Retry and Reset layout place everything afresh. What the
  * map does not hold yet starts where the operator last dropped it.
  */
-export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number, remembered: RememberedPlaces = NOTHING_REMEMBERED): GraphLayout {
+/** `starts`: the map draws its start circles and its Add project place, which a tool's map does not (PRD hide-external-control B40). */
+export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number, remembered: RememberedPlaces = NOTHING_REMEMBERED, starts = true): GraphLayout {
   const latest = useRef(model);
   latest.current = model;
+  const latestStarts = useRef(starts);
+  latestStarts.current = starts;
   const latestPlaces = useRef(remembered);
   latestPlaces.current = remembered;
   // Reset layout asks the core to forget this scope's places; until the
@@ -87,7 +90,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
   useLayoutEffect(() => { if (isEmpty(remembered)) forgetting.current = false; }, [remembered]);
   const scale = useGraphScale();
   const reduced = useReducedMotion();
-  const key = `${model.structure}:${scale}`;
+  const key = `${model.structure}:${scale}:${starts}`;
   const [state, setState] = useState<{ key: string; phase: GraphLayout["phase"]; size: Dimensions | null; map: ForceMap | null; points: ReadonlyMap<string, MapPoint> }>({ key: "", phase: "loading", size: null, map: null, points: new Map() });
   // Each animated step only asks for a redraw; the view reads the live map itself.
   const [, setSteps] = useState(0);
@@ -107,7 +110,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       placedResets.current = resets;
       // Each project's start circle stands where its next session would, and the map's Add project
       // place is a project of its own, so the physics keeps both clear of every session (issue 2514).
-      const adding = input.projects.length > 0;
+      const adding = latestStarts.current && input.projects.length > 0;
       const map = new ForceMap({
         projects: [...input.projects.map((group) => group.id), ...(adding ? [ADD_PROJECT.project] : [])],
         sessions: [
@@ -115,7 +118,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
             ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
             ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
             // A start circle carries no words, so it needs only its circle's room.
-            { id: group.startSlot, projectId: group.id, parent: null, radius: room({ width: size.root.orb, height: size.root.orb, orb: size.root.orb }, size.gap), quiet: true },
+            ...(latestStarts.current ? [{ id: group.startSlot, projectId: group.id, parent: null, radius: room({ width: size.root.orb, height: size.root.orb, orb: size.root.orb }, size.gap), quiet: true }] : []),
           ]),
           ...(adding ? [{ id: ADD_PROJECT.slot, projectId: ADD_PROJECT.project, parent: null, radius: room(size.root, size.gap), quiet: true }] : []),
         ],

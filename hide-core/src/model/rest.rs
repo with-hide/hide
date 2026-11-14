@@ -132,6 +132,7 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     hide_ai_checkouts: Vec<HideAiCheckoutSnapshot> => s.hide_ai_checkouts,
     sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot> => s.sleeping_sessions,
     archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot> => s.archived_sessions,
+    tools: Vec<crate::agent_state::ToolCell> => s.tools,
 }, {});
 
 section!(TerminalSections, TerminalSnapshot, s, {

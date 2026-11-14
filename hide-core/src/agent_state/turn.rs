@@ -231,6 +231,9 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     }
     let own = demand_verb(agent);
     let declared = agent.declared_human_turn.as_ref();
+    if ownership_of(agent) == Ownership::Tool {
+        return tool_ask(agent);
+    }
     // Everything else that waits on the operator under this root is counted
     // behind the lead, `외 N건` (D-13), the row's own question included
     // while its person's turn leads (PRD ask-human D-21).
@@ -270,6 +273,36 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
         verb: lead.verb,
         what: lead.what.clone(),
         more: total - 1,
+        subject: lead.subject.clone(),
+    })
+}
+
+/// What a tool's agent asks the operator: only a person's turn, its own or
+/// the lead one raised to it, and `외 N건` counts only the other persons'
+/// turns under it; the agent's question and every other raise are the
+/// tool's (PRD hide-external-control B28, B29). In Needs You for a View
+/// alone, it asks nothing, and the row says the View.
+fn tool_ask(agent: &SidebarAgentSnapshot) -> Option<Ask> {
+    let lead = agent.human_turn.as_ref()?;
+    let raised = agent
+        .raised
+        .iter()
+        .filter(|raised| raised.human_turn())
+        .collect::<Vec<_>>();
+    let more = raised.len() + usize::from(agent.declared_human_turn.is_some()) - 1;
+    if lead.own {
+        let declared = agent.declared_human_turn.as_ref()?;
+        return Some(Ask {
+            verb: super::escalation::Verb::Answer,
+            what: first_line_cut(&declared.place),
+            more,
+            subject: Some(declared.subject()),
+        });
+    }
+    raised.first().map(|lead| Ask {
+        verb: lead.verb,
+        what: lead.what.clone(),
+        more,
         subject: lead.subject.clone(),
     })
 }
@@ -623,6 +656,18 @@ pub fn agent_group_for(
             AgentGroup::Seen
         };
     }
+    if ownership == Ownership::Tool {
+        // The tool reads its agent's state and answers it itself (PRD
+        // hide-external-control D-09, B28), so unlike Hide AI's row the
+        // agent's own question, approval or block calls no one here; only
+        // a View it opened for the operator does (D-38), and a person's
+        // turn is laid over the group as on every root (B29).
+        return if look {
+            AgentGroup::NeedsYou
+        } else {
+            AgentGroup::Seen
+        };
+    }
     if let Ownership::HideAi { operator_turn } = ownership {
         // Its home shows the work's progress and result; the operator is
         // called out only for what the operator has to do: the agent's own
@@ -650,6 +695,30 @@ pub fn agent_group_for(
     } else {
         AgentGroup::Seen
     }
+}
+
+/// Where an external tool's row stands in the tool's own cell (PRD
+/// hide-external-control D-45, D-46, B40): its agent's question, approval or
+/// block is the tool's turn to answer, read or not, since the tool reads it
+/// and not the operator; otherwise it stands as the operator's own row
+/// would, with nothing of the operator's laid over it (a View to look at and
+/// a person's turn are the operator's, in their own Needs You). An answer
+/// typed into its pane clears the demand, and with it the tool's turn (B43).
+pub(crate) fn tool_cell_group(agent: &SidebarAgentSnapshot) -> AgentGroup {
+    let (demand, activity, unread) = axes_of(agent);
+    if agent.blocked || demand != AgentDemand::None {
+        return AgentGroup::NeedsYou;
+    }
+    agent_group_for(
+        demand,
+        activity,
+        agent.completed,
+        unread,
+        false,
+        Ownership::Operator,
+        agent.wait.is_some(),
+        false,
+    )
 }
 
 /// An intentionally closed execution has no live parent or unread demand.
@@ -886,16 +955,18 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         waiting,
         !agent.unseen_views.is_empty(),
     );
-    let group = if !agent.raised.is_empty() || human {
+    let raised = raise_calls(agent);
+    let group = if raised || human {
         AgentGroup::NeedsYou
     } else {
         group
     };
     agent.group = group.name().to_owned();
+    agent.unlisted = !super::axes::listed_for_operator(agent);
     agent.look = look_of(agent, |agent| {
         // Where the row would stand with nothing to look at, which tells the
         // notifications a View to look at from the row's own ask.
-        if !agent.raised.is_empty() || human {
+        if raised || human {
             return AgentGroup::NeedsYou;
         }
         agent_group_for(
@@ -1005,14 +1076,31 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     agent.state = row_state(agent);
 }
 
+/// Whether the descendants raised to this root call the operator. A raise
+/// is the parent's failure to handle its child, which on a tool's root is
+/// the tool's to see; only a person's turn, which no tool can take, reaches
+/// the operator through it (PRD hide-external-control B29).
+fn raise_calls(agent: &SidebarAgentSnapshot) -> bool {
+    if ownership_of(agent) == Ownership::Tool {
+        agent
+            .raised
+            .iter()
+            .any(super::escalation::RaisedAsk::human_turn)
+    } else {
+        !agent.raised.is_empty()
+    }
+}
+
 /// What an operator's own row says about the Views it opened that they have
-/// not seen (PRD unseen-agent-views D-05, D-14). A delegated row's go up as
-/// its ancestors' signals instead (D-10), and a home's row has none (D-18).
+/// not seen (PRD unseen-agent-views D-05, D-14), and a tool's row, whose
+/// agent opened them for the operator, since a tool cannot look in its place
+/// (PRD hide-external-control D-38). A delegated row's go up as its
+/// ancestors' signals instead (D-10), and a home's row has none (D-18).
 fn look_of(
     agent: &SidebarAgentSnapshot,
     otherwise: impl FnOnce(&SidebarAgentSnapshot) -> AgentGroup,
 ) -> Option<crate::model::LookSnapshot> {
-    if ownership_of(agent) != Ownership::Operator {
+    if !matches!(ownership_of(agent), Ownership::Operator | Ownership::Tool) {
         return None;
     }
     let newest = agent.unseen_views.first()?;

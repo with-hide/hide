@@ -35,8 +35,12 @@ function useRevealOnKeyboardFocus(id: string) {
   return (event: FocusEvent<HTMLElement>) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); };
 }
 
-/** `start` opens the start panel on no project, as ⌘K's Start an agent does (issue 2514). */
-export type OperatorNode = Node<{ label: string; startLabel: string; start: () => void }, "operator">;
+/**
+ * The map's centre: the operator (`나`), whose `start` opens the start panel on no project, as ⌘K's Start an agent
+ * does (issue 2514), or in an external tool's cell the tool, drawn with its rail tile's letters and no `+`, since
+ * what the operator starts is never the tool's work (PRD hide-external-control B40).
+ */
+export type OperatorNode = Node<{ label: string; glyph: string; tool: string | null; startLabel: string; start: (() => void) | null }, "operator">;
 /** The dashed circle where a project's next session would stand; pressing it starts one there (issue 2514). */
 export type StartSlotNode = Node<{ workspaceId: string; label: string; accent: ProjectAccent; muted: boolean; start: (workspaceId: string) => void }, "start">;
 /** The map's Add project place, in free space among the projects (issue 2514). */
@@ -47,7 +51,7 @@ export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; cur
 /** The soft light behind a project's sessions, fading to nothing at its edge. */
 export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
 /** A folded project: one circle with its name and counts. */
-export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void; start: (workspaceId: string) => void }, "cluster">;
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void; start: ((workspaceId: string) => void) | null }, "cluster">;
 export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
 /** A team root's fold: how many descendants, their states, and whether they are folded away. */
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
@@ -90,8 +94,8 @@ export function GraphLine({ agent, className }: { agent: AgentRow; className?: s
 export function OperatorGraphNode({ id, data }: NodeProps<OperatorNode>) {
   const reveal = useRevealOnKeyboardFocus(id);
   // The circle is a picture; only its `+` badge on the rim is pressed.
-  return <div className="og-operator"><Ports /><span role="img" aria-label={data.label}><span aria-hidden="true">{data.label}</span></span>
-    <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag" aria-label={data.startLabel} data-graph-operator-start="true" onFocus={reveal} onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint>
+  return <div className="og-operator" data-graph-center={data.tool ?? "operator"}><Ports /><span role="img" aria-label={data.label}><span aria-hidden="true">{data.glyph}</span></span>
+    {data.start ? <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag" aria-label={data.startLabel} data-graph-operator-start="true" onFocus={reveal} onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint> : null}
   </div>;
 }
 
@@ -151,7 +155,7 @@ export function ClusterGraphNode({ id, data }: NodeProps<ClusterNode>) {
   return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} data-muted={data.muted} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
-    <span className="og-cluster-name"><strong>{label}</strong><ProjectStartButton nodeId={id} workspaceId={summary.project.workspace.id} label={label} start={data.start} /></span>
+    <span className="og-cluster-name"><strong>{label}</strong>{data.start ? <ProjectStartButton nodeId={id} workspaceId={summary.project.workspace.id} label={label} start={data.start} /> : null}</span>
     <GraphStateCounts summary={summary} />
   </div>;
 }

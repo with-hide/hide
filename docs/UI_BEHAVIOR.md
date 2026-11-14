@@ -820,6 +820,47 @@ A feature that makes Hide AI start a new kind of agent names the kind's home in 
 A connected device's agents follow the same rules, and they hold across a restart of hided because the ledger is persisted.
 Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line, whether a tree draws a checkout, where a row opens), `web/src/AgentMark.tsx` (the owl, the badge and the pane header's mark), `web/src/AgentRowMark.tsx` (the row's mark by view mode), `web/src/sidebar.tsx` and `web/src/components/sidebar-agent-row.tsx` (the rows), `web/src/TaskLens.tsx` (the 태스크 row) and `openListedAgent` in `web/src/actions.ts`; core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs` and `hide-core/src/runtime/memory_promotion.rs`.
 
+### Work an external tool keeps
+
+An external tool the operator approved at Act in Settings › External tools starts agents for its own purposes, and while it stays connected at Act those agents are the tool's work, not the operator's (PRD hide-external-control D-09): the agent it started and the agents that one started under itself with `--parent here` (a Conductor's workers among them).
+`docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws, with-hide/hide-private `docs/tasks-and-pr-list.md`, The sidebar's 태스크 list, how the 태스크 list draws it, and with-hide/hide-private `docs/missions.md`, A mission an external tool conducts, what such a mission gives the operator.
+
+Each tool connected at Act has a cell of its own on the device rail, after the devices ([Device rail](#device-rail)), and its work is drawn there and in no device's cell (PRD hide-external-control D-45, operator decision 2026-11-14).
+In a device's cell the agents are in no list of the operator's: not the sidebar's tree, Needs You, Done or Working, not the 태스크 list, Sessions, Overview's requests, graph or counts, not a Project tool's session count, a checkout's count or the device's tile, not the phone's agent list, and they move no app badge, desktop notification or push (B26, B27).
+The tool reads them and answers them itself, so an agent's own question, approval, block or finished turn never reaches the operator while the tool keeps it.
+They are still found by ⌘K, the recent panel, the tab strip and `hide agent list`, and Settings › External tools counts each tool's agents and missions.
+
+A mission such an agent conducts is the tool's too (B30, D-36): a device's mission screen, the sidebar's `미션` number, its 내 차례 rows, its decision, gate and safety-net cards, the device's Needs You, its notices and the phone's mission list leave it out, and the tool's cell lists it.
+
+Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen and the Overview in place of a device's (B40), with this window's own machine in front under it; the selection is the window's alone, and a cell that goes is forgotten at once, so Act again on the same tool brings its tile back without taking the window into it (B44).
+A device the Overview named, its own switch's or the page's, gives way on both moves, so once the cell goes the Overview, the rail and the sidebar show the same machine:
+
+- The sidebar draws the 태스크 list of the tool's work by state, `도구가 답할 차례` first, then `작업 중` and `끝남`, then the folds, with no lens switch, since the cell has one list.
+  `도구가 답할 차례` is what waits on the tool's answer: its agent's question, approval or block, read or not.
+  Nothing in the cell takes the warning colour, since nothing in it is the operator's turn: a Conductor row's mission chip keeps its `!` in the grey of the cell's count (operator decision 2026-11-14), and no row names the tool, since every row is its work.
+- A task on another device, such as an agent the tool started with `--machine`, names its device on its row (B45).
+- A cell with no work says `아직 맡은 일이 없어요`, in the sidebar and in the Overview's work tab (B42).
+- The mission screen lists the missions the tool keeps, on every device, its head naming the tool; its turn group reads `도구가 답할 차례`, nothing takes the decision colour, and neither a row nor an opened mission's map head names the tool, since every mission there is its own.
+- The Overview draws only the tool's agents, on the projects it works in, and names the tool in place of its device switch; the device's Overview never draws them (D-48).
+  The map's centre is the tool, drawn with its tile's letters and without the `+` a device's map gives `나`, since what the operator starts is never the tool's work; for the same reason the tool's map has no start circles, no Add project place, no project `+` and no `New agent`.
+  Its side column lists what waits on the tool under `도구가 답할 차례`, the missions waiting on its answer among them, where a device's lists `나를 기다리는 것`.
+  The Projects tab counts the tool's tasks in each project, even one the operator works in too, the tool's turn as `도구 차례 N` in no warning colour.
+  The places dragged on a tool's map are its own; the filter and the hidden and folded projects are one choice for every map, as they are across devices.
+- The Overview and `미션` rows of the sidebar draw no number in a tool's cell, since their numbers are the operator's (B41).
+
+The operator can answer in a row's pane from the cell; the answer takes the row out of the tool's turn, and the work stays the tool's (B43).
+⌥n numbers the cell's rows as it numbers the 태스크 list's.
+
+The tool's name is drawn wherever the tool's work reaches the operator's own cells, and never inside the tool's own cell (B31, D-15): as a quiet badge cut short in a narrow space after the title of the agent's pane head, its ⌘K result, and the mission screen's row and the map head of a mission its agent conducts, and, in the sidebar's rows (the projects list and the 태스크 list, an agent's or a mission's), as muted words leading the second line, `nightly · 어느 순서로 할까요`, since a sidebar row's first line keeps only the title, its chips and the time (operator decision 2026-11-14).
+Its hint says the work is the tool's (`외부 도구 nightly의 일`); once the tool lets go the name stays as where the work came from, and the hint says so (`외부 도구 nightly에서 시작됨`).
+
+Two things of the agents reach the operator anyway, as one row in the sidebar's Needs You and the 태스크 list's Needs You of the device's cell, never in a tree, the row staying in the tool's cell too (B29, D-37): a step only a person can take (`hide agent ask-human auth|permission`), the agent's own or a child's, which also notifies on the desktop and the phone, and a View the agent opened for the operator with `hide file open`, `hide diff open` or `hide browser open`, which is its `볼 것` as on any agent's row.
+When the operator disconnects the tool, the tool leaves, or the operator sets it to View only, all its work is the operator's from that moment, still running: its agents and missions enter the lists, counts and graph at once, and their next question is the operator's turn; the tool's tile goes, and a window showing its cell shows This Mac (B16, B44).
+Setting the same connection to Act again takes the work back, and a new connection under the same name takes none of it.
+A connected device's agents follow the same rules.
+The phone has no tool's cell (B46; `docs/INSTALL.md`, What each system supports); a tool's person's turn or View on the phone's list leads its second line with the tool's name, as the desktop's sidebar row does.
+Web owner: `web/src/toolCells.ts` (which cell is in front and what it holds), `ToolTaskLens` in `web/src/TaskLens.tsx`, `ToolTileView` in `web/src/components/device-rail.tsx`, and `ToolMark` and `ToolLabel` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs`, `hide-core/src/agent_state/tally/scope.rs` (`ToolCell`) and `hide-core/src/runtime/access.rs`.
+
 ### Agent logo view mode
 
 The View menu, Help and Settings stand together, in that order: stacked at the foot of the device rail, their hints and menus opening to the right, or, while the rail is hidden, at the sidebar footer's right edge after the usage chips, opening upwards.
@@ -2252,8 +2293,16 @@ Every tile is a button reached with Tab and chosen with Enter or Space, named fo
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents stay on it, and the rail stays.
 
+Each external tool connected at Act (Settings › External tools) has a tile after `+`, under a short line, one per tool in the order the tools were approved, and only the tools of this window's core (PRD hide-external-control D-50, D-51).
+A tool's tile is the size of a device's, a ring rather than a filled square so it never reads as a machine, and holds the monogram of the tool's name; its hint is `<name> · 외부 도구`, with `도구 차례 N` while something waits on the tool.
+Its one mark is a grey pill (`--muted-foreground`) with the number of what waits on the tool's answer, `9+` from 10, and no Needs You, app badge or notice of the operator's counts it (B39, B41).
+A tool with nothing waiting has no mark, and a tool at View only has no tile (D-47).
+Selecting a tool's tile shows its cell ([Work an external tool keeps](#work-an-external-tool-keeps)) and brings This Mac to the front under it, so a tool that leaves Act, and its tile with it, leaves the window on This Mac (B44).
+Which cell a window shows is the window's own: another window and the phone keep theirs.
+⌥⌘1-9 numbers the devices only.
+
 A right-click on the rail offers `기기 목록 숨기기`.
-While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), `기기 추가…` and `기기 목록 표시`.
+While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), then, after a line, the tools with their letters and their grey number, `기기 추가…` and `기기 목록 표시`; while a tool's cell is in front the top row names the tool, `nightly 외부 도구`.
 The View menu of the desktop app carries `Toggle device rail` (`toggle_device_rail`, no default chord, bindable in Settings › Shortcuts like the sidebar switch); a browser tab uses the `This Mac ⌄` menu.
 The hidden state is the core's `ui_state.device_rail_visible`, kept beside `left_sidebar_visible`, so it survives a restart.
 
@@ -3137,8 +3186,7 @@ Each row shows the tool's name and one line, its machine, its last use (moved at
 A 시키기 tool that started agents or missions also says 끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요 under its line; a 보기만 tool's work is already the operator's, so it does not.
 With no tool connected the list holds 연결된 도구가 없어요 and the command that asks, `hide access request --name <이름>`.
 
-Pressing a row anywhere outside its controls opens the agents and then the missions that tool started: an agent as its status mark, agent mark and title, a mission as its mark and title.
-Pressing an agent closes Settings and opens its pane, and pressing a mission opens its map as a mission chip does; an agent the window has not drawn yet keeps its line under its id, and a row whose tool started nothing says so.
+A row opens nothing: the counts are the whole of what it says about the tool's work, which the operator finds in the tool's cell on the device rail, by ⌘K and by the pane head's tool name (operator decision 2026-11-14).
 The gallery draws the page from invented tools at `?scene=external-tools&state=pending|connected|empty`.
 
 ### The phone app

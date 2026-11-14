@@ -931,6 +931,8 @@ mod tests {
             notification_finalized: false,
             awaited_replies: Vec::new(),
             hide_ai: None,
+            tool: None,
+            unlisted: false,
             request: None,
             unseen_views: Vec::new(),
             look: None,

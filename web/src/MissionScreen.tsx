@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
 import { HeldMark, useDelayPill } from "./components/mission-hold";
-import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { KindHelpButton } from "./components/kind-help-dialog";
@@ -44,7 +44,9 @@ import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
 import { catalogOf, type Mission, type MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
+import { useFrontTool } from "./toolCells";
 import { useUiStore } from "./ui";
+import { InToolCell, ToolMark } from "./components/tool-mark";
 
 // The mission screen (PRD mission-screen D-01-D-11, B1-B23): one device's
 // missions, every project of it, as a table in the Mission tool's four
@@ -63,14 +65,14 @@ const LOADING: DeviceMissions = { state: "loading" };
 const FAILED: DeviceMissions = { state: "failed" };
 
 /** `deviceId`'s missions in their groups (D-06); one value per snapshot change of the missions or the workers, never per terminal frame. */
-export function useDeviceMissions(deviceId: string): DeviceMissions {
+export function useDeviceMissions(deviceId: string, tool: string | null = null): DeviceMissions {
   const missions = useShellStore((s) => s.rest?.missions);
   const escalationOf = useWorkerEscalation();
   return useMemo(() => {
     if (!missions) return LOADING;
     if (missions.failed) return FAILED;
-    return { state: "ready", entries: deviceMissions(missions.items, deviceId).map((mission) => missionEntry(mission, escalationOf)) };
-  }, [missions, deviceId, escalationOf]);
+    return { state: "ready", entries: deviceMissions(missions.items, deviceId, tool).map((mission) => missionEntry(mission, escalationOf)) };
+  }, [missions, deviceId, tool, escalationOf]);
 }
 
 /** The sidebar row's number (B1): the front device's missions with anything in their `내 차례`. */
@@ -80,14 +82,26 @@ export function useMissionTurnCount(): number {
   return missions.state === "ready" ? turnCount(missions.entries) : 0;
 }
 
+/** A group's name, the turn named for the tool in a tool's cell. */
+function useGroupName(): (group: MissionGroup) => string {
+  const { t } = useInterfaceTranslation();
+  const tool = useContext(InToolCell);
+  return (group) => (tool && group === "turn" ? t("missionScreen.group.toolTurn") : t(`missionScreen.group.${group}`));
+}
+
 export function MissionScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const place = useUiStore((s) => s.missions);
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const deviceId = place.deviceId ?? front;
-  const missions = useDeviceMissions(deviceId);
-  const connected = useShellStore((s) => deviceConnected(s.rest, deviceId));
-  const device = useShellStore((s) => machineName(s.rest?.navigator?.devices, deviceId, t));
+  // A tool's cell in front shows the missions the tool keeps (PRD hide-external-control B40).
+  const frontToolCell = useFrontTool();
+  const tool = place.deviceId === null ? frontToolCell : null;
+  const missions = useDeviceMissions(deviceId, tool?.connection ?? null);
+  const deviceConnectedNow = useShellStore((s) => deviceConnected(s.rest, deviceId));
+  const connected = tool !== null || deviceConnectedNow;
+  const deviceName = useShellStore((s) => machineName(s.rest?.navigator?.devices, deviceId, t));
+  const device = tool?.name ?? deviceName;
   const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const catalog = useMemo(() => catalogOf(workspaces, remote), [workspaces, remote]);
@@ -121,12 +135,14 @@ export function MissionScreen({ actions }: { actions: Actions }) {
 
   const projectLabel = (id: string) => projects.find((project) => project.id === id)?.label ?? null;
   return (
+    <InToolCell.Provider value={tool !== null}>
     <section
       className="@container/missions flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
       aria-label={t("missionScreen.list", { device })}
       data-mission-screen={missions.state}
       data-mission-screen-view={detail ? "detail" : "table"}
       data-mission-screen-device={deviceId}
+      data-mission-screen-tool={tool?.connection}
     >
       <Head
         device={device}
@@ -150,6 +166,7 @@ export function MissionScreen({ actions }: { actions: Actions }) {
         <Table groups={groups} empty={entries?.length === 0} filtered={projectId !== null} connected={connected} projectLabel={projectLabel} actions={actions} />
       )}
     </section>
+    </InToolCell.Provider>
   );
 }
 
@@ -279,10 +296,12 @@ function Table({ groups, empty, filtered, connected, projectLabel, actions }: {
 /** A group's head: its name, its count, and for 끝남 `모두 ›` once it holds more than three. */
 function GroupHead({ group, count, className }: { group: MissionGroup; count: number; className?: string }) {
   const { t } = useInterfaceTranslation();
+  const name = useGroupName();
+  const tool = useContext(InToolCell);
   const all = useUiStore((s) => s.missions.closedAll);
   return (
-    <h2 className={cn("flex items-center gap-xs text-caption font-semibold", group === "turn" ? "text-mission-hold" : "text-muted-foreground", className)}>
-      <span>{t(`missionScreen.group.${group}`)}</span>
+    <h2 className={cn("flex items-center gap-xs text-caption font-semibold", group === "turn" && !tool ? "text-mission-hold" : "text-muted-foreground", className)}>
+      <span>{name(group)}</span>
       <span className="font-normal tabular-nums text-subtle-foreground">{count}</span>
       {group === "closed" && count > CLOSED_SHOWN ? (
         <Button variant="text" size="inline" className="ml-auto gap-0" aria-expanded={all} data-mission-closed-all={all ? "open" : "folded"} onClick={() => useUiStore.getState().setMissions({ closedAll: !all })}>
@@ -295,11 +314,11 @@ function GroupHead({ group, count, className }: { group: MissionGroup; count: nu
 }
 
 function TableGroup({ group, entries, connected, projectLabel, actions }: { group: MissionGroup; entries: MissionEntry[]; connected: boolean; projectLabel: (id: string) => string | null; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
+  const name = useGroupName();
   const all = useUiStore((s) => s.missions.closedAll);
   const rows = group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries;
   return (
-    <section className="flex min-w-0 flex-col border-t border-border/60 px-lg pt-md pb-sm first-of-type:border-t-0" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
+    <section className="flex min-w-0 flex-col border-t border-border/60 px-lg pt-md pb-sm first-of-type:border-t-0" aria-label={`${name(group)} ${entries.length}`} data-mission-group={group} data-mission-group-count={entries.length}>
       <GroupHead group={group} count={entries.length} className="px-xs pb-xs" />
       {rows.map((entry) => <TableRow key={entry.mission.id} entry={entry} connected={connected} project={projectLabel(entry.mission.workspace_id)} actions={actions} />)}
     </section>
@@ -329,6 +348,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
           <MissionNumber mission={mission} className="text-caption" />
           {closed ? <ClosedMark mission={mission} /> : <Pill mission={mission} turn={turn[0] ?? null} />}
           <span className={cn("min-w-0 truncate text-body", closed ? "text-subtle-foreground" : "font-semibold text-foreground")} title={mission.title}>{mission.title}</span>
+          <ToolMark tool={mission.tool} className="max-w-2/5" />
         </span>
         {closed ? null : (
           <span className="flex min-w-0 items-center gap-xs">
@@ -411,10 +431,11 @@ function ClosedMark({ mission }: { mission: Mission }) {
 /** The state pill: what the operator does on their turn, in the decision colour, else the map head's own pill; a takeover row draws none, since its 이어받기 button is the action. */
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
+  const tool = useContext(InToolCell);
   const held = useDelayPill(mission);
   if (turn?.kind === "takeover") return null;
   if (turn) {
-    return <span className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}>{t(missionPillKey(mission, turn))}</span>;
+    return <span className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", tool ? PILL_TONE.quiet : PILL_TONE.hold)} data-mission-row-pill={turn.kind}>{t(missionPillKey(mission, turn))}</span>;
   }
   // A delay holds every new start: the pill says so, with how long, in place of 진행 중.
   if (held) {
@@ -483,7 +504,7 @@ function LandingLine({ nodes, join }: { nodes: MissionNode[]; join: boolean }) {
  * too narrow for it beside the detail it stands above (B23).
  */
 function List({ groups, selected, connected, actions }: { groups: { group: MissionGroup; entries: MissionEntry[] }[]; selected: string; connected: boolean; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
+  const name = useGroupName();
   const all = useUiStore((s) => s.missions.closedAll);
   const order = useMemo(() => listedMissions(groups, all), [groups, all]);
   const box = useRef<HTMLDivElement>(null);
@@ -509,7 +530,7 @@ function List({ groups, selected, connected, actions }: { groups: { group: Missi
       data-mission-list="true"
     >
       {groups.map(({ group, entries }) => (
-        <section key={group} className="flex min-w-0 flex-col pt-sm" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-mission-group={group}>
+        <section key={group} className="flex min-w-0 flex-col pt-sm" aria-label={`${name(group)} ${entries.length}`} data-mission-group={group}>
           <GroupHead group={group} count={entries.length} className="px-sm pb-xxs" />
           {(group === "closed" && !all ? entries.slice(0, CLOSED_SHOWN) : entries).map((entry) => (
             <ListRow key={entry.mission.id} entry={entry} selected={entry.mission.id === selected} connected={connected} actions={actions} />
@@ -536,6 +557,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
       <span className="flex min-w-0 items-center gap-xs">
         {group === "closed" ? <ClosedMark mission={mission} /> : <KindIcon kind="mission" className="size-(--size-icon-sm)" />}
         <span className={cn("min-w-0 flex-1 truncate text-body", group === "closed" ? "text-subtle-foreground" : "text-foreground")} title={mission.title}>{mission.title}</span>
+        <ToolMark tool={mission.tool} className="max-w-2/5" />
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>
       {group !== "closed" && ((group === "turn" && turn[0]) || mission.nodes.length > 0) ? (

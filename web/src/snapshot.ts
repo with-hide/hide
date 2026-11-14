@@ -1,4 +1,4 @@
-import type { AgentScope } from "./agentScope";
+import type { AgentScope, ToolCell } from "./agentScope";
 import type { ProjectSettings, ProjectSettingsWrite } from "./projectSettings";
 // The parts of the core's `rest` section the web shell reads, typed as the
 // core serializes them (hide-core/src/model.rs), plus the pure selectors that
@@ -99,12 +99,22 @@ export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number } | 
  */
 export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn };
 
+/**
+ * An external tool's work (PRD hide-external-control D-09, D-15): an agent the tool started, or one started under it.
+ * `owns` says the tool keeps it now (its connection stands at Act); the core decides it and the lists it leaves.
+ */
+export type ToolWork = { connection: string; name: string; owns: boolean };
+
 /** A checkout Hide AI made for an agent it started, joined to a checkout by device and path. */
 export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask };
 
 export type AgentRow = {
   /** Set by the core from the coordination record of the spawn, never from a branch name. */
   hide_ai?: HideAi;
+  /** An external tool started this agent, or an agent of the tool started it under itself; set by the core from the same record. */
+  tool?: ToolWork;
+  /** The operator's lists leave this row out (`agent_state::listed_for_operator`); the core's scopes already did, and the phone reads it. */
+  unlisted?: boolean;
   resolved?: { at_unix_ms: number; source: "operator" | "automatic" } | null;
   /** Resolved within the last 24 hours, so Sessions still lists it. */
   resolved_recent?: boolean;
@@ -1740,6 +1750,8 @@ export type MissionSkip = { node: string; title: string; line: string; kind: Mis
 export type Mission = {
   id: string;
   title: string;
+  /** The external tool whose agent conducts it (PRD hide-external-control B30, D-15): listed and answered as any mission, its row and map head name the tool. */
+  tool?: ToolWork;
   workspace_id: string;
   project: string;
   checkout_path: string;
@@ -1887,7 +1899,8 @@ export type GraphProjectKey = { device_id: string; workspace_id: string };
 /** A session by machine, engine pane and session digest (or native id), so a reused pane is never taken for it. */
 export type GraphSessionKey = { device_id: string; pane_id: string; session: string | null };
 /** One device's map of every project, or one project's own map (PRD overview-graph-remembered D-07). */
-export type GraphScope = { kind: "all"; device_id: string } | { kind: "project"; device_id: string; workspace_id: string };
+/** `tool`: the external tool whose map it is, by connection id, whose places are its own; absent on a device's map (PRD hide-external-control B40). */
+export type GraphScope = { kind: "all"; device_id: string; tool?: string } | { kind: "project"; device_id: string; workspace_id: string; tool?: string };
 /** A dropped place in map units at interface scale one (D-08). */
 export type GraphPlace<K> = { scope: GraphScope; key: K; x: number; y: number };
 /** The Overview Work map's remembered choices (`ui_state.overview_graph`, D-05); each list keeps the most recently changed last. */
@@ -3202,11 +3215,8 @@ export type AccessConnection = {
   created_ms: number;
   /** Moved at most once a minute (B34). */
   last_used_ms: number;
-  /** The live agents the tool started, each by its pane, which the row opens (B15). */
-  agents: { agent_id: string; pane_id: string }[];
+  /** How many live agents the tool started, and how many open missions those agents conduct. */
   agent_count: number;
-  /** The open missions those agents conduct, by id. */
-  missions: string[];
   mission_count: number;
 };
 
@@ -3536,6 +3546,8 @@ export type SnapshotRest = {
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
     focused_device_id?: string | null;
+    /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
+    tools?: ToolCell[];
   };
   connection?: { kind: string; state: string; target_id: string | null };
   task_operation?: TaskOperation | null;

@@ -182,6 +182,123 @@ pub struct Place {
     pub kind: &'static str,
 }
 
+/// An external tool's cell beside the devices (PRD hide-external-control
+/// D-45, D-46, D-47): one per tool connected at Act, work or none, holding
+/// only the rows and missions the tool keeps, on every device it reached.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolCell {
+    /// The connection's id, as the access section and a row's `tool` name it.
+    pub connection: String,
+    pub name: String,
+    /// What waits on the tool's answer, the cell's grey number: its tasks
+    /// whose root asks or is blocked, and its missions that are their own
+    /// ask. Never counted in the operator's Needs You, badge or notices
+    /// (D-46, B41).
+    pub turn: usize,
+    /// The tool's work per device that holds any, in the devices' order.
+    pub devices: Vec<ToolDevice>,
+    /// The tool's missions that are their own ask, oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mission_asks: Vec<String>,
+}
+
+/// An external tool's work on one device: its 태스크 cards, grouped by the
+/// tool's turn (`tool_cell_group`), and the Overview's members.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolDevice {
+    pub device_id: String,
+    pub tasks: super::tasks::Tasks,
+    pub members: Vec<Member>,
+}
+
+/// The rows connection `connection`'s tool keeps on each connected device,
+/// each carrying the group it stands in within the tool's cell.
+fn tool_rows(devices: &[DeviceRows<'_>], connection: &str) -> Vec<Vec<SidebarAgentSnapshot>> {
+    devices
+        .iter()
+        .map(|device| {
+            if !device.connected {
+                return Vec::new();
+            }
+            device
+                .agents
+                .iter()
+                .filter(|row| {
+                    row.tool
+                        .as_ref()
+                        .is_some_and(|tool| tool.owns && tool.connection == connection)
+                })
+                .map(|row| {
+                    let mut row = (*row).clone();
+                    row.group = crate::agent_state::tool_cell_group(&row).name().to_owned();
+                    row
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// One tool's cell, from the rows it keeps (`tool_rows`, in `devices`'
+/// order), without its mission asks, which `Cache::apply` lays on. A tool
+/// keeping no row has an empty cell, built without a pass over the panes.
+fn tool_cell(
+    connection: &str,
+    name: &str,
+    devices: &[DeviceRows<'_>],
+    rows: &[Vec<SidebarAgentSnapshot>],
+) -> ToolCell {
+    if rows.iter().all(Vec::is_empty) {
+        return ToolCell {
+            connection: connection.to_owned(),
+            name: name.to_owned(),
+            turn: 0,
+            devices: Vec::new(),
+            mission_asks: Vec::new(),
+        };
+    }
+    let mut places = Vec::new();
+    for (device, rows) in devices.iter().zip(rows) {
+        let by_pane: HashMap<_, _> = rows.iter().map(|row| (row.pane_id.as_str(), row)).collect();
+        for project in &device.projects {
+            for checkout in &project.checkouts {
+                for pane in checkout.tabs.iter().flat_map(|t| &t.panes) {
+                    if let Some(agent) = by_pane.get(pane.id.as_str()) {
+                        places.push(super::tasks::Place {
+                            device_id: device.id,
+                            device_label: device.label,
+                            project,
+                            checkout_id: checkout.id.as_str(),
+                            agent,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    let mut tasks = super::tasks::Forest::new(places).publish().devices;
+    let devices: Vec<ToolDevice> = devices
+        .iter()
+        .zip(rows)
+        .filter_map(|(device, rows)| {
+            let listed: Vec<_> = rows.iter().collect();
+            let members = members(&device.projects, &listed);
+            let tasks = tasks.remove(device.id).unwrap_or_default();
+            (!tasks.is_empty() || !members.is_empty()).then(|| ToolDevice {
+                device_id: device.id.to_owned(),
+                tasks,
+                members,
+            })
+        })
+        .collect();
+    ToolCell {
+        connection: connection.to_owned(),
+        name: name.to_owned(),
+        turn: devices.iter().map(|device| device.tasks.needs_you).sum(),
+        devices,
+        mission_asks: Vec::new(),
+    }
+}
+
 const GROUPS: [&str; 4] = ["needs_you", "done", "working", "seen"];
 const VERBS: [RequestVerb; 8] = [
     RequestVerb::Answer,
@@ -595,6 +712,8 @@ struct Input {
     clock_minute: u64,
     /// The operator's 놔두기 on 흘린 것 rows (project-panel-results D-17).
     stray_dismissals: std::collections::BTreeMap<String, super::project_status::StrayDismissal>,
+    /// The tools that have a cell (`Cache::tools`).
+    tools: Vec<(String, String)>,
 }
 
 /// One owned comparison input, bounded by the snapshot's agents and catalog.
@@ -616,6 +735,12 @@ pub(crate) struct Cache {
     /// mission views last marked them; laid on the device scopes and the
     /// overall one at every apply, never into the cached output.
     mission_asks: BTreeMap<String, Vec<String>>,
+    /// The tools connected at Act, by connection id and name, in the access
+    /// list's order: each has a cell (PRD hide-external-control D-47).
+    tools: Vec<(String, String)>,
+    /// Each tool's missions that are their own ask, by connection, laid on
+    /// its cell at every apply as `mission_asks` is on a device's.
+    tool_asks: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Default)]
@@ -624,6 +749,7 @@ struct Output {
     checkouts: HashMap<(String, String), Scope>,
     devices: HashMap<String, Scope>,
     overall: Scope,
+    tools: Vec<ToolCell>,
 }
 
 struct DeviceRows<'a> {
@@ -635,25 +761,22 @@ struct DeviceRows<'a> {
     projects: Vec<&'a WorkspaceSnapshot>,
     /// Every row the device lists, for lookups by pane.
     agents: Vec<&'a SidebarAgentSnapshot>,
-    /// The rows the operator's own lists enumerate: a row its home owns is
-    /// left out unless it is in Needs You (PRD hide-ai-work-home D-13), so
-    /// no tree, section, count, request or graph names it.
+    /// The rows the operator's own lists enumerate: a row a home or an
+    /// external tool keeps is left out unless it is in Needs You (PRD
+    /// hide-ai-work-home D-13, PRD hide-external-control B26), so no tree,
+    /// section, count, request or graph names it.
     listed: Vec<&'a SidebarAgentSnapshot>,
 }
 
-/// The rows a checkout's tree draws: `listed` without the rows a home owns,
-/// which the raised Needs You and Sessions lists draw and no checkout's tree
-/// does (PRD hide-ai-work-home D-17).
+/// The rows a checkout's tree draws: `listed` without the rows a home or an
+/// external tool keeps, which the raised Needs You and Sessions lists draw
+/// and no checkout's tree does (PRD hide-ai-work-home D-17, PRD
+/// hide-external-control B29).
 fn tree_rows<'a>(listed: &[&'a SidebarAgentSnapshot]) -> Vec<&'a SidebarAgentSnapshot> {
     listed
         .iter()
         .copied()
-        .filter(|row| {
-            !matches!(
-                crate::agent_state::ownership_of(row),
-                crate::agent_state::Ownership::HideAi { .. }
-            )
-        })
+        .filter(|row| !crate::agent_state::kept_elsewhere(row))
         .collect()
 }
 
@@ -723,6 +846,7 @@ impl Cache {
         let input = Input {
             clock_minute: now / 60_000,
             stray_dismissals: snapshot.ui_state.stray_dismissals.clone(),
+            tools: self.tools.clone(),
             devices: devices
                 .iter()
                 .map(|d| DeviceInput {
@@ -1155,11 +1279,19 @@ impl Cache {
         for device in &devices {
             super::close::add(&mut overall.closes, &device.projects, &device.agents, &live);
         }
+        let tools = self
+            .tools
+            .iter()
+            .map(|(connection, name)| {
+                tool_cell(connection, name, &devices, &tool_rows(&devices, connection))
+            })
+            .collect();
         self.output = Output {
             projects,
             checkouts,
             devices: device_scopes,
             overall,
+            tools,
         };
         self.placements = placements;
         self.strays_over = strays_over;
@@ -1203,6 +1335,22 @@ impl Cache {
         true
     }
 
+    /// Takes the tools that have a cell and each one's missions that are
+    /// their own ask, laid at the next refresh; true when either moved, so
+    /// the caller refreshes.
+    pub(crate) fn note_tools(
+        &mut self,
+        tools: Vec<(String, String)>,
+        asks: BTreeMap<String, Vec<String>>,
+    ) -> bool {
+        if self.tools == tools && self.tool_asks == asks {
+            return false;
+        }
+        self.tools = tools;
+        self.tool_asks = asks;
+        true
+    }
+
     fn apply(&self, snapshot: &mut crate::model::Snapshot) -> bool {
         let mut overall = self.output.overall.clone();
         for asks in self.mission_asks.values() {
@@ -1223,6 +1371,21 @@ impl Cache {
             changed |= device.agent_scope != next;
             device.agent_scope = next;
         }
+        let tools: Vec<ToolCell> = self
+            .output
+            .tools
+            .iter()
+            .map(|cell| {
+                let mut cell = cell.clone();
+                if let Some(asks) = self.tool_asks.get(&cell.connection) {
+                    cell.turn += asks.len();
+                    cell.mission_asks.clone_from(asks);
+                }
+                cell
+            })
+            .collect();
+        changed |= snapshot.navigator.tools != tools;
+        snapshot.navigator.tools = tools;
         let workspaces = snapshot.navigator.workspaces.iter_mut().chain(
             snapshot
                 .status

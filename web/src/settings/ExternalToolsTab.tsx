@@ -1,32 +1,25 @@
-// Settings › External tools (PRD hide-external-control B2-B4, B11-B13, B15,
-// D-33, D-34): the requests waiting for the operator, each approved at View
-// only or Act or refused, and the connected tools as rows like Mobile's
-// paired phones, each with its two-level control, Disconnect, and the agents
-// and missions it started when the row is opened. Every value is the core's
+// Settings › External tools (PRD hide-external-control B2-B4, B11-B13, D-33,
+// D-34): the requests waiting for the operator, each approved at View only or
+// Act or refused, and the connected tools as rows like Mobile's paired
+// phones, each with its two-level control, Disconnect, and how many agents
+// and missions it started. Every value is the core's
 // `access` section and every control sends one `access_*` event; a request
 // reaches the operator here only, never as a turn, a badge or a notice (D-24).
 
-import { ChevronRightIcon, EyeIcon, PlayIcon, WaypointsIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { EyeIcon, PlayIcon } from "lucide-react";
+import { useState } from "react";
 import type { Actions } from "../actions";
-import { AgentMark } from "../AgentMark";
-import { markTone } from "../agentRow";
 import { useMinuteClock } from "../components/elapsed";
 import { Group, Note } from "../components/settings-rows";
-import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
-import { RowButton, RowOverlayButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
-import { connectionLine, pendingLine, toolWork, warnsOfWork, type ToolWork } from "../externalTools";
+import { connectionLine, pendingLine, warnsOfWork } from "../externalTools";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { cn } from "../lib/utils";
-import { agentsByPane, allAgents } from "../paneAgents";
 import { coreMachineName } from "../screenMachine";
 import type { AccessConnection, AccessLevel, AccessPending } from "../snapshot";
 import { useShellStore } from "../store";
-import { useUiStore } from "../ui";
 
 const LEVELS: readonly AccessLevel[] = ["view", "act"];
 const LEVEL_ICON = { view: EyeIcon, act: PlayIcon } as const;
@@ -132,99 +125,40 @@ function PendingRow({ request, machine, now, actions }: { request: AccessPending
 }
 
 /**
- * One connected tool (B11-B13, B15): its name and line, the two-level control
- * and Disconnect, which acts at once; the warning when its work would become
- * the operator's; a press anywhere else opens its agents and missions.
+ * One connected tool (B11-B13): its name and line, which counts the agents and
+ * missions it started, the two-level control and Disconnect, which acts at
+ * once, and the warning when its work would become the operator's.
  */
 function ConnectionRow({ connection, machine, now, actions }: { connection: AccessConnection; machine: string; now: number; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
-  const [open, setOpen] = useState(false);
   return (
-    <div data-access-connection={connection.id} data-access-level={connection.level}>
-      <div className="relative">
-        <RowOverlayButton aria-label={t("externalTools.open", { name: connection.name })} aria-expanded={open} onClick={() => setOpen(!open)} data-access-open={connection.id} />
-        <div className="pointer-events-none relative flex flex-wrap items-center gap-x-md gap-y-xs px-md py-sm">
-          <span className="flex min-w-[min(100%,var(--size-settings-control-w))] flex-1 items-start gap-sm">
-            <ChevronRightIcon aria-hidden="true" className={cn("mt-xxs size-(--size-icon) shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-            <span className="flex min-w-0 flex-col gap-xxs">
-              <span className="break-words text-subhead font-medium text-foreground">{connection.name}</span>
-              <span className="break-words text-body text-muted-foreground" data-access-line={connection.id}>
-                {connectionLine(connection, machine, now, t, language).map((piece, index) => (
-                  <span key={index}>{index > 0 ? " · " : ""}<span className="whitespace-nowrap">{piece}</span></span>
-                ))}
-              </span>
-              {warnsOfWork(connection) ? <span className="mt-xxs" data-access-warning={connection.id}><Note tone="warn">{t("externalTools.workWarning")}</Note></span> : null}
-            </span>
-          </span>
-          <span className="pointer-events-auto ml-auto flex flex-wrap items-center justify-end gap-sm">
-            <ToggleGroup type="single" value={connection.level} onValueChange={(next) => next && next !== connection.level && actions.setAccessLevel(connection.id, next as AccessLevel)} aria-label={t("externalTools.level.label")}>
-              {LEVELS.map((level) => {
-                const Icon = LEVEL_ICON[level];
-                return (
-                  <ToggleGroupItem key={level} value={level} data-access-level-option={level}>
-                    <Icon aria-hidden="true" />
-                    {t(`externalTools.level.${level}`)}
-                  </ToggleGroupItem>
-                );
-              })}
-            </ToggleGroup>
-            <Button variant="secondary" size="sm" className="text-destructive" onClick={() => actions.revokeAccess(connection.id)} data-access-revoke={connection.id}>
-              {t("externalTools.disconnect")}
-            </Button>
-          </span>
-        </div>
-      </div>
-      {open ? <WorkList connection={connection} actions={actions} /> : null}
-    </div>
-  );
-}
-
-/** The opened row (B15): each agent opens its pane, each mission its map, and Settings closes so it shows. */
-function WorkList({ connection, actions }: { connection: AccessConnection; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const local = useShellStore((s) => s.agents);
-  const remote = useShellStore((s) => s.rest?.status?.remote);
-  const missions = useShellStore((s) => s.rest?.missions?.items);
-  const work = useMemo(() => toolWork(connection, agentsByPane(allAgents(local, remote)), missions ?? []), [connection, local, remote, missions]);
-  const go = (open: () => void) => {
-    useUiStore.getState().closeOverlay("settings");
-    open();
-  };
-  return (
-    <div className="border-t border-border px-md py-xs pl-xl" data-access-work={connection.id}>
-      {work.length === 0 ? <p className="py-xs text-body text-muted-foreground">{t("externalTools.noWork")}</p> : (
-        <ul className="flex flex-col">
-          {work.map((item) => (
-            <li key={item.kind === "agent" ? item.agentId : item.id}>
-              <WorkRow item={item} onOpen={() => go(() => item.kind === "agent" ? actions.openAgent(item.paneId) : actions.openMission(item.id))} />
-            </li>
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs px-md py-sm" data-access-connection={connection.id} data-access-level={connection.level}>
+      <span className="flex min-w-[min(100%,var(--size-settings-control-w))] flex-1 flex-col gap-xxs">
+        <span className="break-words text-subhead font-medium text-foreground">{connection.name}</span>
+        <span className="break-words text-body text-muted-foreground" data-access-line={connection.id}>
+          {connectionLine(connection, machine, now, t, language).map((piece, index) => (
+            <span key={index}>{index > 0 ? " · " : ""}<span className="whitespace-nowrap">{piece}</span></span>
           ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function WorkRow({ item, onOpen }: { item: ToolWork; onOpen: () => void }) {
-  const { t } = useInterfaceTranslation();
-  if (item.kind === "agent") {
-    const row = item.row;
-    return (
-      <RowButton className="gap-sm text-body" onClick={onOpen} data-access-agent={item.paneId}>
-        {row ? <StatusMark mark={row.mark} className={markTone(row)} /> : null}
-        {row ? <AgentMark kind={row.agent_kind} /> : null}
-        <span className={cn("min-w-0 flex-1 truncate", row ? "text-foreground" : "text-muted-foreground")}>
-          {row ? row.identity_label : t("externalTools.agentGone", { id: item.agentId })}
         </span>
-      </RowButton>
-    );
-  }
-  return (
-    <RowButton className="gap-sm text-body" onClick={onOpen} disabled={!item.mission} data-access-mission={item.id}>
-      <WaypointsIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-      <span className="sr-only">{t("externalTools.mission")}: </span>
-      <span className="min-w-0 flex-1 truncate text-foreground">{item.mission?.title ?? item.id}</span>
-    </RowButton>
+        {warnsOfWork(connection) ? <span className="mt-xxs" data-access-warning={connection.id}><Note tone="warn">{t("externalTools.workWarning")}</Note></span> : null}
+      </span>
+      <span className="ml-auto flex flex-wrap items-center justify-end gap-sm">
+        <ToggleGroup type="single" value={connection.level} onValueChange={(next) => next && next !== connection.level && actions.setAccessLevel(connection.id, next as AccessLevel)} aria-label={t("externalTools.level.label")}>
+          {LEVELS.map((level) => {
+            const Icon = LEVEL_ICON[level];
+            return (
+              <ToggleGroupItem key={level} value={level} data-access-level-option={level}>
+                <Icon aria-hidden="true" />
+                {t(`externalTools.level.${level}`)}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+        <Button variant="secondary" size="sm" className="text-destructive" onClick={() => actions.revokeAccess(connection.id)} data-access-revoke={connection.id}>
+          {t("externalTools.disconnect")}
+        </Button>
+      </span>
+    </div>
   );
 }
