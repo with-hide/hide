@@ -974,8 +974,10 @@ fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversa
         .cloned()
         .expect("the child");
     let mut slept = crate::agent_sleep::SleepRecord::ending(&sleeper, None, 0).unwrap();
-    // This engine still reports the ended agent, as after begin_agent_sleep.
+    // This engine still reports the ended agent, as after begin_agent_sleep
+    // and its end landing.
     slept.server_mark = runtime.read_mark(runtime.node.as_str());
+    slept.ended_seq = sleeper.state_change_seq;
     slept.phase = crate::agent_sleep::SleepPhase::Sleeping;
     runtime
         .snapshot

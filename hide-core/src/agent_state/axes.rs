@@ -1,5 +1,5 @@
 //! Lifecycle, completion, read and ownership axes, including lineage.
-use super::turn::{AgentGroup, derive_from_axes, group_of, sort_agents};
+use super::turn::{AgentGroup, derive_from_axes, sort_agents};
 use crate::labels::analysis::LabelEnd;
 use crate::model::{AgentWait, PaneReadRecord, SidebarAgentSnapshot};
 use crate::sidebar::SessionAgentPayload;
@@ -79,6 +79,14 @@ pub enum Ownership {
     /// home's own turn (a pull request to review, a failed check), beside
     /// the agent's own demand, which every row carries.
     HideAi { operator_turn: bool },
+    /// Work an external tool started and keeps (PRD hide-external-control
+    /// D-09): a root whose `tool` mark says its connection stands at Act.
+    /// Unlike Hide AI's, the agent's own question, approval or block does
+    /// not call the operator, since the tool reads and answers its agent
+    /// itself (D-09, B28); only a View the agent opened for the operator
+    /// does, and a person's turn, as on every root (B29). It is Seen
+    /// otherwise, never Working or Done.
+    Tool,
 }
 
 /// Names each fork's source (`SidebarAgentSnapshot::forked_from`). A fork is
@@ -721,19 +729,39 @@ pub fn ownership_of(agent: &SidebarAgentSnapshot) -> Ownership {
         Ownership::HideAi {
             operator_turn: home.turn.is_some(),
         }
+    } else if tool_keeps(agent) {
+        Ownership::Tool
     } else {
         Ownership::Operator
     }
 }
 
+/// Whether an external tool keeps the row's work now: its agent, or one
+/// delegated under it, while the tool's connection stands at Act (PRD
+/// hide-external-control D-14). A delegated row of the tool's is still
+/// `Delegated` for its group; this is what keeps it off the lists too
+/// (B27).
+pub(crate) fn tool_keeps(agent: &SidebarAgentSnapshot) -> bool {
+    agent.tool.as_ref().is_some_and(|tool| tool.owns)
+}
+
+/// Whether a row's work is kept by someone other than the operator: Hide
+/// AI's home or an external tool.
+pub fn kept_elsewhere(agent: &SidebarAgentSnapshot) -> bool {
+    matches!(ownership_of(agent), Ownership::HideAi { .. }) || tool_keeps(agent)
+}
+
 /// Whether a row belongs in the lists that enumerate the operator's own work
 /// (the sidebar tree's roots, Sessions, Overview's requests and graph, the
-/// phone): a row its home owns is listed only while it is in Needs You, the
-/// one place the home calls the operator out (PRD hide-ai-work-home D-13).
-/// This is the one decision, so no list filters on its own.
+/// 태스크 list, the checkout counts, the phone): a row Hide AI's home or an
+/// external tool keeps is listed only while it is in Needs You, the one
+/// place its owner calls the operator out (PRD hide-ai-work-home D-13, PRD
+/// hide-external-control B26, B29). The group is the row's as derived, a
+/// raise and a person's turn included, so the lists agree with the raised
+/// Needs You and the phone, which read the same group. This is the one
+/// decision, so no list filters on its own; `unlisted` publishes it.
 pub fn listed_for_operator(agent: &SidebarAgentSnapshot) -> bool {
-    !matches!(ownership_of(agent), Ownership::HideAi { .. })
-        || group_of(agent) == AgentGroup::NeedsYou
+    !kept_elsewhere(agent) || agent.group == AgentGroup::NeedsYou.name()
 }
 
 /// The demand axis of a projected row, for callers outside this module.

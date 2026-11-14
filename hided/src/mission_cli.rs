@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission node <key> [--mission <id>] (--hold <why> --for <30m|2h> | --no-hold)\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>]... [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node-or-mission-id>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission node <key> [--mission <id>] (--hold <why> --for <30m|2h> | --no-hold)\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] ((--pass | --fix) --said <the operator's words> | --show <view-id|path>...)\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>]... [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node-or-mission-id>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -99,7 +99,11 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
     ),
     ("skip", &["--mission", "--reason", "--decision"], &[]),
     ("defect", &["--mission", "--found-by", "--line"], &[]),
-    ("gate", &["--mission", "--said"], &["--pass", "--fix"]),
+    (
+        "gate",
+        &["--mission", "--said", "--show"],
+        &["--pass", "--fix"],
+    ),
     (
         "decide",
         &[
@@ -248,6 +252,31 @@ fn commit(flag: &str, value: &str) -> Result<String, String> {
     } else {
         Err(format!("{flag} takes a commit: 7 to 64 hexadecimal digits"))
     }
+}
+
+/// What each repeated flag gave, in order, and the words left for `flags`.
+type Repeated<'a> = (BTreeMap<String, Vec<String>>, Vec<&'a String>);
+
+/// Takes out of `args` the flags of `names`, each given once per value and
+/// kept in order: what each gave, and the other words, which `flags` reads.
+fn repeated<'a>(
+    mut args: impl Iterator<Item = &'a String>,
+    names: &[&str],
+) -> Result<Repeated<'a>, String> {
+    let mut given: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut rest = Vec::new();
+    while let Some(arg) = args.next() {
+        if !names.contains(&arg.as_str()) {
+            rest.push(arg);
+            continue;
+        }
+        let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?;
+        if value.starts_with("--") || value.trim().is_empty() {
+            return Err(format!("{arg} needs a value"));
+        }
+        given.entry(arg.clone()).or_default().push(value.clone());
+    }
+    Ok((given, rest))
 }
 
 fn mission_of(values: &BTreeMap<String, String>) -> Result<Option<String>, String> {
@@ -473,10 +502,31 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "gate" => {
-            let (positional, values, set) = flags(args, "gate")?;
+            let (mut given, rest) = repeated(args, &["--show"])?;
+            let show = given.remove("--show").unwrap_or_default();
+            if show.len() > hide_core::missions::VIEW_LINK_LIMIT {
+                return Err(format!(
+                    "--show names at most {} Views",
+                    hide_core::missions::VIEW_LINK_LIMIT
+                ));
+            }
+            let (positional, values, set) = flags(rest.into_iter(), "gate")?;
             let [node] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
+            if !show.is_empty() {
+                if !set.is_empty() || values.contains_key("--said") {
+                    return Err(
+                        "--show shows the gate's screens; relay the operator's answer apart with --pass or --fix and --said"
+                            .to_owned(),
+                    );
+                }
+                return Ok(MissionCli::Command(MissionCommand::GateShow {
+                    mission: mission_of(&values)?,
+                    node: key(node)?,
+                    show,
+                }));
+            }
             let pass = match (
                 set.iter().any(|flag| flag == "--pass"),
                 set.iter().any(|flag| flag == "--fix"),
@@ -497,28 +547,15 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "decide" => {
-            // `--option`, `--show` and `--node` are given more than once, in order.
-            let args: Vec<&String> = args.collect();
-            let mut options = Vec::new();
-            let mut show = Vec::new();
-            let mut nodes = Vec::new();
-            let mut rest = Vec::new();
-            let mut words = args.into_iter();
-            while let Some(arg) = words.next() {
-                if arg == "--option" || arg == "--show" || arg == "--node" {
-                    let value = words.next().ok_or_else(|| format!("{arg} needs a value"))?;
-                    if value.starts_with("--") || value.trim().is_empty() {
-                        return Err(format!("{arg} needs a value"));
-                    }
-                    match arg.as_str() {
-                        "--option" => options.push(value.clone()),
-                        "--show" => show.push(value.clone()),
-                        _ => nodes.push(key(value)?),
-                    }
-                } else {
-                    rest.push(arg);
-                }
-            }
+            let (mut given, rest) = repeated(args, &["--option", "--show", "--node"])?;
+            let options = given.remove("--option").unwrap_or_default();
+            let show = given.remove("--show").unwrap_or_default();
+            let mut nodes = given
+                .remove("--node")
+                .unwrap_or_default()
+                .iter()
+                .map(|value| key(value))
+                .collect::<Result<Vec<_>, _>>()?;
             let (positional, values, set) = flags(rest.into_iter(), "decide")?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
@@ -736,39 +773,51 @@ pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
     print_answer(request(env, &command))
 }
 
-/// `decide --show`'s paths opened as Views and named by their ids: a value
-/// that names an existing path is opened, any other is a View id already.
+/// `decide --show`'s and `gate --show`'s paths opened as Views and named
+/// by their ids: a value that names an existing path is opened, any other is
+/// a View id already.
 fn shown_as_views(env: &Env, command: MissionCommand) -> Result<MissionCommand, String> {
-    let MissionCommand::Decide {
-        mission,
-        line,
-        why,
-        options,
-        recommend,
-        node,
-        nodes,
-        show,
-    } = command
-    else {
-        return Ok(command);
-    };
-    let mut views = Vec::with_capacity(show.len());
-    for target in show {
-        if std::path::Path::new(&target).exists() {
-            views.push(crate::cli::open_view_for_decision(env, &target)?);
-        } else {
-            views.push(target);
+    let opened = |show: Vec<String>| -> Result<Vec<String>, String> {
+        let mut views = Vec::with_capacity(show.len());
+        for target in show {
+            if std::path::Path::new(&target).exists() {
+                views.push(crate::cli::open_view_for_decision(env, &target)?);
+            } else {
+                views.push(target);
+            }
         }
-    }
-    Ok(MissionCommand::Decide {
-        mission,
-        line,
-        why,
-        options,
-        recommend,
-        node,
-        nodes,
-        show: views,
+        Ok(views)
+    };
+    Ok(match command {
+        MissionCommand::Decide {
+            mission,
+            line,
+            why,
+            options,
+            recommend,
+            node,
+            nodes,
+            show,
+        } => MissionCommand::Decide {
+            mission,
+            line,
+            why,
+            options,
+            recommend,
+            node,
+            nodes,
+            show: opened(show)?,
+        },
+        MissionCommand::GateShow {
+            mission,
+            node,
+            show,
+        } => MissionCommand::GateShow {
+            mission,
+            node,
+            show: opened(show)?,
+        },
+        command => command,
     })
 }
 
@@ -1026,6 +1075,21 @@ mod tests {
                 show: Vec::new(),
             })
         );
+        // A gate's screens are shown once per View, in order, and never with
+        // the operator's answer.
+        assert_eq!(
+            parse(words(&["gate", "fix", "--show", "a.png", "--show", "v12"]).iter()).unwrap(),
+            MissionCli::Command(MissionCommand::GateShow {
+                mission: None,
+                node: "fix".into(),
+                show: vec!["a.png".into(), "v12".into()],
+            })
+        );
+        assert!(
+            parse(words(&["gate", "fix", "--show", "a.png", "--pass", "--said", "OK"]).iter())
+                .is_err()
+        );
+        assert!(parse(words(&["gate", "fix", "--show"]).iter()).is_err());
         assert!(parse(words(&["decide", "--line", "Q", "--recommend", "0"]).iter()).is_err());
         assert!(parse(words(&["decide", "--line", "Q", "--option"]).iter()).is_err());
         assert!(parse(words(&["close"]).iter()).is_err());

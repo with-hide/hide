@@ -4,6 +4,9 @@ import { createActions } from "./actions";
 import { clearProbeCache } from "./terminalLinkProvider";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { frontDeviceId } from "./devices";
+import { overviewDeviceOf } from "./overviewTasks";
+import "./toolCells";
 import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
 import { FindBar } from "./Overlays";
@@ -436,5 +439,66 @@ describe("input after a confirmed View close", () => {
       frames.forEach((callback) => callback(0));
       expect(document.activeElement).toBe(content);
     } finally { remove(); }
+  });
+});
+
+// PRD hide-external-control B44: a tool's cell stands over this window's own
+// machine, which the window shows again once the cell goes (disconnect, leave
+// or View only), whether the window is a node's or the Overview showed another device.
+describe("selecting a tool's cell", () => {
+  const TOOL = "c0ffee00c0ffee00";
+  afterEach(() => {
+    window.location.hash = "";
+    useShellStore.setState({ rest: null });
+    useUiStore.getState().setToolCell(null);
+  });
+  // `named` is the device a main page names, as a rail tile or a device's Overview opened as the page leaves it.
+  const select = (hash: string, front: string, overview: string | null = null, named?: string) => {
+    window.location.hash = hash;
+    useShellStore.setState({ rest: { navigator: { focused_device_id: front, devices: [{ id: "core", kind: "local" }, { id: "node-window", kind: "remote" }, { id: "mini", kind: "remote" }], workspaces: [], tools: [{ connection: TOOL, name: "nightly", turn: 0, devices: [] }] }, status: { remote: [] } } as never });
+    useUiStore.setState({ screen: { kind: "main", deviceId: named } } as never);
+    useUiStore.getState().setOverview({ deviceId: overview });
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).focusTool(TOOL);
+    return { focus: sent.filter((event) => event.kind === "focus_device").map((event) => (event.payload as { device_id: string }).device_id), overview: useUiStore.getState().overview.deviceId, cell: useUiStore.getState().toolCell };
+  };
+  // The machine the Overview shows, as `useOverviewDevice` reads it, beside the one the rail and the sidebar show once no cell stands.
+  const shown = () => {
+    const { overview, screen } = useUiStore.getState();
+    const now = useShellStore.getState().rest;
+    return { overview: overviewDeviceOf(now, overview.deviceId, screen?.kind === "main" ? screen.deviceId : undefined), rail: frontDeviceId(now) };
+  };
+  // The core takes the focus the window asked for, then the tool leaves Act (a disconnect, a leave, View only) and its cell goes.
+  const cellGoes = (focused: string) => {
+    const now = useShellStore.getState().rest!;
+    useShellStore.setState({ rest: { ...now, navigator: { ...now.navigator!, focused_device_id: focused, tools: [] } } });
+  };
+
+  it("brings this window's own machine to the front under the cell, never the core's from a node's window", () => {
+    expect(select("#node=node-window", "core"), "a node's window").toEqual({ focus: ["node-window"], overview: null, cell: TOOL });
+    expect(select("#node=node-window", "node-window"), "already in front").toEqual({ focus: [], overview: null, cell: TOOL });
+    expect(select("", "mini", "mini"), "the core's window on a device's Overview").toEqual({ focus: ["core"], overview: null, cell: TOOL });
+  });
+
+  it("leaves the Overview on the machine the rail and the sidebar show once the cell goes, from a device's Overview page", () => {
+    for (const [hash, own] of [["", "core"], ["#node=node-window", "node-window"]] as const) {
+      expect(select(hash, "mini", null, "mini").focus, hash).toEqual([own]);
+      cellGoes(own);
+      expect(useUiStore.getState().toolCell, hash).toBeNull();
+      expect(shown(), hash).toEqual({ overview: own, rail: own });
+    }
+  });
+
+  it("names this window's own machine for the Overview under the cell, before the core answers the focus", () => {
+    select("#node=node-window", "mini", null, "mini");
+    expect(shown().overview).toBe("node-window");
+  });
+
+  it("drops a device the Overview named while the cell stood once the cell goes", () => {
+    select("", "core");
+    useUiStore.setState({ screen: { kind: "main", deviceId: "mini" } });
+    useUiStore.getState().setOverview({ deviceId: "mini" });
+    cellGoes("core");
+    expect(shown()).toEqual({ overview: "core", rail: "core" });
   });
 });

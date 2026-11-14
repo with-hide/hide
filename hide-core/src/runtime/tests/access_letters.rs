@@ -234,6 +234,7 @@ fn a_tool_at_act_writes_to_an_agent_and_reads_its_reply_once_in_its_inbox() {
                 id: id.into(),
                 intent: "answer".into(),
                 body: "done".into(),
+                now: false,
             },
         )
         .unwrap();
@@ -704,4 +705,55 @@ fn a_disconnect_with_the_store_full_a_leave_or_a_restore_ends_what_the_tool_kept
             "{end}"
         );
     }
+}
+
+/// Together check, issue 5: `hide agent list` lists agents, so a tool's own
+/// identity is no row of it, for an agent's list or a tool's, as no
+/// code-owned identity is (Desk's, Hide AI's); it is the origin of the work
+/// the tool starts, which `origin_tool` and `hide agent show` still name.
+#[test]
+fn the_agent_list_names_no_tools_own_identity() {
+    let fixture = Fixture::start();
+    let connection = fixture.connect(Level::Act);
+    register_origin(&fixture, &connection);
+    let ledger = fixture.runtime.lock().unwrap().delivery_state().unwrap();
+    assert_eq!(
+        ledger
+            .agents
+            .iter()
+            .filter(|record| record.actor.code_owned())
+            .count(),
+        1,
+        "the tool's record is kept"
+    );
+    let names = |listed: Value| {
+        let mut names = listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["pane"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    let list = || Command::Agents {
+        command: crate::coordination::Command::List { live: false },
+    };
+    assert_eq!(
+        names(fixture.agent("worker", list()).unwrap()),
+        ["other", "worker"]
+    );
+    assert_eq!(
+        names(fixture.tool(&connection, list()).unwrap()),
+        ["other", "worker"]
+    );
+    // At View only, as the together check read it.
+    fixture.operator(AccessEvent::Level {
+        id: connection.clone(),
+        level: Level::View,
+    });
+    assert_eq!(
+        names(fixture.tool(&connection, list()).unwrap()),
+        ["other", "worker"]
+    );
 }

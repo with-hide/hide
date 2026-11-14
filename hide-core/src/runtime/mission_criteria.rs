@@ -314,6 +314,10 @@ impl Runtime {
             .map(|line| {
                 let mut line = line.clone();
                 line.state = line.shown(heads);
+                // The Views shown for a gate reach the screen through its
+                // question (`Question::views`); the map and `hide mission
+                // show` carry no checkout path of them.
+                line.shown.clear();
                 line
             })
             .collect()

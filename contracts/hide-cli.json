@@ -6421,6 +6421,11 @@
                 }
             ],
             "command": "mission gate",
+            "needs_one_of": [
+                "--pass",
+                "--fix",
+                "--show"
+            ],
             "options": [
                 {
                     "name": "--mission",
@@ -6432,25 +6437,48 @@
                 },
                 {
                     "conflicts": [
-                        "--fix"
+                        "--fix",
+                        "--show"
                     ],
                     "name": "--pass",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--said"
+                    ],
                     "value": null
                 },
                 {
                     "conflicts": [
-                        "--pass"
+                        "--pass",
+                        "--show"
                     ],
                     "name": "--fix",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--said"
+                    ],
                     "value": null
                 },
                 {
+                    "conflicts": [
+                        "--show"
+                    ],
                     "name": "--said",
-                    "required": true,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pass",
+                        "--fix",
+                        "--said"
+                    ],
+                    "name": "--show",
+                    "repeats_at_most": 16,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
@@ -6462,6 +6490,7 @@
                 "mission_node_unknown",
                 "mission_gate_none",
                 "mission_gate_not_open",
+                "mission_gate_passed",
                 "mission_gate_words_missing",
                 "mission_closed"
             ],
@@ -6965,7 +6994,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:da7b258dbae48b3a38ae37afac33d4181b4babc85c2c80f4023ca2561a43cfab",
+    "digest": "sha256:a1ce395cd70b29fa3386f242985febbc94ba910b52be7b3cbf94fad30a6a25f5",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -2,10 +2,9 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { legacyAgentRow } from "../../test/legacyAgentRow";
 import { createActions } from "../actions";
 import { clientI18n } from "../i18n/translator";
-import type { AccessConnection, AccessSection, Mission } from "../snapshot";
+import type { AccessConnection, AccessSection } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import type { DispatchFn } from "../ws";
@@ -34,7 +33,7 @@ afterEach(async () => {
 function tool(over: Partial<AccessConnection>): AccessConnection {
   return {
     id: "conn-1", name: "nightly-cron", level: "view", program: "/usr/local/bin/nightly", created_ms: NOW - 86_400_000,
-    last_used_ms: NOW - 3 * 60_000, agents: [], agent_count: 0, missions: [], mission_count: 0, ...over,
+    last_used_ms: NOW - 3 * 60_000, agent_count: 0, mission_count: 0, ...over,
   };
 }
 
@@ -105,7 +104,7 @@ it("names a request whose program the system did not say as an unknown program",
   await unmount();
 });
 
-it("lists connected tools under n / 16 with the legend, each line naming machine, last use and its work (B11)", async () => {
+it("lists connected tools under n / 16 with the legend, each line naming machine, last use and how much work it started, and opening nothing (B11)", async () => {
   const { q, container, unmount } = await mount(section({
     connections: [tool({ id: "a", name: "hermes-ctong", level: "act", agent_count: 2, mission_count: 1 }), tool({ id: "b" })],
   }), "ko");
@@ -113,6 +112,8 @@ it("lists connected tools under n / 16 with the legend, each line naming machine
   expect(q("[data-access-legend]")?.textContent).toBe("보기만볼 수만시키기일까지 시킴");
   expect(q('[data-access-line="a"]')?.textContent).toMatch(/ · 3분 전 사용 · 에이전트 2 · 미션 1$/);
   expect(container.querySelectorAll("[data-access-connection]")).toHaveLength(2);
+  // A row is a summary only: it opens no list of the tool's agents or missions.
+  expect(q('[data-access-connection="a"] [aria-expanded]')).toBeNull();
   expect(q("[data-external-tools]")?.textContent).not.toContain("승인 대기");
   await unmount();
 });
@@ -129,9 +130,9 @@ it("switches a tool's level with its two-part control and sends nothing for the 
 it("disconnects at once with no confirmation, and warns only on an Act tool that holds work (B13)", async () => {
   const { events, q, press, unmount } = await mount(section({
     connections: [
-      tool({ id: "busy", level: "act", agent_count: 1, agents: [{ agent_id: "agent-9", pane_id: "w1:p9" }] }),
+      tool({ id: "busy", level: "act", agent_count: 1 }),
       tool({ id: "idle", level: "act" }),
-      tool({ id: "seeing", level: "view", agent_count: 1, agents: [{ agent_id: "agent-8", pane_id: "w1:p8" }] }),
+      tool({ id: "seeing", level: "view", agent_count: 1 }),
     ],
   }), "ko");
   expect(q('[data-access-warning="busy"]')?.textContent).toBe("끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요");
@@ -155,39 +156,5 @@ it("waits for the core's section before drawing either list", async () => {
   const { q, container, unmount } = await mount(null);
   expect(container.textContent).toBe("Connecting to hide…");
   expect(q("[data-access-count]")).toBeNull();
-  await unmount();
-});
-
-it("opens a tool row on its agents and missions; an agent opens its pane and closes Settings (B15)", async () => {
-  const agent = legacyAgentRow({ pane_id: "w1:p9", identity_label: "fix-login", agent_kind: "claude" });
-  const mission = { id: "mission-3", title: "Ship the login fix" } as Mission;
-  const { events, q, press, container, unmount } = await mount(section({
-    connections: [tool({ id: "a", level: "act", agent_count: 2, mission_count: 1, agents: [{ agent_id: "agent-9", pane_id: "w1:p9" }, { agent_id: "agent-10", pane_id: "w1:p10" }], missions: ["mission-3"] })],
-  }), "en", { agents: [agent], rest: { ...savedShell.rest, missions: { items: [mission] } } });
-  expect(q('[data-access-work="a"]')).toBeNull();
-  await press('[data-access-open="a"]');
-  expect(q('[data-access-open="a"]')?.getAttribute("aria-expanded")).toBe("true");
-  const listed = [...container.querySelectorAll('[data-access-work="a"] li')].map((line) => line.textContent);
-  expect(listed).toEqual(["fix-login", "agent-10 · not in the list yet", "Mission: Ship the login fix"]);
-
-  await press('[data-access-agent="w1:p9"]');
-  expect(useUiStore.getState().overlay).not.toBe("settings");
-  expect(events.find((event) => event.kind === "focus_pane")?.payload).toMatchObject({ pane_id: "w1:p9" });
-  await unmount();
-});
-
-it("opens a tool's mission from its row and says when a tool started nothing (B15)", async () => {
-  const mission = { id: "mission-3", title: "Ship the login fix", device_id: "local", workspace_id: "ws", checkout_path: "/nowhere" } as Mission;
-  const { q, press, unmount } = await mount(section({
-    connections: [tool({ id: "a", missions: ["mission-3"], mission_count: 1 }), tool({ id: "b" })],
-  }), "en", { rest: { ...savedShell.rest, missions: { items: [mission] } } });
-  await press('[data-access-open="b"]');
-  expect(q('[data-access-work="b"]')?.textContent).toBe("This tool has started no agents or missions");
-  await press('[data-access-open="a"]');
-  await press('[data-access-mission="mission-3"]');
-  expect(useUiStore.getState().overlay).not.toBe("settings");
-  // Away from a Workspace, a mission whose checkout no list holds opens on the mission screen.
-  expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
-  expect(useUiStore.getState().missions.selected).toBe("mission-3");
   await unmount();
 });

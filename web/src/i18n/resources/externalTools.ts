@@ -27,10 +27,6 @@ export const externalToolsEnglish = {
   "externalTools.workWarning": "Disconnecting or switching to View only makes this tool's work yours",
   "externalTools.empty": "No tools are connected",
   "externalTools.emptyCommand": "hide access request --name <name>",
-  "externalTools.open": "{{name}} · Show its agents and missions",
-  "externalTools.noWork": "This tool has started no agents or missions",
-  "externalTools.agentGone": "{{id}} · not in the list yet",
-  "externalTools.mission": "Mission",
 } as const;
 
 const ko = {
@@ -57,10 +53,6 @@ const ko = {
   "externalTools.workWarning": "끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요",
   "externalTools.empty": "연결된 도구가 없어요",
   "externalTools.emptyCommand": "hide access request --name <이름>",
-  "externalTools.open": "{{name}} · 에이전트와 미션 보기",
-  "externalTools.noWork": "이 도구가 띄운 에이전트와 미션이 없어요",
-  "externalTools.agentGone": "{{id}} · 아직 목록에 없어요",
-  "externalTools.mission": "미션",
 } satisfies Catalog<typeof externalToolsEnglish>;
 
 const zhCN = {
@@ -87,10 +79,6 @@ const zhCN = {
   "externalTools.workWarning": "断开或改为仅查看后，此工具的工作将归你所有",
   "externalTools.empty": "没有已连接的工具",
   "externalTools.emptyCommand": "hide access request --name <名称>",
-  "externalTools.open": "{{name}} · 查看其智能体和任务",
-  "externalTools.noWork": "此工具没有启动智能体或任务",
-  "externalTools.agentGone": "{{id}} · 尚未出现在列表中",
-  "externalTools.mission": "任务",
 } satisfies Catalog<typeof externalToolsEnglish>;
 
 const ja = {
@@ -117,10 +105,6 @@ const ja = {
   "externalTools.workWarning": "切断するか閲覧のみに変えると、このツールの作業はあなたのものになります",
   "externalTools.empty": "接続済みのツールはありません",
   "externalTools.emptyCommand": "hide access request --name <名前>",
-  "externalTools.open": "{{name}} · エージェントとミッションを表示",
-  "externalTools.noWork": "このツールが起動したエージェントとミッションはありません",
-  "externalTools.agentGone": "{{id}} · まだ一覧にありません",
-  "externalTools.mission": "ミッション",
 } satisfies Catalog<typeof externalToolsEnglish>;
 
 export const externalToolsCatalogs = { en: externalToolsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof externalToolsEnglish>;

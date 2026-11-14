@@ -425,7 +425,10 @@ fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState 
     if read_ask(agent) {
         return TaskState::NeedsYou;
     }
-    if agent.resolved.is_none() && agent.wait.is_some() {
+    // A person's step the root waits on outside Needs You (a tool's agent in
+    // the tool's cell, PRD hide-external-control B29) is a wait too: the
+    // work is in progress, not at rest.
+    if agent.resolved.is_none() && (agent.wait.is_some() || agent.human_turn.is_some()) {
         return TaskState::Waiting;
     }
     if agent.revisit.is_some_and(|revisit| revisit.starred) {

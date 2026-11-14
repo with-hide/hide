@@ -18,9 +18,14 @@ export type MissionGroup = (typeof MISSION_GROUPS)[number];
 /** How many closed missions the list shows before `모두 ›` (B7). */
 export const CLOSED_SHOWN = 3;
 
-/** The missions a device works on (D-06), every project of it. */
-export function deviceMissions<M extends Pick<Mission, "device_id">>(missions: readonly M[], deviceId: string): M[] {
-  return missions.filter((mission) => mission.device_id === deviceId);
+/**
+ * The missions a device works on (D-06), every project of it, but for those an
+ * external tool keeps, which are in the tool's cell (PRD hide-external-control
+ * B30, D-36); with `tool`, the missions that tool keeps, on every device.
+ */
+export function deviceMissions<M extends Pick<Mission, "device_id" | "tool">>(missions: readonly M[], deviceId: string, tool: string | null = null): M[] {
+  if (tool !== null) return missions.filter((mission) => mission.tool?.owns === true && mission.tool.connection === tool);
+  return missions.filter((mission) => mission.device_id === deviceId && mission.tool?.owns !== true);
 }
 
 /** A project chip (B3): the catalog project a mission belongs to, by its id, and the name it shows. */

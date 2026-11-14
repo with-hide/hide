@@ -883,7 +883,8 @@ pub struct NavigatorSnapshot {
     /// search, focus, and project navigation never lose a folded project.
     pub inactive_projects: Vec<InactiveProjectGroupSnapshot>,
     pub agents: Vec<SidebarAgentSnapshot>,
-    /// The checkouts Hide AI started an agent in, by device and path. A list
+    /// The checkouts Hide AI, or an external tool that keeps its work, started
+    /// an agent in, by device and path. A list
     /// beside the checkouts, not a field on them, because a checkout row is
     /// rebuilt from Git and the engine at several places and would lose a value
     /// laid on it; the shell joins it by `(device_id, path)`.
@@ -894,6 +895,11 @@ pub struct NavigatorSnapshot {
     /// D-09); a row whose root is live again only feeds that root's record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
+    /// One cell per external tool connected at Act, beside the devices
+    /// (PRD hide-external-control D-45, D-47): the work it keeps, which the
+    /// operator's own scopes leave out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<crate::agent_state::ToolCell>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -921,6 +927,22 @@ pub struct HideAiSnapshot {
     pub turn: Option<HomeTurn>,
 }
 
+/// An external tool's work on a row (PRD hide-external-control D-09, D-15).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolWorkSnapshot {
+    /// The tool's connection, by id (`AccessConnectionSnapshot::id`): a new
+    /// connection of the same name is another id, and takes none of this
+    /// work (D-40).
+    pub connection: String,
+    /// The name the tool connected with, which the pane head writes.
+    pub name: String,
+    /// The tool keeps the work now: its connection stands at Act. Read from
+    /// the connection list on every projection, never stored, so a
+    /// disconnect, a leave or View only hands the work to the operator at
+    /// once and Act again takes it back (D-14, D-40).
+    pub owns: bool,
+}
+
 /// The home's turn: the operator is to act on the work the agent did
 /// (D-14). The agent's own question, approval or block is the row's demand,
 /// not this.
@@ -938,13 +960,20 @@ pub enum HomeTurn {
     BranchReady,
 }
 
-/// A checkout Hide AI made for an agent it started.
+/// A checkout Hide made for an agent Hide AI started, or for one an external
+/// tool started while the tool keeps its work.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HideAiCheckoutSnapshot {
     pub device_id: String,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::coordination::SpawnTask>,
+    /// The name of the external tool whose work the checkout is, while its
+    /// connection stands at Act (PRD hide-external-control D-14); absent for
+    /// Hide AI's. Once the tool lets go the checkout is the operator's and
+    /// leaves this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -2267,6 +2296,20 @@ pub struct SidebarAgentSnapshot {
     /// it; absent from the wire for every other agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_ai: Option<HideAiSnapshot>,
+    /// An external tool's work (PRD hide-external-control D-09): an agent
+    /// the tool started, or one started under it with `--parent`. Set by
+    /// the runtime from the coordination ledger and the tool's connection,
+    /// so a session read never makes it; absent from the wire for every
+    /// other agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolWorkSnapshot>,
+    /// The operator's own lists leave this row out
+    /// (`agent_state::listed_for_operator`): work Hide AI's home or an
+    /// external tool keeps, while it asks nothing of the operator. Written
+    /// with the group, so a wire reader (the phone) follows the core's one
+    /// decision instead of making its own; absent while the row is listed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     /// The request view's part of the row: the verb and since when, the
     /// request and reply lines, the pull requests (`request_view.rs`).
     /// Absent until the core has built it.
@@ -8214,6 +8257,7 @@ impl Snapshot {
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
                 archived_sessions: Vec::new(),
+                tools: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,
@@ -10533,7 +10577,6 @@ mod wire_enum_tests {
             use crate::delivery::held::HeldFor;
             let held = [
                 HeldFor::Unreachable,
-                HeldFor::Undelivered,
                 HeldFor::Approval,
                 HeldFor::Draft,
                 HeldFor::Unanswered,
@@ -10541,7 +10584,6 @@ mod wire_enum_tests {
             for variant in held {
                 match variant {
                     HeldFor::Unreachable
-                    | HeldFor::Undelivered
                     | HeldFor::Approval
                     | HeldFor::Draft
                     | HeldFor::Unanswered => {}

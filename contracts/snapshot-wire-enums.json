@@ -32,7 +32,7 @@
   "mission_answer_source": ["banner", "conversation"],
   "mission_decision_view_by": ["conductor", "worker"],
   "mission_answer_failure": ["conductor_gone", "device_disconnected", "send_failed", "session_unreadable"],
-  "mission_letters_held_for": ["unreachable", "undelivered", "approval", "draft", "unanswered"],
+  "mission_letters_held_for": ["unreachable", "approval", "draft", "unanswered"],
   "mission_node_work": ["working", "waiting", "stopped", "no_worker"],
   "plan_step_status": ["planned", "working", "done", "dropped"],
   "plan_review": ["approved", "proposed"],

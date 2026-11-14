@@ -172,6 +172,22 @@ export type ProjectTasksScope = {
   recency: string;
 };
 
+/**
+ * An external tool's cell beside the devices (PRD hide-external-control D-45,
+ * D-46, D-47): one per tool connected at Act, with only the work it keeps.
+ * `turn` is its grey number, what waits on the tool's answer, never counted
+ * in the operator's Needs You, badge or notices (B41).
+ */
+export type ToolCell = {
+  connection: string;
+  name: string;
+  turn: number;
+  /** The tool's work per device that holds any: its 태스크 cards and the Overview's members. */
+  devices: { device_id: string; tasks: ProjectTasksScope; members: AgentScope["members"] }[];
+  /** The tool's missions that are their own ask, oldest first. */
+  mission_asks?: string[];
+};
+
 /** Why a pull request stands where it does, as a kind the web words (`Reason`, PRD work-tab-pr-lens D-16). */
 export type PrReasonKind = "merge" | "update" | "assign_reviewer" | "assign_reviewer_optional" | "review" | "team_review" | "reply" | "check" | "working" | "conflict" | "failed" | "changes" | "ci" | "waiting_review" | "draft" | "queued" | "merged" | "checking" | "unjudged";
 

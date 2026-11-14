@@ -634,11 +634,7 @@ impl Runtime {
             }
             let sleeping = self.mission_sleeping(mission, ledger.as_deref());
             let mut facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
-            let operator_waits: Vec<bool> = mission
-                .nodes
-                .iter()
-                .map(|node| self.gate_open(mission, node))
-                .collect();
+            let operator_waits = self.operator_waits(mission);
             let seen =
                 self.stops_seen(mission, &mut facts.nodes, facts.pulls, &operator_waits, now);
             let acts = warn_acts(mission, facts.pulls, &facts.nodes, &operator_waits, now);
@@ -823,11 +819,7 @@ impl Runtime {
                 changed |= lower_not_started(&mut self.missions.book.missions[index], now);
             }
             let mission = &self.missions.book.missions[index];
-            let operator_waits: Vec<bool> = mission
-                .nodes
-                .iter()
-                .map(|node| self.gate_open(mission, node))
-                .collect();
+            let operator_waits = self.operator_waits(mission);
             let standing = crate::mission_health::stalls(
                 mission,
                 self.mission_pulls(mission),
@@ -947,6 +939,7 @@ impl Runtime {
                     own_prs,
                     unmet,
                     stopped,
+                    operator_waits: self.waits_on_operator(mission, node),
                 }
             })
             .collect();
@@ -977,11 +970,10 @@ impl Runtime {
             let Some(fact) = nodes.get_mut(at) else {
                 continue;
             };
-            let waits = operator_waits.get(at).copied().unwrap_or(false);
             let gone =
                 crate::mission_health::worker_gone(mission, node.status, node.kind, fact.worker);
             if !gone
-                && crate::mission_health::stopped_worker(mission, node, fact, pulls, waits)
+                && crate::mission_health::stopped_worker(mission, node, fact, pulls, operator_waits)
                     .is_none()
             {
                 continue;
@@ -1918,7 +1910,13 @@ impl Runtime {
         // before an earlier raise can leave it, even if this pass is capped.
         let mut inherited = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {
-            if !mission.status.asks() || self.mission_stale(mission) {
+            // A mission an external tool keeps tells the operator nothing;
+            // what it holds unannounced is told once the tool lets go of it
+            // (PRD hide-external-control B30, D-14).
+            if !mission.status.asks()
+                || self.mission_stale(mission)
+                || self.mission_tool(mission).is_some_and(|tool| tool.owns)
+            {
                 continue;
             }
             for (index, node) in mission.nodes.iter().enumerate() {
@@ -2009,11 +2007,7 @@ impl Runtime {
             return None;
         }
         let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
-        let operator_waits: Vec<bool> = mission
-            .nodes
-            .iter()
-            .map(|node| self.gate_open(mission, node))
-            .collect();
+        let operator_waits = self.operator_waits(mission);
         crate::mission_health::safety_net(
             mission,
             present,
@@ -2032,11 +2026,7 @@ impl Runtime {
         {
             return None;
         }
-        let operator_waits: Vec<bool> = mission
-            .nodes
-            .iter()
-            .map(|node| self.gate_open(mission, node))
-            .collect();
+        let operator_waits = self.operator_waits(mission);
         crate::mission_health::safety_net_due(
             mission,
             self.conductor_present_since(&mission.id, now),
@@ -2116,6 +2106,7 @@ impl Runtime {
                             mission,
                             node,
                             self.mission_pulls(mission),
+                            &self.operator_waits(mission),
                         ) == Some(true)
                             || node.warnings.iter().any(|warning| {
                                 warning.kind == crate::missions::WarningKind::Stopped

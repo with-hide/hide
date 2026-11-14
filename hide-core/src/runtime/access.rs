@@ -16,9 +16,7 @@ use serde_json::{Value, json};
 use super::Runtime;
 use crate::access::{Access, Call, Ended, Level, Standing, Stored};
 use crate::latest_file::{LatestFile, read_capped};
-use crate::model::{
-    AccessAgentSnapshot, AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot,
-};
+use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
 
 #[derive(Default)]
 pub(crate) struct AccessRuntime {
@@ -269,6 +267,7 @@ impl Runtime {
                         .map_err(str::to_owned)?;
                     self.note_access("access.left", Some(&connection.id), None, None);
                     self.access_changed(true);
+                    self.tool_work_moved(&connection.id);
                     Ok(json!({"state": "left", "id": connection.id}))
                 }
                 Standing::Pending { id, .. } => {
@@ -315,6 +314,13 @@ impl Runtime {
             Ok((kind, id, level, save)) => {
                 self.note_access(kind, Some(id), level, None);
                 self.access_changed(save);
+                if matches!(
+                    event,
+                    AccessEvent::Level { .. } | AccessEvent::Revoke { .. }
+                ) {
+                    let id = id.clone();
+                    self.tool_work_moved(&id);
+                }
                 true
             }
             Err(reason) => {
@@ -352,6 +358,77 @@ impl Runtime {
         self.access.edit += 1;
     }
 
+    /// Whether the tool of `connection` keeps its work now: the connection
+    /// stands, at Act (PRD hide-external-control D-14). A View only, a
+    /// disconnected or a left connection keeps none, and a new connection
+    /// of the same name is another id, so it takes none of this (D-40).
+    pub(crate) fn access_keeps_work(&self, connection: &str) -> bool {
+        self.access
+            .state
+            .connection(connection)
+            .is_some_and(|connection| connection.level == Level::Act)
+    }
+
+    /// The external tool `work` is, as a row or a mission names it: whether
+    /// the tool keeps it is read from its connection now (D-14, D-40).
+    pub(crate) fn tool_work_snapshot(
+        &self,
+        work: &crate::coordination::started::ToolWork,
+    ) -> crate::model::ToolWorkSnapshot {
+        crate::model::ToolWorkSnapshot {
+            connection: work.connection.clone(),
+            name: work.name.clone(),
+            owns: self.access_keeps_work(&work.connection),
+        }
+    }
+
+    /// The external tool whose work `mission`'s Conductor is, by its
+    /// registration (or, for a record that names none, by its pane and
+    /// session) (PRD hide-external-control B30, D-36). While the tool keeps
+    /// it (`owns`) the mission is in the tool's cell and off the operator's
+    /// mission screen, counts, asks and notices; once the tool lets go it is
+    /// the operator's and still names the tool. Hide AI's and the
+    /// operator's missions name none (B37).
+    pub(crate) fn mission_tool(
+        &self,
+        mission: &crate::missions::Mission,
+    ) -> Option<crate::model::ToolWorkSnapshot> {
+        let conductor = &mission.conductor;
+        self.hide_started
+            .tool_work
+            .iter()
+            .find(|work| match conductor.agent_id.as_deref() {
+                Some(id) => work.agent_id == id,
+                None => {
+                    work.pane_id == conductor.actor.pane_id
+                        && work.session.is_some()
+                        && work.session == conductor.actor.session
+                }
+            })
+            .map(|work| self.tool_work_snapshot(work))
+    }
+
+    /// Who keeps connection `id`'s work moved (a level, a disconnect, a
+    /// leave): the rows and their lists are judged again on this event, so
+    /// the work is in or out of the operator's lists at once (B16). Nothing
+    /// is read for a tool that started nothing.
+    fn tool_work_moved(&mut self, id: &str) -> bool {
+        if !self
+            .hide_started
+            .tool_work
+            .iter()
+            .any(|work| work.connection == id)
+        {
+            return false;
+        }
+        let lineage = self.refresh_agent_lineage();
+        let agents = self.snapshot.navigator.agents.clone();
+        lineage
+            | self.sync_pane_status_from_agents(&agents)
+            | self.sync_session_state()
+            | self.refresh_agent_scopes()
+    }
+
     /// Makes the `access` section what the list, the tools' starts and the
     /// mission book say now, when one of them moved; sent again only when
     /// it differs.
@@ -374,7 +451,7 @@ impl Runtime {
                     .filter(|start| start.connection == connection.id)
                     .map(|start| &start.agent)
                     .collect();
-                let conducted: Vec<String> = missions
+                let conducted = missions
                     .iter()
                     .filter(|mission| {
                         mission.status.open()
@@ -383,8 +460,7 @@ impl Runtime {
                                     && mission.conductor.actor.session == agent.session
                             })
                     })
-                    .map(|mission| mission.id.clone())
-                    .collect();
+                    .count();
                 AccessConnectionSnapshot {
                     id: connection.id.clone(),
                     name: connection.name.clone(),
@@ -393,15 +469,7 @@ impl Runtime {
                     created_ms: connection.created_ms,
                     last_used_ms: connection.last_used_ms,
                     agent_count: agents.len(),
-                    agents: agents
-                        .iter()
-                        .map(|agent| AccessAgentSnapshot {
-                            agent_id: agent.agent_id.clone(),
-                            pane_id: agent.pane_id.clone(),
-                        })
-                        .collect(),
-                    mission_count: conducted.len(),
-                    missions: conducted,
+                    mission_count: conducted,
                 }
             })
             .collect();

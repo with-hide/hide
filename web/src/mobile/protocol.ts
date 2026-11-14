@@ -37,6 +37,8 @@ export type PhoneAgent = {
   wait_subagents?: number;
   /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
   starred?: true;
+  /** The external tool whose work the row is, by name, leading its second line as on the desktop's sidebar row (PRD hide-external-control B46); absent on the operator's own rows, and from a Mac that predates it. */
+  tool?: string;
   agent_kind: string;
   title: string;
   place: string | null;

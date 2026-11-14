@@ -1666,6 +1666,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * keep naming the same one.
      */
     focusDevice(deviceId: string) {
+      // A device's tile shows that device, in place of a tool's cell (PRD hide-external-control B40).
+      ui().setToolCell(null);
       const screen = ui().screen;
       // The mission screen follows the rail to the device chosen (PRD mission-screen D-06).
       if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
@@ -1676,6 +1678,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       }
       if (frontDeviceId(rest()) === deviceId) return;
       dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
+    },
+
+    /**
+     * Shows a tool's cell (PRD hide-external-control D-45, B40): the sidebar,
+     * the mission screen and the Overview read the tool's work in place of a
+     * device's. This machine comes to the front under it, so the cell gone
+     * (a disconnect, a leave, View only) leaves the window on This Mac (B44).
+     */
+    focusTool(connection: string) {
+      const screen = ui().screen;
+      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
+      // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
+      const own = windowDeviceId(rest()?.navigator?.devices);
+      if (screen?.kind === "main") {
+        // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
+        ui().setOverview({ deviceId: null, projectId: null, panel: null });
+        if (screen.deviceId !== undefined && screen.deviceId !== own) useUiStore.setState({ screen: { kind: "main", deviceId: own } });
+      }
+      ui().setToolCell(connection);
+      if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11). */

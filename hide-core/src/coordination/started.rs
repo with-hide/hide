@@ -5,6 +5,8 @@
 //! pane's identity as its origin, so neither matches. Nothing here reads a
 //! branch name or a path's spelling.
 
+use std::collections::HashMap;
+
 use super::{SpawnMode, SpawnTask};
 use crate::delivery::ledger::Ledger;
 
@@ -26,6 +28,18 @@ pub(crate) struct StartedCheckout {
     pub(crate) machine: String,
     pub(crate) path: String,
     pub(crate) task: Option<SpawnTask>,
+    /// The external tool whose spawn made it, absent for Hide AI's: the
+    /// connection's id and the name it connected with. Whether the tool
+    /// keeps the checkout is read from its connection when it is published,
+    /// as a row's is (PRD hide-external-control D-14).
+    pub(crate) tool: Option<CheckoutTool>,
+}
+
+/// The external tool a checkout was made for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CheckoutTool {
+    pub(crate) connection: String,
+    pub(crate) name: String,
 }
 
 /// One live agent an external tool started (PRD hide-external-control
@@ -36,6 +50,21 @@ pub(crate) struct AccessStarted {
     pub(crate) agent: StartedAgent,
 }
 
+/// One registration an external tool's work holds (PRD hide-external-control
+/// D-09): an agent the tool started, or one started under such an agent with
+/// `--parent` (B27), however deep. An ended one is kept, so a mission whose
+/// Conductor ended stays the tool's (D-36).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ToolWork {
+    pub(crate) connection: String,
+    /// The name the tool connected with, as its identity in the ledger says.
+    pub(crate) name: String,
+    pub(crate) agent_id: String,
+    pub(crate) pane_id: String,
+    pub(crate) session: Option<String>,
+    pub(crate) ended: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HideStarted {
     pub(crate) agents: Vec<StartedAgent>,
@@ -44,6 +73,9 @@ pub(crate) struct HideStarted {
     /// is the tool's while its connection stands at Act, which the
     /// connection list says, not this ledger.
     pub(crate) access: Vec<AccessStarted>,
+    /// Every registration of the tools' work, their starts' descendants
+    /// included (`ToolWork`), which decides whose a row and a mission are.
+    pub(crate) tool_work: Vec<ToolWork>,
 }
 
 /// The agents and checkouts Hide started, in ledger order. Compared by value
@@ -62,34 +94,53 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
         crate::delivery::HIDE_PREFIX,
         crate::delivery::HIDE_DESK_ROLE
     );
-    let origins: Vec<(&str, Option<&str>)> = ledger
+    let origins: Vec<(&str, Option<(&str, &str)>)> = ledger
         .agents
         .iter()
         .filter(|agent| agent.actor.hide_owned() && agent.actor.pane_id != desk)
-        .map(|agent| (agent.id.as_str(), agent.actor.access_connection()))
+        .map(|agent| {
+            let tool = agent
+                .actor
+                .access_connection()
+                .map(|connection| (connection, agent.actor.access_name().unwrap_or(connection)));
+            (agent.id.as_str(), tool)
+        })
         .collect();
     if origins.is_empty() {
         return started;
     }
+    // The registrations the tools started, ended or not: their work's roots.
+    let mut tool_roots: HashMap<&str, (&str, &str)> = HashMap::new();
     for spawn in ledger
         .spawns
         .iter()
         .filter(|spawn| spawn.mode == SpawnMode::Handoff)
     {
-        let Some(&(_, connection)) = origins
+        let Some(&(_, tool)) = origins
             .iter()
             .find(|(origin, _)| *origin == spawn.parent.as_str())
         else {
             continue;
         };
+        let connection = tool.map(|(connection, _)| connection);
+        if let (Some(tool), Some(child)) = (tool, spawn.child.as_deref()) {
+            tool_roots.insert(child, tool);
+        }
         let machine = super::spawn_machine(ledger, spawn);
-        if connection.is_none()
-            && let (Some(path), Some(machine)) = (&spawn.path, machine)
+        // A tool's checkout is one its spawn made: a spawn that started in
+        // a worktree already there, the operator's, or in the repository's
+        // own folder leaves that checkout the operator's.
+        if let (Some(path), Some(machine)) = (&spawn.path, machine)
+            && (tool.is_none() || spawn.made)
         {
             started.checkouts.push(StartedCheckout {
                 machine: machine.to_owned(),
                 path: path.clone(),
                 task: spawn.task.clone(),
+                tool: tool.map(|(connection, name)| CheckoutTool {
+                    connection: connection.to_owned(),
+                    name: name.to_owned(),
+                }),
             });
         }
         let Some(child) = spawn
@@ -114,7 +165,50 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
             None => started.agents.push(agent),
         }
     }
+    started.tool_work = tool_work(ledger, tool_roots);
     started
+}
+
+/// Every registration of the tools' work: the roots they started and each
+/// registration whose responsibility parent (`AgentRecord::parent`, set only
+/// by a delegation) is already one. A child registers after its parent, so
+/// one pass finds them all; a pass repeats only while it still adds one.
+fn tool_work<'a>(
+    ledger: &'a Ledger,
+    mut owner: HashMap<&'a str, (&'a str, &'a str)>,
+) -> Vec<ToolWork> {
+    if owner.is_empty() {
+        return Vec::new();
+    }
+    loop {
+        let before = owner.len();
+        for agent in &ledger.agents {
+            if owner.contains_key(agent.id.as_str()) {
+                continue;
+            }
+            if let Some(&tool) = agent.parent.as_deref().and_then(|parent| owner.get(parent)) {
+                owner.insert(agent.id.as_str(), tool);
+            }
+        }
+        if owner.len() == before {
+            break;
+        }
+    }
+    ledger
+        .agents
+        .iter()
+        .filter_map(|agent| {
+            let &(connection, name) = owner.get(agent.id.as_str())?;
+            Some(ToolWork {
+                connection: connection.to_owned(),
+                name: name.to_owned(),
+                agent_id: agent.id.clone(),
+                pane_id: agent.actor.pane_id.clone(),
+                session: agent.actor.session.clone(),
+                ended: agent.ended,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -243,6 +337,7 @@ pub(crate) mod tests {
                 seed_tab: None,
                 id: id.clone(),
                 path: Some(format!("/repo.worktrees/{branch}")),
+                made: true,
                 pane: Some(actor.pane_id.clone()),
                 terminal: None,
                 shell: None,
@@ -320,10 +415,161 @@ pub(crate) mod tests {
         .unwrap();
         let started = hide_started(&ledger);
         assert!(started.agents.is_empty());
-        assert!(started.checkouts.is_empty());
+        // Its checkout is the tool's, which the sidebar tree draws by the
+        // rule of a checkout Hide AI made (together check, issue 2).
+        assert_eq!(
+            started
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.tool.clone())
+                .collect::<Vec<_>>(),
+            vec![Some(CheckoutTool {
+                connection: "c0ffee00c0ffee00".into(),
+                name: "hermes".into(),
+            })]
+        );
         assert_eq!(started.access.len(), 1);
         assert_eq!(started.access[0].connection, "c0ffee00c0ffee00");
         assert_eq!(started.access[0].agent.pane_id, "w1:p1");
+        assert_eq!(started.tool_work.len(), 1);
+        assert_eq!(started.tool_work[0].name, "hermes");
+    }
+
+    /// Review of #2586: a tool's spawn that starts in a worktree that was
+    /// already there (the operator's, or the repository's own folder) made
+    /// no checkout, so it lists none and that checkout stays the operator's;
+    /// a spawn that made its worktree lists it.
+    #[test]
+    fn a_tools_spawn_lists_only_the_checkout_it_made() {
+        let mut ledger = Ledger::default();
+        let tool = Actor::access("c0ffee00c0ffee00", "hermes", NODE);
+        let origin = register(&mut ledger, &tool);
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "made",
+            here("w1:p1"),
+        )
+        .unwrap();
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "operators",
+            here("w1:p2"),
+        )
+        .unwrap();
+        // The second started in the operator's own worktree of that branch:
+        // the executor advanced it with `made: false`.
+        ledger.spawns[1].made = false;
+        assert_eq!(
+            hide_started(&ledger)
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/repo.worktrees/made"]
+        );
+    }
+
+    /// B27, D-36: what a tool's agent starts under itself with `--parent`,
+    /// and what that starts in turn, is the tool's work too; a handoff the
+    /// agent makes without `--parent` is the operator's own, and an ended
+    /// Conductor's registration stays the tool's so its mission does.
+    #[test]
+    fn a_tools_work_holds_what_its_agent_delegates_however_deep_and_ends_nothing() {
+        let mut ledger = Ledger::default();
+        let tool = Actor::access("c0ffee00c0ffee00", "hermes", NODE);
+        let origin = register(&mut ledger, &tool);
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "conductor",
+            here("w1:p1"),
+        )
+        .unwrap();
+        let conductor_id = ledger.agents.last().unwrap().id.clone();
+        let mut conductor = pane("w1:p1", "session");
+        conductor.name = "child-conductor".into();
+        let child = |pane: &'static str| Child {
+            machine: NODE,
+            pane,
+            session: "session",
+        };
+        spawn(
+            &mut ledger,
+            &conductor,
+            &conductor_id,
+            true,
+            None,
+            "worker",
+            child("w1:p2"),
+        )
+        .unwrap();
+        let worker_id = ledger.agents.last().unwrap().id.clone();
+        let mut worker = pane("w1:p2", "session");
+        worker.name = "child-worker".into();
+        spawn(
+            &mut ledger,
+            &worker,
+            &worker_id,
+            true,
+            None,
+            "reviewer",
+            child("w1:p3"),
+        )
+        .unwrap();
+        spawn(
+            &mut ledger,
+            &conductor,
+            &conductor_id,
+            false,
+            None,
+            "handed",
+            child("w1:p4"),
+        )
+        .unwrap();
+        let work = |ledger: &Ledger| {
+            hide_started(ledger)
+                .tool_work
+                .into_iter()
+                .map(|work| (work.pane_id, work.connection, work.ended))
+                .collect::<Vec<_>>()
+        };
+        let held = |pane: &str, ended| (pane.to_owned(), "c0ffee00c0ffee00".to_owned(), ended);
+        assert_eq!(
+            work(&ledger),
+            [
+                held("w1:p1", false),
+                held("w1:p2", false),
+                held("w1:p3", false)
+            ]
+        );
+        for agent in &mut ledger.agents {
+            if agent.id == conductor_id {
+                agent.ended = true;
+            }
+        }
+        assert_eq!(
+            work(&ledger),
+            [
+                held("w1:p1", true),
+                held("w1:p2", false),
+                held("w1:p3", false)
+            ]
+        );
+        assert!(
+            hide_started(&ledger).access.is_empty(),
+            "the live starts the settings count leave the ended Conductor"
+        );
     }
 
     fn here(pane: &str) -> Child<'_> {
@@ -347,6 +593,7 @@ pub(crate) mod tests {
                 machine: NODE.into(),
                 path: "/repo.worktrees/hide-memory-m72".into(),
                 task: memory_task("m72"),
+                tool: None,
             }]
         );
     }

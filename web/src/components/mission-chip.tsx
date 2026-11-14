@@ -1,9 +1,11 @@
+import { useContext } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { chipWords, conductedBy, missionTone, missionTurn, TURN_WORDS, type CellTone, type ConductorOwner } from "../missions";
 import { heldBy, useDelayWords, type MissionDelay } from "./mission-hold";
 import type { MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
 import { MissionChipFace, TONE_TEXT } from "./mission-tone";
+import { InToolCell } from "./tool-mark";
 import { useShellStore } from "../store";
 import { Hint } from "./ui/tooltip";
 
@@ -14,15 +16,20 @@ import { Hint } from "./ui/tooltip";
  * while it runs, `n/m`; its words move to its hint and name. Its colour is the
  * map's state colour (PRD mission-plan-visibility B35, D-23); the operator's
  * turn, a decision or a node raised to them, adds `!` before it
- * (needs-you-cleanup B5), and a mission delay a grey pause. A row that
+ * (needs-you-cleanup B5), and a mission delay a grey pause. In an external
+ * tool's cell that turn is the tool's, so the chip keeps its `!` in the grey
+ * of the cell's count, never in the operator's colour (PRD
+ * hide-external-control D-46, operator decision 2026-11-14). A row that
  * conducts nothing draws nothing, so no other row moves.
  */
 export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
+  const inCell = useContext(InToolCell);
   const mission = useShellStore((s) => conductedBy(s.rest, agent));
   if (!mission) return null;
   const { key, counts } = chipWords(mission);
-  return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} status={mission.status} onOpen={onOpen} />;
+  const tone = missionTone(mission);
+  return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={inCell && tone === "hold" ? "waiting" : tone} turn={missionTurn(mission)} delay={heldBy(mission)} status={mission.status} onOpen={onOpen} />;
 }
 
 /**

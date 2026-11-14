@@ -974,6 +974,8 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         notification_finalized: agent.notification_finalized,
         awaited_replies: Vec::new(),
         hide_ai: None,
+        tool: None,
+        unlisted: false,
         request: None,
         unseen_views: Vec::new(),
         look: None,

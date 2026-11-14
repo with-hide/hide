@@ -643,7 +643,7 @@ impl Runtime {
         match result {
             Ok(state_change_seq) => {
                 record.phase = SleepPhase::Sleeping;
-                record.state_change_seq = Some(state_change_seq);
+                record.ended_seq = Some(state_change_seq);
                 record.since_unix_ms = now;
                 let pending_wake = record.pending_wake.take();
                 // Keys for the sleeping pane are dropped at its node from now.
@@ -1066,8 +1066,9 @@ impl Runtime {
             };
             record.phase = SleepPhase::Sleeping;
             record.session_id = record.session_id.or(session);
-            // No agent of this engine ran it: any agent the pane lists later
-            // is a new one, and wakes the record.
+            // No agent of this engine ran it: the row has no turn of this
+            // engine's, and with no end's sequence (`ended_seq`) any agent the
+            // pane lists later is a new one, and wakes the record.
             record.state_change_seq = None;
             // With no sequence the row is placed by the core's change time,
             // the one the labels kept from before the restart, or now.

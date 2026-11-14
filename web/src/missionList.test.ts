@@ -26,6 +26,14 @@ describe("the missions a device lists (D-06, B3)", () => {
     expect(deviceMissions(missions, "gone")).toEqual([]);
   });
 
+  it("leaves out a mission an external tool keeps, which the tool's cell lists on every device (PRD hide-external-control B30, B40)", () => {
+    const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+    const missions = [mission("mine"), mission("kept", { tool }), mission("let-go", { tool: { ...tool, owns: false } }), mission("kept-away", { device_id: "mini", tool })];
+    expect(deviceMissions(missions, "mac").map((m) => m.id)).toEqual(["mine", "let-go"]);
+    expect(deviceMissions(missions, "mac", tool.connection).map((m) => m.id)).toEqual(["kept", "kept-away"]);
+    expect(deviceMissions(missions, "mac", "another")).toEqual([]);
+  });
+
   it("offers each project once as a chip, by its catalog name or else its folder's", () => {
     const missions = [mission("a"), mission("b", { workspace_id: "w2", project: "/work/atorni-ax" }), mission("c")];
     expect(missionProjects(missions, [{ id: "w", label: "herdr-ide" }])).toEqual([{ id: "w2", label: "atorni-ax" }, { id: "w", label: "herdr-ide" }]);
