@@ -12128,6 +12128,437 @@ fn an_ok_relayed_before_the_gate_asks_passes_it_and_the_node_still_waits_on_its_
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
 }
 
+/// A gated node whose worker met the lines it answers for (its own and the
+/// check command) asks the operator while its review and CI still run
+/// (operator decision 2026-11-14): a look after the review sent the review
+/// round again. Passing it does not finish the node before those are met.
+#[test]
+fn a_gate_asks_once_the_workers_own_lines_pass_before_its_checks() {
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    let asked = |runtime: &mut Runtime| {
+        runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .as_ref()
+            .map(|question| (question.key, question.node.clone()))
+    };
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    assert_eq!(
+        asked(&mut runtime),
+        None,
+        "its check command has not passed"
+    );
+    assert_eq!(
+        node_view(&runtime, "fix").gate.unwrap().state,
+        GateState::Ahead
+    );
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let (key, node) = asked(&mut runtime).expect("it asks before its review and CI");
+    assert_eq!(node.as_deref(), Some("fix"));
+    assert_eq!(
+        node_view(&runtime, "fix").gate.unwrap().state,
+        GateState::Open
+    );
+
+    assert!(runtime.mission_answer_event("mission-1", key, Some(1), None, false));
+    assert_eq!(
+        node_view(&runtime, "fix").gate.unwrap().state,
+        GateState::Passed
+    );
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(
+                &mut runtime,
+                "sender",
+                json!({"op": "node", "node": "fix", "patch": {"status": "done"}})
+            )
+            .unwrap_err()
+        )
+        .0,
+        "mission_criteria_unmet",
+        "its review still holds it"
+    );
+    met_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+}
+
+/// `hide mission gate <node> --show` while the node still works, before any
+/// line is met: the gate asks on the map at once with the View shown, a
+/// second showing joins the same question, and a fix answer spends the
+/// showing, so the gate waits for the next one or for the fix's line. Only
+/// the Conductor shows, and only a node that has a gate.
+#[test]
+fn a_gate_the_conductor_shows_asks_at_once_with_its_views() {
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let question = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .as_ref()
+            .map(|question| (question.key, question.node.clone()))
+    };
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(question(&runtime), None);
+
+    let screen = project_view(&mut runtime, "/checkouts/fixture/screens.html");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "fix", "show": [screen]}),
+    )
+    .unwrap();
+    let (key, node) = question(&runtime).expect("a shown gate asks at once");
+    assert_eq!(node.as_deref(), Some("fix"));
+    assert_eq!(
+        node_view(&runtime, "fix").gate.unwrap().state,
+        GateState::Open
+    );
+    assert_eq!(
+        decision_views(&mut runtime),
+        [(screen.clone(), "conductor")]
+    );
+    let second = project_view(&mut runtime, "/checkouts/fixture/second.html");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "fix", "show": [second]}),
+    )
+    .unwrap();
+    assert_eq!(question(&runtime).map(|(key, _)| key), Some(key));
+    let views: Vec<_> = decision_views(&mut runtime)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        views.contains(&screen) && views.contains(&second),
+        "{views:?}"
+    );
+
+    let refusal = |runtime: &mut Runtime, pane: &str, value: Value| {
+        crate::coordination::split_refusal(&command(runtime, pane, value).unwrap_err())
+            .0
+            .to_owned()
+    };
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            "recipient",
+            json!({"op": "gate_show", "mission": "mission-1", "node": "fix", "show": [screen]})
+        ),
+        "mission_not_conductor"
+    );
+    // `hide mission gate --show <path>` opens the path from the Conductor's
+    // pane first, which links it as the Conductor's View: a refused showing
+    // leaves it for no question (review O1).
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let conductor_views = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .conductor_views
+            .len()
+    };
+    let refused = project_view(&mut runtime, "/checkouts/fixture/refused.html");
+    runtime.link_mission_view(
+        &place,
+        &refused,
+        "sender",
+        crate::runtime::unix_milliseconds(),
+    );
+    assert_eq!(conductor_views(&runtime), 1);
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            "sender",
+            json!({"op": "gate_show", "node": "docs", "show": [refused]})
+        ),
+        "mission_gate_none"
+    );
+    assert_eq!(
+        conductor_views(&runtime),
+        0,
+        "a refused showing links nothing"
+    );
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate", "node": "fix", "pass": false, "said": "버튼 색을 바꿔 줘"}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(question(&runtime), None, "the answered showing is spent");
+    assert_eq!(
+        node_view(&runtime, "fix").gate.unwrap().state,
+        GateState::Ahead
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "fix", "show": [second]}),
+    )
+    .unwrap();
+    assert!(question(&runtime).is_some(), "the fixed screens ask again");
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate", "node": "fix", "pass": true, "said": "좋아"}),
+    )
+    .unwrap();
+    let late = project_view(&mut runtime, "/checkouts/fixture/late.html");
+    runtime.link_mission_view(&place, &late, "sender", crate::runtime::unix_milliseconds());
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            "sender",
+            json!({"op": "gate_show", "node": "fix", "show": [late]})
+        ),
+        "mission_gate_passed",
+        "screens shown for a gate that passed would reach no one"
+    );
+    assert_eq!(conductor_views(&runtime), 0);
+}
+
+/// Review of with-hide/hide#2584 (S1): a gate that asks before its node's
+/// checks waits on the operator for the look alone, so a worker that stops
+/// with its own lines still owed and nothing to wait on warns its Conductor
+/// as it would with no gate; the gate's question holds no stall of the
+/// mission while its node owes other work.
+#[test]
+fn a_gate_asking_before_its_checks_still_warns_of_a_stopped_worker() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
+        Some(STOPPED_SINCE - MINUTE);
+    let screen = project_view(&mut runtime, "/checkouts/fixture/screens.html");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "fix", "show": [screen]}),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(
+        mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.as_deref()),
+        Some("fix"),
+        "the gate asks"
+    );
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "idle");
+    row.lineage_session = worker.session.clone();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    assert!(
+        !runtime.mission_worker_waits(&worker),
+        "the gate's question leaves the node's own lines to its worker"
+    );
+    runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [WarningKind::Stopped],
+        "the look waits on the operator, the node's own lines on its worker"
+    );
+}
+
+/// Screens shown for two gates while the Conductor's own question holds
+/// the decision stay with their own gate, though opening them linked them
+/// as the Conductor's Views (review F1): once that question goes, each gate
+/// asks with only what was shown for it. A node dropped and taken up again,
+/// with no health pass between, has neither the question nor the showing
+/// of its dropped work (review F2): its gate waits for a new showing, or
+/// for its own lines.
+#[test]
+fn a_shown_gate_keeps_its_own_screens_and_new_work_needs_a_new_showing() {
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(json!("the parser"), json!("the guide")),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    for node in ["fix", "docs"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "working", "agent_id": "agent-2"}}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge them later?"}),
+    )
+    .unwrap();
+    let parser = project_view(&mut runtime, "/checkouts/fixture/parser.html");
+    let guide = project_view(&mut runtime, "/checkouts/fixture/guide.html");
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    for (node, view) in [("fix", &parser), ("docs", &guide)] {
+        // `hide mission gate --show <path>` opens the path from the
+        // Conductor's pane first, which links it as the Conductor's View.
+        runtime.link_mission_view(&place, view, "sender", crate::runtime::unix_milliseconds());
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "gate_show", "node": node, "show": [view]}),
+        )
+        .unwrap();
+    }
+    let asked = |runtime: &mut Runtime| {
+        runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+        let question = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .clone();
+        question.map(|question| (question.key, question.node))
+    };
+    assert_eq!(
+        asked(&mut runtime).unwrap().1,
+        None,
+        "the Conductor's question stands"
+    );
+    assert_eq!(
+        node_view(&runtime, "fix").waiting_on,
+        Some(crate::missions::WaitingOn::Decision),
+        "a shown gate waits on the operator behind the Conductor's question"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    let (key, node) = asked(&mut runtime).expect("a shown gate asks once the decision is free");
+    assert_eq!(node.as_deref(), Some("fix"));
+    assert_eq!(
+        decision_views(&mut runtime),
+        [(parser.clone(), "conductor")]
+    );
+    assert!(runtime.mission_answer_event("mission-1", key, Some(1), None, false));
+    let (_, node) = asked(&mut runtime).expect("the next shown gate asks");
+    assert_eq!(node.as_deref(), Some("docs"));
+    assert_eq!(decision_views(&mut runtime), [(guide.clone(), "conductor")]);
+
+    // Dropped, its question goes; taken up again, the node's gate waits for
+    // a new showing.
+    let patch = |runtime: &mut Runtime, status: &str| {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": "docs", "patch": {"status": status}}),
+        )
+        .unwrap();
+    };
+    // Dropped and taken up again before any health pass, the question of
+    // the dropped work goes with the drop.
+    patch(&mut runtime, "dropped");
+    patch(&mut runtime, "working");
+    assert_eq!(asked(&mut runtime), None);
+    assert_eq!(
+        node_view(&runtime, "docs").gate.unwrap().state,
+        GateState::Ahead
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "docs", "show": [guide]}),
+    )
+    .unwrap();
+    assert_eq!(asked(&mut runtime).unwrap().1.as_deref(), Some("docs"));
+}
+
 /// PRD mission-human-gate D-11, B7, B21: an answer that is not `계속 진행`,
 /// here written on the phone, leaves the gate open and sends its words to
 /// the node's worker as a defect with where they came from; the node works
@@ -12369,6 +12800,20 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
                 &mut runtime,
                 "sender",
                 json!({"op": "gate", "node": "ship", "pass": true, "said": "ㄱㄱ"}),
+            )
+            .unwrap_err()
+        )
+        .0,
+        "mission_gate_not_open"
+    );
+    // Nor is it shown early: it asks by itself once its node could start.
+    let mockup = project_view(&mut runtime, "/checkouts/fixture/mockup.html");
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(
+                &mut runtime,
+                "sender",
+                json!({"op": "gate_show", "node": "ship", "show": [mockup]}),
             )
             .unwrap_err()
         )

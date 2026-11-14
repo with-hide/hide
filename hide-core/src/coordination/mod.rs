@@ -88,6 +88,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_gate_operator_only"
             | "mission_gate_none"
             | "mission_gate_not_open"
+            | "mission_gate_passed"
             | "mission_machine_node_refused"
             | "mission_machine_no_repository"
             | "mission_nodes_unfinished"

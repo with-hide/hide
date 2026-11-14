@@ -352,6 +352,7 @@ class Scenario:
                            "steps": ["Read notes.md", "Write what it holds", "Report it"],
                            "worker": {"agent": "claude", "model": "sonnet"}}]}
         self.checked("dev-a", f"hide mission plan --json '{json.dumps(plan)}'")
+        self.device_plan = plan
         self.checked("dev-a", "hide mission start")
         spawned = self.spawn("dev-a", f"hide agent spawn --parent here --intent {mission}:look --name dev-worker "
                                       f"--kind claude --repo {DEVICE_REPO} --branch main --path {DEVICE_REPO} "
@@ -368,12 +369,7 @@ class Scenario:
         with. A release before decisions named Views refuses `--show`."""
         result = self.run("dev-a", "hide mission decide --line 'Is notes.md ready?' --option ready --option 'not yet' "
                                    "--show notes.md")
-        answer = result.get("json") or {}
-        if answer.get("ok") is not True:
-            code = (answer.get("error") or {}).get("code")
-            if result["rc"] != 0 and (code in (None, "invalid_request", "usage") or "--show" in result["err"]):
-                raise NotInRelease(f"rc={result['rc']} {result['err'][-300:]}")
-            raise Stop(f"the decision was refused: {result['out'][-800:]} {result['err'][-300:]}")
+        self.refusal(result, "the decision")
         rows = self.wait(lambda rest: next((mission.get("decision_views") for mission in
                                             (rest.get("missions") or {}).get("items") or []
                                             if mission.get("decision_views")), None), "the decision's View")
@@ -386,6 +382,33 @@ class Scenario:
             return (not rows or any(row.get("closed") for row in rows)) and ("kept" if rows else "dropped")
         kept = self.wait(closed, "the decision's View closed")
         return f"{view} linked to the device mission's decision and closed ({kept})"
+
+    def refusal(self, result, what):
+        """Nothing when `result` answered ok; else a refusal this release
+        cannot take (a usage error, an unknown request, or `--show` it does
+        not know) is not in it, and any other stops the step."""
+        answer = result.get("json") or {}
+        if answer.get("ok") is True:
+            return
+        code = (answer.get("error") or {}).get("code")
+        if result["rc"] != 0 and (code in (None, "invalid_request", "usage") or "--show" in result["err"]):
+            raise NotInRelease(f"rc={result['rc']} {result['err'][-300:]}")
+        raise Stop(f"{what} was refused: {result['out'][-800:]} {result['err'][-300:]}")
+
+    def shown_gate(self):
+        """While the decision above still holds the question, the device
+        mission's node gets a gate and the Conductor shows notes.md for it:
+        the device View is kept on the gate's line (`criteria.shown`, with
+        the device's id) until the gate asks. A release before `gate --show`
+        is named as such."""
+        plan = getattr(self, "device_plan", None)
+        if plan is None:
+            raise Stop("the device mission was not made")
+        nodes = [dict(node, gate="the notes page") for node in plan["nodes"]]
+        self.refusal(self.run("dev-a", f"hide mission plan --json '{json.dumps(dict(plan, nodes=nodes))}'"),
+                     "the gate's plan")
+        self.refusal(self.run("dev-a", "hide mission gate look --show notes.md"), "the gate's showing")
+        return "notes.md shown for the look gate"
 
     def mission_states(self):
         """Missions in the states a later build has to read as they were:
@@ -719,6 +742,7 @@ class Scenario:
             self.step("plan step spawned from a device session", self.plan_spawn)
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("decision View opened by a device agent and closed", self.decision_view)
+            self.step("gate shown behind that decision", self.shown_gate)
             self.step("missions in each state a later build reads", self.mission_states)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)

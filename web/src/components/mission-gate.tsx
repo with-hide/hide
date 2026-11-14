@@ -70,7 +70,7 @@ export function OperatorBand({ gate, mergeDue, className }: { gate: Pick<Mission
 /**
  * Where the operator will look, while the plan waits for their approval
  * (D-08, B1): `내가 볼 곳 N` with when, said once since it is the same for
- * every place (once the node's other finish lines all pass, D-10), then one
+ * every place (before its node's review and CI, D-10), then one
  * place each: what to look at on its first line and its node, quiet and
  * whole, under it. It wears no hold colour, since none of it is the
  * operator's turn (B9); the operator turns a place on or off by saying so to

@@ -267,15 +267,7 @@ impl Runtime {
     ) -> Result<Vec<ViewLink>, String> {
         let mut links: Vec<ViewLink> = Vec::new();
         if !show.is_empty() {
-            // The checkout the Conductor's pane works in, else the one the
-            // mission was created in.
-            let place = self
-                .conductor_checkout(actor)
-                .or_else(|| {
-                    let mission = self.missions.book.get(id)?;
-                    Some((mission.device_id.clone(), mission.checkout_path.clone()))
-                })
-                .ok_or("mission_show_unknown")?;
+            let place = self.show_place(id, actor).ok_or("mission_show_unknown")?;
             let layout = self.view_layout_of(&place).ok_or("mission_show_unknown")?;
             let now = super::memory::now_ms();
             for view in show {
@@ -332,6 +324,15 @@ impl Runtime {
             }
         }
         Ok(links)
+    }
+
+    /// The checkout a View id the Conductor shows names a View of: the one
+    /// its pane works in, else the one the mission was created in.
+    pub(super) fn show_place(&self, id: &str, actor: &Actor) -> Option<WorkspaceKey> {
+        self.conductor_checkout(actor).or_else(|| {
+            let mission = self.missions.book.get(id)?;
+            Some((mission.device_id.clone(), mission.checkout_path.clone()))
+        })
     }
 
     /// The checkout the Conductor's pane works in, whose Views `--show`

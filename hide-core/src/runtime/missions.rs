@@ -449,7 +449,17 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             {
                 return Some(WaitingOn::Worker);
             }
-            // A gate waits after every other line, on the operator.
+            // A gate reached waits on the operator while the CI and the
+            // checkers may still run beside it, whether or not its question
+            // holds the decision yet.
+            if view
+                .gate
+                .as_ref()
+                .is_some_and(|gate| gate.state == super::mission_gates::GateState::Open)
+            {
+                return Some(WaitingOn::Decision);
+            }
+            // An unreached gate waits after every other line, on the operator.
             let open = view
                 .criteria
                 .iter()
@@ -467,7 +477,9 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
                 // A CI line open for want of a read waits on no run.
                 Some(CriterionKind::Ci) if view.pr_state.is_some() => WaitingOn::Ci,
                 Some(CriterionKind::Ci) => WaitingOn::Conductor,
-                Some(_) => WaitingOn::Worker,
+                Some(CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect) => {
+                    WaitingOn::Worker
+                }
                 None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
                     WaitingOn::Merge
                 }
@@ -2312,6 +2324,7 @@ impl Runtime {
                     &mut next,
                 );
                 let changed = target.nodes[index] != next;
+                let moved = target.nodes[index].status != next.status;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
                 super::mission_health::prune_attention_wakes(target);
@@ -2325,6 +2338,13 @@ impl Runtime {
                     if follow {
                         self.follow_mission_outside(&id);
                     }
+                }
+                // A node that stopped or went to work again has its gates
+                // brought to where it stands now, not at the next health
+                // pass: a gate's question of work that was dropped goes with
+                // it before the node can work again under it.
+                if moved {
+                    self.raise_gates(&id, now);
                 }
                 // A hold set or lifted is the Conductor's move on the node:
                 // whatever stood before it is counted again from now.
@@ -2455,6 +2475,11 @@ impl Runtime {
                 pass,
                 said,
             } => self.relay_gate(&actor, mission.as_deref(), &node, (pass, said), now),
+            MissionCommand::GateShow {
+                mission,
+                node,
+                show,
+            } => self.show_gate(&actor, mission.as_deref(), &node, &show, now),
             MissionCommand::Take { mission, handover } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
                 if target.status == MissionStatus::Cancelled {
@@ -4319,6 +4344,7 @@ impl Runtime {
         let github = self.github_project_on(&mission.device_id, &mission.project);
         let blocked = mission.blocked();
         let conductor_present = self.conductor_present(&mission.conductor.actor);
+        let operator_waits = self.operator_waits(mission);
         let nodes = mission
             .nodes
             .iter()
@@ -4507,7 +4533,7 @@ impl Runtime {
                     node,
                     &fact,
                     self.mission_pulls(mission),
-                    self.gate_open(mission, node),
+                    &operator_waits,
                 );
                 view.work = node_work(mission, &view, activity, stopped, clock);
                 view
