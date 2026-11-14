@@ -725,9 +725,12 @@ impl Resumed {
             .unwrap();
         assert_eq!(child.parent.as_deref(), Some(pane.id.as_str()));
         assert!(child.ended);
-        assert_eq!(
-            runtime.registration_of(&runtime.missions.book.missions[0].conductor),
-            Some(pane.id),
+        let conductor = &runtime.missions.book.missions[0].conductor.actor;
+        assert!(
+            ledger
+                .agents
+                .iter()
+                .any(|record| record.id == pane.id && record.actor.same_identity(conductor)),
             "the mission's Conductor conducts under the pane's registration"
         );
     }
@@ -783,12 +786,12 @@ fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_wo
                 .pane_id,
             "recipient"
         );
+        resumed.ends_the_worker_from_the_pane();
         assert_eq!(
             handed(&logged, "mission.handover").as_deref(),
             Some("registered"),
             "{kind}: nothing carries the registration"
         );
-        resumed.ends_the_worker_from_the_pane();
         let pane = resumed.pane_registration();
         assert_ne!(pane.id, resumed.former, "{kind}");
         assert_eq!(pane.parent, None, "{kind}");
