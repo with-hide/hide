@@ -151,6 +151,13 @@ jobs:
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
           repositories: hide
+      - name: A repeated run that had a failed iteration fails here
+        # `--stress-count N` exits 0 when its last iteration passes, so this
+        # run's reports and nextest log decide whether any iteration failed
+        # (`scripts/check-stress-report.py`; docs/TESTING.md, The repeat lane).
+        if: ${{ !cancelled() && inputs.repeat != '1' }}
+        timeout-minutes: 2
+        run: python3 scripts/check-stress-report.py --junit target/nextest/ci/junit*.xml --repeat "${{ inputs.repeat }}"
       - name: Report flaky and failed tests
         id: flaky
         if: ${{ !cancelled() }}

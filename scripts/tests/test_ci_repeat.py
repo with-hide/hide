@@ -18,7 +18,9 @@ SPEC.loader.exec_module(repeat)
 PLAN = importlib.util.spec_from_file_location("ci_plan", ROOT / "scripts/ci-plan.py")
 ci = importlib.util.module_from_spec(PLAN)
 PLAN.loader.exec_module(ci)
-CRATE_DIRS = {directory: crate["name"] for directory, crate in ci.cargo_crates(ROOT).items()}
+CRATES = ci.cargo_crates(ROOT)
+CRATE_DIRS = {directory: crate["name"] for directory, crate in CRATES.items()}
+TARGETS = {directory: crate["targets"] for directory, crate in CRATES.items() if crate.get("targets")}
 
 
 def entries(*paths, status="M"):
@@ -67,7 +69,7 @@ class Detection(unittest.TestCase):
         for status in ("A", "M"):
             with self.subTest(status=status):
                 found = repeat.select([(status, "web/e2e/s3.spec.ts")], CRATE_DIRS)
-                self.assertEqual(found, {"web": ["web/e2e/s3.spec.ts"], "rust": []})
+                self.assertEqual(found, {"web": ["web/e2e/s3.spec.ts"], "units": [], "rust": [], "rust_sources": []})
 
     def test_a_deleted_spec_a_helper_a_desktop_spec_and_a_nested_file_are_not(self):
         found = repeat.select([
@@ -78,7 +80,29 @@ class Detection(unittest.TestCase):
             ("M", "desktop/e2e/attach.spec.ts"),
             ("M", "web/src/App.tsx"),
         ], CRATE_DIRS)
-        self.assertEqual(found, {"web": [], "rust": []})
+        self.assertEqual(found, {"web": [], "units": [], "rust": [], "rust_sources": []})
+
+    def test_an_added_or_modified_unit_test_file_is_a_changed_test(self):
+        for status in ("A", "M"):
+            with self.subTest(status=status):
+                found = repeat.select([(status, "web/src/searchDetail.test.ts")], CRATE_DIRS)
+                self.assertEqual(found["units"], ["web/src/searchDetail.test.ts"])
+                self.assertEqual((found["web"], found["rust"]), ([], []))
+
+    def test_each_package_of_a_unit_test_file_is_named_and_product_code_is_not(self):
+        found = repeat.select([
+            ("M", "web/src/App.tsx"), ("M", "web/e2e/wire.ts"),
+            ("M", "desktop/scripts/device-helpers.test.mjs"), ("M", "mobile/scripts/release.test.mjs"),
+            ("M", "site/tests/legal.test.mjs"), ("M", "web/src/gallery/Scene.tsx"),
+            ("D", "web/src/gone.test.ts"), ("M", "elsewhere/src/thing.test.ts"),
+        ], CRATE_DIRS)
+        self.assertEqual(found["units"], ["desktop/scripts/device-helpers.test.mjs", "mobile/scripts/release.test.mjs"])
+
+    def test_a_unit_test_file_is_every_test_file_the_three_packages_collect(self):
+        for path in ("web/src/a.test.tsx", "web/e2e/close-order.unit.ts", "desktop/src/main/env.test.ts",
+                     "mobile/scripts/release.test.mjs"):
+            with self.subTest(path=path):
+                self.assertEqual(repeat.select(entries(path), CRATE_DIRS)["units"], [path])
 
     def test_a_tests_it_module_is_a_changed_rust_test_selected_by_its_name(self):
         found = repeat.select(entries("hided/tests/it/handshake.rs"), CRATE_DIRS)
@@ -103,27 +127,62 @@ class Detection(unittest.TestCase):
     def test_a_module_that_lists_no_test_runs_its_crates_whole_binary_and_n_is_what_lists(self):
         asked = []
 
-        def lister(package, expression):
-            asked.append((package, expression))
+        def lister(package, test, expression):
+            asked.append((package, test, expression))
             return 0 if expression else 293
 
         plan = repeat.rust_plan([{"package": "hide-platform", "module": "stand_ins"}], lister)
-        self.assertEqual(plan, [{"package": "hide-platform", "filter": "", "tests": 293}])
-        self.assertEqual(asked, [("hide-platform", "test(/^(stand_ins)::/)"), ("hide-platform", "")])
+        self.assertEqual(plan, [{"package": "hide-platform", "test": "it", "filter": "", "tests": 293}])
+        self.assertEqual(asked, [("hide-platform", "it", "test(/^(stand_ins)::/)"), ("hide-platform", "it", "")])
         # A helper beside a module that lists tests still runs the whole binary.
         plan = repeat.rust_plan(
             [{"package": "hide-platform", "module": "resident"}, {"package": "hide-platform", "module": "stand_ins"}],
-            lambda package, expression: 293 if not expression else (0 if "stand_ins)" in expression and "resident" not in expression else 9),
+            lambda package, test, expression: 293 if not expression else (0 if "stand_ins)" in expression and "resident" not in expression else 9),
         )
-        self.assertEqual(plan, [{"package": "hide-platform", "filter": "", "tests": 293}])
+        self.assertEqual(plan, [{"package": "hide-platform", "test": "it", "filter": "", "tests": 293}])
         # A module that lists tests keeps its filter, and a helper adds nothing to 20 web tests: N = 20 + 5.
-        plan = repeat.rust_plan([{"package": "hide-relay-protocol", "module": "admission"}], lambda package, expression: 5)
-        self.assertEqual(plan, [{"package": "hide-relay-protocol", "filter": "test(/^(admission)::/)", "tests": 5}])
+        plan = repeat.rust_plan([{"package": "hide-relay-protocol", "module": "admission"}], lambda package, test, expression: 5)
+        self.assertEqual(plan, [{"package": "hide-relay-protocol", "test": "it", "filter": "test(/^(admission)::/)", "tests": 5}])
 
     def test_a_hand_run_module_that_does_not_exist_is_refused_before_anything_runs(self):
-        for item in ("hided:no_such_module", "no-such-crate:seat", "hided:"):
+        for item in ("hided:lib:no_such_module", "no-such-crate:lib:seat", "hided:lib:", "hided:seat", "hided:examples:seat"):
             with self.subTest(item=item), self.assertRaises(ValueError):
                 repeat.rust_entry(item)
+
+    def test_a_hand_run_names_a_src_test_module_by_the_target_it_is_built_into(self):
+        # The case this lane first missed: a library's own unit test module.
+        self.assertEqual(repeat.rust_entry("hided:lib:mobile::clear_tests"),
+                         {"package": "hided", "test": "lib", "module": "mobile::clear_tests"})
+        # A crate with no `tests/it` binary at all, and a test-gated block in a
+        # product file, both reachable by name.
+        self.assertEqual(repeat.rust_entry("hide-kit:lib:process::tests"),
+                         {"package": "hide-kit", "test": "lib", "module": "process::tests"})
+        self.assertEqual(repeat.rust_entry("hide-node:lib:ssh::host::bootstrap::windows_tests"),
+                         {"package": "hide-node", "test": "lib", "module": "ssh::host::bootstrap::windows_tests"})
+        # The whole target, and a `tests/it` module as before.
+        self.assertEqual(repeat.rust_entry("hide-kit:lib:*"), {"package": "hide-kit", "test": "lib", "module": "*"})
+        self.assertEqual(repeat.rust_entry("hided:it:seat"), {"package": "hided", "test": "it", "module": "seat"})
+
+    def test_a_changed_src_file_selects_the_modules_it_declares_its_tests_in(self):
+        # A file only a test build compiles is selected by its own module.
+        found = repeat.select(entries("hided/src/mobile/clear_tests.rs"), CRATE_DIRS, TARGETS)
+        self.assertEqual(found["rust_sources"], [{"package": "hided", "test": "lib", "module": "mobile::clear_tests"}])
+        # A product file is selected by each test-gated block it holds, never
+        # by the product module itself: that name holds the product's code.
+        found = repeat.select(entries("hide-kit/src/process.rs"), CRATE_DIRS, TARGETS)
+        self.assertEqual(found["rust_sources"], [{"package": "hide-kit", "test": "lib", "module": "process::tests"}])
+        # A product file with no test of its own selects nothing.
+        self.assertEqual(repeat.select(entries("hided/src/node_cli.rs"), CRATE_DIRS, TARGETS)["rust_sources"], [])
+
+    def test_a_changed_src_file_selects_only_the_tests_it_declares_itself(self):
+        # `runtime.rs` declares `runtime::tests` as a file and holds a
+        # test-gated block of its own. A change to it selects the block, whose
+        # tests it holds; the tests of `runtime/tests.rs` are that file's, and
+        # a change to them selects them where they are written.
+        found = repeat.select(entries("hide-core/src/runtime.rs"), CRATE_DIRS, TARGETS)
+        self.assertEqual([entry["module"] for entry in found["rust_sources"]], ["runtime::deepest_holder_tests"])
+        found = repeat.select(entries("hide-core/src/runtime/tests.rs"), CRATE_DIRS, TARGETS)
+        self.assertEqual([entry["module"] for entry in found["rust_sources"]], ["runtime::tests"])
 
     def test_product_code_other_files_and_unknown_directories_are_no_test(self):
         found = repeat.select(entries(
@@ -207,19 +266,57 @@ class Playwright(unittest.TestCase):
         self.assertFalse(pattern.search("/work/hide/web/e2e/s3.spec.tsx"))
 
 
+class UnitFiles(unittest.TestCase):
+    """A unit test file is named from the repository root and listed from its
+    package's folder: the two are different strings, and Vitest matches only
+    the second."""
+
+    def test_a_hand_run_name_finds_its_package_and_must_exist(self):
+        self.assertEqual(repeat.unit_path("web/src/searchDetail.test.ts"), "web/src/searchDetail.test.ts")
+        self.assertEqual(repeat.unit_path("searchDetail.test.ts"), "web/src/searchDetail.test.ts")
+        self.assertEqual(repeat.unit_path("env.test.ts"), "desktop/src/main/env.test.ts")
+        for name in ("web/src/nothere.test.ts", "site/tests/legal.test.mjs", "../web/src/a.test.ts", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                repeat.unit_path(name)
+
+    def test_the_plan_names_the_file_from_the_root_and_lists_it_from_the_package(self):
+        # What the lister receives is the package's spelling, which is what
+        # `vitest list` matches; the plan keeps the root's, so a job can find
+        # the file. A root-spelled filter listed 0 tests and would have failed
+        # every units run at its count.
+        asked = []
+
+        def lister(package, files):
+            asked.append((package, files))
+            return 4
+
+        plan = repeat.units_plan(["web/src/searchDetail.test.ts", "desktop/src/main/env.test.ts"], lister)
+        self.assertEqual(asked, [("desktop", ["desktop/src/main/env.test.ts"]), ("web", ["web/src/searchDetail.test.ts"])])
+        self.assertEqual(plan, [{"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 4},
+                                {"package": "web", "files": ["web/src/searchDetail.test.ts"], "tests": 4}])
+
+    def test_a_file_that_lists_no_test_fails_the_count(self):
+        with self.assertRaises(ValueError):
+            repeat.units_plan(["web/src/searchDetail.test.ts"], lambda package, files: 0)
+
+
 class Nextest(unittest.TestCase):
-    def test_the_modules_of_a_package_are_one_filterset_over_its_it_binary(self):
+    def test_the_modules_of_a_target_are_one_filterset_over_it(self):
         modules = [
             {"package": "hided", "module": "seat"}, {"package": "hided", "module": "handshake"},
             {"package": "hide-holder", "module": "node::pty"},
+            {"package": "hided", "test": "lib", "module": "mobile::clear_tests"},
+            {"package": "hide-kit", "test": "lib", "module": "process::tests"},
         ]
         self.assertEqual(
             repeat.nextest_filters(modules),
-            [("hide-holder", "test(/^(node::pty)::/)"), ("hided", "test(/^(handshake|seat)::/)")],
+            [("hide-holder", "it", "test(/^(node::pty)::/)"), ("hide-kit", "lib", "test(/^(process::tests)::/)"),
+             ("hided", "it", "test(/^(handshake|seat)::/)"), ("hided", "lib", "test(/^(mobile::clear_tests)::/)")],
         )
 
     def test_a_name_that_is_not_an_identifier_never_reaches_the_filterset(self):
-        for module in ({"package": "hided", "module": "a)|test(/.*"}, {"package": "-p x", "module": "seat"}, {"package": "hided", "module": ""}):
+        for module in ({"package": "hided", "module": "a)|test(/.*"}, {"package": "-p x", "module": "seat"}, {"package": "hided", "module": ""},
+                       {"package": "hided", "test": "examples", "module": "seat"}):
             with self.subTest(module=module), self.assertRaises(ValueError):
                 repeat.nextest_filters([module])
 
@@ -244,20 +341,25 @@ class Resolve(unittest.TestCase):
         with self.assertRaises(ValueError):
             repeat.resolve("pull_request", "[]", json.dumps([{"package": "hided", "module": "x y"}]), "", "linux")
 
-    def test_a_hand_run_names_specs_and_modules_in_words_and_the_repeat_it_wants(self):
-        work = repeat.resolve("workflow_dispatch", "s3.spec.ts  web/e2e/s7.spec.ts", "hided:handshake hided:seat", "7", "windows")
+    def test_a_hand_run_names_specs_modules_and_unit_files_in_words_and_the_repeat_it_wants(self):
+        work = repeat.resolve("workflow_dispatch", "s3.spec.ts  web/e2e/s7.spec.ts",
+                              "hided:it:handshake hided:it:seat hided:lib:mobile::clear_tests", "7", "windows",
+                              "web/src/searchDetail.test.ts desktop/src/main/env.test.ts")
         self.assertEqual(work["web"], ["web/e2e/s3.spec.ts", "web/e2e/s7.spec.ts"])
-        self.assertEqual([(m["package"], m["module"]) for m in work["rust"]], [("hided", "handshake"), ("hided", "seat")])
+        self.assertEqual([(m["package"], m["test"], m["module"]) for m in work["rust"]],
+                         [("hided", "it", "handshake"), ("hided", "it", "seat"), ("hided", "lib", "mobile::clear_tests")])
+        self.assertEqual(work["units"], ["desktop/src/main/env.test.ts", "web/src/searchDetail.test.ts"])
         self.assertEqual((work["runner"], work["repeat"], work["counted"]), ("windows", 7, False))
 
     def test_a_hand_run_with_a_bad_repeat_runner_or_name_is_refused(self):
-        for web, rust, count, runner in [
-            ("s3.spec.ts", "", "0", "linux"), ("s3.spec.ts", "", "101", "linux"), ("s3.spec.ts", "", "ten", "linux"),
-            ("s3.spec.ts", "", "", "linux"), ("s3.spec.ts", "", "5", "plan9"), ("", "", "5", "linux"),
-            ("", "hided", "5", "linux"), ("", "hided:Bad-Name", "5", "linux"),
+        for web, rust, units, count, runner in [
+            ("s3.spec.ts", "", "", "0", "linux"), ("s3.spec.ts", "", "", "101", "linux"), ("s3.spec.ts", "", "", "ten", "linux"),
+            ("s3.spec.ts", "", "", "", "linux"), ("s3.spec.ts", "", "", "5", "plan9"), ("", "", "", "5", "linux"),
+            ("", "hided", "", "5", "linux"), ("", "hided:lib:Bad-Name", "", "5", "linux"),
+            ("", "", "web/src/nothere.test.ts", "5", "linux"), ("", "", "site/tests/legal.test.mjs", "5", "linux"),
         ]:
-            with self.subTest(web=web, rust=rust, count=count, runner=runner), self.assertRaises(ValueError):
-                repeat.resolve("workflow_dispatch", web, rust, count, runner)
+            with self.subTest(web=web, rust=rust, units=units, count=count, runner=runner), self.assertRaises(ValueError):
+                repeat.resolve("workflow_dispatch", web, rust, count, runner, units)
 
 
 class Command(unittest.TestCase):
@@ -288,19 +390,22 @@ class Command(unittest.TestCase):
                 self.assertEqual((outputs["run-web"], outputs["run-rust"], outputs["repeat"]), expected)
 
     def test_a_pr_selection_needs_a_real_positive_count(self):
-        for kind, selection in (("web", "web/e2e/s3.spec.ts"), ("rust", '[{"package":"hided","module":"seat"}]')):
+        for kind, selection in (("web", "web/e2e/s3.spec.ts"), ("units", '["web/src/searchDetail.test.ts"]'),
+                                ("rust", '[{"package":"hided","test":"lib","module":"seat"}]')):
             for count in ("", "0", "-1"):
                 with self.subTest(kind=kind, count=count):
                     result, outputs = self.run_script(
                         "choose", "--event", "pull_request", "--web", selection if kind == "web" else "",
+                        "--units", selection if kind == "units" else "[]",
                         "--rust", selection if kind == "rust" else "[]", f"--{kind}-count", count,
                     )
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(outputs, {})
 
     def test_the_workflow_verdict_exits_nonzero_for_a_successful_zero_run(self):
-        needs = {"count": {"result": "success", "outputs": {"run-web": "true", "run-rust": "false", "repeat": "10"}},
-                 "web": {"result": "success", "outputs": {"completed": "0"}}, "rust": {"result": "skipped"}}
+        needs = {"count": {"result": "success", "outputs": {"run-web": "true", "run-units": "false", "run-rust": "false", "repeat": "10"}},
+                 "web": {"result": "success", "outputs": {"completed": "0"}}, "units": {"result": "skipped"},
+                 "rust": {"result": "skipped"}}
         result, _ = self.run_script("verdict", needs=needs)
         self.assertEqual(result.returncode, 1)
         self.assertIn("0 completed test runs", result.stderr)
@@ -310,21 +415,35 @@ class Command(unittest.TestCase):
 
     def test_a_hand_run_resolves_to_outputs_the_jobs_read(self):
         result, outputs = self.run_script(
-            "resolve", "--event", "workflow_dispatch", "--web", "s3.spec.ts", "--rust", "hided:handshake", "--repeat", "10", "--runner", "windows",
+            "resolve", "--event", "workflow_dispatch", "--web", "s3.spec.ts", "--units", "web/src/searchDetail.test.ts",
+            "--rust", "hided:it:handshake", "--repeat", "10", "--runner", "windows",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(outputs["runner"], "windows-latest")
         self.assertEqual(outputs["os"], "windows")
         self.assertEqual(outputs["web"], "web/e2e/s3.spec.ts")
-        self.assertEqual(json.loads(outputs["rust"]), [{"package": "hided", "module": "handshake"}])
-        self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"], outputs["rust-count-needed"]), ("10", "false", "false", "false"))
+        self.assertEqual(json.loads(outputs["units"]), ["web/src/searchDetail.test.ts"])
+        self.assertEqual(json.loads(outputs["rust"]), [{"package": "hided", "test": "it", "module": "handshake"}])
+        # A hand run counts no tests, but its unit files are still listed:
+        # the units job runs what the count found in each package.
+        self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"], outputs["units-count-needed"],
+                          outputs["rust-count-needed"]), ("10", "false", "false", "true", "false"))
 
     def test_a_pull_request_resolves_with_its_rust_count_and_no_repeat_yet(self):
-        rust = json.dumps([{"package": "hided", "module": "handshake"}], separators=(",", ":"))
-        result, outputs = self.run_script("resolve", "--event", "pull_request", "--web", '["web/e2e/s3.spec.ts"]', "--rust", rust)
+        rust = json.dumps([{"package": "hided", "test": "lib", "module": "handshake"}], separators=(",", ":"))
+        result, outputs = self.run_script("resolve", "--event", "pull_request", "--web", '["web/e2e/s3.spec.ts"]',
+                                          "--units", '["web/src/searchDetail.test.ts"]', "--rust", rust)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((outputs["repeat"], outputs["counted"]), ("", "true"))
-        self.assertEqual((outputs["web-count-needed"], outputs["rust-count-needed"]), ("true", "true"))
+        self.assertEqual((outputs["web-count-needed"], outputs["units-count-needed"], outputs["rust-count-needed"]),
+                         ("true", "true", "true"))
+
+    def test_a_hand_run_lists_its_unit_files_and_a_run_without_them_counts_nothing(self):
+        _, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--units", "web/src/searchDetail.test.ts",
+                                    "--repeat", "3")
+        self.assertEqual((outputs["units"], outputs["units-count-needed"]), ('["web/src/searchDetail.test.ts"]', "true"))
+        _, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--web", "s3.spec.ts", "--repeat", "3")
+        self.assertEqual((outputs["units"], outputs["units-count-needed"]), ("[]", "false"))
 
     def test_a_refusal_is_one_line_and_a_failed_exit(self):
         result, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--web", "nothing.spec.ts", "--repeat", "5")
@@ -339,24 +458,41 @@ class Command(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "3")
         result, _ = self.run_script("spec-patterns", "web/e2e/s3.spec.ts")
         self.assertEqual(result.stdout.strip(), r"web/e2e/s3\.spec\.ts$")
-        plan = json.dumps([{"package": "hided", "filter": "test(/^(seat)::/)", "tests": 1}, {"package": "hide-platform", "filter": "", "tests": 9}])
+        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1},
+                           {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
-        self.assertEqual(result.stdout, "hided\ttest(/^(seat)::/)\nhide-platform\t\n")
+        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\nhide-platform\tlib\t\n")
+        units = json.dumps([{"package": "web", "files": ["web/src/a.test.ts"], "tests": 2},
+                            {"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
+        result, _ = self.run_script("units-lines", "--plan", units)
+        self.assertEqual(result.stdout, "web\tweb/src/a.test.ts\ndesktop\tdesktop/src/main/env.test.ts\n")
+
+    def test_every_line_the_jobs_read_ends_with_lf_even_on_a_windows_runner(self):
+        # Windows translates `\n` to `\r\n` on stdout, and the trailing `\r`
+        # reached nextest as unparsed input (run 43619979993).
+        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1}])
+        result, _ = self.run_script("plan-lines", "--plan", plan)
+        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\n")
+        self.assertNotIn("\r", result.stdout)
 
 
 class Verdict(unittest.TestCase):
     """Chosen tests cannot disappear between selection and a green workflow."""
 
     def needs(self, event, kind, completed="30", result="success"):
-        decision = repeat.choose(event, "web/e2e/s3.spec.ts" if kind == "web" else "",
-                                 [{"package": "hided", "module": "seat"}] if kind == "rust" else [], "3", "100", "100")
+        selected = {"web": kind == "web", "units": kind == "units", "rust": kind == "rust"}
+        decision = repeat.choose(event, "web/e2e/s3.spec.ts" if selected["web"] else "",
+                                 [{"package": "hided", "test": "lib", "module": "seat"}] if selected["rust"] else [],
+                                 "3", "100", "100",
+                                 ["web/src/searchDetail.test.ts"] if selected["units"] else [], "100")
         return {"count": {"result": "success", "outputs": decision},
-                "web": {"result": "skipped", "outputs": {}}, "rust": {"result": "skipped", "outputs": {}},
+                "web": {"result": "skipped", "outputs": {}}, "units": {"result": "skipped", "outputs": {}},
+                "rust": {"result": "skipped", "outputs": {}},
                 kind: {"result": result, "outputs": {"completed": completed}}}
 
     def test_a_hand_run_and_a_pr_require_actual_runs_of_each_chosen_kind(self):
         for event in ("workflow_dispatch", "pull_request"):
-            for kind in ("web", "rust"):
+            for kind in ("web", "units", "rust"):
                 with self.subTest(event=event, kind=kind):
                     repeat.verdict(self.needs(event, kind))
                     for count in ("", "0", "null", "-1", "1", "29"):
@@ -367,7 +503,7 @@ class Verdict(unittest.TestCase):
                             repeat.verdict(self.needs(event, kind, result=outcome))
 
     def test_missing_decisions_failed_count_and_missing_jobs_fail_closed(self):
-        for field in ("run-web", "run-rust", "repeat"):
+        for field in ("run-web", "run-units", "run-rust", "repeat"):
             needs = self.needs("workflow_dispatch", "web")
             del needs["count"]["outputs"][field]
             with self.subTest(field=field), self.assertRaises((ValueError, KeyError)):
@@ -380,10 +516,10 @@ class Verdict(unittest.TestCase):
         with self.assertRaises(KeyError):
             repeat.verdict(needs)
 
-    def test_only_a_pr_with_nothing_chosen_may_skip_both_legs(self):
+    def test_only_a_pr_with_nothing_chosen_may_skip_every_leg(self):
         decision = repeat.choose("pull_request", "", [], "", "", "")
         needs = {"count": {"result": "success", "outputs": decision},
-                 "web": {"result": "skipped"}, "rust": {"result": "skipped"}}
+                 "web": {"result": "skipped"}, "units": {"result": "skipped"}, "rust": {"result": "skipped"}}
         repeat.verdict(needs)
         decision["repeat"] = "10"
         with self.assertRaises(ValueError):
@@ -430,6 +566,109 @@ class Reports(unittest.TestCase):
                 repeat.completed_runs(None, paths[:1])
             with self.assertRaises(OSError):
                 repeat.completed_runs(None, [Path(directory) / "missing.xml"])
+
+
+STRESS = importlib.util.spec_from_file_location("check_stress", ROOT / "scripts/check-stress-report.py")
+stress = importlib.util.module_from_spec(STRESS)
+STRESS.loader.exec_module(stress)
+
+
+class StressReport(unittest.TestCase):
+    """A repeated run whose iterations include a failure fails the lane, even
+    when nextest's own exit status says the run passed.
+
+    nextest 0.9.146's `--stress-count N` exits 0 when the last iteration
+    passes; a `wsl device windows` job ended successful on 2026-11-14 with
+    `20/20 stress run iterations: 19 passed, 1 failed` in its log
+    (run 43626029599).
+    """
+
+    def run_script(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / "scripts/check-stress-report.py"), *args],
+                              text=True, capture_output=True)
+
+    def report(self, directory, failures=()):
+        """A nextest JUnit report of ten iterations, the named ones failing."""
+        path = Path(directory) / "junit.xml"
+        cases = {True: '<testcase name="seat::a_test"><failure message="boom"/></testcase>',
+                 False: '<testcase name="seat::a_test"/>'}
+        suites = "".join(
+            f'<testsuite name="it@stress-{iteration}">{cases[iteration in failures]}</testsuite>'
+            for iteration in range(1, 11)
+        )
+        path.write_text(f"<testsuites>{suites}</testsuites>", encoding="utf-8")
+        return path
+
+    def test_every_iteration_passing_passes_the_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_script("--junit", str(self.report(directory)), "--repeat", "10")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_one_failed_iteration_fails_the_check_and_names_the_test(self):
+        for failure in (1, 5, 9, 10):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                result = self.run_script("--junit", str(self.report(directory, {failure})))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("seat::a_test", result.stderr)
+                self.assertIn(f"iteration {failure}", result.stderr)
+                self.assertIn("1 failed test runs", result.stderr)
+
+    def test_the_stress_summary_line_alone_fails_the_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "nextest.log"
+            log.write_text("     Summary [ 778.209s] 20/20 stress run iterations: 19 passed, 1 failed\n", encoding="utf-8")
+            result = self.run_script("--summary", str(log))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("1 failed iterations of 20", result.stderr)
+            log.write_text("     Summary [ 12.000s] 10/10 stress run iterations: 10 passed\n", encoding="utf-8")
+            result = self.run_script("--summary", str(log))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_report_shorter_than_the_repeat_asked_for_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "nextest.log"
+            log.write_text("     Summary [ 12.000s] 4/4 stress run iterations: 4 passed\n", encoding="utf-8")
+            result = self.run_script("--summary", str(log), "--repeat", "10")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("fewer than the 10 asked for", result.stderr)
+
+    def test_a_missing_report_or_no_input_at_all_fails_rather_than_passing_silently(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no report or summary", result.stderr)
+        result = self.run_script("--junit", "/nonexistent/junit.xml")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no such report", result.stderr)
+
+    def test_one_report_per_iteration_is_read_by_its_file_name(self):
+        # `repeat.yml`'s unit leg has no `--repeat-each` to use, so it writes
+        # one Vitest report per iteration: a failure in the second names that
+        # report, and a run whose iterations all passed still passes.
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for iteration in (1, 2, 3):
+                path = Path(directory) / f"junit-web-src-a-test-ts.{iteration}.xml"
+                failure = '<failure message="boom"/>' if iteration == 2 else ""
+                path.write_text(
+                    f'<testsuites><testsuite name="src/a.test.ts"><testcase name="a test">{failure}</testcase></testsuite></testsuites>',
+                    encoding="utf-8")
+                paths.append(path)
+            result = self.run_script("--junit", *map(str, paths), "--repeat", "3")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("a test", result.stderr)
+            self.assertIn("junit-web-src-a-test-ts.2", result.stderr)
+            paths[1].write_text(
+                '<testsuites><testsuite name="src/a.test.ts"><testcase name="a test"/></testsuite></testsuites>',
+                encoding="utf-8")
+            result = self.run_script("--junit", *map(str, paths), "--repeat", "3")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_skipped_iteration_is_neither_a_pass_that_proves_repeats_nor_a_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "junit.xml"
+            path.write_text('<testsuites><testsuite name="it@stress-1"><testcase name="a"><skipped/></testcase></testsuite></testsuites>',
+                            encoding="utf-8")
+            self.assertEqual(stress.junit_failures([path]), [])
 
 
 if __name__ == "__main__":

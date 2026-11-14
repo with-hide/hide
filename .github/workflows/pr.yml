@@ -135,9 +135,11 @@ jobs:
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
       # The tests this pull request adds or changes, for the `repeat` lane:
-      # the web specs (a JSON list of paths) and the Rust test modules (a JSON
-      # list of `{package, module, path}`), both empty when it changes none.
+      # the web specs, the packages' unit test files (JSON lists of paths) and
+      # the Rust test modules (a JSON list of `{package, test, module}`), all
+      # empty when it changes none.
       repeat-web: ${{ steps.plan.outputs.repeat-web }}
+      repeat-units: ${{ steps.plan.outputs.repeat-units }}
       repeat-rust: ${{ steps.plan.outputs.repeat-rust }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
       # nightly and a pull request that changes a macOS path
@@ -934,8 +936,9 @@ jobs:
   # (`repeat.yml`, docs/TESTING.md, "Flaky tests"): a new test that fails one
   # run in ten passes its own pull request nine times in ten, and a failed run
   # here fails `verify`. The plan names the tests (`scripts/ci-repeat.py`); on
-  # Linux, the web specs through `web-e2e.yml` and the Rust modules under
-  # nextest. A hand run of `repeat.yml` is the way to another system.
+  # Linux, the web specs through `web-e2e.yml`, the packages' unit test files
+  # under Vitest, and the Rust modules under nextest. A hand run of
+  # `repeat.yml` is the way to another system.
   repeat:
     name: repeat changed tests
     needs: plan
@@ -945,6 +948,7 @@ jobs:
       contents: read
     with:
       web: ${{ needs.plan.outputs.repeat-web }}
+      units: ${{ needs.plan.outputs.repeat-units }}
       rust: ${{ needs.plan.outputs.repeat-rust }}
 
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
