@@ -1274,6 +1274,7 @@ mod tests {
                 id,
                 intent: "answer".into(),
                 body: "reply".into(),
+                now: false,
             },
             300,
         )

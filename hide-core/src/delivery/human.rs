@@ -157,6 +157,7 @@ mod tests {
                     id,
                     intent: "checked".into(),
                     body: "I checked the target".into(),
+                    now: false,
                 },
             };
             mailbox::apply(&mut ledger, &parent, None, &command, 20).unwrap();

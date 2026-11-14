@@ -10348,42 +10348,52 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
 /// takes it at its next tool call while it works; the same letter to an
 /// agent that conducts nothing waits its five minutes of work.
 #[test]
-fn a_letter_to_an_open_missions_conductor_goes_now() {
+fn letters_and_replies_to_an_open_missions_conductor_go_now() {
     let fixture = conducting();
-    let recipient = fixture.runtime.lock().unwrap().delivery_observations["recipient"]
-        .actor
-        .clone();
-    let context = authority(&recipient).context;
-    let send = |intent: &str| {
-        let prepared = fixture
-            .runtime
-            .lock()
-            .unwrap()
-            .prepare_delivery(
-                crate::node::TEST_NODE,
-                "recipient",
-                &context,
-                None,
-                crate::delivery::Command::Send {
-                    target: "sender".into(),
-                    intent: intent.into(),
-                    body: "Done with the fix".into(),
-                    kind: "report".into(),
-                    now: false,
-                    force: false,
-                },
-            )
+    let run = |pane: &str, command: crate::delivery::Command| {
+        let mut guard = fixture.runtime.lock().unwrap();
+        let context = authority(&guard.delivery_observations[pane].actor).context;
+        let prepared = guard
+            .prepare_delivery(crate::node::TEST_NODE, pane, &context, None, command)
             .unwrap();
+        drop(guard);
         prepared.run(std::time::Duration::from_secs(10)).unwrap()
     };
-    assert_eq!(send("before")["immediate"], false, "no mission yet");
+    let send = |target: &str, intent: &str, kind: &str| crate::delivery::Command::Send {
+        target: target.into(),
+        intent: intent.into(),
+        body: "Done with the fix".into(),
+        kind: kind.into(),
+        now: false,
+        force: false,
+    };
+    // The worker's report, and its reply to the Conductor's question.
+    let report = |intent: &str| run("recipient", send("sender", intent, "report"));
+    let reply = |intent: &str| {
+        let asked = run(
+            "sender",
+            send("recipient", &format!("{intent}-ask"), "request"),
+        );
+        run(
+            "recipient",
+            crate::delivery::Command::Reply {
+                id: asked["id"].as_str().unwrap().into(),
+                intent: intent.into(),
+                body: "Yes".into(),
+                now: false,
+            },
+        )
+    };
+    assert_eq!(report("before")["immediate"], false, "no mission yet");
+    assert_eq!(reply("before-reply")["immediate"], false, "no mission yet");
     command(
         &mut fixture.runtime.lock().unwrap(),
         "sender",
         json!({"op": "create", "title": "Fix the bug"}),
     )
     .unwrap();
-    assert_eq!(send("during")["immediate"], true);
+    assert_eq!(report("during")["immediate"], true);
+    assert_eq!(reply("during-reply")["immediate"], true);
 }
 
 /// A mission of one direct change (no pull request) whose worker recorded

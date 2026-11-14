@@ -1830,20 +1830,33 @@ impl Runtime {
             }
             _ => None,
         };
-        // A letter to an open mission's Conductor is taken at its next tool
-        // call even while it works, as `--now` asks, rather than after five
-        // minutes of its work: every worker and checker of the mission waits
-        // on it (operator decision 2026-11-14).
-        if !repeated
-            && let (
-                Command::Send {
-                    now, force: false, ..
-                },
-                Some(target),
-            ) = (&mut command, &target)
-            && self.missions.book.conducted_open(&target.actor).is_some()
-        {
-            *now = true;
+        // A letter or a reply to an open mission's Conductor is taken at its
+        // next tool call even while it works, as `--now` asks, rather than
+        // after five minutes of its work: every worker and checker of the
+        // mission waits on it (operator decision 2026-11-14).
+        if !repeated {
+            let conducting =
+                |recipient: &Actor| self.missions.book.conducted_open(recipient).is_some();
+            match (&mut command, &target) {
+                (
+                    Command::Send {
+                        now, force: false, ..
+                    },
+                    Some(target),
+                ) if conducting(&target.actor) => *now = true,
+                (Command::Reply { id, now, .. }, _)
+                    if self.delivery_ledger.as_ref().is_ok_and(|ledger| {
+                        ledger
+                            .letters
+                            .iter()
+                            .find(|letter| letter.id == *id)
+                            .is_some_and(|original| conducting(&original.sender))
+                    }) =>
+                {
+                    *now = true
+                }
+                _ => {}
+            }
         }
         let also_reads = self.node_exchanges(&actor, &command);
         let prepared = Prepared::new(
