@@ -174,11 +174,21 @@ pub enum Change<'a> {
     /// names it (a resume or a compaction of the same session keeps its
     /// subagents); an event that names none starts the record over.
     SessionStarted,
+    /// A new Codex process took the session over: a `SessionStart` from
+    /// `startup` or `resume`. The old process's subagents ended with it
+    /// without a `SubagentStop`, so none is working any more and none is
+    /// counted done; otherwise it is [`Change::SessionStarted`].
+    Reopened,
     /// One subagent started: by id when the agent names it, and a subagent that
     /// stopped and is running again is not counted done any more.
     Started(Option<&'a str>),
     /// One subagent stopped: a known id moves from working to done once.
     Stopped(Option<&'a str>),
+    /// A subagent's own tool call: it works, as [`Change::Started`] says,
+    /// and the event reports only when that moved a count. A Codex follow-up
+    /// task to a finished subagent sends no `SubagentStart`, and its tool
+    /// calls come before its `SubagentStop`.
+    Working(&'a str),
     /// The turn ended with this many subagents still running, for an agent
     /// that names none by id: none for an agent whose subagents end with its
     /// turn, and the background ones Grok lists for a turn that leaves them
@@ -189,6 +199,12 @@ pub enum Change<'a> {
     /// is no longer working; it is not counted done, since nothing said it
     /// finished.
     Listed { running: &'a [String] },
+    /// The main turn ended and Codex's session file says the main agent
+    /// stopped these subagents during it
+    /// ([`hide_session::calls::codex_subagents_stopped_in_turn`]), which sends
+    /// no `SubagentStop`: they are no longer working, and are not counted
+    /// done, since they did not finish.
+    Ended { ids: &'a [String] },
     /// The event changes no count; the pane's counts are only republished.
     None,
 }
@@ -197,15 +213,44 @@ impl<'a> Change<'a> {
     /// The change one event of a six-event runtime makes, from what its input
     /// said.
     ///
-    /// Claude Code names each subagent and lists the ones still running when
-    /// a turn ends, so its `Stop` never sweeps: a background subagent outlives
-    /// its parent's turn (measured: the turn's `Stop` fires before the
-    /// subagent's `SubagentStop`). A `Stop` without that list changes nothing
-    /// rather than guessing. A runtime that lists nothing keeps the older
-    /// rule, that the turn is over and so are the subagents it started.
-    pub fn of(runtime: Option<AgentRuntime>, event: HookEvent, input: &'a SubagentInput) -> Self {
+    /// Both runtimes name each subagent, and in both a background subagent
+    /// outlives its parent's turn (measured: the turn's `Stop` fires before
+    /// the subagent's `SubagentStop`), so no `Stop` sweeps. Claude Code lists
+    /// the ones still running when a turn ends; a `Stop` without that list
+    /// changes nothing rather than guessing. Codex lists none, and a
+    /// subagent its main agent stops sends no `SubagentStop`, so its main
+    /// turn's end, a `Stop` or an `Interrupt`, ends the subagents the session
+    /// file says the turn stopped (`stopped`, [`Change::Ended`]); a file that
+    /// could not be read changes nothing. A follow-up task to a finished Codex
+    /// subagent sends no `SubagentStart`: the older tools open each of its
+    /// turns with a `UserPromptSubmit` that names it, and its tool calls name
+    /// it with either. A `SessionStart` from `startup` or `resume` is a new
+    /// Codex process, which runs none of the old one's subagents.
+    pub fn of(
+        runtime: Option<AgentRuntime>,
+        event: HookEvent,
+        input: &'a SubagentInput,
+        stopped: Option<&'a [String]>,
+    ) -> Self {
         match event {
+            HookEvent::SessionStart
+                if runtime == Some(AgentRuntime::Codex)
+                    && matches!(input.source.as_deref(), Some("startup" | "resume")) =>
+            {
+                Self::Reopened
+            }
             HookEvent::SessionStart => Self::SessionStarted,
+            HookEvent::UserPromptSubmit if input.subagent.is_some() => {
+                Self::Started(input.subagent.as_deref())
+            }
+            HookEvent::Stop | HookEvent::Interrupt
+                if runtime == Some(AgentRuntime::Codex) && input.subagent.is_none() =>
+            {
+                stopped.map_or(Self::None, |ids| Self::Ended { ids })
+            }
+            HookEvent::PreToolUse if runtime == Some(AgentRuntime::Codex) => {
+                input.subagent.as_deref().map_or(Self::None, Self::Working)
+            }
             HookEvent::UserPromptSubmit
             | HookEvent::PreToolUse
             | HookEvent::PostToolUse
@@ -220,11 +265,12 @@ impl<'a> Change<'a> {
             HookEvent::SubagentStop => Self::Stopped(input.subagent.as_deref()),
             // A subagent's own turn end is not the session's.
             HookEvent::Stop if input.subagent.is_some() => Self::None,
-            HookEvent::Stop if runtime == Some(AgentRuntime::ClaudeCode) => match &input.running {
-                Some(running) => Self::Listed { running },
-                None => Self::None,
+            HookEvent::Stop => match &input.running {
+                Some(running) if runtime == Some(AgentRuntime::ClaudeCode) => {
+                    Self::Listed { running }
+                }
+                _ => Self::None,
             },
-            HookEvent::Stop => Self::Settled { running: 0 },
         }
     }
 }
@@ -239,6 +285,34 @@ pub struct SubagentInput {
     /// The ids Claude Code's `background_tasks` lists as running subagents,
     /// when the input has that list.
     pub running: Option<Vec<String>>,
+    /// The turn the event is about (Codex's `turn_id`).
+    pub turn: Option<String>,
+    /// What started the session, for a `SessionStart` (`startup`, `resume`,
+    /// `clear`, `compact`, ...).
+    pub source: Option<String>,
+    /// The session file the agent keeps (`transcript_path`): the main
+    /// agent's, in a subagent's event too.
+    pub transcript: Option<PathBuf>,
+}
+
+impl SubagentInput {
+    /// The subagents Codex's session file says the main agent stopped during
+    /// the main turn this event ends: read for a Codex `Stop` or `Interrupt`
+    /// of the main agent only, and `None` for any other event, an input that
+    /// names no turn or file, or a file that could not be read.
+    pub fn stopped(&self, runtime: Option<AgentRuntime>, event: HookEvent) -> Option<Vec<String>> {
+        let ends_main_turn = runtime == Some(AgentRuntime::Codex)
+            && matches!(event, HookEvent::Stop | HookEvent::Interrupt)
+            && self.subagent.is_none();
+        if !ends_main_turn {
+            return None;
+        }
+        hide_session::calls::codex_subagents_stopped_in_turn(
+            self.transcript.as_deref()?,
+            self.turn.as_deref()?,
+        )
+        .ok()
+    }
 }
 
 impl SubagentInput {
@@ -257,6 +331,9 @@ impl SubagentInput {
             session_id: Option<String>,
             agent_id: Option<String>,
             background_tasks: Option<Vec<Task>>,
+            turn_id: Option<String>,
+            transcript_path: Option<PathBuf>,
+            source: Option<String>,
         }
         let Some(input) = (!truncated)
             .then(|| serde_json::from_slice::<Input>(payload).ok())
@@ -280,6 +357,9 @@ impl SubagentInput {
                     .filter(|id| valid_subagent(id))
                     .collect()
             }),
+            turn: input.turn_id,
+            source: input.source,
+            transcript: input.transcript_path,
         }
     }
 }
@@ -304,6 +384,8 @@ fn valid_subagent(id: &str) -> bool {
 pub struct Applied {
     /// The session's counts after the change.
     pub counters: PaneCounters,
+    /// Whether the change moved the session's counts.
+    pub counted: bool,
     /// The turn the session's last report said, before this change.
     pub previous_turn: Option<HookTurn>,
     /// Whether the turn or the open approvals moved.
@@ -665,37 +747,24 @@ pub fn apply_in(
     };
     let previous_turn = record.turn;
     let previous_waiting = record.waiting.clone();
+    let previous_counters = record.counters();
     match change {
         // A session that names itself has its own record already, or is the
         // record's own (a resume or a compaction keeps its subagents); one
         // that names none cannot say which, and starts over.
-        Change::SessionStarted => {
+        Change::SessionStarted | Change::Reopened => {
             if who.session.is_none() {
                 record = Record::default();
+            }
+            if change == Change::Reopened {
+                record.running.clear();
             }
             record.turn = None;
             record.waiting.clear();
         }
-        Change::Started(Some(subagent)) => {
-            if let Some(at) = record.finished.iter().position(|id| id == subagent) {
-                record.finished.remove(at);
-                record.done = record.done.saturating_sub(1);
-            }
-            if !record.running.iter().any(|id| id == subagent) {
-                if record.running.len() >= RUNNING_LIMIT {
-                    return Err(too_many());
-                }
-                record.running.push(subagent.to_owned());
-            }
-        }
+        Change::Started(Some(subagent)) | Change::Working(subagent) => record.start(subagent)?,
         Change::Started(None) => record.working = record.working.saturating_add(1),
-        Change::Stopped(Some(subagent)) => {
-            if let Some(at) = record.running.iter().position(|id| id == subagent) {
-                record.running.remove(at);
-                remember_finished(&mut record, subagent);
-                record.done = record.done.saturating_add(1);
-            }
-        }
+        Change::Stopped(Some(subagent)) => record.stop(subagent),
         Change::Stopped(None) => {
             record.working = record.working.saturating_sub(1);
             record.done = record.done.saturating_add(1);
@@ -719,6 +788,7 @@ pub fn apply_in(
             }
             record.running = listed;
         }
+        Change::Ended { ids } => record.running.retain(|running| !ids.contains(running)),
         Change::None => {}
     }
     fold_said(&mut record, said)?;
@@ -739,6 +809,7 @@ pub fn apply_in(
         record.session = who.session.map(str::to_owned);
     }
     let counters = record.counters();
+    let counted = counters != previous_counters;
     file.sessions.push(record);
     if file.sessions.len() > SESSIONS_PER_PANE {
         file.sessions.remove(0);
@@ -750,6 +821,7 @@ pub fn apply_in(
     drop(held);
     Ok(Applied {
         counters,
+        counted,
         previous_turn,
         moved,
         turn,
@@ -764,13 +836,41 @@ fn too_many() -> io::Error {
     )
 }
 
-/// Remembers that `subagent` finished, so that one that starts again is not
-/// counted done twice. The oldest ids go first.
-fn remember_finished(record: &mut Record, subagent: &str) {
-    if record.finished.len() >= FINISHED_LIMIT {
-        record.finished.remove(0);
+impl Record {
+    /// `subagent` runs: a subagent that finished and runs again is not
+    /// counted done any more.
+    fn start(&mut self, subagent: &str) -> io::Result<()> {
+        if let Some(at) = self.finished.iter().position(|id| id == subagent) {
+            self.finished.remove(at);
+            self.done = self.done.saturating_sub(1);
+        }
+        if !self.running.iter().any(|id| id == subagent) {
+            if self.running.len() >= RUNNING_LIMIT {
+                return Err(too_many());
+            }
+            self.running.push(subagent.to_owned());
+        }
+        Ok(())
     }
-    record.finished.push(subagent.to_owned());
+
+    /// `subagent` finished: a running one moves to done once, and a repeated
+    /// stop or one of a subagent that never started changes nothing.
+    fn stop(&mut self, subagent: &str) {
+        if let Some(at) = self.running.iter().position(|id| id == subagent) {
+            self.running.remove(at);
+            self.remember_finished(subagent);
+            self.done = self.done.saturating_add(1);
+        }
+    }
+
+    /// Remembers that `subagent` finished, so that one that starts again is
+    /// not counted done twice. The oldest ids go first.
+    fn remember_finished(&mut self, subagent: &str) {
+        if self.finished.len() >= FINISHED_LIMIT {
+            self.finished.remove(0);
+        }
+        self.finished.push(subagent.to_owned());
+    }
 }
 
 /// Replaces `who`'s counts with ones its agent keeps itself: OpenCode's
@@ -1521,7 +1621,7 @@ mod tests {
         let sub = SubagentInput::read(CLAUDE_SUBAGENT_STOP, false);
         let blank = SubagentInput::default();
         let claude = Some(AgentRuntime::ClaudeCode);
-        let of = |runtime, event, input| Change::of(runtime, event, input);
+        let of = |runtime, event, input| Change::of(runtime, event, input, None);
         assert_eq!(
             of(claude, HookEvent::Stop, &stop),
             Change::Listed {
@@ -1532,9 +1632,33 @@ mod tests {
         // a subagent's own end is not the session's.
         assert_eq!(of(claude, HookEvent::Stop, &blank), Change::None);
         assert_eq!(of(claude, HookEvent::Stop, &sub), Change::None);
+        // Codex's turn end never sweeps: without what its session file said
+        // it changes nothing, and with it, it applies that.
+        let codex = Some(AgentRuntime::Codex);
+        assert_eq!(of(codex, HookEvent::Stop, &blank), Change::None);
+        assert_eq!(of(codex, HookEvent::Interrupt, &blank), Change::None);
+        let stopped = ids(&["d"]);
+        for event in [HookEvent::Stop, HookEvent::Interrupt] {
+            assert_eq!(
+                Change::of(codex, event, &blank, Some(&stopped)),
+                Change::Ended { ids: &stopped }
+            );
+        }
+        // A file is no word on Claude Code's turn, nor a subagent's tool call.
         assert_eq!(
-            of(Some(AgentRuntime::Codex), HookEvent::Stop, &blank),
-            Change::Settled { running: 0 }
+            Change::of(claude, HookEvent::Stop, &blank, Some(&stopped)),
+            Change::None
+        );
+        assert_eq!(of(claude, HookEvent::PreToolUse, &sub), Change::None);
+        assert_eq!(
+            of(codex, HookEvent::PreToolUse, &sub),
+            Change::Working("a4d1fa")
+        );
+        assert_eq!(of(codex, HookEvent::PreToolUse, &blank), Change::None);
+        // A prompt that names a subagent is that subagent's turn starting.
+        assert_eq!(
+            of(codex, HookEvent::UserPromptSubmit, &sub),
+            Change::Started(Some("a4d1fa"))
         );
         assert_eq!(
             of(claude, HookEvent::SubagentStart, &sub),

@@ -1067,7 +1067,8 @@ fn run_hook(arguments: &[String], started: Instant) {
         .unwrap_or_default();
     // A subagent's prompt (Codex's older subagent tools open each of a
     // subagent's turns with one, under the main session's id) is not the
-    // pane's: it takes no letter, no Memory and no guidance.
+    // pane's: it takes no letter, no Memory and no guidance. The outer
+    // prompt hook counts it (`report_recorded_turn`).
     if event == HookEvent::UserPromptSubmit && input.subagent.is_some() {
         return;
     }
@@ -1196,8 +1197,9 @@ fn run_hook(arguments: &[String], started: Instant) {
         }
         return;
     }
+    let stopped = counted.then(|| input.stopped(runtime, event)).flatten();
     let change = if counted {
-        Change::of(runtime, event, &input)
+        Change::of(runtime, event, &input, stopped.as_deref())
     } else {
         Change::None
     };
@@ -1308,7 +1310,14 @@ fn report_pane(
                 Said::Turn(_) | Said::Asks(_) => true,
                 Said::Tool { .. } => applied.moved,
             };
-            if !(starts || change != Change::None || speaks) {
+            let changed = match change {
+                Change::None => false,
+                // A subagent's every tool call says it works; only the one
+                // that moved a count is news.
+                Change::Working(_) => applied.counted,
+                _ => true,
+            };
+            if !(starts || changed || speaks) {
                 return;
             }
             (
@@ -1404,21 +1413,28 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
     let call = payload
         .map(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated))
         .unwrap_or_default();
+    let counted = runtime.dialect().adapter().subagent_counts.is_some();
     // A prompt that names a subagent is that subagent's turn starting, not
-    // the session's.
-    let subagent_prompt = event == HookEvent::UserPromptSubmit
-        && payload.is_some_and(|(bytes, truncated)| {
-            SubagentInput::read(bytes, *truncated).subagent.is_some()
-        });
+    // the session's, and a subagent's tool call says it works (`Change::of`).
+    // The session's own tool call's input is not read again.
+    let input = payload
+        .filter(|_| event == HookEvent::UserPromptSubmit || call.subagent)
+        .map(|(bytes, truncated)| SubagentInput::read(bytes, *truncated))
+        .unwrap_or_default();
+    let change = if counted {
+        Change::of(Some(runtime), event, &input, None)
+    } else {
+        Change::None
+    };
     let said = match event {
-        HookEvent::UserPromptSubmit if subagent_prompt => Said::Nothing,
+        HookEvent::UserPromptSubmit if input.subagent.is_some() => Said::Nothing,
         HookEvent::UserPromptSubmit => Said::Turn(HookTurn::Working),
         _ => Said::Tool { event, call: &call },
     };
     report_pane(
         &home,
         event,
-        Change::None,
+        change,
         Reporter {
             agent: Some(runtime.id()),
             session: session.as_deref(),
@@ -1428,7 +1444,7 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
             transcript: call.transcript.as_deref(),
             refused: None,
         },
-        runtime.dialect().adapter().subagent_counts.is_some(),
+        counted,
         report::deadline(started, runtime, event),
     );
 }

@@ -226,7 +226,7 @@ No adapter can observe a blocked subagent from the events it has, so the blocked
 
 A record belongs to one session.
 A new session in a reused pane starts a record of its own, so it never inherits the last one's numbers.
-A `SessionStart` of the same session (a resume or a compaction) keeps them, since its background subagents still run, and forgets the session's turn; a runtime whose input names no session resets at `SessionStart`.
+A `SessionStart` of the same session (a resume or a compaction) keeps them, since its background subagents still run, and forgets the session's turn; a runtime whose input names no session resets at `SessionStart`, and Codex's resume, a new process that runs none of the old one's subagents, keeps the done count and no running subagent ([Which subagents run](#which-subagents-run)).
 
 #### Which session is the pane's
 
@@ -308,7 +308,24 @@ A start adds the id (and takes a resumed subagent back out of `done`), a stop of
 The parent's `Stop` replaces the running ids with the ones it lists: a subagent it no longer lists left without a stop reaching the hook and stops working, without being counted done.
 A `Stop` that lists nothing (an input cut off, or a Claude Code that sends no `background_tasks`) changes nothing; nothing sweeps, since no signal says a running subagent ended.
 The running ids are capped at 256 per session, the remembered finished ids at 256 (the oldest go first, and the done count keeps them); crossing the running cap fails the event and is written down as the pane's last report failure.
-Codex and the runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists, none for Codex.
+
+Codex names every subagent too (`agent_id`, the subagent's thread id, beside the main session's `session_id` in every subagent event), and sends these facts (Codex 0.167.2, measured in an interactive session with both of its subagent tool sets, the current one and the older one some models and old sessions still use):
+
+- The main agent's `Stop` fires while subagents still run, each of which sends its `SubagentStop` when it ends; with the older tools the `Stop` even comes before the subagents' `SubagentStart`.
+  An `Interrupt` of the main turn leaves the subagents running.
+- A follow-up task to a finished subagent sends no `SubagentStart`: the older tools open each of a subagent's turns with a `UserPromptSubmit` that names it, and with either its tool calls name it.
+- A subagent the main agent stops itself (`interrupt_agent`, or the older tools' `close_agent`) sends no `SubagentStop`; only the main agent's session file records it (a `SubAgentActivity` item of kind `interrupted`, or a `CollabAgentToolCall` of `close_agent`).
+- Quitting Codex while a subagent runs sends no `SubagentStop`; `codex resume` starts the same session again with a `SessionStart` whose `source` is `resume`.
+
+So Codex keeps the same running and finished ids, with no list to replace them from.
+A start, a subagent's prompt and a subagent's own tool call (a `PreToolUse` of the tools Codex's matcher sends, reported only when it moves a count) add the id, a stop moves it to `done`, and the main agent's `Stop` or `Interrupt` sweeps nothing.
+At that `Stop` or `Interrupt` the helper reads the main session file named in the input (`transcript_path`), the records after the turn's `task_started` within the file's last 256 KiB, whichever start is nearer, and takes out of the running ids, without counting them done, the subagents whose latest word there is a stop (`hide_session::calls::codex_subagents_stopped_in_turn`); a later word on the same subagent, such as a follow-up task, takes the stop back, and a file that cannot be read changes nothing.
+A start or a completion in the file is not read as one: Codex writes a subagent's completion there only after its `SubagentStop`, so a turn end read between the two would count a finished subagent as running again.
+A `SessionStart` from `startup` or `resume` is a new Codex process, which runs none of the old one's subagents, so the session's running ids go, without being counted done; one from `compact` or `clear` keeps them.
+`codex_subagent_counts` asserts each of these orders against the helper.
+
+Two Codex cases have no signal, so the count stays as the hooks left it, and Hide waits on no timer for them: a subagent that a subagent of its own stopped (its stop is in that subagent's file, which the helper does not read) stays working until the session starts again; and a stop written more than 256 KiB before the main turn's end is not read.
+The runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists.
 
 ### The Hide global instruction
 

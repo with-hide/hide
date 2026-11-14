@@ -867,6 +867,7 @@ docs/agent-hooks.md owns the hook.
 `working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
 Each count is separately knowable, and a count the core cannot read is `None`, never zero, because a zero would claim the agent works alone; an agent whose adapter declares no count has none to read.
 Claude Code, Codex, Grok, OpenCode and omp report a count, and Pi (it runs no subagents) declares none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
+Codex's count follows its subagents past the main turn's end, as Claude Code's does: a subagent still running when the main agent's turn ends stays working until its own end, one the main agent stops itself leaves without being counted done, and a quit and resume of the session counts none of the subagents the quit cut off (docs/agent-hooks.md, Which subagents run).
 Settings > Agents lists no subagent count either: the kit's feature table has no `subagents` entry.
 
 ### Closing an agent that spawned others
