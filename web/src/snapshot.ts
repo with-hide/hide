@@ -3172,6 +3172,44 @@ export type DeskMentions = {
   projects: { id: string; name: string; sessions: string[] }[];
 };
 
+/** What an approved external tool may do (PRD hide-external-control D-06, D-34): see what Hide shows, or that and set agents to work. */
+export type AccessLevel = "view" | "act";
+
+/**
+ * The `access` section (PRD hide-external-control B2, B11, B15): the requests
+ * waiting for the operator and the approved tools on the core's machine. The
+ * core decides every value; Settings › External tools words them and sends
+ * the operator's approve, refuse, level and disconnect back.
+ */
+export type AccessSection = {
+  /** The core's machine, where every tool runs. */
+  machine: string;
+  /** How many tools may connect (`n / 16`). */
+  limit: number;
+  /** Oldest first. */
+  pending: AccessPending[];
+  /** In the order they were approved. */
+  connections: AccessConnection[];
+};
+
+export type AccessPending = { id: string; name: string; program: string | null; requested_ms: number };
+
+export type AccessConnection = {
+  id: string;
+  name: string;
+  level: AccessLevel;
+  program: string | null;
+  created_ms: number;
+  /** Moved at most once a minute (B34). */
+  last_used_ms: number;
+  /** The live agents the tool started, each by its pane, which the row opens (B15). */
+  agents: { agent_id: string; pane_id: string }[];
+  agent_count: number;
+  /** The open missions those agents conduct, by id. */
+  missions: string[];
+  mission_count: number;
+};
+
 /** The `desk` section: absent until hided starts Desk. */
 export type DeskSection = {
   selection: { agent: DeskAgentId | null; model: string | null; effort: string | null };

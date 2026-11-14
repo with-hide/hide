@@ -2717,7 +2717,7 @@ All pages use the four interface languages, existing settings rows, system contr
 
 Settings opens as one modal, from ⌘,, the sidebar's gear and the desktop menu's Settings…, about 880 wide (`--size-settings-sheet-w`) and as wide and tall as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side (PRD settings-left-nav B1, B13).
 Its left is a list of pages and its right the chosen page; the list keeps its width (`--size-settings-nav-w`) and its place while only the page scrolls, down to the smallest window, 720×480 (B12, B13).
-The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mission, Mobile, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
+The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mission, Mobile, External tools, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
 Its top inset uses `spacing-sm` and group labels use `spacing-xs` above and below, so the additional Usage page fits at 720×480 with the default Interface text without shrinking row targets.
 When Interface text makes the list overflow, its grouped pages scroll independently while About and Privacy stay pinned at the foot; every page remains reachable by pointer or keyboard, and scrolling either the list or the page does not move the other.
 Each page has its mark and its name, the names are the same in every language, and a group name is a label, never a page.
@@ -3111,6 +3111,25 @@ A foreign HTTPS entry or Funnel is refused; a failed removal remains visible unt
 The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 연결 해제, which closes that phone at once.
 The phone pause switch is on Settings > Notifications, and its choice survives a restart.
 A phone is told only when an agent waits on the operator’s answer, a question, an approval or a block, never when it finishes (status-model.md, Phone notices).
+
+### Settings > External tools
+
+External tools (외부 도구) is a page of Settings' machine group, after Mobile, drawn from the core's `access` section (`web/src/settings/ExternalToolsTab.tsx`, `web/src/externalTools.ts`).
+It is where a program outside Hide's panes that ran `hide access request --name <name>` is approved, and the only place: a request never reaches 내 차례, a badge, a notice or the phone, and no `hide` command approves, refuses, changes or disconnects a tool.
+Every tool runs on the core's machine, so each line names that machine the way Settings names it.
+
+승인 대기 (with its count) leads the page while a request waits, one row per request: the name the tool asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
+Under them two choices with one line each, 보기만 · Hide에 보이는 것(상태, 에이전트 화면, 미션)을 볼 수만 있어요 and 시키기 · 보기에 더해 에이전트를 띄우고 끝내고 말을 넣고, 미션을 맡길 수 있어요, with 보기만 chosen.
+The approve button names the choice, 보기만으로 승인 or 시키기로 승인, beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
+
+연결된 도구 · n / 16 lists the approved tools in the order they were approved, under one line naming the two levels (보기만 볼 수만 · 시키기 일까지 시킴).
+Each row shows the tool's name and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; the 보기만 and 시키기 segments, where pressing the other one changes the level from the tool's next command; and 끊기, which disconnects at once with no confirmation.
+A 시키기 tool that started agents or missions also says 끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요 under its line; a 보기만 tool's work is already the operator's, so it does not.
+With no tool connected the list holds 연결된 도구가 없어요 and the command that asks, `hide access request --name <이름>`.
+
+Pressing a row anywhere outside its controls opens the agents and then the missions that tool started: an agent as its status mark, agent mark and title, a mission as its mark and title.
+Pressing an agent closes Settings and opens its pane, and pressing a mission opens its map as a mission chip does; an agent the window has not drawn yet keeps its line under its id, and a row whose tool started nothing says so.
+The gallery draws the page from invented tools at `?scene=external-tools&state=pending|connected|empty`.
 
 ### The phone app
 

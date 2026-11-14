@@ -39,10 +39,20 @@ pub struct AccessConnectionSnapshot {
     pub created_ms: u64,
     /// Moved at most once a minute (B34).
     pub last_used_ms: u64,
-    /// The live agents this tool started, by registration id, and how many.
-    pub agents: Vec<String>,
+    /// The live agents this tool started, and how many: each by its
+    /// registration id and its pane, which Settings › External tools opens
+    /// (B15).
+    pub agents: Vec<AccessAgentSnapshot>,
     pub agent_count: usize,
     /// The open missions those agents conduct, by id, and how many.
     pub missions: Vec<String>,
     pub mission_count: usize,
+}
+
+/// One agent a tool started: its registration id and its pane in the
+/// core's own ids.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccessAgentSnapshot {
+    pub agent_id: String,
+    pub pane_id: String,
 }
