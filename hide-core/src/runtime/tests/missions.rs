@@ -16107,9 +16107,10 @@ fn published(mission: &Value) -> Value {
 /// stacked on a pull request, behind a gate asked and a gate passed,
 /// waiting on an outside branch, verified, and worked on a device) are read
 /// by this build as that build published them: the same state, landing,
-/// lines, gates and results. None records a destination, none is written
-/// one, and the first evaluation after the upgrade reopens, closes or moves
-/// nothing.
+/// lines, gates and results. Each keeps the destination its release stored:
+/// a release before destinations (1.2.7 and older) stored none and none is
+/// written one, and a later release's recorded branch is read unchanged.
+/// The first evaluation after the upgrade reopens, closes or moves nothing.
 #[test]
 fn a_released_builds_missions_read_as_that_build_published_them() {
     use crate::node_migration::upgrade_tests::{fixtures, started};
@@ -16122,6 +16123,46 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
     let mut compared = Vec::new();
     for folder in fixtures() {
         let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        // Each mission's destination as the release itself wrote it, read
+        // from the release folder rather than through this build's reader:
+        // the folder book (`missions/<id>.json`) from 1.2.8, the single
+        // `missions.json` before it.
+        let stored_destinations: std::collections::BTreeMap<String, Value> = {
+            let book = folder.join("missions");
+            let files: Vec<std::path::PathBuf> = if book.is_dir() {
+                std::fs::read_dir(&book)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| {
+                                name.starts_with("mission-") && name.ends_with(".json")
+                            })
+                    })
+                    .collect()
+            } else {
+                vec![folder.join("missions.json")]
+                    .into_iter()
+                    .filter(|path| path.is_file())
+                    .collect()
+            };
+            files
+                .iter()
+                .flat_map(|path| {
+                    let file: Value =
+                        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    file["missions"].as_array().cloned().unwrap_or_default()
+                })
+                .map(|mission| {
+                    let id = mission["id"].as_str().unwrap().to_owned();
+                    (
+                        id,
+                        mission.get("destination").cloned().unwrap_or(Value::Null),
+                    )
+                })
+                .collect()
+        };
         let state = started(&folder);
         let store = crate::mission_store::MissionStore::new(state.path());
         let restored = store.restore();
@@ -16131,9 +16172,18 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
         runtime.install_mission_store(store, restored);
         assert_eq!(runtime.missions.unreadable, None, "{tag}");
         for mission in &runtime.missions.book.missions {
-            assert_eq!(mission.destination, None, "{tag} {}", mission.id);
+            let stored = stored_destinations
+                .get(&mission.id)
+                .cloned()
+                .unwrap_or(Value::Null);
+            assert_eq!(json!(mission.destination), stored, "{tag} {}", mission.id);
             let record = serde_json::to_value(mission).unwrap();
-            assert_eq!(record.get("destination"), None, "{tag} {}", mission.id);
+            assert_eq!(
+                record.get("destination").cloned().unwrap_or(Value::Null),
+                stored,
+                "{tag} {}",
+                mission.id
+            );
         }
         let read = |runtime: &Runtime| {
             let ids: Vec<String> = runtime

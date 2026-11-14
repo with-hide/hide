@@ -765,8 +765,10 @@ class Scenario:
 # What a mission's record alone decides of how it is published; the upgrade
 # test (`released_missions` in hide-core) cuts a later build's view the same way.
 MISSION_FIELDS = ("id", "title", "status", "scope", "decision", "landing_order", "stack_waiting", "report")
-NODE_FIELDS = ("key", "kind", "delivery", "status", "depends_on", "branch", "base_pr", "commit", "verdict", "checks",
-               "landing", "external", "line")
+# `preset` is what a general node is for (research, verify) from 1.2.8; a
+# release before it published that as the node's kind and has no preset.
+NODE_FIELDS = ("key", "kind", "preset", "delivery", "status", "depends_on", "branch", "base_pr", "commit", "verdict",
+               "checks", "landing", "external", "line")
 
 
 def published_mission(mission):
