@@ -485,6 +485,11 @@ impl Mobile {
             relay_change: watch::channel(0).0,
             relay_task: Mutex::new(None),
         });
+        // A notice for an app phone carries the relay room, which comes from these keys. The
+        // supervisor's first pass makes them too, but a notice can be delivered before that pass
+        // runs (`push_payload`), and one that finds no keys is dropped with its closes; making
+        // them here means the first delivery reads the same pair as every later one.
+        mobile.prepare_relay_keys();
         *mobile
             .relay_task
             .lock()
@@ -527,6 +532,25 @@ impl Mobile {
             &store::settings_path(&self.config.state_dir),
             &inner.settings,
         );
+    }
+
+    /// Makes the relay keys before anything needs them, while the relay is on: a notice's room, a
+    /// pairing QR and the relay link all read the one pair. Called wherever Mobile starts using the
+    /// relay (a start, the switch, the method), so no delivery is the first caller to make the pair.
+    fn prepare_relay_keys(&self) {
+        let inner = self.lock();
+        if !inner.settings.enabled || inner.settings.method() != Method::Relay {
+            return;
+        }
+        drop(inner);
+        // A pair that cannot be made leaves no room for a notice, so the relay line says so
+        // (`key_unavailable`, with its retry) instead of a notice failing later on its own.
+        if self.relay_keys().is_err() {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_relay", "kind": "relay.keys_unprepared",
+            }));
+            self.relay_state(relay::State::KeyUnavailable);
+        }
     }
 
     fn relay_keys(&self) -> Result<Arc<relay::Keys>, ()> {
@@ -1317,9 +1341,19 @@ impl Mobile {
         clear: &BTreeSet<AgentKey>,
     ) -> Result<Value, &'static str> {
         let mut payload = push::payload(notice, clear);
-        let inner = self.lock();
-        if inner.settings.method() == Method::Relay {
-            let keys = inner.relay_keys.as_ref().ok_or("relay_key_unavailable")?;
+        // One lock and no I/O: the pair is made when the relay is turned on (`prepare_relay_keys`),
+        // and this reads what that left. A delivery that still finds none makes it rather than
+        // dropping the notice over its room, because the notice carries the closes: a start whose
+        // key write failed, or a method change racing a delivery, would otherwise lose both.
+        let prepared = {
+            let inner = self.lock();
+            (inner.settings.method() == Method::Relay).then(|| inner.relay_keys.clone())
+        };
+        if let Some(prepared) = prepared {
+            let keys = match prepared {
+                Some(keys) => keys,
+                None => self.relay_keys().map_err(|()| "relay_key_unavailable")?,
+            };
             payload["room"] = json!(keys.room());
         }
         Ok(payload)
@@ -1484,6 +1518,8 @@ impl Mobile {
                 if !enabled {
                     self.close_phones("mobile_off");
                 }
+                // Switching the relay on means a notice can now need its room.
+                self.prepare_relay_keys();
                 hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "mobile.switched", "enabled": enabled,
                 }));
@@ -1525,6 +1561,8 @@ impl Mobile {
                     };
                     self.save_settings(&inner);
                 }
+                // The new method's first notice needs the room the relay keys name.
+                self.prepare_relay_keys();
                 self.set_origin(None);
                 self.close_phones("method_changed");
                 self.relay_changed();

@@ -315,6 +315,69 @@ fn a_clear_survives_web_preflight_failure() {
     with_runtime(web_preflight());
 }
 
+/// The relay's first pass is what used to make the keys its room names, and a
+/// notice can be delivered before that pass: the daemon's follower starts on
+/// the snapshot burst, not on the relay link. A delivery that found no keys was
+/// dropped whole, and the next push that would have carried its closes went
+/// with it (issues 2578, 2579, 2538: `push.failed` `relay_key_unavailable`
+/// before the holder's queue read `no entry found for key`). `test_mobile`
+/// starts no supervisor, so this is that ordering exactly: the delivery here
+/// is the first thing to need the pair.
+#[test]
+fn a_notice_delivered_before_the_relays_first_pass_still_has_its_room() {
+    with_runtime(before_the_relays_first_pass());
+}
+
+async fn before_the_relays_first_pass() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("state");
+    let registration = AppKey::new().registration(&"ab".repeat(32));
+    assert!(store::write_logged(
+        &store::settings_path(&state),
+        &json!({"enabled": true, "method": "relay", "push_mode": "always"}),
+    ));
+    assert!(store::write_logged(
+        &store::phones_path(&state),
+        &json!({"phones": [{
+            "id": PHONE, "name": "Phone", "credential_sha256": "0".repeat(64),
+            "paired_at_ms": now_ms(), "last_seen_ms": now_ms(),
+            "notifications": "on", "origin": "relay",
+            "apns": {"token": registration["token"], "environment": "sandbox",
+                "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"]},
+        }]}),
+    ));
+    let mobile = test_mobile(directory.path(), &Arc::default());
+    assert!(
+        mobile.lock().relay_keys.is_some(),
+        "the keys are made where the relay is turned on, not by its first pass"
+    );
+    let payload = mobile
+        .push_payload(&notice("a"), &BTreeSet::new())
+        .expect("a notice carries its room without waiting for the relay");
+    assert_eq!(payload["room"], json!(room(&mobile)));
+    // A method change can race a delivery, and a start whose key write failed leaves
+    // none either: the delivery makes the pair rather than dropping the notice and
+    // the closes it carries.
+    {
+        let mut inner = mobile.lock();
+        inner.relay_keys = None;
+        inner.settings.relay_keys = None;
+    }
+    let payload = mobile
+        .push_payload(&notice("b"), &BTreeSet::new())
+        .expect("a delivery with no prepared pair makes it rather than dropping the notice");
+    assert_eq!(payload["room"], json!(room(&mobile)));
+}
+
+fn room(mobile: &Arc<Mobile>) -> String {
+    mobile
+        .lock()
+        .relay_keys
+        .clone()
+        .expect("the pair is in memory")
+        .room()
+}
+
 async fn web_preflight() {
     let directory = tempfile::tempdir().unwrap();
     let phone_key = AppKey::new();
@@ -465,7 +528,6 @@ impl RestFixture {
             &json!({"phones":phones})
         ));
         let mobile = test_mobile(directory.path(), &Arc::default());
-        mobile.relay_keys().unwrap();
         mobile.config.desktop.set_waiting(1, true);
         // Use the injected observation clock, with the initial computer input
         // outside the one-second tie window of a subsequent phone action.

@@ -3470,7 +3470,7 @@ The phone's own language and light or dark choice are the one exception to "the 
 The loader and the app read the same module, so the start page and every protocol bundle of an origin agree; the app's language is that choice, else the core's `interface_language`, else the phone's language, and `followPhoneTheme` is the one function that puts the `dark` class on the page.
 Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, selected method, last direct scope, push mode, owned serve entry, VAPID key, device signing seed and Noise static key), written through a temporary file at mode 0600.
 An older file without a method keeps Tailscale when it has a Serve record or last tailnet; a new setup defaults to relay.
-The relay keys are decoded once per daemon and shared by admission, QR and push payloads.
+The relay keys are made when Mobile starts using the relay, and decoded once per daemon and shared by admission, QR and push payloads, so no notice waits for the relay's first pass to name its room.
 
 The default transport is `mobile/relay.rs`: one outbound WebSocket to `wss://relay.withhide.dev/ws`, with the validated `HIDE_RELAY_URL` override for tests and development (plaintext `ws` is loopback-only).
 The supervisor owns that socket and at most eight phone tasks; switching off, changing method, closing the move gate or shutting down cancels the link and joins its phone tasks.
