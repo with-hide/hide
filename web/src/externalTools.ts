@@ -1,13 +1,13 @@
 // The pure decisions behind Settings › External tools (PRD
-// hide-external-control B2, B11, B13, B15): what a request's and a connected
-// tool's second line say, when a row warns that its work would become the
-// operator's, and what the row lists when it is opened. Every value is the
-// core's `access` section; nothing here reads the store.
+// hide-external-control B2, B11, B13): what a request's and a connected
+// tool's second line say, and when a row warns that its work would become the
+// operator's. Every value is the core's `access` section; nothing here reads
+// the store.
 
 import type { TFunction } from "i18next";
 import type { InterfaceLanguage } from "./i18n/locale";
 import { lastSeen } from "./mobileSettings";
-import type { AccessConnection, AccessPending, AgentRow, Mission } from "./snapshot";
+import type { AccessConnection, AccessPending } from "./snapshot";
 
 // Times read as a paired phone's last seen does (`lastSeen`), on the window's
 // shared clock: the `access` section carries no clock of the core's.
@@ -43,21 +43,4 @@ export function connectionLine(connection: AccessConnection, machine: string, no
  */
 export function warnsOfWork(connection: AccessConnection): boolean {
   return connection.level === "act" && connection.agent_count + connection.mission_count > 0;
-}
-
-/** One line of an opened tool row (B15): an agent opens its pane, a mission its map. */
-export type ToolWork =
-  | { kind: "agent"; agentId: string; paneId: string; row: AgentRow | null }
-  | { kind: "mission"; id: string; mission: Mission | null };
-
-/**
- * What an opened row lists, agents first, then missions, each in the
- * section's order. An agent or a mission the window has not drawn yet keeps
- * its line under its id, so a count never names more than the list shows.
- */
-export function toolWork(connection: AccessConnection, rowsByPane: ReadonlyMap<string, AgentRow>, missions: readonly Mission[]): ToolWork[] {
-  return [
-    ...connection.agents.map((agent): ToolWork => ({ kind: "agent", agentId: agent.agent_id, paneId: agent.pane_id, row: rowsByPane.get(agent.pane_id) ?? null })),
-    ...connection.missions.map((id): ToolWork => ({ kind: "mission", id, mission: missions.find((mission) => mission.id === id) ?? null })),
-  ];
 }

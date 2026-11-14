@@ -3214,11 +3214,8 @@ export type AccessConnection = {
   created_ms: number;
   /** Moved at most once a minute (B34). */
   last_used_ms: number;
-  /** The live agents the tool started, each by its pane, which the row opens (B15). */
-  agents: { agent_id: string; pane_id: string }[];
+  /** How many live agents the tool started, and how many open missions those agents conduct. */
   agent_count: number;
-  /** The open missions those agents conduct, by id. */
-  missions: string[];
   mission_count: number;
 };
 
