@@ -1473,6 +1473,10 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
+        // What a pane agent alone may ask is refused to a tool before any
+        // of it is read: the tool starts an agent for it (PRD
+        // hide-external-control B22, B23).
+        crate::runtime::access::admit_tool_command(&actor, &command)?;
         // A machine named by a dialed device's SSH alias is that device's id
         // from here on (`machine_named`).
         if let Command::Agents {
@@ -1663,9 +1667,6 @@ impl Runtime {
             }
             _ => {}
         }
-        // What a pane agent alone may ask is refused to a tool, which starts
-        // an agent for it (PRD hide-external-control B22, B23).
-        crate::runtime::access::admit_tool_command(&actor, &command)?;
         // A spawn of Desk's past its places waits in Desk's queue (B21).
         let queued = self.desk_spawn_admission(&actor, &command)?;
         // `parent` names the sender's own parent, which a child is never told

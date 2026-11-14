@@ -422,6 +422,8 @@ pub(crate) fn admit_tool_command(
         Agents::Spawn {
             beside, plan_node, ..
         } if *beside || plan_node.is_some() => Err(NEEDS_AGENT.into()),
+        // A task names the work as Hide's own (Hide AI); a tool's is not.
+        Agents::Spawn { task: Some(_), .. } => Err("task_reserved".into()),
         Agents::Show { id } if id == crate::coordination::HERE => Err(NEEDS_AGENT.into()),
         Agents::RegisterSelf { .. }
         | Agents::Register { .. }
