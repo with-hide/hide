@@ -19,7 +19,7 @@ The containers, network, image and work folder are removed on every exit; the ol
 
 ## Where the folder goes
 
-- `hide-core/tests/fixtures/release-state/<tag>/`: only what a start reads (the JSON stores, the SQLite stores with their logs folded in, `node.json`, the engine folder and the mission events). Logs, holders, sockets, scrollback, pane credentials, backups and pairing secrets are left behind.
+- `hide-core/tests/fixtures/release-state/<tag>/`: only what a start reads (the JSON stores, the SQLite stores with their logs folded in, `node.json`, the engine folder, the mission folder and the mission events). Logs, holders, sockets, scrollback, pane credentials, backups and pairing secrets are left behind.
 - `hide-kit/tests/fixtures/release-home/<tag>/device/`: what the release's kit left in the device's account, at its place in the home: the kit's record (`.hide/kit/installed.json`), Claude Code's `settings.json` with Hide's hooks beside the operator's, and the folder trust Hide recorded for a worktree it spawned into (`.claude.json`, `.hide/agent-hooks/claude-trust.json`). The core has none: it runs outside a desktop package, whose kit installs nothing.
 - `hide-core/tests/fixtures/release-state/<tag>.json`: the release's commit, the made-up ids, each scenario step with `ok` true, false, or null when the release itself refuses the step (`why` says what it answered), and `missions`, each mission as the release published it; a folder made before that was kept has none, and its missions are only read.
 
