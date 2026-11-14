@@ -739,6 +739,36 @@ export function hostLog(env: Record<string, string>): { event: string; [key: str
 }
 
 /**
+ * What the host was doing around an exception nothing caught (issue 2561).
+ *
+ * `timer._onTimeout is not a function` names Node's own dispatch, not the timer
+ * that caused it. Node selects a timer, checks that it still has a callback,
+ * and calls it later; anything that clears that callback in between makes the
+ * call throw, and the stack then names only `listOnTimeout`. A run that only
+ * keeps the stack cannot say which timer was armed or what else the main
+ * process held, so both sides are written: the host's own log around the throw
+ * and what Node still lists as active work.
+ *
+ * `process._getActiveHandles()` does not list timeouts (they are not handles),
+ * so the timer side comes from `getActiveResourcesInfo()`, which names every
+ * pending resource kind. That names no individual timer; when a later failure
+ * needs one, the host has to record its own timers.
+ */
+export async function hostTimerDump(app: ElectronApplication, env: Record<string, string>): Promise<unknown> {
+  const log = hostLog(env);
+  let resources: unknown;
+  try {
+    resources = await app.evaluate(() => {
+      const read = (process as unknown as { getActiveResourcesInfo?: () => string[] }).getActiveResourcesInfo;
+      return typeof read === "function" ? read() : "unavailable in this Node";
+    });
+  } catch (error) {
+    resources = { unavailable: String(error) };
+  }
+  return { uncaught: log.filter((line) => line.event === "host.uncaught"), resources, log: log.slice(-60) };
+}
+
+/**
  * A screenshot under the run directory when one is named; nothing is written
  * otherwise. Running CSS transitions are finished first, so a capture taken
  * right after a click shows the state the click produced rather than a fade.

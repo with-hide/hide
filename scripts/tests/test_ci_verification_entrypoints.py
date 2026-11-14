@@ -324,7 +324,10 @@ if name == 'playwright' and '--list' in args:
 
     def test_web_repeat_runs_the_named_specs_n_times_with_no_retry(self):
         self.enable_package_scripts()
-        shutil.copyfile(ROOT / "scripts/ci-repeat.py", self.root / "scripts/ci-repeat.py")
+        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
+        # so a staged run needs both.
+        for name in ("ci-repeat.py", "rust_scan.py"):
+            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
         result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
                                     RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
                                     HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
@@ -337,7 +340,10 @@ if name == 'playwright' and '--list' in args:
 
     def test_web_repeat_refuses_a_bad_repeat_and_a_second_shard(self):
         self.enable_package_scripts()
-        shutil.copyfile(ROOT / "scripts/ci-repeat.py", self.root / "scripts/ci-repeat.py")
+        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
+        # so a staged run needs both.
+        for name in ("ci-repeat.py", "rust_scan.py"):
+            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
         for repeat, shard in (("", "1/1"), ("0", "1/1"), ("ten", "1/1"), ("10", "1/2")):
             with self.subTest(repeat=repeat, shard=shard):
                 result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",

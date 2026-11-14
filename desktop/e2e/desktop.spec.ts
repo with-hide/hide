@@ -17,7 +17,7 @@ import { chord, commandLabel } from "../../web/e2e/chords";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { countSent, enterWorkspace } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
-import { detachedApp, DESKTOP_DIR, HIDE_CLI, hostLog, isolate, launch, launchShell, relaunch, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
+import { detachedApp, DESKTOP_DIR, HIDE_CLI, hostLog, hostTimerDump, isolate, launch, launchShell, relaunch, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
 
 let run: Isolated;
 let stack: Stack;
@@ -489,7 +489,18 @@ test("uncaught: an exception and a rejection nothing in the host caught go to it
     void Promise.reject(new Error("planted rejection"));
   }, secret);
   const uncaught = () => hostLog(run.env).filter((line) => line.event === "host.uncaught");
-  await expect.poll(() => uncaught().map((line) => line.kind).sort()).toEqual(["uncaughtException", "unhandledRejection"]);
+  // An exception the host caught nothing for names Node's own dispatch rather
+  // than the timer that caused it, and the log kept no record of which timer
+  // was armed when its callback was cleared under it (issue 2561: the first
+  // attempt failed with `timer._onTimeout is not a function` from
+  // `listOnTimeout`). When the two planted lines are not the whole record, both
+  // sides are kept: what the host was doing, and the timer-shaped work it holds.
+  try {
+    await expect.poll(() => uncaught().map((line) => line.kind).sort()).toEqual(["uncaughtException", "unhandledRejection"]);
+  } catch (error) {
+    console.log(`[failure dump] host uncaught: ${JSON.stringify(await hostTimerDump(app!, run.env))}`);
+    throw error;
+  }
   const exception = uncaught().find((line) => line.kind === "uncaughtException")!;
   expect(exception.message).toBe("planted exception [redacted] at https://[address]");
   expect(String(exception.stack)).toContain("planted exception [redacted]");

@@ -66,6 +66,29 @@ export function useLayerOpen(open: boolean | undefined, defaultOpen: boolean | u
 let layersOpened = 0;
 
 /**
+ * The `onCloseAutoFocus` a part whose layer is drawn by Radix itself adds so a
+ * hand-back that lands too late cannot steal the keyboard.
+ * Radix hands focus back from a timer after the layer closes, to the layer's
+ * trigger; under load that timer runs after the operator moved the keyboard
+ * somewhere else, and then the hand-back would take it from where their next
+ * key belongs, so the key they meant (Help, say) lands on the trigger instead
+ * (issue 2547). At hand-back the keyboard is already on something the operator
+ * chose when it is a connected element that is neither the page body nor the
+ * trigger and does not sit inside it; that hand-back is cancelled, and one the
+ * operator's own close owes, with nothing of theirs holding the keyboard, runs
+ * as Radix documents.
+ */
+export function useLateClose(trigger: () => HTMLElement | null): (event: Event) => void {
+  return useCallback((event: Event) => {
+    const now = document.activeElement;
+    const back = trigger();
+    if (!(now instanceof HTMLElement) || now === document.body || !now.isConnected) return;
+    if (back && (now === back || back.contains(now))) return;
+    event.preventDefault();
+  }, []);
+}
+
+/**
  * The element that held the keyboard when a layer opened, so closing it can
  * hand the keyboard back through `restoreFocus`, which knows that a terminal
  * is focused through its pane rather than through a stale textarea.

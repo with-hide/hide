@@ -135,9 +135,11 @@ jobs:
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
       # The tests this pull request adds or changes, for the `repeat` lane:
-      # the web specs (a JSON list of paths) and the Rust test modules (a JSON
-      # list of `{package, module, path}`), both empty when it changes none.
+      # the web specs, the packages' unit test files (JSON lists of paths) and
+      # the Rust test modules (a JSON list of `{package, test, module}`), all
+      # empty when it changes none.
       repeat-web: ${{ steps.plan.outputs.repeat-web }}
+      repeat-units: ${{ steps.plan.outputs.repeat-units }}
       repeat-rust: ${{ steps.plan.outputs.repeat-rust }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
       # nightly and a pull request that changes a macOS path
@@ -836,7 +838,18 @@ jobs:
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
   # The browser `@platform` tests on Windows, the same set the macOS lane
-  # runs, against hided and the Windows pane holder.
+  # runs, against hided and the Windows pane holder. It runs in three shards,
+  # dealt from the Windows suite's own durations
+  # (`web/e2e/shard-durations-windows.json`): one job held all 88 tests, ran
+  # 13.8 minutes of them, and took 22.4 minutes at the median of 65 successful
+  # jobs, the longest job of a run.
+  # A shard waits on the daemon and shell builds before its own setup, and
+  # those fixed costs (288 s of build, 114 s of setup at the median) do not
+  # shrink with the count, so the lane is sized by when it finishes: two
+  # shards plan 383 s each and finish near 785 s, over the 720 s the lane
+  # targets, while three plan 255 s and finish near 657 s. Three is the
+  # fewest that does, and `scripts/tests/test_e2e_shard.py` holds the count to
+  # that measurement.
   windows-e2e:
     name: windows e2e
     needs: plan
@@ -849,8 +862,9 @@ jobs:
     with:
       lane: windows
       runner: windows-latest
-      shards: 1
+      shards: 3
       grep: "@platform"
+      table: web/e2e/shard-durations-windows.json
 
   # The web shell is the same code on every operating system, so the whole
   # suite runs once, on Linux, where runners are plentiful. What differs by
@@ -922,8 +936,9 @@ jobs:
   # (`repeat.yml`, docs/TESTING.md, "Flaky tests"): a new test that fails one
   # run in ten passes its own pull request nine times in ten, and a failed run
   # here fails `verify`. The plan names the tests (`scripts/ci-repeat.py`); on
-  # Linux, the web specs through `web-e2e.yml` and the Rust modules under
-  # nextest. A hand run of `repeat.yml` is the way to another system.
+  # Linux, the web specs through `web-e2e.yml`, the packages' unit test files
+  # under Vitest, and the Rust modules under nextest. A hand run of
+  # `repeat.yml` is the way to another system.
   repeat:
     name: repeat changed tests
     needs: plan
@@ -933,6 +948,7 @@ jobs:
       contents: read
     with:
       web: ${{ needs.plan.outputs.repeat-web }}
+      units: ${{ needs.plan.outputs.repeat-units }}
       rust: ${{ needs.plan.outputs.repeat-rust }}
 
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
