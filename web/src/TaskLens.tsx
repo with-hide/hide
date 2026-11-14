@@ -47,6 +47,7 @@ import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type T
 import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
+import { ToolMark } from "./components/tool-mark";
 import type { TaskState } from "./agentScope";
 
 const NO_FOLDS: string[] = [];
@@ -446,6 +447,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
           {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
+          <ToolMark tool={agent.tool} className="max-w-2/5" />
           <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />

@@ -7435,14 +7435,13 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     );
 }
 
-/// PRD hide-external-control B30, D-14, D-36: a mission whose Conductor an
-/// external tool keeps is the tool's. The mission screen and its number,
-/// the device's Needs You, the notices and the phone's list leave it out
-/// while the tool's connection stands at Act; the moment the operator
-/// disconnects the tool it is the operator's, and a raise held back is told
-/// then, once.
+/// PRD hide-external-control B30, D-15, D-36: a mission whose Conductor is
+/// an external tool's work reaches the operator as any other does, while
+/// the tool keeps it: listed with the tool named on it, in the device's
+/// Needs You, on the phone's list and told once. A disconnect keeps the
+/// name, as where the work came from, and tells nothing again.
 #[test]
-fn a_mission_a_tool_conducts_reaches_the_operator_only_once_the_tool_lets_go() {
+fn a_mission_a_tool_conducts_reaches_the_operator_and_names_the_tool() {
     use crate::access::{Call, Level, key_hash};
     use crate::delivery::worker::HumanNoticeKind;
     use crate::missions::AttentionReason;
@@ -7494,7 +7493,10 @@ fn a_mission_a_tool_conducts_reaches_the_operator_only_once_the_tool_lets_go() {
     runtime.snapshot.navigator.agents.clear();
     let reach = |runtime: &mut Runtime| {
         runtime.snapshot_delta_payload(0);
-        let unlisted = runtime.snapshot.missions.items[0].unlisted;
+        let tool = runtime.snapshot.missions.items[0]
+            .tool
+            .as_ref()
+            .map(|tool| (tool.name.clone(), tool.owns));
         let asks = runtime
             .snapshot
             .navigator
@@ -7515,12 +7517,17 @@ fn a_mission_a_tool_conducts_reaches_the_operator_only_once_the_tool_lets_go() {
             .iter()
             .map(|notice| notice.kind)
             .collect::<Vec<_>>();
-        (unlisted, asks, phone, notices)
+        (tool, asks, phone, notices)
     };
     assert_eq!(
         reach(&mut runtime),
-        (true, Vec::new(), 0, Vec::new()),
-        "the tool keeps its mission"
+        (
+            Some(("nightly".to_owned(), true)),
+            vec!["mission-1".to_owned()],
+            1,
+            vec![HumanNoticeKind::MissionAttention]
+        ),
+        "the tool keeps its mission, which the operator sees and is told of"
     );
 
     assert!(runtime.access_event(AccessEvent::Revoke {
@@ -7529,14 +7536,13 @@ fn a_mission_a_tool_conducts_reaches_the_operator_only_once_the_tool_lets_go() {
     assert_eq!(
         reach(&mut runtime),
         (
-            false,
+            Some(("nightly".to_owned(), false)),
             vec!["mission-1".to_owned()],
             1,
-            vec![HumanNoticeKind::MissionAttention]
+            Vec::new()
         ),
-        "a disconnect hands it to the operator at once"
+        "a disconnect keeps the tool's name and tells nothing again"
     );
-    assert!(runtime.claim_mission_notices().is_empty(), "told once");
 }
 
 /// PRD mission-node-simple B14, letter 19419: a mission whose node waits on

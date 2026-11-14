@@ -261,7 +261,7 @@ fn mission(
     MissionView {
         id: id.into(),
         title: format!("{id} title"),
-        unlisted: false,
+        tool: None,
         workspace_id: "project".into(),
         project: "/fixture/main".into(),
         checkout_path: "/fixture/main".into(),

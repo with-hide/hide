@@ -45,6 +45,7 @@ import { machineName } from "./screenMachine";
 import { catalogOf, type Mission, type MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { ToolMark } from "./components/tool-mark";
 
 // The mission screen (PRD mission-screen D-01-D-11, B1-B23): one device's
 // missions, every project of it, as a table in the Mission tool's four
@@ -329,6 +330,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
           <MissionNumber mission={mission} className="text-caption" />
           {closed ? <ClosedMark mission={mission} /> : <Pill mission={mission} turn={turn[0] ?? null} />}
           <span className={cn("min-w-0 truncate text-body", closed ? "text-subtle-foreground" : "font-semibold text-foreground")} title={mission.title}>{mission.title}</span>
+          <ToolMark tool={mission.tool} className="max-w-2/5" />
         </span>
         {closed ? null : (
           <span className="flex min-w-0 items-center gap-xs">
@@ -536,6 +538,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
       <span className="flex min-w-0 items-center gap-xs">
         {group === "closed" ? <ClosedMark mission={mission} /> : <KindIcon kind="mission" className="size-(--size-icon-sm)" />}
         <span className={cn("min-w-0 flex-1 truncate text-body", group === "closed" ? "text-subtle-foreground" : "text-foreground")} title={mission.title}>{mission.title}</span>
+        <ToolMark tool={mission.tool} className="max-w-2/5" />
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>
       {group !== "closed" && ((group === "turn" && turn[0]) || mission.nodes.length > 0) ? (

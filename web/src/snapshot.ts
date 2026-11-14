@@ -1740,8 +1740,8 @@ export type MissionSkip = { node: string; title: string; line: string; kind: Mis
 export type Mission = {
   id: string;
   title: string;
-  /** An external tool keeps it now (its Conductor is the tool's work at Act, PRD hide-external-control B30): the operator's mission screen, count and cards leave it out, and Settings › External tools still opens its map by id. */
-  unlisted?: boolean;
+  /** The external tool whose agent conducts it (PRD hide-external-control B30, D-15): listed and answered as any mission, its row and map head name the tool. */
+  tool?: ToolWork;
   workspace_id: string;
   project: string;
   checkout_path: string;
@@ -1806,7 +1806,7 @@ export type Mission = {
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
 export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
-export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question" | "unlisted"> & {
+export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;
   nodes: N[];
 };

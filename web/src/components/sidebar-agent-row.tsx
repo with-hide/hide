@@ -24,6 +24,7 @@ import { Elapsed } from "./elapsed";
 import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
+import { ToolMark } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
 import { SessionRowBody } from "./session-row";
@@ -269,6 +270,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           {device ? (
             <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
           ) : null}
+          <ToolMark tool={agent.tool} className="pointer-events-none max-w-2/5" />
           {placeInHead && place ? <span aria-hidden="true" data-agent-place-head={place} className="pointer-events-none min-w-0 max-w-2/5 shrink truncate text-caption text-muted-foreground">{place.split(" › ")[0]}</span> : null}
           {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={openPull}>{icon}</PrHoverCard>} />}
           {agent.letters_waiting ? <RowLetterMark /> : null}

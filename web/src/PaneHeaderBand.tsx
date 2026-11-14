@@ -11,7 +11,7 @@ import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type ToolWork } from "./snapshot";
+import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { relationState } from "./lineage";
@@ -27,7 +27,6 @@ import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard
 import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
-import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { RowOverlayButton } from "./components/ui/row-button";
 import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
@@ -55,24 +54,6 @@ export function PaneForkMark({ pane, actions }: { pane: PaneRow; actions: Action
       <span className="flex shrink-0 items-center text-subtle-foreground" role="img" aria-label={label} data-pane-fork="">
         <GitForkIcon className="size-(--size-icon-sm)" aria-hidden="true" />
       </span>
-    </Hint>
-  );
-}
-
-/**
- * The external tool whose work the pane's agent is (PRD hide-external-control B31, D-15): its name in
- * words after the title, so the operator who opens the pane from ⌘K or a tab sees why no list of theirs
- * holds it. It stays once the tool let go, as where the work came from; the hint says which it is.
- */
-export function PaneToolMark({ tool }: { tool: ToolWork | undefined }) {
-  const { t } = useInterfaceTranslation();
-  if (!tool) return null;
-  const label = t(tool.owns ? "panes.tool.kept" : "panes.tool.started", { name: tool.name });
-  return (
-    <Hint label={label}>
-      <Badge variant="outline" className="min-w-0 shrink" aria-label={label} data-pane-tool={tool.connection} data-pane-tool-owns={tool.owns ? "" : undefined}>
-        <span className="min-w-0 truncate">{tool.name}</span>
-      </Badge>
     </Hint>
   );
 }

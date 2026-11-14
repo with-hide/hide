@@ -369,24 +369,41 @@ impl Runtime {
             .is_some_and(|connection| connection.level == Level::Act)
     }
 
-    /// Whether an external tool keeps `mission`: its Conductor is the tool's
-    /// work, by its registration (or, for a record that names none, by its
-    /// pane and session), and the tool keeps its work now (PRD
-    /// hide-external-control B30, D-36). Hide AI's and the operator's
-    /// missions are never kept (B37).
-    pub(crate) fn mission_kept_by_tool(&self, mission: &crate::missions::Mission) -> bool {
+    /// The external tool `work` is, as a row or a mission names it: whether
+    /// the tool keeps it is read from its connection now (D-14, D-40).
+    pub(crate) fn tool_work_snapshot(
+        &self,
+        work: &crate::coordination::started::ToolWork,
+    ) -> crate::model::ToolWorkSnapshot {
+        crate::model::ToolWorkSnapshot {
+            connection: work.connection.clone(),
+            name: work.name.clone(),
+            owns: self.access_keeps_work(&work.connection),
+        }
+    }
+
+    /// The external tool whose work `mission`'s Conductor is, by its
+    /// registration (or, for a record that names none, by its pane and
+    /// session) (PRD hide-external-control B30, D-36). The mission is the
+    /// operator's to see and answer as any other; this only names the tool
+    /// on it. Hide AI's and the operator's missions name none (B37).
+    pub(crate) fn mission_tool(
+        &self,
+        mission: &crate::missions::Mission,
+    ) -> Option<crate::model::ToolWorkSnapshot> {
         let conductor = &mission.conductor;
-        self.hide_started.tool_work.iter().any(|work| {
-            let conducts = match conductor.agent_id.as_deref() {
+        self.hide_started
+            .tool_work
+            .iter()
+            .find(|work| match conductor.agent_id.as_deref() {
                 Some(id) => work.agent_id == id,
                 None => {
                     work.pane_id == conductor.actor.pane_id
                         && work.session.is_some()
                         && work.session == conductor.actor.session
                 }
-            };
-            conducts && self.access_keeps_work(&work.connection)
-        })
+            })
+            .map(|work| self.tool_work_snapshot(work))
     }
 
     /// Who keeps connection `id`'s work moved (a level, a disconnect, a

@@ -155,13 +155,15 @@ it("ends a mission decision's line with an eye and how many Views it links to lo
   expect(line("bare").querySelector("[data-ask-views]")).toBeNull();
 });
 
-it("says a View to look at as its line, ahead of a question the row's own mark does not lead with (PRD hide-external-control B29)", async () => {
+it("says a View to look at as its line, ahead of a question the row's own mark does not lead with, and names the tool (PRD hide-external-control B29, D-15)", async () => {
   // An external tool's agent opened a View for the operator while its Conductor's decision waits on the tool:
   // the core draws the eye, and the line is the View's, not the tool's question.
   const look = { group: "seen", count: 1, view_id: "v1", label: "tool-report.md", workspace_id: "hide", checkout_id: "hide-main" };
   const agent = row("tool", { mark: "look", group: "needs_you", demand: "question", look, tool: { connection: "c0ffee00c0ffee00", name: "nightly", owns: true } } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" });
   const withLine = { ...agent, state: { ...agent.state, asking: true, line: { text: "Which order?", mode: "request" } } } as AgentRow;
   const { container } = await render(snapshot([withLine], [card("tool", "needs_you", "hide-main")]), [withLine]);
+  // The row names the tool, as the agent's pane head does (D-15).
+  expect(container.querySelector('[data-task-row="tool"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
   const line = container.querySelector('[data-task-row="tool"] [data-task-line]')!;
   expect(line.textContent).toContain("볼 것");
   expect(line.textContent).toContain("tool-report.md");

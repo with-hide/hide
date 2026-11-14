@@ -821,18 +821,23 @@ Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line,
 
 ### Work an external tool keeps
 
-An external tool the operator approved at Act in Settings › External tools starts agents for its own purposes, and while it stays connected at Act that work is the tool's, not the operator's (PRD hide-external-control D-09): the agent it started, the agents that one started under itself with `--parent here` (a Conductor's workers among them), and a mission such an agent conducts.
+An external tool the operator approved at Act in Settings › External tools starts agents for its own purposes, and while it stays connected at Act those agents are the tool's work, not the operator's (PRD hide-external-control D-09): the agent it started and the agents that one started under itself with `--parent here` (a Conductor's workers among them).
 `docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws, with-hide/hide-private `docs/tasks-and-pr-list.md`, The sidebar's 태스크 list, how the 태스크 list draws it, and with-hide/hide-private `docs/missions.md`, A mission an external tool conducts, what such a mission gives the operator.
 
-The work is in no list of the operator's: not the sidebar's tree, Needs You, Done or Working, not the 태스크 list, Sessions, Overview's requests, graph or counts, not a Project tool's session count, a checkout's count or the device rail, not the mission screen or the sidebar's `미션` number, not the phone's agent or mission list, and it moves no app badge, desktop notification or push (B26, B27, B30).
-The tool reads it and answers it itself, so an agent's own question, approval, block or finished turn, and a mission's decision, gate, safety net or merge, never reach the operator while the tool keeps it.
-It is still found by ⌘K, the recent panel, the tab strip and `hide agent list`, and Settings › External tools lists each tool's agents and missions and opens them.
-The pane head of such an agent writes the tool's name after the title, a quiet badge cut short in a narrow pane, whose hint says the work is the tool's and kept out of the operator's lists (`외부 도구 nightly의 일이라 내 목록에는 없어요`); once the tool lets go, the name stays as where the work came from and the hint says so (`외부 도구 nightly에서 시작됨`) (B31, `PaneToolMark` in `web/src/PaneHeaderBand.tsx`).
+The agents are in no list of the operator's: not the sidebar's tree, Needs You, Done or Working, not the 태스크 list, Sessions, Overview's requests, graph or counts, not a Project tool's session count, a checkout's count or the device rail, not the phone's agent list, and they move no app badge, desktop notification or push (B26, B27).
+The tool reads them and answers them itself, so an agent's own question, approval, block or finished turn never reaches the operator while the tool keeps it.
+They are still found by ⌘K, the recent panel, the tab strip and `hide agent list`, and Settings › External tools lists each tool's agents and missions and opens them.
 
-Two things reach the operator anyway, as one row in the sidebar's Needs You and the 태스크 list's Needs You, never in a tree (B29): a step only a person can take (`hide agent ask-human auth|permission`), the agent's own or a child's, which also notifies on the desktop and the phone, and a View the agent opened for the operator with `hide file open`, `hide diff open` or `hide browser open`, which is its `볼 것` as on any agent's row.
-When the operator disconnects the tool, the tool leaves, or the operator sets it to View only, all its work is the operator's from that moment, still running: it enters the lists, counts and mission screen at once, and its next question is the operator's turn; setting the same connection to Act again takes it back, and a new connection under the same name takes none of it (B16).
+A mission such an agent conducts is listed with the operator's own (B30, D-36): the mission screen draws it in its state's group among the others, and the sidebar's `미션` number, the mission's 내 차례 rows, its cards, decisions, gates, safety net and notices and the phone's mission list treat it as any mission.
+Its Conductor's and workers' rows stay out of the lists as above.
+
+The tool's name, a quiet badge cut short in a narrow space, follows the title wherever the tool's work reaches the operator (B31, D-15): the agent's pane head, its 내 차례 row in the sidebar and the 태스크 list, its ⌘K result, and the row of a mission its agent conducts and that mission's map head.
+Its hint says the work is the tool's (`외부 도구 nightly의 일`); once the tool lets go the name stays as where the work came from, and the hint says so (`외부 도구 nightly에서 시작됨`).
+
+Two things of the agents reach the operator anyway, as one row in the sidebar's Needs You and the 태스크 list's Needs You, never in a tree (B29): a step only a person can take (`hide agent ask-human auth|permission`), the agent's own or a child's, which also notifies on the desktop and the phone, and a View the agent opened for the operator with `hide file open`, `hide diff open` or `hide browser open`, which is its `볼 것` as on any agent's row.
+When the operator disconnects the tool, the tool leaves, or the operator sets it to View only, all its work is the operator's from that moment, still running: its agents enter the lists, counts and graph at once, and their next question is the operator's turn; setting the same connection to Act again takes it back, and a new connection under the same name takes none of it (B16).
 A connected device's agents follow the same rules.
-Web owners: `PaneToolMark` in `web/src/PaneHeaderBand.tsx` (the pane head) and `deviceMissions` in `web/src/missionList.ts` (the mission screen and its number); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs` and `hide-core/src/runtime/access.rs`.
+Web owner: `ToolMark` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs` and `hide-core/src/runtime/access.rs`.
 
 ### Agent logo view mode
 

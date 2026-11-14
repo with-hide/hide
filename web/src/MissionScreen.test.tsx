@@ -84,6 +84,15 @@ describe("the table (B2-B5)", () => {
     expect(q('[data-mission-row-project="w2"]')?.textContent).toBe("atorni-ax");
   });
 
+  it("lists a mission an external tool's agent conducts among the others, by its state, with the tool's name (PRD hide-external-control B30, D-15)", async () => {
+    const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+    const { q, all } = await mount({ missions: { items: [mission("mission-1"), mission("mission-4", { decision: "Which order?", tool })] } });
+    expect(all("[data-mission-group]").map((group) => [group.dataset.missionGroup, group.dataset.missionGroupCount])).toEqual([["turn", "1"], ["running", "1"]]);
+    expect(q('[data-mission-row="mission-4"]')?.dataset.missionRowGroup).toBe("turn");
+    expect(q('[data-mission-row="mission-4"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
+    expect(q('[data-mission-row="mission-1"] [data-tool-mark]')).toBeNull();
+  });
+
   it("narrows the rows and the count to a project's chip, and back with 모든 프로젝트 (B3)", async () => {
     const { q, all, press } = await mount();
     await press(q('[data-mission-project-chip="w2"]'));

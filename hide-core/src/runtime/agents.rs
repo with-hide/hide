@@ -4151,11 +4151,7 @@ impl Runtime {
                         && work.session.is_some()
                         && work.session == agent.lineage_session
                 })
-                .map(|work| crate::model::ToolWorkSnapshot {
-                    connection: work.connection.clone(),
-                    name: work.name.clone(),
-                    owns: self.access_keeps_work(&work.connection),
-                });
+                .map(|work| self.tool_work_snapshot(work));
         }
     }
 

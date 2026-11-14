@@ -26,13 +26,6 @@ describe("the missions a device lists (D-06, B3)", () => {
     expect(deviceMissions(missions, "gone")).toEqual([]);
   });
 
-  it("leaves out a mission an external tool keeps, so its group and the rail's number do not count it (PRD hide-external-control B30)", () => {
-    const missions = [mission("mine", { decision: "Which order?" }), mission("tool", { decision: "Which order?", unlisted: true })];
-    const listed = deviceMissions(missions, "mac");
-    expect(listed.map((m) => m.id)).toEqual(["mine"]);
-    expect(turnCount(listed.map((m) => missionEntry(m, () => null)))).toBe(1);
-  });
-
   it("offers each project once as a chip, by its catalog name or else its folder's", () => {
     const missions = [mission("a"), mission("b", { workspace_id: "w2", project: "/work/atorni-ax" }), mission("c")];
     expect(missionProjects(missions, [{ id: "w", label: "herdr-ide" }])).toEqual([{ id: "w2", label: "atorni-ax" }, { id: "w", label: "herdr-ide" }]);

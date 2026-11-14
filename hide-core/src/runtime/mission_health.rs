@@ -1918,13 +1918,7 @@ impl Runtime {
         // before an earlier raise can leave it, even if this pass is capped.
         let mut inherited = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {
-            // A mission an external tool keeps tells the operator nothing;
-            // what it holds unannounced is told once the tool lets go of it
-            // (PRD hide-external-control B30, D-14).
-            if !mission.status.asks()
-                || self.mission_stale(mission)
-                || self.mission_kept_by_tool(mission)
-            {
+            if !mission.status.asks() || self.mission_stale(mission) {
                 continue;
             }
             for (index, node) in mission.nodes.iter().enumerate() {
