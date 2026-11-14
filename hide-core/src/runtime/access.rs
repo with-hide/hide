@@ -394,3 +394,68 @@ impl Runtime {
         }
     }
 }
+
+/// What a tool may not ask even at Act, refused before anything runs: a
+/// spawn under a parent (B23: a tool is never a parent, as Desk is not),
+/// and what only an agent in a pane can mean, which a tool asks of an
+/// agent it starts instead (B22). Any other actor passes untouched.
+pub(crate) fn admit_tool_command(
+    actor: &crate::delivery::Actor,
+    command: &crate::delivery::Command,
+) -> Result<(), String> {
+    use crate::coordination::Command as Agents;
+    if actor.access_connection().is_none() {
+        return Ok(());
+    }
+    let crate::delivery::Command::Agents { command } = command else {
+        return match command {
+            crate::delivery::Command::Pull { .. } | crate::delivery::Command::Confirm { .. } => {
+                Err(NEEDS_AGENT.into())
+            }
+            _ => Ok(()),
+        };
+    };
+    match command {
+        Agents::Spawn {
+            parent: Some(_), ..
+        } => Err(SPAWN_PARENT.into()),
+        Agents::Spawn {
+            beside, plan_node, ..
+        } if *beside || plan_node.is_some() => Err(NEEDS_AGENT.into()),
+        Agents::Show { id } if id == crate::coordination::HERE => Err(NEEDS_AGENT.into()),
+        Agents::RegisterSelf { .. }
+        | Agents::Register { .. }
+        | Agents::AskHuman { .. }
+        | Agents::AskHumanClear => Err(NEEDS_AGENT.into()),
+        Agents::Spawn { .. } | Agents::List { .. } | Agents::Show { .. } | Agents::End { .. } => {
+            Ok(())
+        }
+    }
+}
+
+/// A command only an agent in a Hide pane can mean (B22).
+pub(crate) const NEEDS_AGENT: &str = "access_needs_agent";
+/// A tool's spawn named a parent (B23).
+pub(crate) const SPAWN_PARENT: &str = "access_spawn_parent";
+
+impl Runtime {
+    /// The identity a tool's delivery command acts as: its connection's,
+    /// on this machine, while the connection stands at Act (B20, B21).
+    pub(super) fn access_authority(
+        &self,
+        device: &str,
+        connection: &str,
+    ) -> Result<crate::delivery::Actor, String> {
+        let (level, actor) = self
+            .access_actor(connection)
+            .filter(|_| device == self.node.as_str())
+            .ok_or(Ended::Revoked.reason())?;
+        if level != Level::Act {
+            return Err(VIEW_ONLY.into());
+        }
+        Ok(actor)
+    }
+}
+
+/// A View only tool asked for what only Act may (B20).
+pub(crate) const VIEW_ONLY: &str = "access_view_only";

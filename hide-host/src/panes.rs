@@ -478,6 +478,11 @@ impl Panes {
                 return Err("invalid_nonce".to_owned());
             }
             install::refuse_other(&request, self.install.as_deref())?;
+            // An external tool connects to the core of its own machine only
+            // (PRD hide-external-control D-07); a device's node takes none.
+            if request.access.is_some() {
+                return Err("access_core_only".to_owned());
+            }
             if request
                 .hook
                 .as_ref()

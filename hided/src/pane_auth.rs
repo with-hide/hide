@@ -41,7 +41,14 @@ use crate::state_file::new_token;
 /// and, for a local pane, one reference file of about a hundred bytes.
 const MAX_CAPABILITIES: usize = 1024;
 const CAPABILITY_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
-pub use hide_node_link::panes::{CHECKOUT_NEXT_ACTION, PANE_NEXT_ACTION, refusal_next_action};
+pub use hide_node_link::panes::{CHECKOUT_NEXT_ACTION, PANE_NEXT_ACTION};
+
+/// What a bootstrap or credential refusal says to do: an external tool's
+/// in its own words, any other as the node words it.
+pub fn refusal_next_action(reason: &str) -> &'static str {
+    crate::access::next_action(reason)
+        .unwrap_or_else(|| hide_node_link::panes::refusal_next_action(reason))
+}
 const UNCLAIMED_LIFETIME: Duration = Duration::from_secs(30);
 const MAX_BOOTSTRAPS: usize = 8;
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,6 +68,12 @@ enum Binding {
     Desk {
         pid: i32,
         started: u64,
+    },
+    /// An external tool's command (PRD hide-external-control): its key
+    /// proved connection `connection` at bootstrap, and every command asks
+    /// the core again whether that connection stands and at which level.
+    Access {
+        connection: String,
     },
 }
 
@@ -82,14 +95,23 @@ pub struct Capability {
     claimed: bool,
     path: PathBuf,
     remote: Option<RemoteCapability>,
+    /// An external tool's level, as the core answered it for this command
+    /// ([`Registry::validate`]); `None` for every other caller.
+    access_level: Option<hide_core::access::Level>,
 }
 
 impl Capability {
+    /// The level an external tool's command runs at, which the command
+    /// boundary judges it by (`server::ScopedRequest::access_need`).
+    pub(crate) fn access_level(&self) -> Option<hide_core::access::Level> {
+        self.access_level
+    }
+
     /// Only a pane-bound credential carries an attested terminal identity.
     pub(crate) fn pane_terminal(&self) -> Option<&str> {
         match &self.binding {
             Binding::Pane { terminal_id, .. } => Some(terminal_id),
-            Binding::Checkout | Binding::Desk { .. } => None,
+            Binding::Checkout | Binding::Desk { .. } | Binding::Access { .. } => None,
         }
     }
 
@@ -130,6 +152,10 @@ impl Capability {
             Binding::Pane { .. } => ("pane_changed", PANE_NEXT_ACTION),
             Binding::Checkout => ("checkout_not_registered", CHECKOUT_NEXT_ACTION),
             Binding::Desk { .. } => ("desk_not_running", DESK_NEXT_ACTION),
+            Binding::Access { .. } => (
+                hide_core::access::Ended::Revoked.reason(),
+                crate::access::REVOKED_NEXT_ACTION,
+            ),
         }
     }
 }
@@ -238,7 +264,7 @@ fn entry_alive(entry: &Capability) -> bool {
             shell_started,
             ..
         } => process_start(*shell_pid) == Some(*shell_started),
-        Binding::Checkout | Binding::Desk { .. } => true,
+        Binding::Checkout | Binding::Desk { .. } | Binding::Access { .. } => true,
     };
     entry.path.is_file()
         && shell_alive
@@ -371,6 +397,7 @@ impl Registry {
                 claimed: false,
                 path: path.clone(),
                 remote: None,
+                access_level: None,
             },
         );
         Ok((path, true, token))
@@ -423,6 +450,7 @@ impl Registry {
                     link: grant.link,
                     source_pane_id: grant.source_pane_id,
                 }),
+                access_level: None,
             },
         );
         Ok((token, true))
@@ -579,6 +607,24 @@ impl Registry {
         // checked; the core checks that Desk still runs it.
         if matches!(cap.binding, Binding::Desk { .. }) {
             return Ok(cap);
+        }
+        // An external tool's connection is asked again for each command, so
+        // a disconnect or a level the operator changed holds from the next
+        // one (PRD hide-external-control B12, B13).
+        if let Binding::Access { connection } = &cap.binding {
+            return match core.access(hide_core::access::Call::Check {
+                id: connection.clone(),
+            }) {
+                Ok(answer) => {
+                    cap.access_level = serde_json::from_value(answer["level"].clone()).ok();
+                    cap.access_level.map(|_| cap).ok_or("access_unavailable")
+                }
+                Err(reason) => {
+                    self.revoke(token);
+                    crate::access::note("access.credential_refused", Some(connection), &reason);
+                    Err(crate::access::static_reason(&reason))
+                }
+            };
         }
         if cap.binding == Binding::Checkout {
             // Only registration and connection are rechecked: the checkout
@@ -834,6 +880,55 @@ fn attest_bootstrap(
                 );
             }),
     }
+}
+
+/// Binds an external tool's command to the connection its key proves (PRD
+/// hide-external-control B18): the core compares the key's hash and names
+/// the connection, and the folder the command ran in, read from the kernel
+/// as a checkout caller's is, gives its Workspace commands a checkout when
+/// one is registered there (D-28). A folder the kernel does not name, or
+/// one no checkout holds, leaves the tool its connection alone.
+pub(crate) fn attest_access(
+    peer: i32,
+    key_sha256: String,
+    core: &CoreHandle,
+) -> Result<Attestation, String> {
+    let proved = core.access(hide_core::access::Call::Prove { key_sha256 })?;
+    let connection = proved["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("access_unavailable")?
+        .to_owned();
+    let node = core.node();
+    let folder = caller_directory(peer).ok();
+    let caller_id = hide_core::workspace_control::access_caller_id(&connection, folder.as_deref());
+    let context = folder
+        .and_then(|_| {
+            core.workspace_query(node.as_str(), &caller_id, Query::Info)
+                .ok()
+                .map(|answer| answer.context)
+        })
+        .unwrap_or_else(|| hide_core::access::access_context(node.as_str(), &connection));
+    Ok(Attestation {
+        pane_id: caller_id,
+        context,
+        binding: Binding::Access { connection },
+    })
+}
+
+/// Issues an external tool's one-shot credential for the command `holder`
+/// runs: a tool keeps no reference between commands, so each command
+/// proves its key again.
+pub(crate) fn issue_access(
+    registry: &Registry,
+    attestation: &Attestation,
+    nonce: &str,
+    port: u16,
+    holder: (i32, u64),
+) -> Result<PathBuf, &'static str> {
+    registry
+        .issue_with_token(attestation, nonce, port, Some(holder))
+        .map(|(path, _, _)| path)
 }
 
 /// Binds a local caller that is not a pane descendant to the registered,
@@ -1175,6 +1270,28 @@ fn answer_bootstrap(
     let parsed = read
         .ok()
         .and_then(|_| serde_json::from_str::<PaneRequest>(&line).ok());
+    // An external tool's ask is answered in this one exchange (PRD
+    // hide-external-control): its request, status or leave, or the one-shot
+    // credential a command of it runs on.
+    if let Some(request) = &parsed
+        && let Some(ask) = &request.access
+        && line.len() <= 4096
+    {
+        let (answer, issued) =
+            crate::access::answer_bootstrap(peer, request, ask, registry, core, engine, port);
+        let mut answer = answer;
+        if answer["ok"] == true {
+            install::stamp(&mut answer, own_install());
+        }
+        if writeln!(stream, "{answer}").is_err()
+            && let Some(path) = issued
+            && let Ok(bytes) = fs::read(path)
+            && let Ok(reference) = serde_json::from_slice::<Reference>(&bytes)
+        {
+            registry.revoke(&reference.token);
+        }
+        return;
+    }
     if let Some(request) = &parsed
         && let Some(hook) = &request.hook
     {
@@ -2004,6 +2121,7 @@ mod tests {
         let core = CoreHandle::bare(directory.path());
         let peer = std::process::id() as i32;
         let request = |pane_id: &str| PaneRequest {
+            access: None,
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,

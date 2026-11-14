@@ -1554,6 +1554,11 @@ pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
 /// devices the caller could have used says so in its next action, and its
 /// reason stays the code.
 fn refusal_answer(reason: String, next_action: &'static str) -> (String, String) {
+    // An external tool's refusal says what the tool does next, whichever
+    // owner refused it (PRD hide-external-control B20-B23).
+    if let Some(next_action) = crate::access::next_action(&reason) {
+        return (reason, next_action.to_owned());
+    }
     match hide_core::coordination::split_refusal(&reason) {
         (code @ "shell_starting", detail) => {
             let (seconds, screen) =
@@ -1676,6 +1681,9 @@ enum ScopedRequest {
     /// `hide workspace remove`: the delete dialog's removal of a worktree,
     /// run by the core, which needs no shell.
     WorktreeRemove(hide_core::worktree_command::WorktreeRemove),
+    /// `hide access list`: an external tool reads the tools connected and
+    /// the requests waiting (PRD hide-external-control B17).
+    AccessList,
 }
 
 impl ScopedRequest {
@@ -1700,7 +1708,81 @@ impl ScopedRequest {
                 | Self::Pane(..)
                 | Self::ProjectOpen(..)
                 | Self::WorktreeRemove(..)
+                | Self::AccessList
         )
+    }
+
+    /// What an external tool's level must allow for this command (PRD
+    /// hide-external-control B20-B23): the one place a tool's command is
+    /// judged; every other caller runs as before.
+    fn access_need(&self) -> crate::access::Need {
+        use crate::access::Need;
+        use hide_core::coordination::Command as Agents;
+        use hide_core::delivery::Command as Delivery;
+        use hide_core::pane_command::PaneCommand;
+        match self {
+            Self::Ps { .. } | Self::AccessList => Need::View,
+            Self::Device(command) => match command {
+                hide_core::device_command::DeviceCommand::List => Need::View,
+                _ => Need::Act,
+            },
+            Self::Mission(command) => match **command {
+                hide_core::missions::MissionCommand::List
+                | hide_core::missions::MissionCommand::Show { .. } => Need::View,
+                _ => Need::Agent,
+            },
+            Self::Pane(command) => match command {
+                PaneCommand::Read { .. }
+                | PaneCommand::ReadScreen { .. }
+                | PaneCommand::AgentRead { .. } => Need::View,
+                PaneCommand::Send { .. } => Need::Act,
+                PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => Need::Agent,
+            },
+            Self::Delivery(command, _) => match &**command {
+                Delivery::Agents { command } => match command {
+                    Agents::List { .. } => Need::View,
+                    Agents::Show { id } if id != hide_core::coordination::HERE => Need::View,
+                    Agents::Spawn {
+                        parent: Some(_), ..
+                    } => Need::Parent,
+                    Agents::Spawn {
+                        beside, plan_node, ..
+                    } if *beside || plan_node.is_some() => Need::Agent,
+                    Agents::Spawn { .. } | Agents::End { .. } => Need::Act,
+                    Agents::Show { .. }
+                    | Agents::RegisterSelf { .. }
+                    | Agents::Register { .. }
+                    | Agents::AskHuman { .. }
+                    | Agents::AskHumanClear => Need::Agent,
+                },
+                // A hook's own reads: a runtime in a pane asks them.
+                Delivery::Pull { .. } | Delivery::Confirm { .. } => Need::Agent,
+                Delivery::Send { .. }
+                | Delivery::Reply { .. }
+                | Delivery::Ack { .. }
+                | Delivery::AckBundle { .. }
+                | Delivery::Cancel { .. }
+                | Delivery::Show { .. }
+                | Delivery::Inbox { .. }
+                | Delivery::WatchStart { .. }
+                | Delivery::WatchStop { .. }
+                | Delivery::WatchAssign { .. }
+                | Delivery::WatchList => Need::Act,
+            },
+            Self::Plan(..) | Self::Memory(..) | Self::MemoryHook(..) => Need::Agent,
+            Self::AgentSleep { .. }
+            | Self::AgentArchive { .. }
+            | Self::Query(..)
+            | Self::Action(..)
+            | Self::BrowserConnect(..)
+            | Self::BrowserRelay(..)
+            | Self::Links(..)
+            | Self::Session(..)
+            | Self::AgentCatalog(..)
+            | Self::AgentProfile(..)
+            | Self::ProjectOpen(..)
+            | Self::WorktreeRemove(..) => Need::Act,
+        }
     }
 }
 
@@ -1879,6 +1961,7 @@ async fn scoped_client_loop(
                             .as_str()
                             .filter(|path| hide_core::project_open::valid_path(path))
                             .map(|path| ScopedRequest::ProjectOpen(path.to_owned())),
+                        Some("access_list") => Some(ScopedRequest::AccessList),
                         _ => None,
                     };
                     // A plan carries its whole node list, so a mission
@@ -1926,6 +2009,13 @@ async fn scoped_client_loop(
                             tokio::task::spawn_blocking(move || {
                             let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
+                            // An external tool runs what its level allows,
+                            // judged here for every command (B20-B23).
+                            if let Some(level) = cap.access_level() {
+                                crate::access::admit(level, command.access_need()).map_err(|reason| {
+                                    (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
+                                })?;
+                            }
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
                                     "renderer_unavailable".to_owned(),
@@ -1966,6 +2056,18 @@ async fn scoped_client_loop(
                                 }
                                 ScopedRequest::Delivery(command, hint) => {
                                     crate::hook_request::delivery(&core, &cap, *command, hint)?
+                                }
+                                ScopedRequest::AccessList => {
+                                    if cap.access_level().is_none() {
+                                        return Err((
+                                            "access_not_connected".to_owned(),
+                                            crate::pane_auth::refusal_next_action("access_not_connected"),
+                                        ));
+                                    }
+                                    core.access(hide_core::access::Call::List).map_err(|code| {
+                                        let next = crate::pane_auth::refusal_next_action(&code);
+                                        (code, next)
+                                    })?
                                 }
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
@@ -2646,6 +2748,12 @@ fn handle_client_text(
                 return Err("View feedback is an operator window's".to_owned());
             }
             return Ok(ClientAction::BrowserComment(event));
+        }
+        // Approving, refusing, changing the level of and disconnecting an
+        // external tool are the operator's, in a window's Settings (PRD
+        // hide-external-control B8): no `hide` command and no pane sends them.
+        Some(kind) if kind.starts_with("access_") && !renderer => {
+            return Err("External tools are approved in an operator window".to_owned());
         }
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.

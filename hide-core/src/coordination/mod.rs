@@ -1744,8 +1744,12 @@ pub(crate) fn apply_with(
                 .parent
                 .as_ref()
                 .and_then(|id| resolve_actor(ledger, id));
+            // An external tool at Act does what the operator does (PRD
+            // hide-external-control D-27): it may end any agent, which
+            // its connection's standing was checked for before this ran.
             if !record.actor.same_identity(caller)
                 && !parent.is_some_and(|parent| parent.same_identity(caller))
+                && caller.access_connection().is_none()
             {
                 return Err("parent_authority_required".into());
             }
@@ -1753,6 +1757,16 @@ pub(crate) fn apply_with(
                 !resolve_actor(ledger, id).is_some_and(|actor| actor.same_identity(caller))
             }) {
                 return Err("actor_identity_conflict".into());
+            }
+            if let Some(connection) = caller.access_connection() {
+                // Who ended it, by the tool's connection (B31).
+                crate::diagnostic!(json!({
+                    "component": "coordination",
+                    "kind": "agent.ended_by_tool",
+                    "agent_id": id,
+                    "connection_id": connection,
+                    "by": caller.name,
+                }));
             }
             end_record(ledger, id, now);
             Ok(view(

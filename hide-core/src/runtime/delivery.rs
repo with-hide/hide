@@ -1442,6 +1442,15 @@ impl Runtime {
                 return Err("caller_identity_conflict".into());
             }
             self.desk_authority(device)?
+        } else if let Caller::Access { connection, .. } = Caller::parse(caller) {
+            // An external tool acts as its connection's own identity, as
+            // Desk does (D-10): never a pane's, so no hint names it. Its
+            // credential recorded the context it ran in, which no pane
+            // membership can move.
+            if hint.is_some() {
+                return Err("caller_identity_conflict".into());
+            }
+            (expected.clone(), self.access_authority(device, connection)?)
         } else {
             let context = self
                 .workspace_control_query(device, caller, Query::Info)
@@ -1654,6 +1663,9 @@ impl Runtime {
             }
             _ => {}
         }
+        // What a pane agent alone may ask is refused to a tool, which starts
+        // an agent for it (PRD hide-external-control B22, B23).
+        crate::runtime::access::admit_tool_command(&actor, &command)?;
         // A spawn of Desk's past its places waits in Desk's queue (B21).
         let queued = self.desk_spawn_admission(&actor, &command)?;
         // `parent` names the sender's own parent, which a child is never told
@@ -2123,6 +2135,18 @@ impl Runtime {
     /// The authority a code-owned caller acts with: a Factory host's own
     /// recipient, or Hide's own identity for one of its roles; never a pane's.
     pub(crate) fn code_owned_authority_current(&self, caller: &str, actor: &Actor) -> bool {
+        // An external tool's identity holds while its connection stands at
+        // Act, for the credential of that same connection (B12, B13).
+        if let Some(connection) = actor.access_connection() {
+            return matches!(
+                Caller::parse(caller),
+                Caller::Access { connection: id, .. } if id == connection
+            ) && self
+                .access_actor(connection)
+                .is_some_and(|(level, current)| {
+                    level == crate::access::Level::Act && current.same_identity(actor)
+                });
+        }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())

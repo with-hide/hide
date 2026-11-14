@@ -20,15 +20,40 @@ impl Runtime {
         command: PaneCommand,
     ) -> Result<Prepared, String> {
         command.check()?;
-        let Caller::Pane(caller_pane) = Caller::parse(caller) else {
-            return Err("pane_required".into());
+        // An external tool reads panes and, at Act, types into them as the
+        // operator does (PRD hide-external-control B20, B21, B28); it has
+        // no pane to open another beside or a checkout to name.
+        let (caller_pane, context) = match Caller::parse(caller) {
+            Caller::Pane(caller_pane) => {
+                let context = self
+                    .resolve_caller(device, Caller::Pane(caller_pane))
+                    .map_err(|refusal| refusal.reason.to_owned())?;
+                if context != *expected {
+                    return Err("caller_context_changed".into());
+                }
+                (caller_pane, context)
+            }
+            Caller::Access { connection, .. } => {
+                let (level, _) = self
+                    .access_actor(connection)
+                    .filter(|_| device == self.node.as_str())
+                    .ok_or(crate::access::Ended::Revoked.reason())?;
+                match &command {
+                    PaneCommand::Read { .. }
+                    | PaneCommand::ReadScreen { .. }
+                    | PaneCommand::AgentRead { .. } => {}
+                    PaneCommand::Send { .. } if level == crate::access::Level::Act => {}
+                    PaneCommand::Send { .. } => {
+                        return Err(super::access::VIEW_ONLY.into());
+                    }
+                    PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => {
+                        return Err(super::access::NEEDS_AGENT.into());
+                    }
+                }
+                ("", expected.clone())
+            }
+            _ => return Err("pane_required".into()),
         };
-        let context = self
-            .resolve_caller(device, Caller::Pane(caller_pane))
-            .map_err(|refusal| refusal.reason.to_owned())?;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
         let node = self.node.as_str();
         // A pane named in full stays on the machine it names; a bare one is
         // the caller's.

@@ -78,7 +78,7 @@ pub fn valid_key(key: &str) -> bool {
 
 /// The SHA-256 of `key`, which is all this core keeps of it.
 pub fn key_hash(key: &str) -> String {
-    hex::encode(Sha256::digest(key.as_bytes()))
+    format!("{:x}", Sha256::digest(key.as_bytes()))
 }
 
 /// A connection's id: the first sixteen hex digits of its key's hash. A
@@ -181,6 +181,23 @@ pub struct Requested {
     pub put_up: bool,
     /// The request this one pushed out of the four, by id.
     pub expired: Option<String>,
+}
+
+/// The context a tool's command carries when the folder it ran in is no
+/// registered checkout: its connection on the core's machine, with no
+/// checkout, as Desk's carries Desk (`crate::desk::desk_context`).
+pub fn access_context(node: &str, connection: &str) -> crate::workspace_control::Context {
+    let identity = format!(
+        "{}{}:{connection}",
+        crate::delivery::HIDE_PREFIX,
+        crate::delivery::HIDE_ACCESS_ROLE
+    );
+    crate::workspace_control::Context {
+        device_id: node.into(),
+        workspace_id: identity.clone(),
+        checkout_id: identity,
+        checkout_path: String::new(),
+    }
 }
 
 /// What hided asks the core for a tool. Each names the key by its hash

@@ -30,8 +30,17 @@ impl Runtime {
         acting: Option<&str>,
         desk_may_act: bool,
     ) -> Result<Actor, String> {
-        let desk = desk_may_act && Caller::parse(caller) == Caller::Desk;
-        let desk_authority = desk.then(|| self.desk_authority(device)).transpose()?;
+        // Desk, and an external tool at Act, which does what the operator
+        // does (PRD hide-external-control D-27), act as their own identity
+        // on any live registration; a tool at View only is refused.
+        let desk_authority = match Caller::parse(caller) {
+            Caller::Access { connection, .. } => {
+                Some((expected.clone(), self.access_authority(device, connection)?))
+            }
+            Caller::Desk if desk_may_act => Some(self.desk_authority(device)?),
+            _ => None,
+        };
+        let desk = desk_authority.is_some();
         let context = match &desk_authority {
             Some((context, _)) => context.clone(),
             None => {
@@ -100,6 +109,15 @@ impl Runtime {
         acting: Option<&str>,
     ) -> Result<(Value, bool), String> {
         let actor = self.registered_agent_for(device, caller, expected, id, acting, false)?;
+        if let Caller::Access { connection, .. } = Caller::parse(caller) {
+            // Who put it to sleep, by the tool's connection (B31).
+            crate::diagnostic!(json!({
+                "component": "agent_sleep",
+                "kind": "agent.sleep_by_tool",
+                "agent_id": id,
+                "connection_id": connection,
+            }));
+        }
         let answer = |state: &str| json!({"id": id, "state": state});
         match self.asleep_route(&actor).map(|(_, stage)| stage) {
             Some(Stage::Ending) => return Ok((answer("ending"), false)),
