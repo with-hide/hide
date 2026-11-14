@@ -32,6 +32,7 @@ mod stand_in_daemon;
 #[allow(dead_code)] // This fixture needs readiness only, not stand-in placement.
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
+mod stress_gate_canary;
 #[cfg(unix)]
 mod support;
 mod system_ssh;

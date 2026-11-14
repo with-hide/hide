@@ -21,6 +21,10 @@ on:
         description: How many times the lane's tests run in the one job; 1 is the lane as `pr.yml` runs it.
         type: string
         default: '1'
+      canary-fail-iteration:
+        description: Declared so the job may read it; a pull request's and the nightly's call leave it empty and run no canary.
+        type: string
+        default: ''
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
@@ -39,6 +43,10 @@ on:
         description: How many times the lane's tests run in the one job (nextest --stress-count).
         type: string
         default: '10'
+      canary-fail-iteration:
+        description: A 1-based stress iteration for the gate canary to fail, to show on a real runner that a failed iteration fails this job (docs/TESTING.md, The repeat lane); empty runs no canary.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -124,12 +132,39 @@ jobs:
         timeout-minutes: ${{ inputs.repeat == '1' && 20 || 60 }}
         env:
           REPEAT: ${{ inputs.repeat }}
+          # Empty on every ordinary run: the canary then passes like any other
+          # test, and this lane's behavior does not depend on it.
+          CANARY: ${{ inputs.canary-fail-iteration }}
+        shell: bash
         run: |
+          set -euo pipefail
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+          # A canary iteration outside the run would fail nothing and prove
+          # nothing, so a mistyped one stops the lane here. It must not be the
+          # last iteration: that one failing is what nextest itself exits
+          # nonzero for, so it would show the step's exit status and not the
+          # check below, which is the gate this run exists to show.
+          if [ -n "$CANARY" ]; then
+            case "$CANARY" in ''|*[!0-9]*) echo "canary-fail-iteration must be a number, not '$CANARY'" >&2; exit 1 ;; esac
+            if [ "$CANARY" -lt 1 ] || [ "$CANARY" -ge "$REPEAT" ] || [ "$REPEAT" -lt 2 ]; then
+              echo "canary-fail-iteration $CANARY names no iteration to fail before the last: with repeat $REPEAT it must be 1 to $((REPEAT - 1))" >&2
+              exit 1
+            fi
+          fi
           stress=()
           # A repetition shows a fix only if one failure fails the job, so no retry.
           if [ "$REPEAT" != 1 ]; then stress=(--stress-count "$REPEAT" --retries 0); fi
-          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci ${stress[@]+"${stress[@]}"} -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only
+          # The gate canary runs beside the lane's own tests, so a hand run can
+          # fail one iteration on purpose and show that this job ends red
+          # (stress_gate_canary; docs/TESTING.md, The repeat lane).
+          filter='test(/^(remote_delivery|node_contract|system_ssh|device_own_engine|stress_gate_canary)::/) & !test(protocol24)'
+          # nextest ends 0 when only its last iteration passed, so its summary
+          # is kept for the check below (`--stress-count` hides an earlier
+          # failure in the exit status alone).
+          log="$RUNNER_TEMP/nextest.log"
+          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder HIDE_TEST_STRESS_CANARY_FAIL_ITERATION="$CANARY" \
+            bash scripts/verify-cargo.sh nextest --profile ci ${stress[@]+"${stress[@]}"} -p hided --test it -E "$filter" --run-ignored only 2>&1 \
+            | tee "$log"
       - name: Another account's hide <path> on a device's bridge
         # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only
         # as a process of the node's own account, by the kernel's answer about
@@ -153,11 +188,16 @@ jobs:
           repositories: hide
       - name: A repeated run that had a failed iteration fails here
         # `--stress-count N` exits 0 when its last iteration passes, so this
-        # run's reports and nextest log decide whether any iteration failed
-        # (`scripts/check-stress-report.py`; docs/TESTING.md, The repeat lane).
+        # run's reports and its nextest log decide whether any iteration
+        # failed (`scripts/check-stress-report.py`; docs/TESTING.md, The
+        # repeat lane). The log is passed too: nextest's own summary is what
+        # says how many iterations ran, without which a truncated run (fewer
+        # iterations than the repeat asked for) would pass on its reports.
         if: ${{ !cancelled() && inputs.repeat != '1' }}
         timeout-minutes: 2
-        run: python3 scripts/check-stress-report.py --junit target/nextest/ci/junit*.xml --repeat "${{ inputs.repeat }}"
+        run: |
+          python3 scripts/check-stress-report.py --junit target/nextest/ci/junit*.xml \
+            --summary "$RUNNER_TEMP/nextest.log" --repeat "${{ inputs.repeat }}"
       - name: Report flaky and failed tests
         id: flaky
         if: ${{ !cancelled() }}
