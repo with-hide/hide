@@ -47,7 +47,7 @@ import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type T
 import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
-import { ToolMark } from "./components/tool-mark";
+import { ToolLabel } from "./components/tool-mark";
 import type { TaskState } from "./agentScope";
 
 const NO_FOLDS: string[] = [];
@@ -447,7 +447,6 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
           {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
-          <ToolMark tool={agent.tool} className="max-w-2/5" />
           <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
           <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
@@ -672,12 +671,13 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
   const ask = card.state === "needs_you" ? agent.state.ask : null;
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
-  if (!parts && !(showProject && project)) return null;
+  if (!parts && !(showProject && project) && !agent.tool) return null;
   // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
   const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
     <>
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
+        <ToolLabel tool={agent.tool} />
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
         {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}

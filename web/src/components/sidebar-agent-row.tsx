@@ -24,7 +24,7 @@ import { Elapsed } from "./elapsed";
 import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
-import { ToolMark } from "./tool-mark";
+import { ToolLabel } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
 import { SessionRowBody } from "./session-row";
@@ -192,6 +192,22 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
     </span>
   );
   const staleness = ask ? undefined : pullsStaleness(pulls);
+  // The row's line under its title.
+  const detail = offline ? (
+    <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
+      {offline}
+    </span>
+  ) : ask && agent.state.ask ? <span className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} copy={copy} textHidden className="flex-1" /></span> : agent.human_turn ? (
+    // A tree row's person's turn, its own or raised to it, says where in place of its line (PRD ask-human B14).
+    <span className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><HumanTurnLine turn={agent.human_turn} copy={copy} textHidden className="flex-1" /></span>
+  ) : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
+    // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
+    <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
+      {homeTurnLine(t, agent.hide_ai.turn)}
+    </span>
+  ) : line ? (
+    <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
+  ) : null;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
     if (tree.popover) {
@@ -270,7 +286,6 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           {device ? (
             <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
           ) : null}
-          <ToolMark tool={agent.tool} className="pointer-events-none max-w-2/5" />
           {placeInHead && place ? <span aria-hidden="true" data-agent-place-head={place} className="pointer-events-none min-w-0 max-w-2/5 shrink truncate text-caption text-muted-foreground">{place.split(" › ")[0]}</span> : null}
           {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={openPull}>{icon}</PrHoverCard>} />}
           {agent.letters_waiting ? <RowLetterMark /> : null}
@@ -282,21 +297,13 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           <FoldLane />
         </>}
       >
-        {offline ? (
-          <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
-            {offline}
+        {/* An external tool's row leads its line with the tool's name, muted, since its first line has no room for it (operator decision 2026-11-14). */}
+        {agent.tool && !offline ? (
+          <span className="pointer-events-none flex min-w-0 items-baseline gap-xs text-caption leading-(--size-sidebar-line-detail)" data-agent-tool-line={agent.tool.connection}>
+            <ToolLabel tool={agent.tool} />
+            <span className="flex min-w-0 flex-1 flex-col">{detail}</span>
           </span>
-        ) : ask && agent.state.ask ? <span className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} copy={copy} textHidden className="flex-1" /></span> : agent.human_turn ? (
-          // A tree row's person's turn, its own or raised to it, says where in place of its line (PRD ask-human B14).
-          <span className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><HumanTurnLine turn={agent.human_turn} copy={copy} textHidden className="flex-1" /></span>
-        ) : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
-          // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
-          <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
-            {homeTurnLine(t, agent.hide_ai.turn)}
-          </span>
-        ) : line ? (
-          <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
-        ) : null}
+        ) : detail}
         {tree && agent.hide_ai ? (
           <span aria-hidden="true" data-agent-task={originLine(t, agent.hide_ai)} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {originLine(t, agent.hide_ai)}

@@ -19,7 +19,7 @@ import { Hint } from "./ui/tooltip";
 import { FoldLane } from "./sidebar-agent-row";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
-import { ToolMark } from "./tool-mark";
+import { ToolLabel } from "./tool-mark";
 
 /**
  * The missions `deviceId`'s scope names as its own Needs You items, the ones
@@ -161,12 +161,11 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
         head={<>
           <span aria-hidden="true" className="pointer-events-none min-w-0 flex-1 truncate text-foreground">{ask.mission.title}</span>
           {device ? <DeviceChip label={device} className="pointer-events-none max-w-2/5" /> : null}
-          <ToolMark tool={ask.mission.tool} className="pointer-events-none max-w-2/5" />
           <Elapsed since={ask.since_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-mission-ask-elapsed="true" />
           <FoldLane />
         </>}
       >
-        <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><MissionAskLine ask={ask} className="flex-1" /></span>
+        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs text-caption leading-(--size-sidebar-line-detail)"><ToolLabel tool={ask.mission.tool} /><MissionAskLine ask={ask} className="min-w-0 flex-1" /></span>
         {place ? (
           <span aria-hidden="true" data-mission-ask-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}
