@@ -1,3 +1,4 @@
+pub mod access;
 #[cfg(test)]
 mod agent_adapter_contract_tests;
 mod agent_find;

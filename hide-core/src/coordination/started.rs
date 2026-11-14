@@ -28,10 +28,22 @@ pub(crate) struct StartedCheckout {
     pub(crate) task: Option<SpawnTask>,
 }
 
+/// One live agent an external tool started (PRD hide-external-control
+/// D-09): the tool's connection, by id, beside the agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AccessStarted {
+    pub(crate) connection: String,
+    pub(crate) agent: StartedAgent,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HideStarted {
     pub(crate) agents: Vec<StartedAgent>,
     pub(crate) checkouts: Vec<StartedCheckout>,
+    /// What external tools started, apart from Hide AI's own: a tool's work
+    /// is the tool's while its connection stands at Act, which the
+    /// connection list says, not this ledger.
+    pub(crate) access: Vec<AccessStarted>,
 }
 
 /// The agents and checkouts Hide started, in ledger order. Compared by value
@@ -39,30 +51,41 @@ pub(crate) struct HideStarted {
 /// a watch) publishes nothing.
 pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
     let mut started = HideStarted::default();
-    // Hide's own identities are one or two records, found once; the ledger's
+    // Hide's own identities are a few records, found once; the ledger's
     // spawns are then filtered by a parent in that short list, so a publish
     // with no Hide AI start costs one pass over the agents and one over the spawns.
     // Desk's sessions are the operator's own work, which Desk starts on the
-    // operator's word, not Hide AI's (PRD Desk 1차).
+    // operator's word, not Hide AI's (PRD Desk 1차); an external tool's are
+    // that tool's (PRD hide-external-control D-09), kept apart.
     let desk = format!(
         "{}{}",
         crate::delivery::HIDE_PREFIX,
         crate::delivery::HIDE_DESK_ROLE
     );
-    let origins: Vec<&str> = ledger
+    let origins: Vec<(&str, Option<&str>)> = ledger
         .agents
         .iter()
         .filter(|agent| agent.actor.hide_owned() && agent.actor.pane_id != desk)
-        .map(|agent| agent.id.as_str())
+        .map(|agent| (agent.id.as_str(), agent.actor.access_connection()))
         .collect();
     if origins.is_empty() {
         return started;
     }
-    for spawn in ledger.spawns.iter().filter(|spawn| {
-        spawn.mode == SpawnMode::Handoff && origins.contains(&spawn.parent.as_str())
-    }) {
+    for spawn in ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.mode == SpawnMode::Handoff)
+    {
+        let Some(&(_, connection)) = origins
+            .iter()
+            .find(|(origin, _)| *origin == spawn.parent.as_str())
+        else {
+            continue;
+        };
         let machine = super::spawn_machine(ledger, spawn);
-        if let (Some(path), Some(machine)) = (&spawn.path, machine) {
+        if connection.is_none()
+            && let (Some(path), Some(machine)) = (&spawn.path, machine)
+        {
             started.checkouts.push(StartedCheckout {
                 machine: machine.to_owned(),
                 path: path.clone(),
@@ -77,12 +100,19 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
         else {
             continue;
         };
-        started.agents.push(StartedAgent {
+        let agent = StartedAgent {
             agent_id: child.id.clone(),
             pane_id: child.actor.pane_id.clone(),
             session: child.actor.session.clone(),
             task: spawn.task.clone(),
-        });
+        };
+        match connection {
+            Some(connection) => started.access.push(AccessStarted {
+                connection: connection.to_owned(),
+                agent,
+            }),
+            None => started.agents.push(agent),
+        }
     }
     started
 }
@@ -271,6 +301,29 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(hide_started(&ledger), HideStarted::default());
+    }
+
+    #[test]
+    fn a_session_a_tool_started_names_its_connection_and_is_not_hide_ai_work() {
+        let mut ledger = Ledger::default();
+        let tool = Actor::access("c0ffee00c0ffee00", "hermes", NODE);
+        let origin = register(&mut ledger, &tool);
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "hermes/fix",
+            here("w1:p1"),
+        )
+        .unwrap();
+        let started = hide_started(&ledger);
+        assert!(started.agents.is_empty());
+        assert!(started.checkouts.is_empty());
+        assert_eq!(started.access.len(), 1);
+        assert_eq!(started.access[0].connection, "c0ffee00c0ffee00");
+        assert_eq!(started.access[0].agent.pane_id, "w1:p1");
     }
 
     fn here(pane: &str) -> Child<'_> {

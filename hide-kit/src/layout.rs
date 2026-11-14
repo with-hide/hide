@@ -308,6 +308,22 @@ pub fn agent_profiles(state_dir: &Path) -> PathBuf {
     state_dir.join("agent-profiles.json")
 }
 
+/// The external tools this core has approved (PRD hide-external-control):
+/// each connection's name, level and key hash, never a key. It moves with
+/// the core.
+pub const ACCESS_STORE: &str = "access.json";
+
+pub fn access_store(state_dir: &Path) -> PathBuf {
+    state_dir.join(ACCESS_STORE)
+}
+
+/// Where an external tool keeps its keys, one owner-only file per
+/// connection name, under the tool's own home (D-18): the operator's home
+/// when the tool runs as the operator with it, another when it has its own.
+pub fn access_keys(home: &Path) -> PathBuf {
+    hide_home(home).join("access")
+}
+
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
 

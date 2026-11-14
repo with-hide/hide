@@ -2087,6 +2087,9 @@ impl Runtime {
                 "task_kind": agent.task.as_ref().map(|task| task.kind.as_str().chars().take(64).collect::<String>()),
             }));
         }
+        if started.access != self.hide_started.access {
+            self.access_starts_moved();
+        }
         self.hide_started = started;
         let feedback = self.observe_feedback_letters(&ledger);
         // A person's turn declared, replaced or taken down, or its agent's
