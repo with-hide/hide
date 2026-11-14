@@ -260,6 +260,14 @@ type UiStore = {
   raisedFolded: readonly string[];
   /** The 태스크 list's open folds (`rest:<group>`, `cleanup:<group>`, `archived:<group>`); page-local, opened by the operator or by entering a resting task (sidebar-task-lens B5). */
   taskFoldsOpen: readonly string[];
+  /**
+   * The external tool whose cell the rail selected, by connection id, in
+   * place of the device in front (PRD hide-external-control D-45, B40); this
+   * window's alone, as which cell a window shows is. A tool no longer at Act
+   * has no cell, and the window shows the device in front again (B44).
+   */
+  toolCell: string | null;
+  setToolCell: (connection: string | null) => void;
   /** The Explorer row the operator last touched; the core owns the opened
    * document's `selected_path`, and a reveal syncs that into here. */
   explorerSelection: string | null;
@@ -471,6 +479,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   raisedOpen: [],
   raisedFolded: [],
   taskFoldsOpen: [],
+  toolCell: null,
+  setToolCell: (toolCell) => set({ toolCell }),
   explorerSelection: null,
   editorFindRequest: 0,
   editorFindDisplay: null,

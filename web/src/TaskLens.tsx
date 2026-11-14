@@ -1,6 +1,6 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
@@ -48,7 +48,8 @@ import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import { ToolLabel } from "./components/tool-mark";
-import type { TaskState } from "./agentScope";
+import type { TaskState, ToolCell } from "./agentScope";
+import { toolTaskList } from "./toolCells";
 
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
@@ -56,6 +57,18 @@ const NO_PANES: ReadonlySet<string> = new Set();
 const MISSION_INSET = "calc(var(--size-lineage-chevron) + var(--spacing-xs))";
 /** A row's second line by the task's state: a question and a block are the operator's turn, both in the warning colour (B8; status-marks B32). */
 const LINE_TONE: Partial<Record<TaskState, string>> = { needs_you: "text-warning", blocked: "text-warning" };
+
+/**
+ * Whether the list draws a tool's cell (PRD hide-external-control B40): its
+ * first group is the tool's turn, not the operator's, so nothing in it takes
+ * the warning colour, and no row names the tool, since every row is its work.
+ */
+const ToolList = createContext(false);
+
+/** A group's name: in a tool's cell 내 차례 is the tool's turn to answer and 읽을 것 is what it finished. */
+function groupLabel(state: TaskGroupState, tool: boolean, t: TFunction<"translation">): string {
+  return tool && (state === "needs_you" || state === "done") ? t(`taskLens.tool.group.${state}`) : t(`taskLens.group.${state}`);
+}
 
 /**
  * The sidebar's 프로젝트 | 태스크 switch (PRD sidebar-task-lens B1, B39):
@@ -136,6 +149,40 @@ export function TaskLens({ actions }: { actions: Actions }) {
   );
 }
 
+/**
+ * A tool's cell in the sidebar (PRD hide-external-control B40, B42, B45):
+ * the 태스크 list of the work the tool keeps, by state, its first group what
+ * waits on the tool's answer, then 작업 중 and 끝남. A task on another device
+ * names it on its row; a cell with no work says so. The operator answers in a
+ * row's pane from here as anywhere (B43).
+ */
+export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const rest = useShellStore((s) => s.rest);
+  const localAgents = useShellStore((s) => s.agents);
+  const folds = rest?.ui_state?.sessions_expanded_agent_pane_ids ?? NO_FOLDS;
+  const inWorkspace = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
+  const focusedPane = useShellStore((s) => s.focusedPaneId);
+  const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
+  const byPane = useMemo(() => agentsByPane(agents), [agents]);
+  const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t)), [rest, tool, byPane, t]);
+  const count = list.groups.reduce((sum, group) => sum + rowCount(group.bands), 0) + list.resting.length + list.cleanup.length;
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens="status" data-tool-cell={tool.connection}>
+      <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate" data-task-count={count}>{t("taskLens.count", { count })}</span>
+      </div>
+      {count === 0 ? (
+        <p className="px-md py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
+      ) : (
+        <ToolList.Provider value={true}>
+          <TaskGroups list={list} view="status" showProject={true} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
+        </ToolList.Provider>
+      )}
+    </div>
+  );
+}
+
 const TASK_VIEWS: readonly TaskView[] = ["status", "project"];
 
 function ViewSwitch({ view, actions }: { view: TaskView; actions: Actions }) {
@@ -197,6 +244,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
   // The resting and cleanup folds open in place for this page only (B5); the
   // page keeps them, so the ⌥n numbers read the same drawn order.
+  const tool = useContext(ToolList);
   const foldsOpen = useUiStore((s) => s.taskFoldsOpen);
   const toggleFold = useUiStore((s) => s.toggleTaskFold);
   const focusedRestFold = useMemo(() => {
@@ -248,12 +296,12 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // heads of the groups above it rather than leaving with its rows: each head
   // stacks under the ones already passed, and pressing one goes back to its rows.
   const drawSection = ({ group, bands, resting, cleanup, archived }: (typeof sections)[number], stack: number) => (
-    <section key={group.key} className={view === "status" ? "contents" : undefined} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
+    <section key={group.key} className={view === "status" ? "contents" : undefined} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, tool, t)}>
       <GroupHead group={group} stack={stack} />
       {bands.map((band) => (
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
-          <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
+          <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? groupLabel(band.state, tool, t) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
             {band.rows.map((row) => (row.kind === "mission"
               ? <SidebarMissionRow key={`mission:${row.ask.mission.id}`} ask={row.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
               : rows([row.tree])[0]))}
@@ -278,8 +326,8 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   );
 }, (before, after) => before.list === after.list && before.view === after.view && before.showProject === after.showProject && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);
 
-function groupName(group: TaskGroup, t: ReturnType<typeof useInterfaceTranslation>["t"]): string {
-  return group.project?.label ?? (group.state ? t(`taskLens.group.${group.state}`) : "");
+function groupName(group: TaskGroup, tool: boolean, t: TFunction<"translation">): string {
+  return group.project?.label ?? (group.state ? groupLabel(group.state, tool, t) : "");
 }
 
 /**
@@ -289,9 +337,10 @@ function groupName(group: TaskGroup, t: ReturnType<typeof useInterfaceTranslatio
  */
 function BandHead({ state }: { state: TaskGroupState }) {
   const { t } = useInterfaceTranslation();
+  const tool = useContext(ToolList);
   return (
-    <div aria-hidden="true" data-task-band={state} className={cn("px-xs pt-xs pb-xxs text-micro text-muted-foreground", state === "needs_you" && "text-warning")}>
-      {t(`taskLens.group.${state}`)}
+    <div aria-hidden="true" data-task-band={state} className={cn("px-xs pt-xs pb-xxs text-micro text-muted-foreground", state === "needs_you" && !tool && "text-warning")}>
+      {groupLabel(state, tool, t)}
     </div>
   );
 }
@@ -327,12 +376,13 @@ function goToHead(head: HTMLElement, stack: number) {
  */
 function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const { t } = useInterfaceTranslation();
+  const tool = useContext(ToolList);
   if (group.state) {
-    const name = t(`taskLens.group.${group.state}`);
+    const name = groupLabel(group.state, tool, t);
     return (
       <h3 data-section-sticky="true" className={STICKY_TASK_HEAD} style={stackTop(stack)} data-task-group-head={group.state}>
         <RowButton data-task-focus="group" aria-label={`${name} ${rowCount(group.bands)}`} onClick={(event) => goToHead(event.currentTarget.parentElement!, stack)}
-          className={cn("h-full rounded-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && "text-warning")}>
+          className={cn("h-full rounded-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && !tool && "text-warning")}>
           <span>{name}</span>
           <span className="tabular-nums">{rowCount(group.bands)}</span>
         </RowButton>
@@ -344,8 +394,8 @@ function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
     <h3 tabIndex={-1} data-task-focus="group" className="flex min-w-0 items-center gap-sm rounded-xs px-xs pt-sm pb-xs text-caption font-semibold text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-task-group-head="project">
       <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? ""}</span>
       {counts.map((state: TaskGroupState) => (
-        <span key={state} className={cn("shrink-0 text-micro font-normal", state === "needs_you" ? "text-warning" : "text-muted-foreground")}>
-          {t(`taskLens.group.${state}`)} {group.counts[state]}
+        <span key={state} className={cn("shrink-0 text-micro font-normal", state === "needs_you" && !tool ? "text-warning" : "text-muted-foreground")}>
+          {groupLabel(state, tool, t)} {group.counts[state]}
         </span>
       ))}
     </h3>
@@ -667,19 +717,22 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
 function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
+  const toolList = useContext(ToolList);
   const { agent, card, project } = entry;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
-  if (!parts && !(showProject && project) && !agent.tool) return null;
+  // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
+  const tool = toolList ? undefined : agent.tool;
+  if (!parts && !(showProject && project) && !tool) return null;
   // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
   const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
     <>
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
-        <ToolLabel tool={agent.tool} />
+        <ToolLabel tool={tool} />
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}

@@ -22,9 +22,11 @@ import type { AgentLayout } from "./agentLayout";
 import { DIGITS, type Digit } from "./shortcuts";
 import { catalogWorkspaces, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
+import { frontTool, toolTaskList } from "./toolCells";
 
 /** The page-local folds the two lists' drawn orders depend on (`ui.ts`). */
-export type SidebarFolds = { raisedOpen: readonly string[]; taskFoldsOpen: readonly string[] };
+/** What the drawn lists depend on beyond the snapshot: the page's open folds and the tool's cell it shows, if any. */
+export type SidebarFolds = { raisedOpen: readonly string[]; taskFoldsOpen: readonly string[]; toolCell?: string | null };
 
 /** The pane id at each number, the first nine of `panes` in their order, a pane counted once. */
 export function numberedPanes(panes: readonly string[]): Map<Digit, string> {
@@ -142,6 +144,12 @@ export function taskListOrder(state: { rest: SnapshotRest | null; agents: AgentR
 
 /** The pane at each ⌥n now: the 태스크 list's rows while the switch shows that list, else the 프로젝트 list's roots. */
 export function sidebarNumbers(state: { rest: SnapshotRest | null; agents: AgentRow[] }, folds: SidebarFolds): Map<Digit, string> {
+  // A tool's cell in front draws the tool's list alone, so ⌥n numbers its rows (PRD hide-external-control B40).
+  const tool = frontTool(state.rest, folds.toolCell ?? null);
+  if (tool) {
+    const list = toolTaskList(state.rest, tool, agentsByPane(everyPaneAgent(state.agents, state.rest?.status?.remote)), (id) => id);
+    return numberedPanes(drawnTasks(taskSections(list, "status", new Set(folds.taskFoldsOpen))).map(({ agent }) => agent.pane_id));
+  }
   return numberedList(state.rest) === "tasks" ? numberedPanes(taskListOrder(state, folds.taskFoldsOpen)) : numberedAgents(agentListOrder(state, folds.raisedOpen));
 }
 

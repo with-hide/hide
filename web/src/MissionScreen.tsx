@@ -44,6 +44,7 @@ import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
 import { catalogOf, type Mission, type MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
+import { useFrontTool } from "./toolCells";
 import { useUiStore } from "./ui";
 import { ToolMark } from "./components/tool-mark";
 
@@ -64,14 +65,14 @@ const LOADING: DeviceMissions = { state: "loading" };
 const FAILED: DeviceMissions = { state: "failed" };
 
 /** `deviceId`'s missions in their groups (D-06); one value per snapshot change of the missions or the workers, never per terminal frame. */
-export function useDeviceMissions(deviceId: string): DeviceMissions {
+export function useDeviceMissions(deviceId: string, tool: string | null = null): DeviceMissions {
   const missions = useShellStore((s) => s.rest?.missions);
   const escalationOf = useWorkerEscalation();
   return useMemo(() => {
     if (!missions) return LOADING;
     if (missions.failed) return FAILED;
-    return { state: "ready", entries: deviceMissions(missions.items, deviceId).map((mission) => missionEntry(mission, escalationOf)) };
-  }, [missions, deviceId, escalationOf]);
+    return { state: "ready", entries: deviceMissions(missions.items, deviceId, tool).map((mission) => missionEntry(mission, escalationOf)) };
+  }, [missions, deviceId, tool, escalationOf]);
 }
 
 /** The sidebar row's number (B1): the front device's missions with anything in their `내 차례`. */
@@ -86,9 +87,14 @@ export function MissionScreen({ actions }: { actions: Actions }) {
   const place = useUiStore((s) => s.missions);
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const deviceId = place.deviceId ?? front;
-  const missions = useDeviceMissions(deviceId);
-  const connected = useShellStore((s) => deviceConnected(s.rest, deviceId));
-  const device = useShellStore((s) => machineName(s.rest?.navigator?.devices, deviceId, t));
+  // A tool's cell in front shows the missions the tool keeps (PRD hide-external-control B40).
+  const frontToolCell = useFrontTool();
+  const tool = place.deviceId === null ? frontToolCell : null;
+  const missions = useDeviceMissions(deviceId, tool?.connection ?? null);
+  const deviceConnectedNow = useShellStore((s) => deviceConnected(s.rest, deviceId));
+  const connected = tool !== null || deviceConnectedNow;
+  const deviceName = useShellStore((s) => machineName(s.rest?.navigator?.devices, deviceId, t));
+  const device = tool?.name ?? deviceName;
   const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const catalog = useMemo(() => catalogOf(workspaces, remote), [workspaces, remote]);
@@ -128,6 +134,7 @@ export function MissionScreen({ actions }: { actions: Actions }) {
       data-mission-screen={missions.state}
       data-mission-screen-view={detail ? "detail" : "table"}
       data-mission-screen-device={deviceId}
+      data-mission-screen-tool={tool?.connection}
     >
       <Head
         device={device}

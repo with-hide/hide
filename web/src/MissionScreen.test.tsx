@@ -9,6 +9,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { MissionScreen } from "./MissionScreen";
+import type { ToolCell } from "./agentScope";
 import type { AgentRow, Mission, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { MISSION_ENTRY, useUiStore, type MissionPlace } from "./ui";
@@ -35,9 +36,9 @@ const MISSIONS = [
   mission("mission-9", { device_id: "mini" }),
 ];
 
-type Setup = { missions?: { items: Mission[]; failed?: string } | null; place?: Partial<MissionPlace>; remote?: unknown[]; agents?: AgentRow[] };
+type Setup = { missions?: { items: Mission[]; failed?: string } | null; place?: Partial<MissionPlace>; remote?: unknown[]; agents?: AgentRow[]; tools?: ToolCell[]; toolCell?: string | null };
 
-async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], agents = [] }: Setup = {}) {
+async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], agents = [], tools = [], toolCell = null }: Setup = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (value: string) => value });
@@ -51,12 +52,13 @@ async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], 
         devices: [{ id: "mac", kind: "local", label: "This Mac" }, { id: "mini", kind: "remote", label: "mini" }],
         focused_device_id: "mac",
         workspaces: [{ id: "w", label: "herdr-ide", device_id: "mac", checkouts: [] }, { id: "w2", label: "atorni-ax", device_id: "mac", checkouts: [] }],
+        tools,
       },
       status: { remote },
       overview_graph: { sessions: [] },
     } as unknown as SnapshotRest,
   });
-  useUiStore.setState({ screen: { kind: "missions" }, missions: { ...MISSION_ENTRY, ...place } });
+  useUiStore.setState({ screen: { kind: "missions" }, missions: { ...MISSION_ENTRY, ...place }, toolCell });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
   const container = document.createElement("div");
@@ -84,13 +86,18 @@ describe("the table (B2-B5)", () => {
     expect(q('[data-mission-row-project="w2"]')?.textContent).toBe("atorni-ax");
   });
 
-  it("lists a mission an external tool's agent conducts among the others, by its state, with the tool's name (PRD hide-external-control B30, D-15)", async () => {
+  it("leaves out a mission an external tool keeps, which its own cell lists with the tool named in the head (PRD hide-external-control B30, B40)", async () => {
     const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
-    const { q, all } = await mount({ missions: { items: [mission("mission-1"), mission("mission-4", { decision: "Which order?", tool })] } });
-    expect(all("[data-mission-group]").map((group) => [group.dataset.missionGroup, group.dataset.missionGroupCount])).toEqual([["turn", "1"], ["running", "1"]]);
-    expect(q('[data-mission-row="mission-4"]')?.dataset.missionRowGroup).toBe("turn");
+    const missions = { items: [mission("mission-1"), mission("mission-4", { decision: "Which order?", tool }), mission("mission-5", { tool: { ...tool, owns: false } })] };
+    const operator = await mount({ missions });
+    expect(operator.all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-1", "mission-5"]);
+    await operator.unmount();
+    const cell = { connection: tool.connection, name: "nightly", turn: 1, devices: [], mission_asks: [] };
+    const { q, all } = await mount({ missions, tools: [cell], toolCell: tool.connection });
+    expect(q("[data-mission-screen-tool]")?.dataset.missionScreenTool).toBe(tool.connection);
+    expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
+    expect(q("[data-mission-screen-device-name]")?.textContent).toBe("· nightly");
     expect(q('[data-mission-row="mission-4"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
-    expect(q('[data-mission-row="mission-1"] [data-tool-mark]')).toBeNull();
   });
 
   it("narrows the rows and the count to a project's chip, and back with 모든 프로젝트 (B3)", async () => {

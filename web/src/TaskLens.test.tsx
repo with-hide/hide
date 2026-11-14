@@ -5,14 +5,14 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
-import type { AgentScope, TaskCardScope, TaskState } from "./agentScope";
+import type { AgentScope, TaskCardScope, TaskState, ToolCell } from "./agentScope";
 import { formatElapsed } from "./components/elapsed";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { withMissionAsk } from "./gallery/MissionScene";
 import { clientI18n } from "./i18n/translator";
 import type { AgentRow, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
-import { TaskLens } from "./TaskLens";
+import { TaskLens, ToolTaskLens } from "./TaskLens";
 import { useUiStore } from "./ui";
 
 // The sidebar's 태스크 list over a device scope the core already decided
@@ -54,7 +54,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | null = null) {
+async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | null = null, tool: ToolCell | null = null) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
@@ -66,7 +66,7 @@ async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | 
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><TaskLens actions={actions} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider>{tool ? <ToolTaskLens tool={tool} actions={actions} /> : <TaskLens actions={actions} />}</TooltipProvider>));
   cleanup = async () => {
     await act(async () => root.unmount());
     container.remove();
@@ -537,4 +537,33 @@ it("names a profile child's agent and profile in its hover and accessible name, 
   expect(named("plain").getAttribute("aria-label")).toContain("Claude Code");
   expect(named("plain").getAttribute("aria-label")).not.toContain(" · work");
   expect(named("plain").title).not.toContain(" · ");
+});
+
+it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the warning colour, names a task on another device and none by the tool, and says when it holds nothing (PRD hide-external-control B40, B42, B45)", async () => {
+  const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+  const agents = [
+    row("ask", { tool, demand: "question" } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" }),
+    row("works", { tool } as Partial<AgentRow>, { line: "테스트 돌리는 중" }),
+    row("finished", { tool } as Partial<AgentRow>),
+  ];
+  const away = row("away", { tool, device_id: "mini" } as Partial<AgentRow>);
+  const rest = snapshot(agents, []);
+  const withMini = { ...rest, navigator: { ...rest.navigator, devices: [...rest.navigator!.devices!, { id: "mini", kind: "remote", label: "mini", agent_scope: emptyScope() }] }, status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [away], workspaces: [] } }] } } as unknown as SnapshotRest;
+  const cell: ToolCell = {
+    connection: tool.connection, name: "nightly", turn: 1,
+    devices: [
+      { device_id: "local", tasks: { cards: [card("ask", "needs_you", "hide-main"), card("works", "working", "hide-main"), card("finished", "done", "hide-main")], needs_you: 1, recency: "" }, members: [] },
+      { device_id: "mini", tasks: { cards: [card("away", "working", "mini-main")], needs_you: 0, recency: "" }, members: [] },
+    ],
+  };
+  const { container } = await render(withMini, agents, null, cell);
+  expect(heads(container)).toEqual(["도구가 답할 차례1", "끝남1", "작업 중2"]);
+  expect(container.querySelector('[data-task-group-head="needs_you"] button')?.className).not.toContain("text-warning");
+  expect(container.querySelector('[data-task-row="ask"] [data-task-line]')?.className).not.toContain("text-warning");
+  expect(container.querySelector("[data-tool-mark]")).toBeNull();
+  expect(container.querySelector('[data-task-row="away"]')?.textContent).toContain("mini");
+  await cleanup?.();
+  cleanup = null;
+  const empty = await render(rest, [], null, { ...cell, turn: 0, devices: [] });
+  expect(empty.container.querySelector("[data-tool-cell-empty]")?.textContent).toBe("아직 맡은 일이 없어요");
 });

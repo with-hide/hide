@@ -8,6 +8,7 @@ import { cn } from "../lib/utils";
 import { numberOf, numberedDevices } from "../numbering";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
 import { useShellStore } from "../store";
+import { toolCells } from "../toolCells";
 import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
 import { Keycap } from "./ui/keycap";
@@ -40,6 +41,10 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const front = useShellStore((s) => frontDeviceId(s.rest));
+  const tools = useShellStore((s) => toolCells(s.rest));
+  // A tool's cell, while one is selected, stands in front of the devices (PRD hide-external-control B40).
+  const picked = useUiStore((s) => s.toolCell);
+  const toolFront = tools.some((cell) => cell.connection === picked) ? picked : null;
   const tiles = useMemo<Tile[]>(() => {
     const own = windowDeviceId(devices);
     const shared = coreShared(devices);
@@ -66,7 +71,7 @@ export function DeviceRail({ actions }: { actions: Actions }) {
         <ul className="flex flex-col items-center gap-md">
           {tiles.map((tile) => (
             <li key={tile.id} className="flex">
-              <RailTile tile={tile} selected={tile.id === front} number={numbers ? numberOf(numbers, tile.id) : null} actions={actions} />
+              <RailTile tile={tile} selected={toolFront === null && tile.id === front} number={numbers ? numberOf(numbers, tile.id) : null} actions={actions} />
             </li>
           ))}
           <li className="flex">
@@ -81,6 +86,13 @@ export function DeviceRail({ actions }: { actions: Actions }) {
               </button>
             </Hint>
           </li>
+          {/* The tools connected at Act, under a short line, after the devices and Add device (PRD hide-external-control D-50). */}
+          {tools.length > 0 ? <li role="separator" aria-hidden="true" data-rail-tools-separator="true" className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
+          {tools.map((cell) => (
+            <li key={cell.connection} className="flex">
+              <ToolTileView name={cell.name} turn={cell.turn} connection={cell.connection} selected={cell.connection === toolFront} onSelect={() => actions.focusTool(cell.connection)} />
+            </li>
+          ))}
         </ul>
         {/* View, Help and Settings stand at the rail's foot, as a chat app's rail keeps its own. */}
         <div className="mt-auto flex flex-col items-center gap-xs pt-md" data-rail-menus="true">
@@ -159,6 +171,49 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
             <XIcon className="size-(--size-rail-mark)" />
           </span>
         )}
+      </button>
+    </Hint>
+  );
+}
+
+/**
+ * A tool's tile (PRD hide-external-control D-50, B39, B41): the size of a
+ * device's, a ring rather than a filled square so it never reads as a
+ * machine, holding the name's letters. Its one mark is the grey number of
+ * what waits on the tool's answer (`9+` from ten), which no Needs You, badge
+ * or notice of the operator's counts; the hint names it an external tool.
+ */
+export function ToolTileView({ name, turn, connection, selected, onSelect }: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const facts = [name, t("devices.rail.tool"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
+  return (
+    <Hint label={facts.join(" · ")} side="right">
+      <button
+        type="button"
+        aria-label={facts.join(", ")}
+        aria-pressed={selected}
+        data-rail-tool={connection}
+        className={cn(
+          TILE,
+          "rounded-full border border-border text-caption font-semibold hover:text-foreground",
+          selected ? "text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-sidebar" : "text-subtle-foreground",
+        )}
+        onClick={onSelect}
+      >
+        <span aria-hidden="true" data-rail-glyph="true">{tileMonogram(name)}</span>
+        {turn > 0 ? (
+          <span
+            aria-hidden="true"
+            data-rail-badge="tool_turn"
+            data-rail-badge-count={turn}
+            className={cn(
+              "absolute -top-xs -right-xs flex h-(--size-rail-badge) min-w-(--size-rail-badge) items-center justify-center rounded-full bg-muted-foreground px-xxs text-(length:--size-rail-badge-text) leading-none font-semibold text-background tabular-nums",
+              CUTOUT,
+            )}
+          >
+            {badgeText(turn)}
+          </span>
+        ) : null}
       </button>
     </Hint>
   );

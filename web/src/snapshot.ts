@@ -1,4 +1,4 @@
-import type { AgentScope } from "./agentScope";
+import type { AgentScope, ToolCell } from "./agentScope";
 import type { ProjectSettings, ProjectSettingsWrite } from "./projectSettings";
 // The parts of the core's `rest` section the web shell reads, typed as the
 // core serializes them (hide-core/src/model.rs), plus the pure selectors that
@@ -3545,6 +3545,8 @@ export type SnapshotRest = {
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
     focused_device_id?: string | null;
+    /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
+    tools?: ToolCell[];
   };
   connection?: { kind: string; state: string; target_id: string | null };
   task_operation?: TaskOperation | null;
