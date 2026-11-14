@@ -47,21 +47,28 @@ export function hideAiPlace(t: TFunction<"translation">, project: string, hideAi
   return `${project} › ${originLine(t, hideAi)}`;
 }
 
-/** The task Hide AI started this checkout for, by the device and path the core lists; absent for an operator's checkout. */
-export function hideAiCheckoutOf(listed: readonly HideAiCheckout[] | undefined, workspace: Pick<Workspace, "device_id">, checkout: Pick<Checkout, "path">): HideAiCheckout | null {
+/** The row the core lists for this checkout, Hide AI's or a tool's that keeps its work, by device and path; absent for an operator's checkout. */
+function listedCheckout(listed: readonly HideAiCheckout[] | undefined, workspace: Pick<Workspace, "device_id">, checkout: Pick<Checkout, "path">): HideAiCheckout | null {
   return listed?.find((row) => row.device_id === workspace.device_id && row.path === checkout.path) ?? null;
 }
 
+/** The task Hide AI started this checkout for; absent for an operator's checkout and for an external tool's, which is no Hide AI work. */
+export function hideAiCheckoutOf(listed: readonly HideAiCheckout[] | undefined, workspace: Pick<Workspace, "device_id">, checkout: Pick<Checkout, "path">): HideAiCheckout | null {
+  const row = listedCheckout(listed, workspace, checkout);
+  return row && !row.tool ? row : null;
+}
+
 /**
- * Whether a project's tree draws `checkout`. One Hide AI made is drawn only
+ * Whether a project's tree draws `checkout`. One Hide AI made, or one made
+ * for an external tool's agent while the tool keeps its work, is drawn only
  * while it is the front checkout or an operator-owned agent works in it, so
- * a promotion's worktree never crowds the tree (PRD hide-ai-work-home D-17,
- * B3); its agent row is never in a tree, the core leaves it out. `holdsAgent`
- * is whether the checkout's tree has any row, and every row in it is the
- * operator's.
+ * neither crowds the tree (PRD hide-ai-work-home D-17, B3; PRD
+ * hide-external-control B26); its agent row is never in a tree, the core
+ * leaves it out. `holdsAgent` is whether the checkout's tree has any row,
+ * and every row in it is the operator's.
  */
 export function drawnInTree(listed: readonly HideAiCheckout[] | undefined, workspace: Pick<Workspace, "device_id">, checkout: Pick<Checkout, "path">, front: boolean, holdsAgent: boolean): boolean {
-  return front || holdsAgent || !hideAiCheckoutOf(listed, workspace, checkout);
+  return front || holdsAgent || !listedCheckout(listed, workspace, checkout);
 }
 
 /**

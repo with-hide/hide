@@ -28,6 +28,18 @@ pub(crate) struct StartedCheckout {
     pub(crate) machine: String,
     pub(crate) path: String,
     pub(crate) task: Option<SpawnTask>,
+    /// The external tool whose spawn made it, absent for Hide AI's: the
+    /// connection's id and the name it connected with. Whether the tool
+    /// keeps the checkout is read from its connection when it is published,
+    /// as a row's is (PRD hide-external-control D-14).
+    pub(crate) tool: Option<CheckoutTool>,
+}
+
+/// The external tool a checkout was made for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CheckoutTool {
+    pub(crate) connection: String,
+    pub(crate) name: String,
 }
 
 /// One live agent an external tool started (PRD hide-external-control
@@ -115,13 +127,20 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
             tool_roots.insert(child, tool);
         }
         let machine = super::spawn_machine(ledger, spawn);
-        if connection.is_none()
-            && let (Some(path), Some(machine)) = (&spawn.path, machine)
+        // A tool's checkout is one its spawn made: a spawn that started in
+        // a worktree already there, the operator's, or in the repository's
+        // own folder leaves that checkout the operator's.
+        if let (Some(path), Some(machine)) = (&spawn.path, machine)
+            && (tool.is_none() || spawn.made)
         {
             started.checkouts.push(StartedCheckout {
                 machine: machine.to_owned(),
                 path: path.clone(),
                 task: spawn.task.clone(),
+                tool: tool.map(|(connection, name)| CheckoutTool {
+                    connection: connection.to_owned(),
+                    name: name.to_owned(),
+                }),
             });
         }
         let Some(child) = spawn
@@ -318,6 +337,7 @@ pub(crate) mod tests {
                 seed_tab: None,
                 id: id.clone(),
                 path: Some(format!("/repo.worktrees/{branch}")),
+                made: true,
                 pane: Some(actor.pane_id.clone()),
                 terminal: None,
                 shell: None,
@@ -395,12 +415,66 @@ pub(crate) mod tests {
         .unwrap();
         let started = hide_started(&ledger);
         assert!(started.agents.is_empty());
-        assert!(started.checkouts.is_empty());
+        // Its checkout is the tool's, which the sidebar tree draws by the
+        // rule of a checkout Hide AI made (together check, issue 2).
+        assert_eq!(
+            started
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.tool.clone())
+                .collect::<Vec<_>>(),
+            vec![Some(CheckoutTool {
+                connection: "c0ffee00c0ffee00".into(),
+                name: "hermes".into(),
+            })]
+        );
         assert_eq!(started.access.len(), 1);
         assert_eq!(started.access[0].connection, "c0ffee00c0ffee00");
         assert_eq!(started.access[0].agent.pane_id, "w1:p1");
         assert_eq!(started.tool_work.len(), 1);
         assert_eq!(started.tool_work[0].name, "hermes");
+    }
+
+    /// Review of #2586: a tool's spawn that starts in a worktree that was
+    /// already there (the operator's, or the repository's own folder) made
+    /// no checkout, so it lists none and that checkout stays the operator's;
+    /// a spawn that made its worktree lists it.
+    #[test]
+    fn a_tools_spawn_lists_only_the_checkout_it_made() {
+        let mut ledger = Ledger::default();
+        let tool = Actor::access("c0ffee00c0ffee00", "hermes", NODE);
+        let origin = register(&mut ledger, &tool);
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "made",
+            here("w1:p1"),
+        )
+        .unwrap();
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "operators",
+            here("w1:p2"),
+        )
+        .unwrap();
+        // The second started in the operator's own worktree of that branch:
+        // the executor advanced it with `made: false`.
+        ledger.spawns[1].made = false;
+        assert_eq!(
+            hide_started(&ledger)
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/repo.worktrees/made"]
+        );
     }
 
     /// B27, D-36: what a tool's agent starts under itself with `--parent`,
@@ -519,6 +593,7 @@ pub(crate) mod tests {
                 machine: NODE.into(),
                 path: "/repo.worktrees/hide-memory-m72".into(),
                 task: memory_task("m72"),
+                tool: None,
             }]
         );
     }

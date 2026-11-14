@@ -681,3 +681,146 @@ fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
         "View only and a disconnect end the cells, and the work let go is the operator's"
     );
 }
+
+/// A runtime with one project whose checkout holds `agent` in pane
+/// `subject`, registered as the work of a tool `nightly` at Act; answers
+/// the connection.
+fn kept_by_tool(agent: SidebarAgentSnapshot) -> (Runtime, String) {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![workspace(
+        "project",
+        "Project",
+        "/fixture",
+        vec![checkout(
+            "project",
+            "work",
+            "/fixture/work",
+            Some(pane("subject", "/fixture/work")),
+        )],
+    )];
+    let mut agent = agent;
+    agent.lineage_session = Some("tool-session".into());
+    runtime.snapshot.navigator.agents = vec![agent];
+    let connection = connect(
+        &mut runtime,
+        "00000000000000a7",
+        "7",
+        crate::access::Level::Act,
+    );
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: "agent-1".into(),
+        pane_id: "subject".into(),
+        session: Some("tool-session".into()),
+        ended: false,
+    }];
+    (runtime, connection)
+}
+
+/// B29, B40 (together check, step 5): a tool's agent waiting on a person
+/// (`hide agent ask-human`) has not finished, so the tool's cell keeps its
+/// task among the work in progress, as a wait, and never in 끝남, however
+/// its last turn ended; the person's step is the operator's, in their own
+/// Needs You, and never the tool's turn.
+#[test]
+fn a_tools_agent_waiting_on_a_person_stays_in_progress_in_the_tools_cell() {
+    use crate::agent_state::tally::tasks::TaskState;
+    let mut agent = row(Owner::Operator, Doing::HumanTurn);
+    agent.activity = "stopped".into();
+    agent.completed = true;
+    agent.unread = true;
+    let declared = agent.declared_human_turn.clone().unwrap();
+    let (mut runtime, connection) = kept_by_tool(agent);
+    // As the ledger's standing declaration lays it on every projection.
+    runtime.human_turns_laid.insert("subject".into(), declared);
+    runtime.refresh_agent_lineage();
+    runtime.sync_session_state();
+    runtime.publish_mission_asks();
+    runtime.refresh_agent_scopes();
+    let cell = &runtime.snapshot.navigator.tools[0];
+    assert_eq!(cell.connection, connection);
+    assert_eq!(
+        (
+            cell.turn,
+            cell.devices
+                .iter()
+                .flat_map(|device| &device.tasks.cards)
+                .map(|card| (card.root.as_str(), card.state))
+                .collect::<Vec<_>>()
+        ),
+        (0, vec![("subject", TaskState::Waiting)]),
+        "a person's step is no tool's turn and no finish"
+    );
+    assert_eq!(
+        runtime.snapshot.navigator.devices[0]
+            .agent_scope
+            .groups
+            .needs_you,
+        1,
+        "the person's step is the operator's"
+    );
+}
+
+/// D-17 of PRD hide-ai-work-home applied to a tool's work (together check,
+/// issue 2): the checkout Hide made for a tool's spawn is published beside
+/// Hide AI's, naming the tool, while the tool keeps its work, so the
+/// sidebar tree leaves it out by the same rule; once the tool lets go it is
+/// the operator's ordinary checkout and leaves the list.
+#[test]
+fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
+    use crate::access::Level;
+    use crate::coordination::started::{CheckoutTool, StartedCheckout};
+    use crate::runtime::access::AccessEvent;
+    let (mut runtime, connection) = kept_by_tool(row(Owner::Operator, Doing::Working));
+    runtime.hide_started.checkouts = vec![
+        StartedCheckout {
+            machine: crate::node::TEST_NODE.into(),
+            path: "/fixture/.hide/worktrees/fixture/helper-task".into(),
+            task: None,
+            tool: Some(CheckoutTool {
+                connection: connection.clone(),
+                name: "nightly".into(),
+            }),
+        },
+        StartedCheckout {
+            machine: crate::node::TEST_NODE.into(),
+            path: "/fixture/.hide/worktrees/fixture/hide-memory-m72".into(),
+            task: None,
+            tool: None,
+        },
+    ];
+    // The level event itself republishes the list: the snapshot is read right after it, with no refresh of the
+    // test's own.
+    runtime.refresh_agent_lineage();
+    let listed = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .navigator
+            .hide_ai_checkouts
+            .iter()
+            .map(|listed| {
+                (
+                    listed.path.rsplit('/').next().unwrap().to_owned(),
+                    listed.tool.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(&runtime),
+        [
+            ("helper-task".to_owned(), Some("nightly".to_owned())),
+            ("hide-memory-m72".to_owned(), None)
+        ]
+    );
+    assert!(runtime.access_event(AccessEvent::Level {
+        id: connection,
+        level: Level::View,
+    }));
+    assert_eq!(
+        listed(&runtime),
+        [("hide-memory-m72".to_owned(), None)],
+        "View only hands the checkout to the operator"
+    );
+}

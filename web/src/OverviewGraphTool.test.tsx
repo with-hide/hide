@@ -3,6 +3,7 @@
 // centre is the tool, by its rail tile's monogram, where a device's map draws
 // the operator with a `+`; the missions it lists wait on the tool, not the
 // operator; and nothing on it starts the operator's work.
+import { ReactFlowProvider } from "@xyflow/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -10,15 +11,18 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import type { ToolCell } from "./agentScope";
+import { InToolCell } from "./components/tool-mark";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { missionFixture } from "./gallery/MissionScene";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { OverviewGraph } from "./OverviewGraph";
-import { sameGraphScope } from "./overviewGraphModel";
+import { sameGraphScope, type GraphAgent } from "./overviewGraphModel";
+import { SessionGraphNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
-import type { Checkout, SnapshotRest } from "./snapshot";
+import type { AgentRow, Checkout, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { toolProjects } from "./toolCells";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 // The force layout needs a real browser; a placed map with no session points still draws its centre. Whether
@@ -99,4 +103,74 @@ it("keeps a tool's map places apart from the device's map of the same machine", 
   const device = { kind: "all" as const, device_id: "local" };
   const tool = { ...device, tool: TOOL.connection };
   expect([sameGraphScope(device, device), sameGraphScope(tool, tool), sameGraphScope(device, tool), sameGraphScope(tool, { ...device, tool: "beef0000beef0000" })]).toEqual([true, true, false, false]);
+});
+
+// Together check, issues 1 and 4. A tool's agent that waits on a person stands in the operator's own
+// Overview; its card in `Waiting on you` and its node's line lead with the tool's name, as its sidebar row does.
+// In the tool's own cell the filter says the cell's words and counts what the cell's sidebar counts.
+const NIGHTLY = { connection: TOOL.connection, name: "nightly", owns: true };
+const WAITING_ON_PERSON = legacyAgentRow({ id: "h", pane_id: "h", identity_label: "helper", agent_kind: "claude", session_id: "native-h", group: "needs_you", activity: "stopped", detail: "Sign-in · github.com/login", tool: NIGHTLY, human_turn: { id: "agent-3.1", kind: "auth", place: "github.com/login", pane_id: "h", title: "helper", since_unix_ms: 1, own: true } });
+const ASKING_TOOL = legacyAgentRow({ id: "q", pane_id: "q", identity_label: "asker", agent_kind: "claude", session_id: "native-q", group: "seen", activity: "stopped", mark: "waiting", demand: "question", tool: NIGHTLY });
+
+async function map(agents: AgentRow[], tool: ToolCell | null) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  initializeInterfaceI18n("en");
+  const row: Checkout = { id: "alpha-main", workspace_id: "alpha", label: "main", path: "/fixture/alpha", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+  const members = agents.map((agent) => ({ pane_id: agent.pane_id, project_id: "alpha", checkout_id: row.id }));
+  const device: BoardProject[] = [{ agents, device: null, workspace: { id: "alpha", label: "alpha", device_id: "local", path: "/fixture/alpha", registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members } } }];
+  const projects = tool ? toolProjects(device, tool) : device;
+  const rest = { navigator: { devices: [{ id: "local", kind: "local", agent_scope: emptyScope() }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local", tools: tool ? [tool] : [] }, status: { remote: [] }, missions: { items: [], failed: false }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: agents.map((agent) => ({ device_id: "local", pane_id: agent.pane_id, session_digest: `digest-${agent.pane_id}` })) } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents, focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" tool={tool} actions={createActions(() => true)} /></TooltipProvider>));
+  const seen = {
+    asks: [...container.querySelectorAll<HTMLElement>("[data-graph-ask]")].map((ask) => ({ pane: ask.dataset.graphAsk, line: ask.querySelector("p")?.textContent ?? null })),
+    filter: [...container.querySelectorAll<HTMLElement>("[data-focus]")].map((chip) => chip.textContent?.replace(/\s+/g, " ").trim()),
+    heading: container.querySelector(".og-waiting h3")?.firstChild?.textContent?.trim() ?? null,
+  };
+  await act(async () => root.unmount());
+  return seen;
+}
+
+/** A session node of the map, drawn alone. */
+async function node(agent: AgentRow, inCell = false) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const row = { agent, id: "session:h", projectId: "project:alpha", deviceId: "local", digest: null, launchModel: null, launchEffort: null, activity: "turn", device: null, project: { label: "alpha" }, checkout: { label: "main" } } as unknown as GraphAgent;
+  const props = { id: "session:h", data: { row, root: true, branch: null, choose: () => {}, highlight: () => {}, team: null, current: false, context: false, muted: false, highlighted: false }, selected: false } as unknown as Parameters<typeof SessionGraphNode>[0];
+  await act(async () => root.render(<TooltipProvider><InToolCell.Provider value={inCell}><ReactFlowProvider><SessionGraphNode {...props} /></ReactFlowProvider></InToolCell.Provider></TooltipProvider>));
+  const line = container.querySelectorAll<HTMLElement>(".og-session-line");
+  const seen = line.length === 1 ? { text: line[0]!.textContent, asking: line[0]!.classList.contains("og-asking") } : { lines: line.length };
+  await act(async () => root.unmount());
+  return seen;
+}
+
+it("leads the operator's Waiting on you card and the node's line with the tool's name, as the sidebar row does", async () => {
+  const { asks } = await map([WAITING_ON_PERSON], null);
+  expect(asks).toHaveLength(1);
+  expect(asks[0]!.line).toMatch(/^nightly·/);
+  expect(await node(WAITING_ON_PERSON)).toEqual({ text: "nightly·Sign-in · github.com/login", asking: true });
+  // The operator's own row names no tool, and in the tool's own cell the line stands alone, as the same one line
+  // with its chip and its asking colour (review of pull request 2586: the cell's lines lost both).
+  expect(await node({ ...WAITING_ON_PERSON, tool: undefined })).toEqual({ text: "Sign-in · github.com/login", asking: true });
+  expect(await node(WAITING_ON_PERSON, true)).toEqual({ text: "Sign-in · github.com/login", asking: true });
+});
+
+it("words and counts a tool's map filter as the tool's cell does: its turn is what waits on the tool", async () => {
+  const cell: ToolCell = { ...TOOL, mission_asks: [], devices: [{ device_id: "local", members: [], tasks: { needs_you: 1, recency: "", cards: [
+    { root: "q", state: "needs_you", members: ["q"], checkouts: ["alpha-main"], recency: "" },
+    { root: "h", state: "waiting", members: ["h"], checkouts: ["alpha-main"], recency: "" },
+  ] } }] };
+  cell.devices[0]!.members = ["q", "h"].map((pane_id) => ({ pane_id, project_id: "alpha", checkout_id: "alpha-main" }));
+  const seen = await map([ASKING_TOOL, WAITING_ON_PERSON], cell);
+  expect(seen.filter).toEqual(["All 2", "Tool's turn 1", "Working 1", "Unread results 0"]);
+  expect(seen.heading).toBe("Tool's turn");
+  expect(seen.asks.map((ask) => ask.pane)).toEqual(["q"]);
 });
