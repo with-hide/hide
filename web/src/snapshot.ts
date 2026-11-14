@@ -14,8 +14,8 @@ export type AgentStatusCode = "error" | "question" | "approval" | "working" | "d
 /** Whose move is next (`RowMark`): the operator's, the operator's to look at a View the agent opened (PRD unseen-agent-views D-05), in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
 export type RowMark = "turn" | "look" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
 
-/** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, or its pull request's checks. */
-export type AgentWait = "children" | "background" | "reply" | "checks";
+/** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, its pull request's checks, or the subagents its session still runs. */
+export type AgentWait = "children" | "background" | "reply" | "checks" | "subagents";
 
 /** Why a row's second line is on screen (`RowLine::mode`); see agentRow.ts. */
 export type LineMode = "request" | "news" | "waiting" | "kept" | "quiet" | "vanished" | "checks_passed" | "checks_failed";
@@ -186,6 +186,12 @@ export type AgentRow = {
   background_left?: number;
   /** The descendants still working under a root whose finished turn the operator has not read, which its line ends with; absent when none. */
   children_left?: number;
+  /** How many subagents its session runs inside itself now, drawn as dots beside its title; absent when none run and when Hide cannot read the count (docs/UI_BEHAVIOR.md, Subagents). */
+  subagents?: number;
+  /** The subagents still running under a finished turn the operator has not read, which its line ends with; absent when none. */
+  subagents_left?: number;
+  /** How many things its `wait` waits on, which its line counts (`자식 2개 기다림`); absent for running checks and when it waits for nothing. */
+  wait_count?: number;
   /** How deep under its lineage root; a root is 0. */
   lineage_depth?: number;
   /** Whether the operator has this row's descendants folded away; folded is the default. */
@@ -1150,6 +1156,8 @@ export type PaneHeader = {
   finished?: boolean;
   /** The agent waits on its children: how many descendants work, said after the request. */
   waiting_on_children?: number;
+  /** The agent rests while subagents run inside its session: how many, said after the request. */
+  waiting_on_subagents?: number;
 };
 /** The shown request in one line and its images, which the row counts. */
 export type PaneTurnRequest = {text: string | null; images: number};

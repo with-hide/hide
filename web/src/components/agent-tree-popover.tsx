@@ -210,7 +210,7 @@ export function AgentTreePopover({
         <Command ref={list} tabIndex={-1} label={t("agents.children.label", { name: root.identity_label })} className="outline-none" onKeyDown={onKeyDown}>
           <div className="flex items-center gap-sm border-b border-border px-md py-sm">
             <AgentMark kind={root.agent_kind} />
-            <AgentRecordTitle agent={root} className="text-body font-medium text-foreground" />
+            <AgentRecordTitle agent={root} subagents="hint" className="text-body font-medium text-foreground" />
             <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agentSessions.tree.children", { count: directs.length })}>
               <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
               <span aria-hidden="true" className="font-mono text-caption">{directs.length}</span>
@@ -339,7 +339,7 @@ function TreeItem({
       data-tree-pane={child.pane_id}
       data-agent-child={child.pane_id}
       data-depth={line.depth}
-      aria-label={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, reason ?? (childLine ? lineText(t, child, childLine) : statusText(t, child.status_code)), ask && !unavailable ? `${t(`agentSessions.verb.${ask.verb}`)}: ${askWhat(t, ask.verb, ask.what, ask.subject)}` : null, deviceLabel && device !== parentDevice ? deviceLabel : null].filter(Boolean).join(", ")}
+      aria-label={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, reason ?? (childLine ? lineText(t, child, childLine) : statusText(t, child.status_code)), child.mark === "going" && child.subagents ? t("agents.subagents.working", { count: child.subagents }) : null, ask && !unavailable ? `${t(`agentSessions.verb.${ask.verb}`)}: ${askWhat(t, ask.verb, ask.what, ask.subject)}` : null, deviceLabel && device !== parentDevice ? deviceLabel : null].filter(Boolean).join(", ")}
       className={cn("items-stretch gap-none py-none", ask && !unavailable && "ring-1 ring-inset ring-foreground", (unavailable || rowDimmed(child)) && "opacity-(--opacity-dimmed)")}
     >
       <TreeRails place={place} />
@@ -348,7 +348,7 @@ function TreeItem({
         <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <StatusMark mark={unavailable ? null : child.mark} human={child.human_turn !== undefined} className={unavailable ? undefined : markTone(child)} />
           <AgentMark kind={child.agent_kind} />
-          <AgentRecordTitle agent={child} className="text-foreground" />
+          <AgentRecordTitle agent={child} subagents="inRow" className="text-foreground" />
           <AgentPrHover agent={child} pulls={rowPulls(child, "own")} />
           {line.hasChildren && !line.open && !unavailable ? <DescendantMark agent={child} /> : null}
           {unavailable ? null : <Elapsed since={child.last_prompt_at_unix_ms} className="shrink-0 font-mono text-micro text-muted-foreground" />}

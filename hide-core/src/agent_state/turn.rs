@@ -976,6 +976,19 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     } else {
         0
     };
+    // And the subagents its session still runs under it.
+    agent.subagents_left = if finished_verdict(agent) && super::axes::subagents_running(agent) {
+        agent.subagents
+    } else {
+        0
+    };
+    agent.wait_count = match agent.wait {
+        Some(crate::model::AgentWait::Children) => agent.descendant_counts.working,
+        Some(crate::model::AgentWait::Subagents) => agent.subagents,
+        Some(crate::model::AgentWait::Background) => super::axes::background_left(agent),
+        Some(crate::model::AgentWait::Reply) => agent.replies_in_progress,
+        Some(crate::model::AgentWait::Checks) | None => 0,
+    };
     agent.requires_close_confirmation =
         agent_requires_close_confirmation(activity, demand, agent.blocked, agent.start);
     agent.requires_close_status_check =
@@ -1835,6 +1848,101 @@ mod row_tests {
             let line = agent.state.line.as_ref().expect("a waiting line");
             assert_eq!(line.mode, "waiting", "{end:?}");
         }
+    }
+
+    /// Operator decision 2026-11-14: a resting agent whose subagents still
+    /// run waits on them in Working, its wait counting them; a finished turn
+    /// the operator has not read yet is not hidden by them and counts them
+    /// left, and once read it waits on them again. A Claude Code subagent at
+    /// rest is also one of its background tasks, and is counted once.
+    #[test]
+    fn a_resting_row_waits_on_its_subagents_until_they_end() {
+        use crate::labels::analysis::LabelEnd;
+        use crate::model::AgentWait;
+        let mut rows = vec![row()];
+        rows[0].activity = "stopped".into();
+        rows[0].completed = true;
+        rows[0].subagents = 2;
+        rows[0].row_facts = Some(crate::request_view::RowFacts {
+            end: Some(LabelEnd::Done),
+            wake_devices: 2,
+            ..Default::default()
+        });
+        crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+        let said = |agent: &SidebarAgentSnapshot| {
+            (
+                agent.group.clone(),
+                agent.mark,
+                agent.wait,
+                agent.wait_count,
+                agent.subagents_left,
+                agent.background_left,
+            )
+        };
+        assert_eq!(
+            said(&rows[0]),
+            (
+                "working".to_owned(),
+                RowMark::Waiting,
+                Some(AgentWait::Subagents),
+                2,
+                0,
+                0
+            )
+        );
+
+        // The finished turn, not read yet, is to read; its line counts them.
+        rows[0].own_unread = true;
+        rows[0].unread = true;
+        derive_from_axes(&mut rows[0]);
+        assert_eq!(
+            said(&rows[0]),
+            ("done".to_owned(), RowMark::Done, None, 0, 2, 0)
+        );
+
+        // Read, it waits on them again.
+        rows[0].own_unread = false;
+        rows[0].unread = false;
+        derive_from_axes(&mut rows[0]);
+        assert_eq!(rows[0].wait, Some(AgentWait::Subagents));
+
+        // The last one ending ends the wait; a task that is no subagent is
+        // still waited on as background work.
+        rows[0].subagents = 0;
+        rows[0].row_facts.as_mut().unwrap().end = Some(LabelEnd::Waiting);
+        crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+        assert_eq!(
+            (rows[0].wait, rows[0].wait_count),
+            (Some(AgentWait::Background), 2)
+        );
+    }
+
+    /// A delegated child resting on its subagents is work moving on below
+    /// its root, which waits on it with both counts on its line.
+    #[test]
+    fn a_child_resting_on_its_subagents_keeps_its_root_waiting() {
+        use crate::model::AgentWait;
+        let mut root = row();
+        root.pane_id = "root".into();
+        root.activity = "stopped".into();
+        root.subagents = 1;
+        root.lineage_session = Some("root-session".into());
+        let mut child = row();
+        child.pane_id = "child".into();
+        child.activity = "stopped".into();
+        child.subagents = 3;
+        child.spawned_from_pane_id = Some("root".into());
+        child.declared_parent_session = Some("root-session".into());
+        let mut rows = vec![root, child];
+        crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+        assert_eq!(
+            (rows[0].wait, rows[0].wait_count, rows[0].subagents),
+            (Some(AgentWait::Children), 1, 1)
+        );
+        assert_eq!(
+            (rows[1].group.as_str(), rows[1].wait),
+            ("working", Some(AgentWait::Subagents))
+        );
     }
 
     /// A tree lists a child that waits on a reply or background work before

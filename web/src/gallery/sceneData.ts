@@ -291,6 +291,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       status_code: "working",
       activity: "working",
       elapsed: "1m",
+      subagents: 3,
       lineage_child_pane_ids: A1_CHILDREN,
       lineage_collapsed: !unfolded("a1"),
       descendant_counts: { error: 0, approval: 1, question: 1, working: 1, done: 1 },
@@ -363,7 +364,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     }),
     agent({ pane_id: "q1", identity_label: "브라우저 표시 확인", group: "needs_you", mark: "turn", status_code: "question", demand: "question", elapsed: "40m", detail: "주소 경계를 어디에 둘까요?" }),
     agent({ pane_id: "q2", identity_label: "검색 팔레트", group: "done", mark: "done", status_code: "done", activity: "stopped", elapsed: "1h" }),
-    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h" }),
+    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h", subagents: 6 }),
   ];
 
   if (devices !== "one") agents.push(...HOME_AGENTS[content]);
@@ -396,10 +397,13 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     agent({ pane_id: "a1c6", identity_label: "P6 OpenCode 세션 리더", group: "seen", mark: "quiet", status_code: "done", activity: "stopped", elapsed: "7m", delegated: true, lineage_parent_pane_id: "a1", lineage_depth: 1, ...ownPull(842, "OpenCode 세션 리더", "mergeable") }),
     agent({ pane_id: "a1c7", identity_label: "P5 큰 도구 결과 읽기", group: "seen", mark: "quiet", status_code: "idle", elapsed: "1h", delegated: true, lineage_parent_pane_id: "a1", lineage_depth: 1, ...ownPull(830, "큰 도구 결과 읽기", "merged") }),
     agent({ pane_id: "a1c8", identity_label: "문서 링크 점검", group: "seen", mark: "quiet", status_code: "idle", elapsed: "3h", delegated: true, lineage_parent_pane_id: "a1", lineage_depth: 1 }),
+    // Resting while its own subagents still run, and a finished turn not read yet with one still running (operator decision 2026-11-14).
+    agent({ pane_id: "s1", identity_label: "결제 모듈 정리", agent_kind: "codex", group: "working", mark: "waiting", status_code: "waiting", activity: "stopped", elapsed: "3m", wait: "subagents", wait_count: 2, subagents: 2, state: { ...galleryAgentState("s1", null, Date.now() - 180_000), line: { text: "테스트 2개 돌리는 중", mode: "waiting", tone: { kind: "subtle", read: false } } } }),
+    agent({ pane_id: "s2", identity_label: "릴리스 노트", group: "done", mark: "done", status_code: "done", activity: "stopped", elapsed: "5m", unread: true, subagents: 1, subagents_left: 1, state: { ...galleryAgentState("s2", null, Date.now() - 300_000), line: { text: "리팩터 끝, PR 올림", mode: "news", tone: { kind: "success", read: false } } } }),
   );
 
   const hideCheckouts: Checkout[] = [
-    checkout({ id: "hide:main", workspace: "hide", branch: "main", primary: true, age: 10, purpose: "사이드바 가독성 개선", panes: ["a1", ...A1_CHILDREN.filter((pane) => pane !== "a1c1"), "a1g1", "a1g2", "a2", "a2c1", "a2c2", "a3"], marks: { turn: 2, going: 3, quiet: 1 } }, now),
+    checkout({ id: "hide:main", workspace: "hide", branch: "main", primary: true, age: 10, purpose: "사이드바 가독성 개선", panes: ["a1", ...A1_CHILDREN.filter((pane) => pane !== "a1c1"), "a1g1", "a1g2", "a2", "a2c1", "a2c2", "a3", "s1", "s2"], marks: { turn: 2, going: 4, done: 1, quiet: 1 } }, now),
     checkout({ id: "hide:155", workspace: "hide", branch: "quick/155-browser-display", age: 40 * 60, purpose: issueTitle(155, "browser display (WebContentsView)"), panes: ["q1"], marks: { turn: 1 } }, now),
     checkout({ id: "hide:154", workspace: "hide", branch: "quick/154-search-palette", age: 3600, purpose: issueTitle(154, "⌘K search palette UI"), panes: ["q2"], marks: { done: 1 }, pr: { number: 154, title: "Search palette", badge: "open", is_draft: true, state: "draft" } }, now),
     checkout({ id: "hide:electron", workspace: "hide", branch: "electron-shortcut-bindings", age: 2 * 3600, purpose: "Electron desktop host for the web shell", panes: ["e1"], marks: { going: 1 }, pr: { number: 149, title: "Electron host", badge: "open", is_draft: false, state: "pending" } }, now),

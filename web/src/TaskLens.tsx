@@ -441,7 +441,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} />}
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} profile={agent.profile} />
-            <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
+            <AgentRecordTitle agent={agent} subagents="inRow" className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
@@ -726,7 +726,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             <StatusMark mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} profile={child.profile} />
-            <AgentRecordTitle agent={child} className={cn("text-caption", quiet ? "text-subtle-foreground" : "text-foreground")} />
+            <AgentRecordTitle agent={child} subagents="inRow" className={cn("text-caption", quiet ? "text-subtle-foreground" : "text-foreground")} />
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}

@@ -87,6 +87,10 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     expect(markWords(t, { mark: "done", status_code: "done", background_left: 2 })).toBe("읽을 것 · 끝남 · 백그라운드 2개 남음");
     // A finished root names the children still working under it.
     expect(markWords(t, { mark: "done", status_code: "done", children_left: 2 })).toBe("읽을 것 · 끝남 · 자식 2개 작업 중");
+    // So does one whose session still runs subagents; a working row says its subagents, a resting one its wait (operator decision 2026-11-14).
+    expect(markWords(t, { mark: "done", status_code: "done", subagents_left: 2 })).toBe("읽을 것 · 끝남 · 서브에이전트 2개 남음");
+    expect(markWords(t, { mark: "going", status_code: "working", subagents: 3 })).toBe("진행 중 · 서브에이전트 3개 작업 중");
+    expect(markWords(t, { mark: "waiting", status_code: "waiting", wait: "subagents", wait_count: 2, subagents: 2 })).toBe("진행 중 · 서브에이전트 2개 기다림");
     expect(markWords(t, { mark: "asleep", status_code: "sleeping" })).toBe("재움 · 열면 깨어남");
     // Slept for memory, it says so; a waking row says only that it wakes.
     expect(markWords(t, { mark: "asleep", status_code: "sleeping", sleep: { cause: "memory_pressure" } })).toBe("재움 · 메모리 부족 · 열면 깨어남");
@@ -234,15 +238,21 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const working = row("x", { detail: "파서 고치는 중", unread: true });
     expect(lineText(t, working, sidebarLine(working)!)).toBe("파서 고치는 중");
     expect(treeLine(working)).toBeNull();
-    const waiting = (wait: AgentRow["wait"], pull_request?: number) => {
-      const agent = row("w", { activity: "stopped", status_code: "waiting", wait, descendant_counts: { error: 0, approval: 0, question: 0, working: 2, done: 0 } });
+    const waiting = (wait: AgentRow["wait"], wait_count?: number, pull_request?: number, subagents?: number) => {
+      const agent = row("w", { activity: "stopped", status_code: "waiting", wait, wait_count, subagents });
       agent.state = { ...agent.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request } };
       return lineText(t, agent, sidebarLine(agent)!);
     };
-    expect(waiting("checks", 1846)).toBe("CI 기다림 · PR #1846");
-    expect(waiting("children")).toBe("자식 기다림 · 자식 2개 작업 중");
+    // Every wait says how many it waits on but running checks, which name their pull request (operator decision 2026-11-14).
+    expect(waiting("checks", undefined, 1846)).toBe("CI 기다림 · PR #1846");
+    expect(waiting("children", 2)).toBe("자식 2개 기다림");
+    expect(waiting("subagents", 3)).toBe("서브에이전트 3개 기다림");
+    expect(waiting("background", 1)).toBe("백그라운드 1개 기다림");
+    expect(waiting("reply", 2)).toBe("답장 2개 기다림");
+    // Children and the row's own subagents together are one wait.
+    expect(waiting("children", 1, undefined, 2)).toBe("자식 1개 · 서브에이전트 2개 기다림");
+    // A count the core did not send says the cause alone, never zero.
     expect(waiting("background")).toBe("백그라운드 기다림");
-    expect(waiting("reply")).toBe("답장 기다림");
     const en = (await createInterfaceI18n("en")).t;
     const checks = row("c", { activity: "stopped", status_code: "waiting", wait: "checks" });
     checks.state = { ...checks.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request: 12 } };
@@ -269,6 +279,8 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     expect(lineParts(t, root, sidebarLine(root)!)).toEqual({ lead: "끝남", text: "질문에 답함", tail: "자식 2개 작업 중" });
     expect(lineText(t, root, sidebarLine(root)!)).toBe("끝남 · 질문에 답함 · 자식 2개 작업 중");
     expect(lineText(t, { ...root, children_left: 1 }, sidebarLine(root)!)).toBe("끝남 · 질문에 답함 · 자식 1개 작업 중");
+    // Subagents its session still runs end the line the same way (operator decision 2026-11-14).
+    expect(lineParts(t, { ...root, children_left: 0, subagents_left: 2 }, sidebarLine(root)!)).toEqual({ lead: "끝남", text: "질문에 답함", tail: "서브 2개 남음" });
   });
 
   it("draws a sleeping row with its moon and no line, and a waking or failed one with its words, none dimmed (D-21, B31)", async () => {
