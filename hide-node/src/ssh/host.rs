@@ -1382,6 +1382,11 @@ pub(super) struct ChildLink {
 /// greeting) are skipped line by line.
 const MAX_START_LINE: usize = 64 * 1024;
 
+/// The most processes [`ChildLink::silent_state`] names: an ssh child and the
+/// wrapper it starts are a handful, and a failure that names a whole
+/// machine's tree would say less than it costs.
+const SILENT_STATE_PROCESSES: usize = 8;
+
 impl ChildLink {
     /// Whether the child's standard output has ended: ssh closed its side,
     /// as it does when it exits, rather than this side stopping it.
@@ -1397,10 +1402,15 @@ impl ChildLink {
     /// leaves (with-hide/hide-private#2564, #874).
     ///
     /// Called only on a failure, so a connection that answers costs nothing.
+    /// The tree is named up to [`SILENT_STATE_PROCESSES`] processes, the
+    /// child first: a run of a shell that started more says how many it left
+    /// rather than naming them all, so the record has a bound.
     pub(super) fn silent_state(&self, ran: Duration) -> String {
         use hide_platform::process::{cpu_time, descendants, name_of};
         let mut pids = vec![self.pid];
         pids.extend(descendants(self.pid).unwrap_or_default());
+        let left = pids.len().saturating_sub(SILENT_STATE_PROCESSES);
+        pids.truncate(SILENT_STATE_PROCESSES);
         let processes: Vec<String> = pids
             .into_iter()
             .map(|pid| {
@@ -1412,8 +1422,13 @@ impl ChildLink {
                 format!("{name} {pid} used {worked}")
             })
             .collect();
+        let others = if left == 0 {
+            String::new()
+        } else {
+            format!(", and {left} more")
+        };
         format!(
-            "{} in {ran:.1?} since the start script was sent",
+            "{}{others} in {ran:.1?} since the start script was sent",
             processes.join(", ")
         )
     }
