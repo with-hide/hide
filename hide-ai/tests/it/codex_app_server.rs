@@ -463,6 +463,16 @@ fn real_codex_lists_its_models_and_answers_one_request() {
     );
     let mut ask = request(Duration::from_secs(120));
     ask.input = "user: please rename the build script".to_owned();
+    // Schema mode hands `outputSchema` to the API's strict mode, which refuses
+    // an object that does not close its properties (HTTP 400
+    // `invalid_json_schema`), so the live request closes them as a feature's
+    // schema does.
+    ask.output_schema = json!({
+        "type": "object",
+        "required": ["summary"],
+        "additionalProperties": false,
+        "properties": {"summary": {"type": "string"}},
+    });
     let outcome = router.execute(&ask, &CancelToken::new());
     let class = match &outcome {
         Ok(_) => "ok",
