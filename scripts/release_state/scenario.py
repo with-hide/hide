@@ -352,6 +352,7 @@ class Scenario:
                            "steps": ["Read notes.md", "Write what it holds", "Report it"],
                            "worker": {"agent": "claude", "model": "sonnet"}}]}
         self.checked("dev-a", f"hide mission plan --json '{json.dumps(plan)}'")
+        self.device_plan = plan
         self.checked("dev-a", "hide mission start")
         spawned = self.spawn("dev-a", f"hide agent spawn --parent here --intent {mission}:look --name dev-worker "
                                       f"--kind claude --repo {DEVICE_REPO} --branch main --path {DEVICE_REPO} "
@@ -378,6 +379,7 @@ class Scenario:
                                             (rest.get("missions") or {}).get("items") or []
                                             if mission.get("decision_views")), None), "the decision's View")
         view = rows[0]["display_id"]
+        gate = self.shown_gate()
         self.checked("dev-a", f"hide view close {view}")
         # A release before links kept their View drops the row once it closes.
         def closed(rest):
@@ -385,7 +387,25 @@ class Scenario:
                     for row in mission.get("decision_views") or [] if row.get("display_id") == view or row.get("closed")]
             return (not rows or any(row.get("closed") for row in rows)) and ("kept" if rows else "dropped")
         kept = self.wait(closed, "the decision's View closed")
-        return f"{view} linked to the device mission's decision and closed ({kept})"
+        return f"{view} linked to the device mission's decision and closed ({kept}); gate: {gate}"
+
+    def shown_gate(self):
+        """While that decision holds the question, the device mission's node
+        gets a gate and the Conductor shows notes.md for it: the device View
+        is kept on the gate's line (`criteria.shown`, with the device's id)
+        until the gate asks. A release before gates or before `gate --show`
+        refuses a step, which is named and nothing more is done."""
+        plan = getattr(self, "device_plan", None)
+        if plan is None:
+            return "no device mission"
+        nodes = [dict(node, gate="the notes page") for node in plan["nodes"]]
+        planned = self.run("dev-a", f"hide mission plan --json '{json.dumps(dict(plan, nodes=nodes))}'")
+        if (planned.get("json") or {}).get("ok") is not True:
+            return f"no gates: rc={planned['rc']} {(planned['err'] or planned['out'])[-200:]}"
+        shown = self.run("dev-a", "hide mission gate look --show notes.md")
+        if (shown.get("json") or {}).get("ok") is not True:
+            return f"no --show: rc={shown['rc']} {(shown['err'] or shown['out'])[-200:]}"
+        return "notes.md shown for the look gate"
 
     def mission_states(self):
         """Missions in the states a later build has to read as they were:

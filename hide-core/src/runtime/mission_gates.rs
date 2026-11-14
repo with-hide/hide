@@ -503,6 +503,12 @@ impl Runtime {
         let asking = asks(mission.question.as_ref(), node);
         let links = self.question_view_links(&id, actor, show, None, false)?;
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+        // A path the CLI opened is already among the Views the Conductor
+        // opened (`link_mission_view`), which the next question takes: shown
+        // for this gate, it belongs to the gate alone.
+        target
+            .conductor_views
+            .retain(|known| !links.iter().any(|link| link.same_view(known)));
         if let Some(question) = target.question.as_mut().filter(|_| asking) {
             for link in &links {
                 push_view_link(&mut question.views, link.clone());

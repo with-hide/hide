@@ -12176,10 +12176,12 @@ fn a_gate_the_conductor_shows_asks_at_once_with_its_views() {
 }
 
 /// Screens shown for two gates while the Conductor's own question holds
-/// the decision stay with their own gate (review F1): once that question
-/// goes, each gate asks with only what was shown for it. A node dropped
-/// and taken up again has no showing left (review F2): its gate waits for
-/// a new one, or for its own lines.
+/// the decision stay with their own gate, though opening them linked them
+/// as the Conductor's Views (review F1): once that question goes, each gate
+/// asks with only what was shown for it. A node dropped and taken up again,
+/// with no health pass between, has neither the question nor the showing
+/// of its dropped work (review F2): its gate waits for a new showing, or
+/// for its own lines.
 #[test]
 fn a_shown_gate_keeps_its_own_screens_and_new_work_needs_a_new_showing() {
     use crate::runtime::mission_gates::GateState;
@@ -12216,7 +12218,11 @@ fn a_shown_gate_keeps_its_own_screens_and_new_work_needs_a_new_showing() {
     .unwrap();
     let parser = project_view(&mut runtime, "/checkouts/fixture/parser.html");
     let guide = project_view(&mut runtime, "/checkouts/fixture/guide.html");
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
     for (node, view) in [("fix", &parser), ("docs", &guide)] {
+        // `hide mission gate --show <path>` opens the path from the
+        // Conductor's pane first, which links it as the Conductor's View.
+        runtime.link_mission_view(&place, view, "sender", crate::runtime::unix_milliseconds());
         command(
             &mut runtime,
             "sender",
@@ -12267,8 +12273,9 @@ fn a_shown_gate_keeps_its_own_screens_and_new_work_needs_a_new_showing() {
         )
         .unwrap();
     };
+    // Dropped and taken up again before any health pass, the question of
+    // the dropped work goes with the drop.
     patch(&mut runtime, "dropped");
-    assert_eq!(asked(&mut runtime), None);
     patch(&mut runtime, "working");
     assert_eq!(asked(&mut runtime), None);
     assert_eq!(

@@ -2306,6 +2306,7 @@ impl Runtime {
                     &mut next,
                 );
                 let changed = target.nodes[index] != next;
+                let moved = target.nodes[index].status != next.status;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
                 super::mission_health::prune_attention_wakes(target);
@@ -2319,6 +2320,13 @@ impl Runtime {
                     if follow {
                         self.follow_mission_outside(&id);
                     }
+                }
+                // A node that stopped or went to work again has its gates
+                // brought to where it stands now, not at the next health
+                // pass: a gate's question of work that was dropped goes with
+                // it before the node can work again under it.
+                if moved {
+                    self.raise_gates(&id, now);
                 }
                 // A hold set or lifted is the Conductor's move on the node:
                 // whatever stood before it is counted again from now.
