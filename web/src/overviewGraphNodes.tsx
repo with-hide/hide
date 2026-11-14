@@ -1,6 +1,6 @@
 import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronsDownUpIcon, GitBranchIcon, MailIcon, PlusIcon } from "lucide-react";
-import { useId } from "react";
+import { useId, type FocusEvent } from "react";
 import { AgentMark } from "./AgentMark";
 import { agentWithProfile, badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
@@ -27,6 +27,12 @@ function useRevealNode(id: string) {
     const { x, y } = node.internals.positionAbsolute;
     void flow.setCenter(x + (node.measured.width ?? 0) / 2, y + (node.measured.height ?? 0) / 2, { zoom: flow.getViewport().zoom, duration: 0 });
   };
+}
+
+/** A map control's focus handler: reached from the keyboard, its node comes into view as a session's does. */
+function useRevealOnKeyboardFocus(id: string) {
+  const reveal = useRevealNode(id);
+  return (event: FocusEvent<HTMLElement>) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); };
 }
 
 /** `start` opens the start panel on no project, as ⌘K's Start an agent does (issue 2514). */
@@ -79,32 +85,39 @@ export function GraphLine({ agent, className }: { agent: AgentRow; className?: s
   return line ? <RowLineText data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={className} /> : null;
 }
 
-export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
+// The `+` controls below on nodes that do not drag leave `nopan` off: a drag that starts on one pans the map,
+// and the map's pan swallows the click that would follow it, as a drag across the canvas does (issue 2514).
+export function OperatorGraphNode({ id, data }: NodeProps<OperatorNode>) {
+  const reveal = useRevealOnKeyboardFocus(id);
   // The circle is a picture; only its `+` badge on the rim is pressed.
   return <div className="og-operator"><Ports /><span role="img" aria-label={data.label}><span aria-hidden="true">{data.label}</span></span>
-    <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag nopan" aria-label={data.startLabel} data-graph-operator-start="true" onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint>
+    <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag" aria-label={data.startLabel} data-graph-operator-start="true" onFocus={reveal} onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint>
   </div>;
 }
 
 /** Same size as a root session's circle, dashed and faint, so it never reads as a session; no line ties it to anyone. */
-export function StartSlotGraphNode({ data }: NodeProps<StartSlotNode>) {
+export function StartSlotGraphNode({ id, data }: NodeProps<StartSlotNode>) {
+  const reveal = useRevealOnKeyboardFocus(id);
   return <div className="og-start-slot" data-accent={data.accent} data-muted={data.muted}>
-    <Hint label={data.label}><Button variant="ghost" size="inline" className="og-start-slot-orb nodrag nopan" aria-label={data.label} data-graph-start-slot={data.workspaceId} onClick={() => data.start(data.workspaceId)}><PlusIcon aria-hidden="true" /></Button></Hint>
+    <Hint label={data.label}><Button variant="ghost" size="inline" className="og-start-slot-orb nodrag" aria-label={data.label} data-graph-start-slot={data.workspaceId} onFocus={reveal} onClick={() => data.start(data.workspaceId)}><PlusIcon aria-hidden="true" /></Button></Hint>
   </div>;
 }
 
 /** A dashed, rounded place with its words; pressing it is the sidebar's Add project. */
-export function AddProjectGraphNode({ data }: NodeProps<AddProjectNode>) {
-  return <Button variant="ghost" size="inline" className="og-add-project nodrag nopan" data-graph-add-project="true" onClick={data.add}><PlusIcon aria-hidden="true" />{data.label}</Button>;
+export function AddProjectGraphNode({ id, data }: NodeProps<AddProjectNode>) {
+  const reveal = useRevealOnKeyboardFocus(id);
+  return <Button variant="ghost" size="inline" className="og-add-project nodrag" data-graph-add-project="true" onFocus={reveal} onClick={data.add}><PlusIcon aria-hidden="true" />{data.label}</Button>;
 }
 
 /** A folded project's `+` beside its name, as the sidebar's project row has it: the start panel on that project.
- * It sits beside the name, never on it, so it starts no drag. */
-function ProjectStartButton({ workspaceId, label, start }: { workspaceId: string; label: string; start: (workspaceId: string) => void }) {
+ * Like the folded circle it is one of the project's drag handles, so a drag from it moves the project and the
+ * drag swallows the click; a draggable node never pans the map. */
+function ProjectStartButton({ nodeId, workspaceId, label, start }: { nodeId: string; workspaceId: string; label: string; start: (workspaceId: string) => void }) {
   const { t } = useInterfaceTranslation();
+  const reveal = useRevealOnKeyboardFocus(nodeId);
   const name = t("sidebar.startAgentIn", { name: label });
   return <Hint label={name}>
-    <Button variant="ghost" size="inline" className="og-project-start nodrag nopan" aria-label={name} data-graph-project-start={workspaceId} onClick={() => start(workspaceId)}><PlusIcon aria-hidden="true" /></Button>
+    <Button variant="ghost" size="inline" className="og-project-start og-cluster-drag nopan" aria-label={name} data-graph-project-start={workspaceId} onFocus={reveal} onClick={() => start(workspaceId)}><PlusIcon aria-hidden="true" /></Button>
   </Hint>;
 }
 
@@ -131,14 +144,14 @@ export function GlowGraphNode({ id, data, width, height }: NodeProps<GlowNode>) 
 /** A folded project stands as one circle in its project's colour, with its glow and its name at the
  * expanded size; the operator's turn inside is a badge on the circle, so the border keeps the colour.
  * Choosing it unfolds the project, dragging it moves the project. */
-export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
+export function ClusterGraphNode({ id, data }: NodeProps<ClusterNode>) {
   const { t } = useInterfaceTranslation();
   const { summary } = data;
   const label = summary.project.workspace.label;
   return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} data-muted={data.muted} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
-    <span className="og-cluster-name"><strong>{label}</strong><ProjectStartButton workspaceId={summary.project.workspace.id} label={label} start={data.start} /></span>
+    <span className="og-cluster-name"><strong>{label}</strong><ProjectStartButton nodeId={id} workspaceId={summary.project.workspace.id} label={label} start={data.start} /></span>
     <GraphStateCounts summary={summary} />
   </div>;
 }

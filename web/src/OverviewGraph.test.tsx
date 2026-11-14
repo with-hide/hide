@@ -590,19 +590,26 @@ it("opens the start panel on a project from its row's +, its start circle and a 
       <AddProjectGraphNode {...{ data: { label: "Add project", add } } as unknown as NodeProps<AddProjectNode>} />
     </ReactFlowProvider></TooltipProvider>));
     expect(container.querySelector(".og-project button[aria-label='Start agent in Project']")).toBeNull();
-    for (const button of [container.querySelector<HTMLButtonElement>('[data-graph-start-slot="project"]')!, container.querySelector<HTMLButtonElement>('.og-cluster [data-graph-project-start="project"]')!]) {
+    // A drag from a control must never end in its click: the start circle leaves the drag to the map's pan,
+    // the folded name's `+` is one of the folded project's drag handles (as its circle is).
+    const slot = container.querySelector<HTMLButtonElement>('[data-graph-start-slot="project"]')!;
+    const folded = container.querySelector<HTMLButtonElement>('.og-cluster [data-graph-project-start="project"]')!;
+    expect(slot.closest(".og-project-drag, .og-cluster-drag")).toBeNull();
+    expect([slot.classList.contains("nodrag"), slot.classList.contains("nopan")]).toEqual([true, false]);
+    expect([folded.classList.contains("og-cluster-drag"), folded.classList.contains("nodrag")]).toEqual([true, false]);
+    for (const button of [slot, folded]) {
       expect(button.getAttribute("aria-label")).toBe("Start agent in Project");
-      expect(button.closest(".og-project-drag, .og-cluster-drag")).toBeNull();
-      expect(button.classList.contains("nodrag")).toBe(true);
       await act(async () => button.click());
     }
     expect(start.mock.calls).toEqual([["project"], ["project"]]);
     const operator = container.querySelector<HTMLButtonElement>("[data-graph-operator-start]")!;
     expect(operator.getAttribute("aria-label")).toBe("New agent");
+    expect(operator.classList.contains("nopan")).toBe(false);
     await act(async () => operator.click());
     expect(anywhere).toHaveBeenCalledTimes(1);
     const adding = container.querySelector<HTMLButtonElement>("[data-graph-add-project]")!;
     expect(adding.textContent).toBe("Add project");
+    expect(adding.classList.contains("nopan")).toBe(false);
     await act(async () => adding.click());
     expect(add).toHaveBeenCalledTimes(1);
     expect(fold).not.toHaveBeenCalled();

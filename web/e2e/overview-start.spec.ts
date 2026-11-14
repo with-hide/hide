@@ -5,13 +5,26 @@
 // session joins the map, and the project's name stays its drag handle.
 // End to end because the unit tests cannot see what decides it here: the force map's real placement,
 // the Overview layer's modal keeping the pointer and keyboard to itself, and the core's answer to a start.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openOverview } from "./overview-entry";
+import { quietFor } from "./wait";
 import { enterWorkspace, screenshot } from "./wire";
 
-test.describe.configure({ timeout: 150_000 });
+/** Presses at the control's centre, moves 14 CSS px in small steps and releases; returns how far the control moved. */
+async function dragFrom(page: Page, control: Locator): Promise<number> {
+  const box = await control.boundingBox();
+  if (!box) throw new Error("control has no visible bounds");
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  try { await page.mouse.move(x + 14, y, { steps: 5 }); }
+  finally { await page.mouse.up(); }
+  const after = await control.boundingBox();
+  return (after?.x ?? box.x) - box.x;
+}
 
 test("the Overview's work map opens the start panel from a project's start circle and row, and the start stays in the Overview", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -98,5 +111,58 @@ test("the Overview's work map opens the start panel on no project from You, Add 
     await screenshot(page, "overview-start-folded");
     await cluster.locator("[data-graph-project-start]").click();
     await expect(panel.locator("[data-start-target]")).toHaveAttribute("data-start-target", new RegExp(`^checkout:${daemon.node}:.*/fixture$`));
+  } finally { daemon?.stop(); engine.stop(); }
+});
+
+test("a drag that starts on a map control moves the map and presses nothing, and a control reached by Tab comes into view", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const engine = await startFixture();
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startHided(engine, "overview-start-gestures");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await openOverview(page, "work");
+    const graph = page.locator("[data-overview-graph]");
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 }); // wait-ok: the first layout of the map
+    const panel = page.locator("[data-start-panel]");
+    const addProject = page.locator("[data-add-project]");
+    const slot = graph.locator("[data-graph-start-slot]");
+    const you = graph.locator("[data-graph-operator-start]");
+
+    // On a node that does not drag, the drag pans the map, and the pan swallows the click (the map's own click distance).
+    for (const [name, control] of [["start circle", slot], ["You's +", you], ["Add project", graph.locator("[data-graph-add-project]")]] as const) {
+      expect(await dragFrom(page, control), `a drag from the ${name} pans the map`).toBeGreaterThan(7);
+      await quietFor(page, 300, "a released drag opens neither the start panel nor Add project");
+      await expect(panel).toHaveCount(0);
+      await expect(addProject).toHaveCount(0);
+    }
+
+    // Panned far away, the start circle reached by Tab is brought into view, as a session reached by Tab is.
+    const canvas = graph.locator(".react-flow");
+    const area = (await canvas.boundingBox())!;
+    await page.mouse.move(area.x + area.width - 40, area.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(area.x + 40, area.y + 40, { steps: 12 });
+    await page.mouse.up();
+    expect((await slot.boundingBox())!.x + 40).toBeLessThan(area.x);
+    await you.evaluate((element: HTMLElement) => element.focus({ preventScroll: true }));
+    await page.keyboard.press("Tab");
+    await expect(slot).toBeFocused();
+    const shown = (await slot.boundingBox())!;
+    expect(shown.x).toBeGreaterThanOrEqual(area.x);
+    expect(shown.x + shown.width).toBeLessThanOrEqual(area.x + area.width);
+    await expect(panel).toHaveCount(0);
+
+    // A folded project's `+` is one of its drag handles: the drag moves the project and starts nothing.
+    const project = graph.locator("[data-graph-project]").first();
+    await project.locator(".og-project-name").hover();
+    await project.locator(".og-project-fold").click();
+    const cluster = graph.locator("[data-graph-cluster]").first();
+    await expect(cluster).toBeVisible();
+    await cluster.locator("strong").hover();
+    expect(await dragFrom(page, cluster.locator("[data-graph-project-start]"))).toBeGreaterThan(7);
+    await quietFor(page, 300, "a released drag of the folded project's + opens no start panel");
+    await expect(panel).toHaveCount(0);
   } finally { daemon?.stop(); engine.stop(); }
 });
