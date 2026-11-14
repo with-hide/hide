@@ -685,7 +685,10 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
 function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
   const own = stateLine(agent);
   if (own === null) return null;
-  const row = own ?? rowLine(agent);
+  // A row whose move is to look says the View, as the sidebar's does (`sidebarLine`): an external tool's
+  // question on the same row is the tool's, so it is no line of the operator's (PRD hide-external-control B29).
+  const looking = agent.mark === "look" && agent.look ? { text: agent.look.label, mode: "request" as const, look: agent.look.count } : null;
+  const row = own ?? looking ?? rowLine(agent);
   if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, agent, row!);
   const text = agent.state.session.line;
   if (!text) return null;
