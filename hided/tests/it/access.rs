@@ -578,22 +578,17 @@ async fn a_home_with_two_keys_needs_hide_access_to_choose() {
     running.stop();
 }
 
-/// B8 (D-08): who is never a tool, and who answers one. A process that
-/// descends from a pane's program is never a tool, with no pane in its
-/// environment and a valid key in its home: it runs as its folder, as
-/// before; any other process with the key runs as the tool. An approval
-/// from a connection that is not an operator window is refused, and the
-/// request still waits.
+/// B8 (D-31): an approval from a connection that is not an operator window
+/// is refused, and the request still waits; a window's approval connects it.
 // The daemon runs on this test's runtime while a fake tool's `hide` blocks
 // a thread of it, so it needs threads of its own.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_pane_program_is_never_a_tool_and_only_a_window_approves_one() {
+async fn only_an_operator_window_approves_a_tool() {
     let root = tempfile::tempdir().unwrap();
     let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
     let tool = Tool::new(root.path(), "tool-home");
 
-    let id = tool.put_up("paned");
+    let id = tool.put_up("nightly");
     let mut screen = Window::open_as(&running, None).await;
     screen
         .send("access_approve", json!({"id": id, "level": "act"}))
@@ -605,6 +600,27 @@ async fn a_pane_program_is_never_a_tool_and_only_a_window_approves_one() {
     let status = tool.run(&["access", "status", "--json"]);
     assert_eq!(status.json()["value"]["state"], "pending", "{}", status.out);
 
+    let mut window = Window::open(&running).await;
+    window
+        .send("access_approve", json!({"id": id, "level": "act"}))
+        .await;
+    assert!(tool.request_until_answered("nightly").await.ok);
+    running.stop();
+}
+
+/// B8 (D-08): a process that descends from a pane's program is never a
+/// tool, with no pane in its environment and a valid key in its home: it
+/// runs as its folder, as before, and cannot ask as a tool; any other
+/// process with the key runs as the tool.
+// The daemon runs on this test's runtime while a fake tool's `hide` blocks
+// a thread of it, so it needs threads of its own.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pane_programs_child_is_never_a_tool() {
+    let root = tempfile::tempdir().unwrap();
+    let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
+    let tool = Tool::new(root.path(), "tool-home");
+    let id = tool.put_up("paned");
     let mut window = Window::open(&running).await;
     window
         .send("access_approve", json!({"id": id, "level": "act"}))
