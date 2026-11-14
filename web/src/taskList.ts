@@ -91,22 +91,22 @@ function band(state: TaskGroupState, entries: TaskEntry[], missions: readonly Mi
 /**
  * A band's rows in the order drawn (operator decision 2026-11-08): device by
  * device, `deviceId`'s first, as its tasks already stand; inside a device a
- * mission stands among the unread asks by how long its node has waited, and
- * before every read ask and block. The tasks keep the core's order (unread
- * asks before read ones, each longest waiting first) and the missions the
- * scope's (oldest first).
+ * mission stands among the unread asks by when its node began to wait, newest
+ * first (operator decision 2026-11-14), and before every read ask and block.
+ * The tasks keep the core's order (unread asks before read ones, each newest
+ * first).
  */
 function bandRows(entries: readonly TaskEntry[], missions: readonly MissionAsk[], deviceId: string): BandRow[] {
   const deviceOf = (entry: TaskEntry) => entry.deviceId ?? deviceId;
   const devices = [...new Set([deviceId, ...entries.map(deviceOf), ...missions.map((ask) => ask.mission.device_id)])];
   return devices.flatMap((device) => {
-    const waiting = missions.filter((ask) => ask.mission.device_id === device);
+    const waiting = missions.filter((ask) => ask.mission.device_id === device).sort((a, b) => b.since_unix_ms - a.since_unix_ms);
     const rows: BandRow[] = [];
     let next = 0;
     for (const entry of entries.filter((entry) => deviceOf(entry) === device)) {
-      // An unread ask waits since its request, the core's own key; a read ask or a block lets every mission stand first.
+      // An unread ask waits since its request, the core's own key, and one with no time stands last as the core puts it; a read ask or a block lets every mission stand first.
       const unread = entry.card.state === "needs_you" && !entry.card.read;
-      while (next < waiting.length && (!unread || waiting[next]!.since_unix_ms < (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "mission", ask: waiting[next++]! });
+      while (next < waiting.length && (!unread || waiting[next]!.since_unix_ms > (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "mission", ask: waiting[next++]! });
       rows.push({ kind: "task", entry });
     }
     for (const ask of waiting.slice(next)) rows.push({ kind: "mission", ask });
