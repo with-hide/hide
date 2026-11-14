@@ -75,17 +75,10 @@ impl TabAsks {
         self.0.iter().any(|(_, tab)| tab == tab_id)
     }
 
-    /// Whether Hide has any tab move outstanding at all.
-    ///
-    /// The engine's focused tab is one value over every checkout, so an
-    /// answer of its own to a request in one checkout can name a tab of
-    /// another, and a move it makes while any request is unanswered is not
-    /// evidence of what the operator is looking at. Reading this per checkout
-    /// let a request pending in one project be overtaken by the engine's
-    /// focus in another, which took the screen from the tab the operator
-    /// pressed (with-hide/hide#2575).
-    pub(super) fn any_outstanding(&self) -> bool {
-        !self.0.is_empty()
+    /// Whether Hide has a tab move outstanding in this checkout: the engine is
+    /// about to be moved again, so a move it makes now is not followed.
+    pub(super) fn outstanding_in(&self, checkout_id: &str) -> bool {
+        self.0.iter().any(|(checkout, _)| checkout == checkout_id)
     }
 
     /// The tab Hide last asked for in this checkout.

@@ -1638,15 +1638,7 @@ impl Runtime {
                     })
                     .map(str::to_owned);
                 let pending_tab = asks.newest_in(&checkout.id).map(str::to_owned);
-                // A tab move of Hide's is outstanding somewhere. The engine's
-                // focused tab is one value over every checkout, so an answer
-                // of Hide's own can name a tab of another checkout, and a move
-                // the engine makes while any request waits is not evidence of
-                // what the operator is looking at. Reading this per checkout
-                // let a request pending in one project be overtaken by the
-                // engine's focus in another, which took the screen from the
-                // tab the operator pressed (with-hide/hide#2575).
-                let outstanding = asks.any_outstanding();
+                let outstanding = asks.outstanding_in(&checkout.id);
                 // The tab holding the selected pane, when it is in this
                 // checkout. With no tab of its own yet, Hide shows the tab the
                 // keyboard is in rather than one the engine remembers, so a restore
