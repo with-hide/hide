@@ -3,7 +3,8 @@
 with-hide/hide-private#898: the remote mailbox lane's preparation step ran
 with no output, timed out at 3 minutes, and the log named none of its
 commands, so nobody could say where it stopped. The script prints each
-command's name before it starts, stops a command that overruns its limit, and
+command's name before it starts, stops a command that overruns the run's
+budget, and
 keeps the whole run inside one budget. These tests run it against stand-ins
 for `sudo`, the account tools and `ssh-keygen`, one of which can hang.
 """
@@ -140,26 +141,24 @@ class PrepareSshAccounts(unittest.TestCase):
                         self.calls())
 
     def test_a_hanging_command_is_stopped_and_named_inside_the_budget(self):
-        done, seconds = self.run_script(HANG='useradd', PREPARE_COMMAND_SECONDS='3',
-                                        PREPARE_BUDGET_SECONDS='20')
+        done, seconds = self.run_script(HANG='useradd', PREPARE_BUDGET_SECONDS='3')
         self.assertEqual(done.returncode, 1)
-        self.assertIn('the password account (useradd hidepw) did not finish within 3 s and was stopped',
-                      done.stderr)
+        self.assertRegex(done.stderr,
+                         r'the password account \(useradd hidepw\) did not finish within [1-3] s '
+                         r'and was stopped')
         # The run ends inside its budget, not at the runner's step limit.
         self.assertLess(seconds, 3 + 10, 'the script must end inside its budget')
         # Nothing past the command that hung ran, so the log's last name is the one that stopped.
         self.assertFalse(any('sshd' in call for call in self.calls()), self.calls())
 
-    def test_a_budget_under_one_commands_limit_still_ends_the_run(self):
-        # The command's own limit is a minute and the run has four seconds:
-        # the smaller of the two is what the command gets, so a stuck command
-        # late in an almost-spent run cannot hold the step to its limit.
-        done, seconds = self.run_script(HANG='ssh-keygen', PREPARE_COMMAND_SECONDS='60',
-                                        PREPARE_BUDGET_SECONDS='4')
+    def test_a_late_command_gets_only_what_the_run_has_left(self):
+        # A command that starts late in a run is bounded by the run's
+        # remainder, so it cannot outlive the budget the script promised.
+        done, seconds = self.run_script(HANG='ssh-keygen', PREPARE_BUDGET_SECONDS='4')
         self.assertEqual(done.returncode, 1)
         self.assertRegex(done.stderr,
-                         r'the default key ssh finds by itself did not finish within \d+ s')
-        self.assertLess(seconds, 4 + 10, 'the budget, not the command limit, ends this run')
+                         r'the default key ssh finds by itself did not finish within [1-4] s')
+        self.assertLess(seconds, 4 + 10, 'the budget ends this run')
 
     def test_a_missing_tool_is_named_before_anything_runs(self):
         # A runner without one of the script's own tools says so in one line
@@ -208,10 +207,10 @@ class PrepareSshAccounts(unittest.TestCase):
         self.assertFalse(any(call.startswith('sudo useradd') for call in calls), calls)
 
     def test_the_summary_says_how_long_it_took_and_what_it_was_allowed(self):
-        done, _ = self.run_script(PREPARE_BUDGET_SECONDS='150', PREPARE_COMMAND_SECONDS='45')
+        done, _ = self.run_script(PREPARE_BUDGET_SECONDS='150')
         self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
         self.assertIn('prepare-ssh-accounts: ready in ', done.stdout)
-        self.assertIn('(budget 150 s, 45 s a command)', done.stdout)
+        self.assertIn('(budget 150 s)', done.stdout)
 
     def test_the_scripts_budget_is_shorter_than_the_workflow_steps_limit(self):
         # The step that once named nothing did so because its own
@@ -227,17 +226,15 @@ class PrepareSshAccounts(unittest.TestCase):
         step = steps[0]
         step_seconds = step['timeout-minutes'] * 60
 
-        def limit(name, default):
+        def limit(name):
             # The default the script uses when the workflow names no value.
             found = re.search(rf'\$\{{{name}:-(\d+)\}}', SCRIPT.read_text())
             self.assertIsNotNone(found, f'the script names a default for {name}')
             return int(found.group(1))
 
-        budget = limit('PREPARE_BUDGET_SECONDS', 150)
-        command = limit('PREPARE_COMMAND_SECONDS', 45)
+        budget = limit('PREPARE_BUDGET_SECONDS')
         self.assertLess(budget, step_seconds,
                         'the script ends a stuck run before the step limit does')
-        self.assertLess(command, budget, 'a command gets less than the whole run')
         self.assertLessEqual(step_seconds - budget, 60,
                              'the step limit leaves the script room to say why it stopped')
 

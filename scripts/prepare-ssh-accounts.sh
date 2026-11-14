@@ -12,13 +12,13 @@
 # the whole run stays inside one budget so the runner's step limit is a
 # backstop and never the thing that ends the run.
 #
-# Two limits, because one command's time and the run's are different claims:
-# `PREPARE_COMMAND_SECONDS` (default 45) bounds a single command, and
-# `PREPARE_BUDGET_SECONDS` (default 150) bounds all of them together, sized
-# under the workflow's 3-minute step limit. A command gets whichever is left
-# of the run's budget, so a hang late in the run cannot take the whole step
-# either. The summary line at the end says how long the run took and what it
-# was allowed.
+# One limit, `PREPARE_BUDGET_SECONDS` (default 150), sized under the
+# workflow's 3-minute step limit. Every command is bounded by what the run has
+# left, so a stuck command ends the run here, where the message can name it,
+# rather than at the step limit, which names nothing. There is deliberately no
+# per-command limit: a healthy step takes 35 s on an arm64 runner, nearly all
+# of it `useradd`, and a limit tuned to catch a hang there would also catch a
+# slow runner and fail a run that would have passed.
 #
 # The runner's system decides how the account is made: `RUNNER_OS` as the
 # workflow sees it, and uname when that is unset, so the script can also be
@@ -28,17 +28,14 @@
 # Usage: prepare-ssh-accounts.sh   (on a GitHub-hosted Linux or macOS runner)
 set -euo pipefail
 
-command_seconds=${PREPARE_COMMAND_SECONDS:-45}
 budget=${PREPARE_BUDGET_SECONDS:-150}
 started=$SECONDS
 account=hidepw
 
-for value in "$command_seconds" "$budget"; do
-    [[ $value =~ ^[0-9]+$ ]] && (( value > 0 )) || {
-        printf 'prepare-ssh-accounts: a time limit must be a positive whole number of seconds, not %s\n' "$value" >&2
-        exit 2
-    }
-done
+[[ $budget =~ ^[0-9]+$ ]] && (( budget > 0 )) || {
+    printf 'prepare-ssh-accounts: the time limit must be a positive whole number of seconds, not %s\n' "$budget" >&2
+    exit 2
+}
 
 runner_os=${RUNNER_OS:-}
 if [[ -z $runner_os ]]; then
@@ -68,14 +65,13 @@ if [[ -n $missing ]]; then
     exit 1
 fi
 
-# The whole run's remaining time, and the time one command may take: its own
-# limit, or what the run has left when that is less.
+# What the run has left: every command is bounded by this, so one stuck
+# command cannot outlive what the whole run is allowed.
 left() { echo $(( budget - (SECONDS - started) )); }
 limit_for_command() {
     local limit
     limit=$(left)
     (( limit > 0 )) || limit=1
-    (( limit < command_seconds )) || limit=$command_seconds
     echo "$limit"
 }
 
@@ -168,5 +164,5 @@ run_named 'the password sshd starts' \
     sudo /usr/sbin/sshd -f "$config/sshd_config" -E "$config/sshd.log"
 
 echo "HIDE_E2E_SSH_PASSWORD=$account:$password:2222" >>"$GITHUB_ENV"
-printf 'prepare-ssh-accounts: ready in %s s (budget %s s, %s s a command)\n' \
-    "$((SECONDS - started))" "$budget" "$command_seconds"
+printf 'prepare-ssh-accounts: ready in %s s (budget %s s)\n' \
+    "$((SECONDS - started))" "$budget"
