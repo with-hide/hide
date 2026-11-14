@@ -17,11 +17,36 @@ name: wsl device lane
 
 on:
   workflow_call:
+    inputs:
+      repeat:
+        description: How many times each test of the Windows ssh walks runs; 1 is the lane as `pr.yml` runs it.
+        type: string
+        default: '1'
+      tests:
+        description: The filter of the Windows ssh walks to run; empty runs every one of them.
+        type: string
+        default: ''
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
+  # A branch shows a flaky test of this lane fixed by repeating it on the
+  # system that failed (docs/TESTING.md, Flaky tests): a fix is shown by
+  # repetition in a CI job, not on a machine under load, and a pull request
+  # runs these walks only for a change to the crates they cross. The runner
+  # is the Windows job, which is the only one that runs them.
+  #   gh workflow run wsl-device.yml --ref <branch> -f repeat=20
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: How many times each test of the Windows ssh walks runs, 1 to 100.
+        type: string
+        default: '1'
+      tests:
+        description: The filter of the tests to repeat; empty runs the lane's own selection.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -216,13 +241,23 @@ jobs:
       - name: A Windows core dials a Windows and a Linux device over Windows' own ssh
         # After the WSL walks, which own the distribution while they run. Each
         # walk prints how long its connection took and how its build reached
-        # the device.
-        timeout-minutes: 15
+        # the device. A hand run repeats them with no retry, so one failed run
+        # fails the job and a green one proves the fix (docs/TESTING.md,
+        # Flaky tests).
+        # The lane's own 15 minutes, or enough for the repeat a hand run asked
+        # for (docs/TESTING.md, The repeat lane, bounds one the same way).
+        timeout-minutes: ${{ (inputs.repeat == '' || inputs.repeat == '1') && 15 || 45 }}
         env:
           HIDE_E2E_WSL_DISTRO: Ubuntu-24.04
           HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
           HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^windows_ssh_device::/)' --run-ignored only --success-output immediate
+          REPEAT: ${{ inputs.repeat || '1' }}
+          TESTS: ${{ inputs.tests || '' }}
+        run: |
+          filter="$TESTS"
+          if [ -z "$filter" ]; then filter='test(/^windows_ssh_device::/)'; fi
+          case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate --retries 0 --stress-count "$REPEAT"
       - name: Mint the development issues token
         # Development issues live in this repository (docs/TESTING.md,
         # Flaky tests); the App's token reads this run and files them. A run

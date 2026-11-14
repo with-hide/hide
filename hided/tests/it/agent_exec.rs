@@ -622,8 +622,19 @@ mod windows {
     /// launcher runs, never through `cmd.exe`, so an argument holding what
     /// `cmd.exe` reads (`&`, `"`, `%`, `^`) reaches it whole, with the
     /// profile's variables and its exit code (PRD agent-profiles D-26).
+    ///
+    /// The 30 s in [`HANG_GUARD`] is only a hang guard: this is the first
+    /// Node a CI job starts, and a fresh runner reads and scans `node.exe`
+    /// on that first start, which took from 2.5 s to past a 30 s guard
+    /// (issue 202) and 0.1 s the next time (issue 2568). So the first start
+    /// is paid before the guard begins, as `stand_ins` does for any program
+    /// a test runs against a deadline, and it runs the script the start
+    /// itself runs: `--version` answers before Node starts its engine and
+    /// crypto (with-hide/hide-private#329).
     #[test]
     fn a_windows_start_runs_npms_launcher_as_its_node_and_script_with_each_argument_whole() {
+        const SCRIPT: &str =
+            "process.stdout.write(JSON.stringify([process.env.PROFILE_VAR, ...process.argv.slice(2)]));\nprocess.exit(4);\n";
         let root = tempfile::tempdir().unwrap();
         let modules = root.path().join("node_modules");
         let package = modules.join("@openai").join("codex");
@@ -633,15 +644,15 @@ mod windows {
             r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
         )
         .unwrap();
-        std::fs::write(
-            package.join("bin").join("codex.js"),
-            "process.stdout.write(JSON.stringify([process.env.PROFILE_VAR, ...process.argv.slice(2)]));\nprocess.exit(4);\n",
-        )
-        .unwrap();
+        std::fs::write(package.join("bin").join("codex.js"), SCRIPT).unwrap();
         let bin = modules.join(".bin");
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(bin.join("codex.cmd"), NPM_LAUNCHER).unwrap();
         let path = path_with(&bin);
+        // The Node this start runs, readied before the hang guard begins.
+        let program = hide_platform::host::find_program(&std::env::var_os("PATH").unwrap(), "node")
+            .expect("node is required to start an npm launcher as its node and script");
+        crate::stand_ins::ready_with_args(&program, &["-e", SCRIPT]);
         let node = Node::taking(start(
             "Codex · work",
             &[("PROFILE_VAR", "a=b"), ("PATH", &path)],
