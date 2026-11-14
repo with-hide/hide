@@ -249,7 +249,11 @@ fn each_row_reaches_the_operators_lists_by_whose_work_it_is() {
             Doing::Question,
             everywhere("needs_you", Some("needs_you")),
         ),
-        (Owner::Operator, Doing::Done, everywhere("done", Some("done"))),
+        (
+            Owner::Operator,
+            Doing::Done,
+            everywhere("done", Some("done")),
+        ),
         (
             Owner::Operator,
             Doing::HumanTurn,
@@ -260,15 +264,15 @@ fn each_row_reaches_the_operators_lists_by_whose_work_it_is() {
         (Owner::HideAi, Doing::Question, called_out(true)),
         (Owner::HideAi, Doing::Done, pool_only()),
         (Owner::HideAi, Doing::HumanTurn, called_out(false)),
-        (Owner::Operator, Doing::Look, everywhere("needs_you", Some("needs_you"))),
+        (
+            Owner::Operator,
+            Doing::Look,
+            everywhere("needs_you", Some("needs_you")),
+        ),
         (Owner::HideAi, Doing::Look, pool_only()),
     ];
     for (owner, doing, expected) in cases {
-        assert_eq!(
-            reach(row(owner, doing)),
-            expected,
-            "{owner:?} {doing:?}"
-        );
+        assert_eq!(reach(row(owner, doing)), expected, "{owner:?} {doing:?}");
     }
 }
 
@@ -288,7 +292,11 @@ fn a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view() {
         (Doing::Look, called_out(true)),
     ];
     for (doing, expected) in cases {
-        assert_eq!(reach(row(Owner::Tool(true), doing)), expected, "kept {doing:?}");
+        assert_eq!(
+            reach(row(Owner::Tool(true), doing)),
+            expected,
+            "kept {doing:?}"
+        );
         assert_eq!(
             reach(row(Owner::Tool(false), doing)),
             reach(row(Owner::Operator, doing)),
@@ -415,7 +423,11 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
         id: connection.clone(),
         level: Level::View,
     }));
-    assert_eq!(listed(&runtime), (Some(false), true), "View only lets it go");
+    assert_eq!(
+        listed(&runtime),
+        (Some(false), true),
+        "View only lets it go"
+    );
     assert!(runtime.access_event(AccessEvent::Level {
         id: connection.clone(),
         level: Level::Act,
@@ -425,7 +437,11 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
     assert!(runtime.access_event(AccessEvent::Revoke {
         id: connection.clone(),
     }));
-    assert_eq!(listed(&runtime), (Some(false), true), "a disconnect lets it go");
+    assert_eq!(
+        listed(&runtime),
+        (Some(false), true),
+        "a disconnect lets it go"
+    );
     let again = connect(&mut runtime, "00000000000000a8", "8", Level::Act);
     assert_ne!(again, connection);
     runtime.refresh_agent_lineage();

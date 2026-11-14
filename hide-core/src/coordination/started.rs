@@ -154,7 +154,10 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
 /// registration whose responsibility parent (`AgentRecord::parent`, set only
 /// by a delegation) is already one. A child registers after its parent, so
 /// one pass finds them all; a pass repeats only while it still adds one.
-fn tool_work<'a>(ledger: &'a Ledger, mut owner: HashMap<&'a str, (&'a str, &'a str)>) -> Vec<ToolWork> {
+fn tool_work<'a>(
+    ledger: &'a Ledger,
+    mut owner: HashMap<&'a str, (&'a str, &'a str)>,
+) -> Vec<ToolWork> {
     if owner.is_empty() {
         return Vec::new();
     }
@@ -409,7 +412,16 @@ pub(crate) mod tests {
         let mut ledger = Ledger::default();
         let tool = Actor::access("c0ffee00c0ffee00", "hermes", NODE);
         let origin = register(&mut ledger, &tool);
-        spawn(&mut ledger, &tool, &origin, false, None, "conductor", here("w1:p1")).unwrap();
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "conductor",
+            here("w1:p1"),
+        )
+        .unwrap();
         let conductor_id = ledger.agents.last().unwrap().id.clone();
         let mut conductor = pane("w1:p1", "session");
         conductor.name = "child-conductor".into();
@@ -418,12 +430,39 @@ pub(crate) mod tests {
             pane,
             session: "session",
         };
-        spawn(&mut ledger, &conductor, &conductor_id, true, None, "worker", child("w1:p2")).unwrap();
+        spawn(
+            &mut ledger,
+            &conductor,
+            &conductor_id,
+            true,
+            None,
+            "worker",
+            child("w1:p2"),
+        )
+        .unwrap();
         let worker_id = ledger.agents.last().unwrap().id.clone();
         let mut worker = pane("w1:p2", "session");
         worker.name = "child-worker".into();
-        spawn(&mut ledger, &worker, &worker_id, true, None, "reviewer", child("w1:p3")).unwrap();
-        spawn(&mut ledger, &conductor, &conductor_id, false, None, "handed", child("w1:p4")).unwrap();
+        spawn(
+            &mut ledger,
+            &worker,
+            &worker_id,
+            true,
+            None,
+            "reviewer",
+            child("w1:p3"),
+        )
+        .unwrap();
+        spawn(
+            &mut ledger,
+            &conductor,
+            &conductor_id,
+            false,
+            None,
+            "handed",
+            child("w1:p4"),
+        )
+        .unwrap();
         let work = |ledger: &Ledger| {
             hide_started(ledger)
                 .tool_work
@@ -434,7 +473,11 @@ pub(crate) mod tests {
         let held = |pane: &str, ended| (pane.to_owned(), "c0ffee00c0ffee00".to_owned(), ended);
         assert_eq!(
             work(&ledger),
-            [held("w1:p1", false), held("w1:p2", false), held("w1:p3", false)]
+            [
+                held("w1:p1", false),
+                held("w1:p2", false),
+                held("w1:p3", false)
+            ]
         );
         for agent in &mut ledger.agents {
             if agent.id == conductor_id {
@@ -443,7 +486,11 @@ pub(crate) mod tests {
         }
         assert_eq!(
             work(&ledger),
-            [held("w1:p1", true), held("w1:p2", false), held("w1:p3", false)]
+            [
+                held("w1:p1", true),
+                held("w1:p2", false),
+                held("w1:p3", false)
+            ]
         );
         assert!(
             hide_started(&ledger).access.is_empty(),

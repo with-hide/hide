@@ -7461,7 +7461,13 @@ fn a_mission_a_tool_conducts_reaches_the_operator_only_once_the_tool_lets_go() {
         id: connection.clone(),
         level: Level::Act,
     }));
-    let conductor = runtime.missions.book.get("mission-1").unwrap().conductor.clone();
+    let conductor = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .conductor
+        .clone();
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
         name: "nightly".into(),

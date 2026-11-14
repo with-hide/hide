@@ -314,7 +314,10 @@ impl Runtime {
             Ok((kind, id, level, save)) => {
                 self.note_access(kind, Some(id), level, None);
                 self.access_changed(save);
-                if matches!(event, AccessEvent::Level { .. } | AccessEvent::Revoke { .. }) {
+                if matches!(
+                    event,
+                    AccessEvent::Level { .. } | AccessEvent::Revoke { .. }
+                ) {
                     let id = id.clone();
                     self.tool_work_moved(&id);
                 }
