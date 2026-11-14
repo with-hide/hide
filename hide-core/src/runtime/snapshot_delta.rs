@@ -59,6 +59,8 @@ pub(super) struct DeltaState {
     last_session_thread: Option<Arc<crate::model::SessionThreadSnapshot>>,
     session_thread_history_revision: u64,
     last_session_thread_history: Option<Arc<crate::model::SessionThreadHistorySnapshot>>,
+    pane_replies_revision: u64,
+    last_pane_replies: Option<Arc<crate::model::PaneRepliesSnapshot>>,
     /// Reference-counted so a delta can carry the section out of the lock
     /// without copying it. The runtime never mutates one in place: a changed
     /// section becomes a new `Arc`, which leaves any payload already handed
@@ -366,6 +368,17 @@ impl Runtime {
             self.delta.session_thread_history_revision = self.delta.revision;
             self.delta.last_session_thread_history = Some(Arc::clone(history));
         }
+        if let Some(replies) = &self.snapshot.pane_replies
+            && self
+                .delta
+                .last_pane_replies
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, replies))
+        {
+            self.delta.revision += 1;
+            self.delta.pane_replies_revision = self.delta.revision;
+            self.delta.last_pane_replies = Some(Arc::clone(replies));
+        }
         // A cursor from the future has no valid meaning in-process; treat it
         // as a fresh reader so the response converges on full state.
         let have_revision = if have_revision > self.delta.revision {
@@ -494,6 +507,12 @@ impl Runtime {
                 .last_session_thread_history
                 .as_ref()
                 .filter(|_| self.delta.session_thread_history_revision > have_revision)
+                .map(Arc::clone),
+            pane_replies: self
+                .delta
+                .last_pane_replies
+                .as_ref()
+                .filter(|_| self.delta.pane_replies_revision > have_revision)
                 .map(Arc::clone),
             // Cloning a section clones the summary's `Arc` and at most the
             // capped answers, never the cards.

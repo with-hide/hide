@@ -16,6 +16,7 @@ import type { BoardProject } from "./projectBoard";
 import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
 import type { Checkout, OverviewGraphChoices, SnapshotRest, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
+import { useReplyFields } from "./agentReply";
 import { useUiStore } from "./ui";
 import { useStartPanel } from "./startDraft";
 import type { DispatchFn } from "./ws";
@@ -39,6 +40,7 @@ const savedUi = useUiStore.getState();
 afterEach(() => {
   useShellStore.setState(savedShell, true);
   useUiStore.setState(savedUi, true);
+  useReplyFields.setState({ fields: {} });
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
@@ -295,6 +297,90 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(events.at(-1)?.payload).not.toHaveProperty("change.include_resting");
     await answer({ focus: "turn" });
     expect(container.querySelector('[data-focus="turn"]')?.getAttribute("aria-pressed")).toBe("true");
+  } finally { await act(async () => reactRoot.unmount()); }
+});
+
+// Issue 2513: the waiting item and the session detail each answer the agent
+// without opening its session, as one `pane_reply`; 답하러 가기 and 세션 열기
+// stay, and a refused or unsent reply keeps its words with the reason.
+it("answers a waiting agent from its item and from the session detail, keeping refused words with their reason", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const checkout: Checkout = { id: "alpha-main", workspace_id: "alpha", label: "main", path: "/fixture/alpha", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+  const asking = legacyAgentRow({ id: "r", pane_id: "r", identity_label: "배포 확인", agent_kind: "claude", session_id: "native-r", group: "needs_you", demand: "question", mark: "turn" });
+  asking.state.ask = { verb: "answer", what: "배포 범위를 확인해 주세요", more: 0 };
+  const projects: BoardProject[] = [{ agents: [asking], device: null, workspace: { id: "alpha", label: "알파", device_id: "local", path: "/fixture/alpha", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: "r", project_id: "alpha", checkout_id: checkout.id }] } } }];
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {}, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: "r", session_digest: "digest-r", launch_model: null, launch_effort: null }] } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: [asking], focusedPaneId: null, connection: "live", linkSummaries: null, paneReplies: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
+  const events: Parameters<DispatchFn>[0][] = [];
+  let online = true;
+  const actions = createActions((event) => { if (!online) return false; events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  const type = (input: HTMLInputElement, value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const enter = (input: HTMLInputElement) => act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  const answer = (state: "sending" | "sent" | "refused", reason?: string) => act(async () => {
+    const sent = events.at(-1)!.payload as { request_id: string };
+    useShellStore.setState({ paneReplies: { receipts: [{ request_id: sent.request_id, pane_id: "r", state, ...(reason ? { reason } : {}) }] } });
+  });
+  try {
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    const item = container.querySelector('[data-graph-ask="r"]')!;
+    const field = () => container.querySelector<HTMLElement>('[data-agent-reply="r"]')!;
+    const input = () => field().querySelector<HTMLInputElement>("input")!;
+    expect([...item.querySelectorAll("button")].some((button) => button.textContent === "Go answer")).toBe(true);
+    expect(input().getAttribute("aria-label")).toBe("Reply to 배포 확인");
+
+    // Enter sends one event with the words; nothing opens.
+    await type(input(), "프로덕션까지 해 주세요");
+    await enter(input());
+    expect(events).toHaveLength(1);
+    // It names the session the map drew there, which the core checks the pane still runs.
+    expect(events[0]).toMatchObject({ schema_version: 2, kind: "pane_reply", payload: { pane_id: "r", text: "프로덕션까지 해 주세요", session: "digest-r" } });
+    expect((events[0]!.payload as { request_id: string }).request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(useUiStore.getState().opening).toBeNull();
+    await answer("sending");
+    expect(field().getAttribute("data-agent-reply-state")).toBe("sending");
+    await enter(input());
+    expect(events).toHaveLength(1);
+
+    // A refusal keeps the words and says why, and the same field sends again.
+    await answer("refused", "asleep");
+    expect(input().value).toBe("프로덕션까지 해 주세요");
+    expect(field().querySelector('[role="alert"]')?.textContent).toBe("The session is asleep: wake it to send");
+    expect(input().getAttribute("aria-invalid")).toBe("true");
+    // Editing the words clears the reason.
+    await type(input(), "프로덕션까지 해 주세요!");
+    expect(field().querySelector('[role="alert"]')).toBeNull();
+    await type(input(), "프로덕션까지 해 주세요");
+
+    // A reply that never left the page is refused as offline, its words kept.
+    online = false;
+    await enter(input());
+    expect(events).toHaveLength(1);
+    expect(field().querySelector('[role="alert"]')?.textContent).toBe("Hide is not connected: nothing was sent");
+    expect(input().value).toBe("프로덕션까지 해 주세요");
+    online = true;
+
+    // The session detail shares the field and keeps 세션 열기; its send empties the field once the pane took it.
+    await act(async () => item.querySelector<HTMLButtonElement>(".og-ask-who")!.click());
+    const preview = container.querySelector("[data-graph-preview]")!;
+    expect([...preview.querySelectorAll("button")].some((button) => button.textContent === "Open session")).toBe(true);
+    const detail = preview.querySelector<HTMLElement>('[data-agent-reply="r"]')!;
+    expect(detail.querySelector("input")!.value).toBe("프로덕션까지 해 주세요");
+    await act(async () => detail.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click());
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ kind: "pane_reply", payload: { pane_id: "r", text: "프로덕션까지 해 주세요" } });
+    await answer("sent");
+    expect(detail.querySelector("input")!.value).toBe("");
+    expect(detail.querySelector('[role="alert"]')).toBeNull();
+    expect(detail.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
   } finally { await act(async () => reactRoot.unmount()); }
 });
 

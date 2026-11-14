@@ -6,6 +6,8 @@
 import { HouseIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, type ReactNode } from "react";
 import { AgentMark, ProfileBadge } from "../AgentMark";
+import { useReplyFields } from "../agentReply";
+import { AgentReplyField } from "../components/agent-reply";
 import { LetterTag, PaneLetterButton, RowLetterMark } from "../components/letter-mark";
 import { MentionChip } from "../components/mention-chip";
 import { MissionChip } from "../components/mission-chip";
@@ -41,6 +43,14 @@ const conductor = (state: (typeof MISSION_STATES)[number]) => ({ session: { devi
 const HUMAN_TURN = { id: "gallery.1", kind: "auth", place: "https://github.com/login/device?user_code=TEST-1234" } as const;
 /** The gallery's Copy takes the place without touching the clipboard, so a press shows the check. */
 const galleryCopy = async () => true;
+/** One reply field per state it draws (issue 2513), keyed by an invented pane; the gallery's send goes nowhere. */
+const REPLY_FIELDS = {
+  "reply-typed": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, sentAt: null, refused: null },
+  "reply-sending": { text: "프로덕션까지 배포해 주세요", session: null, sent: "gallery-request", sentAt: null, refused: null },
+  "reply-asleep": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, sentAt: null, refused: "asleep" },
+  "reply-uncertain": { text: "프로덕션까지 배포해 주세요", session: null, sent: null, sentAt: null, refused: "uncertain" },
+};
+const galleryReply = { replyToAgent: () => null };
 const time = (text: string) => <span className="font-mono text-caption text-muted-foreground">{text}</span>;
 const marks = (mark: Parameters<typeof StatusMark>[0]["mark"], kind = "claude") => <><StatusMark mark={mark} /><AgentMark kind={kind} /></>;
 
@@ -68,7 +78,8 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
   const plan = useMemo(() => planFixture("running", AT), []);
   const finished = useMemo(() => planFixture("finished", AT), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: { missions: { items: missions() } } as unknown as SnapshotRest, agents: [], connection: "live" });
+    useShellStore.setState({ rest: { missions: { items: missions() } } as unknown as SnapshotRest, agents: [], connection: "live", paneReplies: { receipts: [{ request_id: "gallery-request", pane_id: "reply-sending", state: "sending" }] } });
+    useReplyFields.setState({ fields: REPLY_FIELDS });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
@@ -111,6 +122,13 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
           <State name="Needs You row"><ol><SessionRow mark={<><StatusMark mark="turn" human /><AgentMark kind="claude" /></>} title="배포 스크립트 정리" right={time("4m")} /></ol><div className="flex flex-col gap-xxs pl-(--size-agent-mark)"><HumanTurnLine turn={HUMAN_TURN} copy={galleryCopy} /><HumanTurnDone turn={HUMAN_TURN} actions={{ finishHumanTurn: open }} /></div></State>
           <State name="Long place, permission"><div className="flex flex-col gap-xxs"><HumanTurnLine turn={{ ...HUMAN_TURN, id: "long", kind: "permission", place: "System Settings > Privacy & Security > Screen & System Audio Recording > Terminal" }} copy={galleryCopy} /><HumanTurnDone turn={{ ...HUMAN_TURN, id: "long" }} actions={{ finishHumanTurn: open }} /></div></State>
           <State name="Device not connected"><HumanTurnDone turn={{ ...HUMAN_TURN, id: "away", device_id: "mini" }} actions={{ finishHumanTurn: open }} /></State>
+        </Part>
+        <Part name="Reply without opening · AgentReplyField">
+          <State name="Empty"><AgentReplyField session={null} paneId="reply-empty" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Typed"><AgentReplyField session={null} paneId="reply-typed" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Sending"><AgentReplyField session={null} paneId="reply-sending" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Refused: asleep"><AgentReplyField session={null} paneId="reply-asleep" name="배포 확인" actions={galleryReply} /></State>
+          <State name="Refused: no answer"><AgentReplyField session={null} paneId="reply-uncertain" name="배포 확인" actions={galleryReply} /></State>
         </Part>
         <Part name="Ready update · UpdateReadyCardBody">
           <State name="Card beside the ↑ button"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>

@@ -209,6 +209,11 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub session_thread_history: Option<Arc<SessionThreadHistorySnapshot>>,
+    /// The answers to replies sent from a screen without opening the
+    /// session (`pane_reply`), absent until the first one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub pane_replies: Option<Arc<PaneRepliesSnapshot>>,
 }
 
 /// A snapshot value that takes a new edit number whenever it may change, so
@@ -8332,6 +8337,7 @@ impl Snapshot {
             session_work_search: None,
             session_thread: None,
             session_thread_history: None,
+            pane_replies: None,
         }
     }
 }
@@ -8346,6 +8352,7 @@ pub(crate) mod overview_graph_choices;
 /// per-event scalars, which now include find state.
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
+mod pane_replies;
 mod rest;
 mod session_thread;
 mod suggestions;
@@ -8355,6 +8362,7 @@ pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
     OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
 };
+pub use pane_replies::{PaneRepliesSnapshot, PaneReplyReceipt};
 pub use rest::{RestSections, RestWire};
 pub use session_thread::*;
 pub use suggestions::*;
@@ -8392,6 +8400,7 @@ pub struct SnapshotDeltaPayload {
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
     pub session_thread: Option<Arc<SessionThreadSnapshot>>,
     pub session_thread_history: Option<Arc<SessionThreadHistorySnapshot>>,
+    pub pane_replies: Option<Arc<PaneRepliesSnapshot>>,
     pub find: PaneFindSnapshot,
 }
 
@@ -8459,6 +8468,8 @@ pub struct SnapshotDeltaWire<'a> {
     pub session_thread: Option<&'a SessionThreadSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_thread_history: Option<&'a SessionThreadHistorySnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_replies: Option<&'a PaneRepliesSnapshot>,
     /// Find state rides top-level rather than in `rest`, because it changes on
     /// every keystroke while a search is open. In `rest` each keystroke would
     /// restamp that revision and resend the whole navigator and ui state
@@ -8514,6 +8525,7 @@ impl<'a> SnapshotDeltaWire<'a> {
             session_work_search: payload.session_work_search.as_deref(),
             session_thread: payload.session_thread.as_deref(),
             session_thread_history: payload.session_thread_history.as_deref(),
+            pane_replies: payload.pane_replies.as_deref(),
             find: &payload.find,
         }
     }

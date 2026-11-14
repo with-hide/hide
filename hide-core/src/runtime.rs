@@ -90,6 +90,7 @@ pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
 mod pane_reopen;
+mod pane_reply;
 pub(crate) mod plans;
 pub(crate) mod project_memory;
 mod project_open;
@@ -1662,6 +1663,8 @@ pub struct Runtime {
     turn_answer_work: turn_answer::TurnAnswerWork,
     /// The one session thread a screen has open (`runtime/session_thread.rs`).
     session_thread: session_thread::ThreadWork,
+    /// The Overview's replies being written (`runtime/pane_reply.rs`).
+    reply_work: pane_reply::ReplyWork,
     backlog_work: backlog::BacklogWork,
     issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
@@ -2587,6 +2590,7 @@ impl Runtime {
             links_work: links::LinksWork::default(),
             turn_answer_work: Default::default(),
             session_thread: session_thread::ThreadWork::default(),
+            reply_work: pane_reply::ReplyWork::default(),
             backlog_work: backlog::BacklogWork::default(),
             issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,

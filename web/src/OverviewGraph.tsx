@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { AgentMark } from "./AgentMark";
+import { AgentReplyField } from "./components/agent-reply";
 import { agentWithProfile, markWords, rowAccessibleName } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { askWhat } from "./components/agent-tree";
@@ -474,9 +475,9 @@ function teamRootOf(id: string, parents: ReadonlyMap<string, string | null>): st
 }
 
 /** Who to answer for a root whose turn it is: the root itself when it asks, else the first descendant that does. */
-function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
-  if (row.agent.demand !== "none") return row.agent.pane_id;
-  return overviewGraphTeam(row, model).find((member) => member.row.agent.mark === "turn" && member.row.agent.demand !== "none")?.row.agent.pane_id ?? row.agent.pane_id;
+function askingRow(row: GraphAgent, model: OverviewGraphModel): GraphAgent {
+  if (row.agent.demand !== "none") return row;
+  return overviewGraphTeam(row, model).find((member) => member.row.agent.mark === "turn" && member.row.agent.demand !== "none")?.row ?? row;
 }
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator.
@@ -518,12 +519,13 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
       <h3>{t("overviewGraph.waiting")} <span>{waiting.length + missions.length}</span></h3>
       <div className="og-ask-list">
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
-      {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
+      {waiting.map((row) => { const asking = askingRow(row, model); return <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" title={row.agent.profile ? agentWithProfile(t, row.agent) : undefined} aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
         <p>{row.agent.human_turn ? <HumanTurnLine turn={row.agent.human_turn} copy={actions.copyText} /> : row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what, row.agent.state.ask.subject) : <GraphLine agent={row.agent} />}</p>
-        <Button variant="secondary" size="sm" onClick={() => actions.openAgent(askingPane(row, model))}>{t("overviewGraph.answer")}</Button>
+        <AgentReplyField paneId={asking.agent.pane_id} session={asking.digest} name={asking.agent.identity_label} actions={actions} className="self-stretch" />
+        <Button variant="secondary" size="sm" onClick={() => actions.openAgent(asking.agent.pane_id)}>{t("overviewGraph.answer")}</Button>
         {row.agent.human_turn ? <HumanTurnDone turn={row.agent.human_turn} actions={actions} /> : null}
-      </div>)}
+      </div>; })}
       </div>
     </section> : null}
   </aside>;
@@ -573,6 +575,7 @@ function SessionPreview({ row, model, actions, openRecord, close, choose }: { ro
     <p className="og-context">{agentWithProfile(t, row.agent)}{launch ? ` · ${t("overviewGraph.launchModel", { model: launch })}` : ""}</p>
     {!ask && hasGraphLine(row.agent) ? <div className="og-now"><b>{t("overviewGraph.now")}</b><GraphLine agent={row.agent} /></div> : null}
     {ask ? <div className="og-ask"><small>{t("overviewGraph.asks")}</small><p>{row.agent.human_turn ? <HumanTurnLine turn={row.agent.human_turn} copy={actions.copyText} /> : askWhat(t, ask.verb, ask.what, ask.subject)}</p>{row.agent.human_turn ? <HumanTurnDone turn={row.agent.human_turn} actions={actions} /> : null}</div> : null}
+    {row.agent.mark !== "asleep" ? <AgentReplyField paneId={row.agent.pane_id} session={row.digest} name={row.agent.identity_label} actions={actions} className="mt-md" /> : null}
     <div className="og-details-actions"><Button variant="outline" size="sm" onClick={() => actions.openAgent(row.agent.pane_id)}>{t("overviewGraph.openSession")}</Button>{session ? <Button variant="secondary" size="sm" onClick={() => openRecord(session)}>{t("overviewGraph.openRecord")}</Button> : null}</div>
     {team.length > 0 ? <section className="og-team-list" aria-label={t("overviewGraph.team", { count: team.length })}><h3>{t("overviewGraph.team", { count: team.length })}</h3>{team.map(({ row: member, depth }) => <button key={member.id} type="button" style={{ paddingInlineStart: `calc(var(--spacing-md) * ${depth - 1})` }} aria-label={rowAccessibleName(t, member.agent, member.device)} onClick={(event) => choose(member.id, event.currentTarget)}><StatusMark mark={member.agent.mark} /><span><AgentRecordTitle agent={member.agent} /></span><small>{markWords(t, member.agent)}</small></button>)}</section> : null}
     {talks.length > 0 ? <section className="og-talks" aria-label={t("overviewGraph.counterparts")}><h3>{t("overviewGraph.counterparts")}</h3>{talks.map((talk) => { const other = rows.get(talk.other)!; return <div key={talk.other} title={[other.agent.profile ? agentWithProfile(t, other.agent) : null, t("overviewGraph.letterCount", { count: talk.letters })].filter(Boolean).join("\n")}><AgentMark kind={other.agent.agent_kind} profile={other.agent.profile} /><span><AgentRecordTitle agent={other.agent} />{other.agent.profile ? <span className="sr-only">, {agentWithProfile(t, other.agent)}</span> : null}</span><small>{[talk.sent ? t("overviewGraph.sent", { count: talk.sent }) : null, talk.received ? t("overviewGraph.received", { count: talk.received }) : null].filter(Boolean).join(" · ")}</small></div>; })}</section> : null}
