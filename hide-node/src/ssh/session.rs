@@ -872,13 +872,14 @@ mod tests {
         );
     }
 
-    /// A start script that never answers names what its child was doing
-    /// (with-hide/hide-private#2564, #874): the probe's failure says how long
-    /// the script went unanswered and which processes were still running. A
-    /// login shell whose wrapper never started is what the question asks
-    /// about, so the dump names the process the attempt still held.
+    /// A start script that never answers names what this computer's `ssh` was
+    /// doing (with-hide/hide-private#2564, #874): how long the script went
+    /// unanswered, the client's pid and the processor time it used. It says
+    /// "this computer's ssh" because the login shell and the wrapper run on
+    /// the device and are never in this tree, so a reader cannot take the
+    /// list for the device's processes.
     #[test]
-    fn a_start_script_that_never_answers_names_the_process_that_was_running() {
+    fn a_start_script_that_never_answers_names_the_client_and_its_wait() {
         let mut command = std::process::Command::new("/bin/sh");
         command
             .args(["-c", "exec sleep 60"])
@@ -891,8 +892,9 @@ mod tests {
         let ssh = ChildLink::start("ssh:studio", child, Some(&cancel)).unwrap();
         let ran = Duration::from_millis(7);
         let silent = ssh.silent_state(ran);
-        // The sentence names the process and the time the script went
-        // unanswered, rather than an answer it never gave.
+        // The client, the time it waited, and what it is: never a claim about
+        // the device's processes.
+        assert!(silent.contains("this computer's ssh"), "{silent}");
         assert!(silent.contains(&format!("{pid}")), "{silent}");
         assert!(silent.contains("7.0ms"), "{silent}");
         assert!(

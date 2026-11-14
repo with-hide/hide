@@ -1394,21 +1394,34 @@ impl ChildLink {
         self.stdout_ended.is_some()
     }
 
-    /// What the child was doing when its start script never answered, for a
-    /// failure to name: each process of its tree, the processor time it used,
-    /// against `ran`, the time the script has gone unanswered. A `cmd.exe` or
-    /// PowerShell login shell whose wrapper never started reads apart from
-    /// one whose wrapper is busy, which is the question an unanswered probe
-    /// leaves (with-hide/hide-private#2564, #874).
+    /// What this computer's `ssh` was doing when its start script never
+    /// answered, for a failure to name: the child's pid and the processor
+    /// time it used, and each of its own children's, against `ran`, the time
+    /// the script has gone unanswered.
+    ///
+    /// This is the client's own side only. The login shell and the start
+    /// script's wrapper run on the device, under the device's `sshd`, so they
+    /// are never in this tree and an empty list here says nothing about them
+    /// (with-hide/hide-private#2564, #874). What it does show is whether
+    /// `ssh` was idle: an `ssh` that used no processor across the whole wait
+    /// was waiting on the device, not working.
     ///
     /// Called only on a failure, so a connection that answers costs nothing.
     /// The tree is named up to [`SILENT_STATE_PROCESSES`] processes, the
-    /// child first: a run of a shell that started more says how many it left
-    /// rather than naming them all, so the record has a bound.
+    /// child first: a run that started more says how many it left rather
+    /// than naming them all, so the record has a bound.
     pub(super) fn silent_state(&self, ran: Duration) -> String {
         use hide_platform::process::{cpu_time, descendants, name_of};
         let mut pids = vec![self.pid];
-        pids.extend(descendants(self.pid).unwrap_or_default());
+        // A tree this cannot read is said so: an empty list and a failed read
+        // are different answers, and the second is why no wrapper is named.
+        let unread = match descendants(self.pid) {
+            Ok(started) => {
+                pids.extend(started);
+                String::new()
+            }
+            Err(error) => format!("; what it started could not be read: {error}"),
+        };
         let left = pids.len().saturating_sub(SILENT_STATE_PROCESSES);
         pids.truncate(SILENT_STATE_PROCESSES);
         let processes: Vec<String> = pids
@@ -1428,7 +1441,7 @@ impl ChildLink {
             format!(", and {left} more")
         };
         format!(
-            "{}{others} in {ran:.1?} since the start script was sent",
+            "this computer's ssh: {}{others} in {ran:.1?} since the start script was sent{unread}",
             processes.join(", ")
         )
     }
