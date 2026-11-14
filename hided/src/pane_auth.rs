@@ -833,9 +833,13 @@ fn attest_bootstrap(
     core: &CoreHandle,
     own: Option<&str>,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
-    // The encoded checkout caller is hided's own key for the core; a request
-    // never names one, whatever the engine's pane namespace holds in the future.
-    if matches!(Caller::parse(&request.pane_id), Caller::Checkout { .. }) {
+    // The encoded checkout and tool callers are hided's own keys for the
+    // core; a request never names one, whatever the engine's pane namespace
+    // holds in the future.
+    if matches!(
+        Caller::parse(&request.pane_id),
+        Caller::Checkout { .. } | Caller::Access { .. }
+    ) {
         return Err("invalid_request");
     }
     install::refuse_other(request, own)?;
@@ -1990,6 +1994,47 @@ mod tests {
         assert!(registry.get(&reference.token).is_none());
     }
 
+    /// C24: a hook's own reports (`status`, `agent exec`) need an attested
+    /// pane terminal, which no checkout, Desk or tool credential carries.
+    #[test]
+    fn only_a_pane_credential_names_a_terminal_a_hook_report_is_about() {
+        let pid = std::process::id() as i32;
+        let terminal = |binding: Binding| {
+            Capability {
+                pane_id: "w1:p1".into(),
+                caller_alias: "w1:p1".into(),
+                context: hide_core::desk::desk_context("local"),
+                binding,
+                one_shot: true,
+                holder: None,
+                created: Instant::now(),
+                claimed: false,
+                path: PathBuf::new(),
+                remote: None,
+                access_level: None,
+            }
+            .pane_terminal()
+            .map(str::to_owned)
+        };
+        assert_eq!(
+            terminal(Binding::Pane {
+                terminal_id: "terminal-1".into(),
+                shell_pid: pid,
+                shell_started: 1,
+            }),
+            Some("terminal-1".to_owned())
+        );
+        for binding in [
+            Binding::Checkout,
+            Binding::Desk { pid, started: 1 },
+            Binding::Access {
+                connection: "0123456789abcdef".into(),
+            },
+        ] {
+            assert_eq!(terminal(binding), None);
+        }
+    }
+
     #[test]
     fn registry_releases_references_and_refuses_issuance_after_shutdown() {
         let directory = tempfile::tempdir().unwrap();
@@ -2139,11 +2184,15 @@ mod tests {
             attest_bootstrap(peer, &request(""), None, &core, None).unwrap_err(),
             "checkout_not_registered"
         );
-        // A request cannot name the core's encoded checkout caller itself.
-        assert_eq!(
-            attest_bootstrap(peer, &request("checkout:abcd:/tmp"), None, &core, None).unwrap_err(),
-            "invalid_request"
-        );
+        // A request cannot name the core's encoded checkout caller, or a
+        // tool's, itself (C4).
+        for named in ["checkout:abcd:/tmp", "access:0123456789abcdef"] {
+            assert_eq!(
+                attest_bootstrap(peer, &request(named), None, &core, None).unwrap_err(),
+                "invalid_request",
+                "{named}"
+            );
+        }
         // An unreadable caller fails closed before any lookup.
         assert_eq!(
             attest_checkout(i32::MAX, &format!("{:032x}", 8), &core).unwrap_err(),

@@ -5918,6 +5918,34 @@ mod tests {
         assert!(!ScopedRequest::MemoryHook(hook).needs_renderer());
         assert!(ScopedRequest::Query(hide_core::workspace_control::Query::Info).needs_renderer());
         assert!(ScopedRequest::BrowserConnect(None).needs_renderer());
+        // C25: the rest of the daemon's own answers, a tool's list among them.
+        for request in [
+            ScopedRequest::Ps { all: false },
+            ScopedRequest::AccessList,
+            ScopedRequest::AgentCatalog(None),
+            ScopedRequest::AgentSleep {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            ScopedRequest::AgentArchive {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            ScopedRequest::Device(hide_core::device_command::DeviceCommand::List),
+            ScopedRequest::ProjectOpen("/srv/project".into()),
+            ScopedRequest::Pane(hide_core::pane_command::PaneCommand::Read {
+                pane: "w1:p1".into(),
+                lines: 10,
+            }),
+        ] {
+            assert!(!request.needs_renderer());
+        }
+        assert!(
+            ScopedRequest::Action(hide_core::workspace_control::Action::OpenFile {
+                path: "/srv/a".into(),
+            })
+            .needs_renderer()
+        );
     }
 
     #[test]
