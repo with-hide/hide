@@ -12,6 +12,7 @@ mod captured_route;
 mod claude_subagent_counts;
 mod codex_binary;
 mod codex_folder_trust;
+mod codex_subagent_counts;
 mod codex_trust;
 mod grok_cursor_hooks;
 mod guardrails;

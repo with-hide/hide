@@ -1065,6 +1065,12 @@ fn run_hook(arguments: &[String], started: Instant) {
         .as_ref()
         .map(|(bytes, truncated)| SubagentInput::read(bytes, *truncated))
         .unwrap_or_default();
+    // A subagent's prompt (Codex's older subagent tools open each of a
+    // subagent's turns with one, under the main session's id) is not the
+    // pane's: it takes no letter, no Memory and no guidance.
+    if event == HookEvent::UserPromptSubmit && input.subagent.is_some() {
+        return;
+    }
     let who = Reporter {
         agent: runtime.map(AgentRuntime::id),
         session: input.session.as_deref(),
@@ -1398,10 +1404,16 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
     let call = payload
         .map(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated))
         .unwrap_or_default();
-    let said = if event == HookEvent::UserPromptSubmit {
-        Said::Turn(HookTurn::Working)
-    } else {
-        Said::Tool { event, call: &call }
+    // A prompt that names a subagent is that subagent's turn starting, not
+    // the session's.
+    let subagent_prompt = event == HookEvent::UserPromptSubmit
+        && payload.is_some_and(|(bytes, truncated)| {
+            SubagentInput::read(bytes, *truncated).subagent.is_some()
+        });
+    let said = match event {
+        HookEvent::UserPromptSubmit if subagent_prompt => Said::Nothing,
+        HookEvent::UserPromptSubmit => Said::Turn(HookTurn::Working),
+        _ => Said::Tool { event, call: &call },
     };
     report_pane(
         &home,
