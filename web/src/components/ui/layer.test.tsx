@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { useOutsidePressSurface, useReturnFocus } from "./layer";
+import { useLateClose, useOutsidePressSurface, useReturnFocus } from "./layer";
 import { Popover, PopoverAnchor, PopoverContent } from "./popover";
 
 afterEach(() => { document.body.replaceChildren(); });
@@ -166,6 +166,62 @@ it("keeps the keyboard where the operator put it outside the named layer, and ta
   expect(document.activeElement).toBe(elsewhere);
   named.remove();
   elsewhere.remove();
+});
+
+// A popover whose own trigger takes the keyboard back a tick after it closed:
+// `useLateClose` lets that run, unless the operator moved the keyboard on.
+function mountLateCloseLayer(trigger: HTMLElement, onHandback: (handback: Handback) => void) {
+  function Content() {
+    onHandback(useLateClose(() => trigger));
+    return null;
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  act(() => root.render(<Content />));
+  return () => {
+    act(() => root.unmount());
+    container.remove();
+  };
+}
+
+it("lets a closed layer hand the keyboard back when nothing else holds it", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const trigger = holder("trigger");
+  let handback: Handback = () => {};
+  const close = mountLateCloseLayer(trigger, (next) => { handback = next; });
+  close();
+  // What the page leaves behind when the layer closes: Radix hands it back a tick later.
+  (document.activeElement as HTMLElement).blur();
+  const event = handBack(handback);
+  expect(event.defaultPrevented).toBe(false);
+});
+
+it("leaves a hand-back alone once the operator moved the keyboard to another control", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const trigger = holder("trigger");
+  let handback: Handback = () => {};
+  const close = mountLateCloseLayer(trigger, (next) => { handback = next; });
+  close();
+  // The operator opened a menu and gave its trigger the keyboard before the layer's timer ran (issue 2547).
+  const help = holder("help");
+  const event = handBack(handback);
+  expect(event.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(help);
+  help.remove();
+  trigger.remove();
+});
+
+it("still hands the keyboard back when the operator left it inside the trigger", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const trigger = holder("trigger");
+  let handback: Handback = () => {};
+  const close = mountLateCloseLayer(trigger, (next) => { handback = next; });
+  close();
+  trigger.focus();
+  const event = handBack(handback);
+  expect(event.defaultPrevented).toBe(false);
+  trigger.remove();
 });
 
 // A popover waits for the click to close and reads a press whose mousedown
