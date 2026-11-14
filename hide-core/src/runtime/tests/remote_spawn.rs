@@ -806,7 +806,7 @@ fn a_spawn_a_tool_asks_for_starts_as_its_connection_and_names_the_tool_as_origin
         (shown.id.as_str(), shown.agent_count),
         (connection.as_str(), 1)
     );
-    assert_eq!(shown.agents, [child.id.clone()]);
+    assert_eq!(shown.agents, std::slice::from_ref(&child.id));
 }
 
 /// `--machine` may name a dialed device by the SSH alias it was added with,
