@@ -321,12 +321,18 @@ pub(crate) fn memory(
             .ok()
             .map(|_| receive)
     });
+    let pane = cap.pane_id.clone();
     let asks = move || {
         asks.and_then(|receive| {
-            receive
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .ok()
-                .flatten()
+            match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(asks) => asks,
+                Err(_) => {
+                    hide_core::diagnostic!(
+                        json!({"component":"session","kind":"asks.give_late","pane":pane})
+                    );
+                    None
+                }
+            }
         })
     };
     memory_answer(core.state_dir(), scope, ask, deadline, asks)

@@ -43,8 +43,28 @@ impl Runtime {
         if !super::backlog::summaries_on(self.ai_settings.as_ref()) {
             return None;
         }
-        let session = self.own_ask_session(device, caller).ok()?;
+        // A prompt of an agent pane whose session Hide cannot name, or names
+        // as another, gives nothing; the log says which.
+        let skipped = |reason: &str, own: Option<&str>| {
+            crate::diagnostic!(json!({
+                "component": "session",
+                "kind": "asks.give_skipped",
+                "device": device,
+                "pane_id": caller,
+                "session_id": session_id,
+                "own_session_id": own,
+                "reason": reason,
+            }));
+        };
+        let session = match self.own_ask_session(device, caller) {
+            Ok(session) => session,
+            Err(reason) => {
+                skipped(reason, None);
+                return None;
+            }
+        };
         if session.session_id != session_id {
+            skipped("session_not_own", Some(&session.session_id));
             return None;
         }
         let directory = self
