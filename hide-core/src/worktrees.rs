@@ -89,6 +89,12 @@ type ObservedRequest = (u64, u64, Vec<ProjectObservation>);
 /// contributes no project entry at all.
 type ProjectAnswer = (PathBuf, Option<ProjectWorktreesSnapshot>);
 
+/// How long after a project's first unread change it is read, so the
+/// writes of one Git command (index, objects, refs) land in one read.
+/// Counted from the first change, not the last: agents that keep running Git
+/// never leave a repository quiet that long, and a quiet period counted from
+/// the last change never ended, so their repository was never read again.
+/// The changes after the first wait for [`WATCH_READ_SPACING`] instead.
 const GIT_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 /// How long a Git watch that ended is left before it is started again.
 const GIT_WATCH_RETRY: Duration = Duration::from_secs(30);
@@ -109,8 +115,8 @@ const GIT_WATCH_STOP_WAIT: Duration = Duration::from_secs(3);
 /// One Git watch on the node that holds the repositories, over every
 /// project's common directory (`Call::GitWatch`). The coordinator drains its
 /// reports on each wake, keeps only the projects whose Git facts changed,
-/// and lets its existing background reader do the Git work once a project
-/// has been quiet for [`GIT_WATCH_DEBOUNCE`]. A change of the watched set
+/// and lets its existing background reader do the Git work
+/// [`GIT_WATCH_DEBOUNCE`] after a project's first change. A change of the watched set
 /// starts a new watch and keeps the old one until the new one is watching,
 /// so a repository in both is never unwatched. Any lapse in that cover (a
 /// watch that ended or could not start, which is tried again after
@@ -136,7 +142,8 @@ struct GitWatch {
     owes_reread: bool,
     /// Each watched Git common directory and the projects that share it.
     roots: BTreeMap<PathBuf, Vec<PathBuf>>,
-    /// Projects whose Git facts changed, with the last time they did.
+    /// Projects whose Git facts changed since they were last read, with the
+    /// first time they did.
     pending: BTreeMap<PathBuf, Instant>,
     registered: BTreeMap<PathBuf, PathBuf>,
     requested_roots: Vec<PathBuf>,
@@ -497,7 +504,7 @@ impl GitWatch {
         self.mark(&changed, now);
         if every {
             for project in self.registered.keys() {
-                self.pending.insert(project.clone(), now);
+                self.pending.entry(project.clone()).or_insert(now);
             }
         }
         if let Some(reason) = ended {
@@ -555,7 +562,7 @@ impl GitWatch {
     fn mark(&mut self, common_dirs: &[String], now: Instant) {
         for common in common_dirs {
             for project in self.roots.get(Path::new(common)).into_iter().flatten() {
-                self.pending.insert(project.clone(), now);
+                self.pending.entry(project.clone()).or_insert(now);
             }
         }
     }
@@ -566,7 +573,7 @@ impl GitWatch {
         let settled: Vec<_> = self
             .pending
             .iter()
-            .filter(|(_, last)| now.duration_since(**last) >= GIT_WATCH_DEBOUNCE)
+            .filter(|(_, first)| now.duration_since(**first) >= GIT_WATCH_DEBOUNCE)
             .map(|(project, _)| project.clone())
             .collect();
         for project in &settled {
@@ -1674,6 +1681,23 @@ mod tests {
         GitWatchReport::Watching {
             unwatched: Vec::new(),
         }
+    }
+
+    /// A repository whose agents keep running Git is never quiet: it is
+    /// read the debounce after its first change, not once changes stop.
+    #[test]
+    fn a_repository_that_keeps_changing_settles_after_its_first_change() {
+        let mut driver = Driver::new();
+        let watch = driver.next_watch(&["/a"]);
+        driver.watch.reconcile(&projects(&["/a"]));
+        driver.report(&watch, watching());
+        let now = Instant::now();
+        let common = ["/a/.git".to_owned()];
+        driver.watch.mark(&common, now - GIT_WATCH_DEBOUNCE);
+        driver.watch.mark(&common, now);
+        assert_eq!(driver.watch.settled(), [PathBuf::from("/a")]);
+        assert!(driver.watch.pending.is_empty());
+        drop(watch);
     }
 
     /// A watch that ended may have missed any change, so once its restart is
