@@ -50,7 +50,9 @@ function ok(answer: Answer, what: string): Record<string, unknown> {
   return (answer.value ?? answer.result) as Record<string, unknown>;
 }
 
-test("a tool outside Hide's panes is approved at Act, starts an agent, writes to it, reads its reply once and ends it", async () => {
+// @platform: the tool's home (`USERPROFILE` on Windows), its owner-only key file and the
+// local stream it reaches the daemon over are written per system (`hide-platform`).
+test("a tool outside Hide's panes is approved at Act, starts an agent, writes to it, reads its reply once and ends it", { tag: "@platform" }, async () => {
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   const home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hde-tool-")));
