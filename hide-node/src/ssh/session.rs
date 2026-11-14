@@ -342,6 +342,7 @@ pub(super) fn sign_in(
         .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
     let mut pipe = SigningIn::new(link, desk, sign_in, wake, cancel);
     stage("sign_in");
+    let asked = Instant::now();
     let facts = match bootstrap::probe(&mut pipe, dial.until) {
         Ok(facts) => facts,
         Err(ProbeError::Unsupported(reason)) => {
@@ -349,8 +350,12 @@ pub(super) fn sign_in(
             return Err(EstablishError::Unsupported(reason));
         }
         Err(ProbeError::Stopped(stop)) => {
-            // Read before the kill below ends ssh's output itself.
+            // Read before the kill below ends ssh's output itself, and before
+            // the kill's own reap makes the tree unreadable.
             let closed = pipe.link.output_ended();
+            let silent = pipe
+                .link
+                .silent_state(Instant::now().saturating_duration_since(asked));
             pipe.link.kill();
             if cancel.is_cancelled() {
                 return Err(EstablishError::Helper(ENDED.to_owned()));
@@ -388,6 +393,10 @@ pub(super) fn sign_in(
                 "target": dial.target,
                 "problem": failure.problem.code(),
                 "stderr_tail": stderr,
+                // What the start script's child was doing when it never
+                // answered, so a shell that ran no wrapper reads apart from
+                // one whose wrapper was busy.
+                "silent": silent,
             }));
             return Err(EstablishError::Ssh(failure));
         }
@@ -861,5 +870,37 @@ mod tests {
             pipe.stderr,
             ["Log in with your Cloudflare account: https://team.cloudflareaccess.com/…"]
         );
+    }
+
+    /// A start script that never answers names what this computer's `ssh` was
+    /// doing (with-hide/hide-private#2564, #874): how long the script went
+    /// unanswered, the client's pid and the processor time it used. It says
+    /// "this computer's ssh" because the login shell and the wrapper run on
+    /// the device and are never in this tree, so a reader cannot take the
+    /// list for the device's processes.
+    #[test]
+    fn a_start_script_that_never_answers_names_the_client_and_its_wait() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "exec sleep 60"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child = hide_platform::process::OwnedChild::spawn_tied(&mut command).unwrap();
+        let pid = child.id();
+        let cancel = Cancel::default();
+        let ssh = ChildLink::start("ssh:studio", child, Some(&cancel)).unwrap();
+        let ran = Duration::from_millis(7);
+        let silent = ssh.silent_state(ran);
+        // The client, the time it waited, and what it is: never a claim about
+        // the device's processes.
+        assert!(silent.contains("this computer's ssh"), "{silent}");
+        assert!(silent.contains(&format!("{pid}")), "{silent}");
+        assert!(silent.contains("7.0ms"), "{silent}");
+        assert!(
+            silent.contains("sleep") || silent.contains("sh"),
+            "{silent}"
+        );
+        drop(ssh);
     }
 }

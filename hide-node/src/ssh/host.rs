@@ -1366,6 +1366,9 @@ pub(super) struct ChildLink {
     arrivals: tokio::sync::mpsc::Receiver<Arrival>,
     input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
     ending: ChildEnding,
+    /// The child's pid, for a failure that says what it was doing when the
+    /// start script never answered.
+    pid: u32,
     /// Standard output read past the last whole line.
     stdout: Vec<u8>,
     /// Standard error read past the last whole line.
@@ -1379,11 +1382,68 @@ pub(super) struct ChildLink {
 /// greeting) are skipped line by line.
 const MAX_START_LINE: usize = 64 * 1024;
 
+/// The most processes [`ChildLink::silent_state`] names: an ssh child and the
+/// wrapper it starts are a handful, and a failure that names a whole
+/// machine's tree would say less than it costs.
+const SILENT_STATE_PROCESSES: usize = 8;
+
 impl ChildLink {
     /// Whether the child's standard output has ended: ssh closed its side,
     /// as it does when it exits, rather than this side stopping it.
     pub(super) fn output_ended(&self) -> bool {
         self.stdout_ended.is_some()
+    }
+
+    /// What this computer's `ssh` was doing when its start script never
+    /// answered, for a failure to name: the child's pid and the processor
+    /// time it used, and each of its own children's, against `ran`, the time
+    /// the script has gone unanswered.
+    ///
+    /// This is the client's own side only. The login shell and the start
+    /// script's wrapper run on the device, under the device's `sshd`, so they
+    /// are never in this tree and an empty list here says nothing about them
+    /// (with-hide/hide-private#2564, #874). What it does show is whether
+    /// `ssh` was idle: an `ssh` that used no processor across the whole wait
+    /// was waiting on the device, not working.
+    ///
+    /// Called only on a failure, so a connection that answers costs nothing.
+    /// The tree is named up to [`SILENT_STATE_PROCESSES`] processes, the
+    /// child first: a run that started more says how many it left rather
+    /// than naming them all, so the record has a bound.
+    pub(super) fn silent_state(&self, ran: Duration) -> String {
+        use hide_platform::process::{cpu_time, descendants, name_of};
+        let mut pids = vec![self.pid];
+        // A tree this cannot read is said so: an empty list and a failed read
+        // are different answers, and the second is why no wrapper is named.
+        let unread = match descendants(self.pid) {
+            Ok(started) => {
+                pids.extend(started);
+                String::new()
+            }
+            Err(error) => format!("; what it started could not be read: {error}"),
+        };
+        let left = pids.len().saturating_sub(SILENT_STATE_PROCESSES);
+        pids.truncate(SILENT_STATE_PROCESSES);
+        let processes: Vec<String> = pids
+            .into_iter()
+            .map(|pid| {
+                let name = name_of(pid).unwrap_or_else(|error| format!("unnamed ({error})"));
+                let worked = cpu_time(pid).map_or_else(
+                    |error| format!("an unread processor time ({error})"),
+                    |time| format!("{time:.1?} of processor"),
+                );
+                format!("{name} {pid} used {worked}")
+            })
+            .collect();
+        let others = if left == 0 {
+            String::new()
+        } else {
+            format!(", and {left} more")
+        };
+        format!(
+            "this computer's ssh: {}{others} in {ran:.1?} since the start script was sent{unread}",
+            processes.join(", ")
+        )
     }
 
     pub(super) fn start(
@@ -1448,6 +1508,7 @@ impl ChildLink {
             })?;
         let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
             Arc::new(Mutex::new(Some(Box::new(stdin))));
+        let pid = child.id();
         let ending = ChildEnding::start(
             target,
             child,
@@ -1463,6 +1524,7 @@ impl ChildLink {
             arrivals,
             input,
             ending,
+            pid,
             stdout: Vec::new(),
             stderr: Vec::new(),
             stdout_ended: None,
