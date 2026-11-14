@@ -486,4 +486,16 @@ fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
     );
     let own = asking(Owner::Operator, Doing::HumanTurn);
     assert_eq!(own.state.ask.unwrap().more, 1);
+
+    // A question the operator read, on the tool's pane, is still the tool's:
+    // it does not lift the row into the 태스크 list's 내 차례 as the
+    // operator's own read question does.
+    let read = |owner: Owner| {
+        let mut agent = row(owner, Doing::Resting);
+        agent.demand = "question".into();
+        agent.changed_at_unix_ms = Some(1);
+        agent
+    };
+    assert_eq!(reach(read(Owner::Tool(true))), pool_only());
+    assert!(reach(read(Owner::Operator)).task);
 }

@@ -697,7 +697,7 @@ pub fn ownership_of(agent: &SidebarAgentSnapshot) -> Ownership {
 /// hide-external-control D-14). A delegated row of the tool's is still
 /// `Delegated` for its group; this is what keeps it off the lists too
 /// (B27).
-fn tool_keeps(agent: &SidebarAgentSnapshot) -> bool {
+pub(crate) fn tool_keeps(agent: &SidebarAgentSnapshot) -> bool {
     agent.tool.as_ref().is_some_and(|tool| tool.owns)
 }
 
