@@ -1788,6 +1788,24 @@
             "title": "Retried",
             "type": "object"
         },
+        "fold_ask": {
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "state": {
+                    "enum": [
+                        "folded",
+                        "already_closed"
+                    ]
+                }
+            },
+            "required": [
+                "id",
+                "state"
+            ],
+            "type": "object"
+        },
         "inbox": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -4404,6 +4422,47 @@
         },
         {
             "answers": [
+                "fold_ask"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "session fold-ask",
+            "options": [
+                {
+                    "name": "--reason",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "ask_unknown",
+                "ask_reopened",
+                "ask_reason_invalid",
+                "ask_session_unknown",
+                "ask_unavailable",
+                "agent_pane_required",
+                "caller_context_changed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "agent_end"
             ],
             "arguments": [
@@ -6935,7 +6994,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:09fd3283f626be0598d769940b189d319345961e02c6450fed42c8ad1eb9de26",
+    "digest": "sha256:a1ce395cd70b29fa3386f242985febbc94ba910b52be7b3cbf94fad30a6a25f5",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -233,6 +233,30 @@ pub enum LedgerCall {
         repository: String,
         number: u32,
     },
+    /// An agent folds one of its own session's open questions with the
+    /// line it gave (`hide session fold-ask`): the same fold Hide AI writes,
+    /// answered only once committed (docs/status-model.md, A question still
+    /// waiting).
+    FoldAsk {
+        session: SessionIdentity,
+        id: String,
+        reason: String,
+    },
+}
+
+/// What an agent's fold of a question found.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldAsk {
+    /// Folded with its reason, under `정리됨`.
+    Folded,
+    /// No longer open: answered, folded, put away, made a backlog item, or
+    /// asked in a flow the session has moved past. Nothing changed.
+    Closed,
+    /// The operator opened it again: only their own answer closes it.
+    Reopened,
+    /// No question of this session has the id.
+    Unknown,
 }
 
 /// The backlog item keys `BacklogKeys` answers per list; the backlog shows
@@ -260,6 +284,7 @@ pub enum LedgerAnswer {
     },
     Made(bool),
     Plans(Vec<crate::plans::Plan>),
+    FoldAsk(FoldAsk),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -472,9 +497,10 @@ pub enum MissedStatus {
     /// `백로그로` made an item of it: `backlog_key` names the item.
     Backlog,
     /// A question Hide AI read as settled or moot in a turn no answer came
-    /// in: folded under `정리됨` with its reason, never removed, and one
-    /// press opens it again (docs/status-model.md, A question still
-    /// waiting). Only a question known not to be the operator's own step.
+    /// in, or its agent folded (`hide session fold-ask`): folded under `정리됨`
+    /// with its reason, never removed, and one press opens it again
+    /// (docs/status-model.md, A question still waiting). Never one the
+    /// operator opened again.
     Folded,
 }
 
@@ -494,9 +520,19 @@ pub struct MissedWork {
     /// (`github:owner/repo#7`, `local:/path#3`).
     pub backlog_key: Option<String>,
     pub creating: bool,
-    /// Why Hide AI folded the question, one line; only on a folded one.
+    /// Why Hide AI or the agent folded the question, one line; only on a
+    /// folded one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// A question the operator opened again (`다시 열기`): only their own
+    /// answer closes it, and neither Hide AI, the agent nor a parent's
+    /// letter settles it. Core only.
+    #[serde(skip)]
+    pub reopened: bool,
+    /// Whether the session's agent was already given the question at a
+    /// prompt, which gives each one once. Core only.
+    #[serde(skip)]
+    pub given: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,9 +542,9 @@ pub struct NewMissedWork {
     pub text: String,
     /// For a question: whether only the operator can take its step
     /// themselves (a sign-in, an approval, a permission, information to
-    /// type in), which a parent's letter cannot answer and Hide AI never
-    /// folds. Absent when the judgment did not say, which counts as not
-    /// known to be anyone else's.
+    /// type in), which a parent's letter cannot answer. Absent when the
+    /// judgment did not say, which counts as not known to be anyone
+    /// else's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_only: Option<bool>,
     /// The id of the session's open question this line repeats, in the same
@@ -652,6 +688,13 @@ pub enum LedgerUpdate {
         session: SessionIdentity,
         id: String,
         status: MissedStatus,
+    },
+    /// The session's agent was given these open questions at a prompt, so
+    /// a later prompt does not give them again.
+    AsksGiven {
+        session: SessionIdentity,
+        ids: Vec<String>,
+        at_unix_ms: u64,
     },
 }
 
@@ -811,7 +854,8 @@ impl LedgerUpdate {
             | Self::Chapter { session, .. }
             | Self::Summaries { session, .. }
             | Self::TurnEnd { session, .. }
-            | Self::MissedStatus { session, .. } => session,
+            | Self::MissedStatus { session, .. }
+            | Self::AsksGiven { session, .. } => session,
         }
     }
 }

@@ -380,7 +380,7 @@ pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
     print_answer(result)
 }
 
-fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String> {
+pub(crate) fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String> {
     match result {
         Ok(answer) if answer["ok"] == true => {
             println!(

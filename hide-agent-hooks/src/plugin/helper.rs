@@ -291,10 +291,12 @@ fn prompt_memory(
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();
     let (context, index_kept) = bounded_memory_capsule(&context, body);
-    let context = match (global, context) {
-        (Some(global), Some(context)) => Some(format!("{global}{context}")),
-        (global, context) => global.or(context),
-    };
+    // The session's open questions ride outside Memory's quota, last.
+    let parts = [global, context, prompt.asks];
+    let context = parts
+        .iter()
+        .any(Option::is_some)
+        .then(|| parts.into_iter().flatten().collect::<String>());
     (context, start && index_kept)
 }
 

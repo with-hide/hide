@@ -397,6 +397,10 @@
     "line": "Reads the raw events of a session around one request, for when the exact words or tool output matter.",
     "example": "hide session read agent-7 --request 3"
   },
+  "session fold-ask": {
+    "line": "Folds one of your own session's open questions that the work settled, with the reason; it leaves Needs You and stays under Settled, where the operator can open it again.",
+    "example": "hide session fold-ask missed-412-0 --reason \"The operator merged the pull request\""
+  },
   "memory show": {
     "line": "Prints one Project Memory card in full, with its status and where its words came from.",
     "example": "hide memory show m508"

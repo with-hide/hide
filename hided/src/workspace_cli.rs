@@ -536,6 +536,29 @@ pub fn request_plan(
     })
 }
 
+/// `hide session fold-ask`: folds one of the caller's session's open questions
+/// with its reason. Running it again converges: a folded question answers
+/// that it is already closed.
+pub fn request_fold_ask(
+    credential: &mut Credential,
+    id: &str,
+    reason: &str,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"fold_ask","request_id":request_id,"id":id,"reason":reason}),
+            &request_id,
+            true,
+            Duration::from_secs(30),
+            after,
+        )
+    })
+}
+
 /// `hide agent catalog`: read from what the core holds, after the daemon's
 /// wait of up to 10 seconds for one read of the model lists, so the
 /// exchange is given longer than an ordinary read.

@@ -10,8 +10,9 @@
 //! a batch a minute.
 
 use super::ledger::{
-    LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall, LedgerContext, LedgerUpdate,
-    SessionIdentity, SessionRecord, SessionSearchOptions, SessionSearchPage, SessionSearchPresence,
+    FoldAsk, LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall, LedgerContext,
+    LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchOptions, SessionSearchPage,
+    SessionSearchPresence,
 };
 use super::store::{
     ArchivedSession, CapacityCrossings, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks,
@@ -810,7 +811,12 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             if let Err(code) = &result {
                 log_write(code, "ledger_call");
             }
-            if matches!(&result, Ok(LedgerAnswer::Saved | LedgerAnswer::Attempt(_))) {
+            if matches!(
+                &result,
+                Ok(LedgerAnswer::Saved
+                    | LedgerAnswer::Attempt(_)
+                    | LedgerAnswer::FoldAsk(FoldAsk::Folded))
+            ) {
                 state.changed_all();
             }
             let _ = answer.send(result);

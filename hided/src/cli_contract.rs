@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
 //! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `workspace
-//! purpose`, `workspace remove`): each command's words, arguments and options, where its
+//! purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -453,6 +453,32 @@ pub const COMMANDS: &[Spec] = &[
             "participant_ended",
             "participant_session_changed",
             "ambiguous_participant",
+        ],
+    },
+    // Folds one of the caller's own session's open questions with the line
+    // saying what settled it, as Hide AI folds one; `already_closed` for a
+    // question no longer open, which is no failure.
+    Spec {
+        words: &["session", "fold-ask"],
+        arguments: &[Arg {
+            name: "id",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--reason", Text), switch("--json")],
+        rest: None,
+        answers: &["fold_ask"],
+        refusals: &[
+            "ask_unknown",
+            "ask_reopened",
+            "ask_reason_invalid",
+            "ask_session_unknown",
+            "ask_unavailable",
+            "agent_pane_required",
+            "caller_context_changed",
         ],
     },
     // The answer is the registration as it ended with what became of its
@@ -1814,6 +1840,17 @@ fn answers() -> Value {
         shape(&["machine", "installed_known", "items"]),
     );
     map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
+    map.insert(
+        "fold_ask".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "state": {"enum": ["folded", "already_closed"]},
+            },
+            "required": ["id", "state"],
+        }),
+    );
     map.insert("agent_profiles".into(), shape(&["machine", "profiles"]));
     map.insert("agent_profile".into(), shape(&["machine", "profile"]));
     map.insert(
@@ -1982,6 +2019,7 @@ mod tests {
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
+                | CommandKind::FoldAsk { .. }
                 | CommandKind::Device(_)
                 | CommandKind::Access(_)
                 | CommandKind::Pane(_)
