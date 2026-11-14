@@ -1391,10 +1391,10 @@ impl ChildLink {
 
     /// What the child was doing when its start script never answered, for a
     /// failure to name: each process of its tree, the processor time it used,
-    /// against the time the attempt ran. A `cmd.exe` or PowerShell login
-    /// shell whose wrapper never started reads apart from one whose wrapper
-    /// is busy, which is the question an unanswered probe leaves
-    /// (with-hide/hide-private#2564, #874).
+    /// against `ran`, the time the script has gone unanswered. A `cmd.exe` or
+    /// PowerShell login shell whose wrapper never started reads apart from
+    /// one whose wrapper is busy, which is the question an unanswered probe
+    /// leaves (with-hide/hide-private#2564, #874).
     ///
     /// Called only on a failure, so a connection that answers costs nothing.
     pub(super) fn silent_state(&self, ran: Duration) -> String {

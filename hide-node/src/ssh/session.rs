@@ -891,8 +891,8 @@ mod tests {
         let ssh = ChildLink::start("ssh:studio", child, Some(&cancel)).unwrap();
         let ran = Duration::from_millis(7);
         let silent = ssh.silent_state(ran);
-        // Nothing was read of its error output, and the sentence says so by
-        // naming the process rather than an answer.
+        // The sentence names the process and the time the script went
+        // unanswered, rather than an answer it never gave.
         assert!(silent.contains(&format!("{pid}")), "{silent}");
         assert!(silent.contains("7.0ms"), "{silent}");
         assert!(
