@@ -1323,6 +1323,15 @@ The graph draws at most the newest 2,000 letters; no letter subject or body reac
 
 With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, and nothing else: no Fold or Hide words (PRD overview-graph-remembered D-02).
 Pointing at a row or moving the keyboard into it shows an eye at its end, whose tooltip and accessible name are `<project> 그래프에서 숨기기`, and a touch screen, which has no pointer, always shows it; pressing it takes the project off the map.
+Before the eye the same pointing shows a `+`, `<project>에서 에이전트 시작` as on the sidebar's project row, which opens the [Start panel](#start-panel) on that project (issue #2514).
+
+The map starts new work where it is drawn (issue #2514).
+Each unfolded project has a start circle where its next session would stand: a root session's circle size, a faint dashed outline in the project's colour with a `+` inside, no words and no line to `나`, named and hinted `<project>에서 에이전트 시작`; it lights and turns solid under the pointer or focus, and pressing it opens the start panel on that project.
+It takes part in the placement as a place with its circle's room and no push of its own, so it never covers a session or its words and does not spread the project; the project's name and glow take it in, and it moves with a project drag and folds away with the project.
+A folded project's name under its circle carries a `+` beside it instead, faint until the circle is pointed at; the name itself stays the project's drag handle and the row's own press keeps moving the camera, so neither becomes a start.
+`나` wears a small ringed `+` on its rim, `새 에이전트`, which fills under the pointer or focus and opens the start panel on no project, choosing its target as ⌘K's `에이전트 시작…` does; Hide has no session outside a project to start instead.
+Wherever the map draws a project, it also draws `프로젝트 추가`: a dashed, rounded place in the widest gap between the projects (opposite a lone project), quieter than any of them and turning solid and filled under the pointer or focus, placed with them so it covers none, which opens the sidebar's Add project dialog (⇧⌘N).
+A start from the map or the side column keeps the operator on the Overview, where the new session joins the map.
 Choosing a session of a hidden project, from Waiting on you or the session list, shows the project again and opens that session.
 Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
 Hiding removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and shows a crossed-out eye without pointing, named `<project> 그래프에 다시 보이기` and pressed, which returns the sessions to the same places (B9).
@@ -1343,7 +1352,7 @@ Choosing a session by click, Enter or Space replaces the column with its panel: 
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.
 
-Project names share the 400-node budget with sessions; admission prioritises the selected session's project and the protected current session, and the remaining room is shared in identity order.
+Project names, each project's start circle and the map's `프로젝트 추가` place share the 400-node budget with sessions; admission prioritises the selected session's project and the protected current session, and the remaining room is shared in identity order.
 An oversized project retains stable-ID representatives and a reserved access slot, where a chosen hidden member appears without moving another member; the paged list searches every matching session, and selecting one outside the graph budget opens its project scope with that session selected.
 One-project scope offers All projects to return.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
@@ -2301,7 +2310,8 @@ The new-worktree dialog, Start from an issue and 맡기기 keep the agent menu w
 While the catalog is being read or cannot be read, the model menu shows the remembered model or `CLI 기본값`, is disabled, and gives the reason in its tooltip; starting is never held back by it.
 Every supported agent start, here or in a dialog, is remembered by the core with its model, `CLI 기본값` included, so the next open preselects that kind and its model with no `recent` mark; the target is not remembered and follows what is in front on every open.
 Escape or a press outside closes the panel and keeps the text for the next open; a start that goes clears it.
-The panel follows only the answer carrying its own request id, even after it closes: a refusal or a failed start shows its reason inside the panel and keeps the text, and a start that went brings the center to the new pane, on a device by moving the rail, the sidebar and the center together.
+The panel follows only the answer carrying its own request id, even after it closes: a refusal or a failed start shows its reason inside the panel and keeps the text, and a start that went brings the center to the new pane, on a device by moving the rail, the sidebar and the center together, except a start from an open the Overview's work map made (a start circle, a `+`, `나`'s `+`), which leaves the Overview in front, the layer over a Workspace and the page alike, and presents nothing (the panel's `stay`; issue #2514).
+Over the Overview's layer the panel is drawn inside that layer, since a modal layer keeps the pointer and the keyboard to its own subtree and would read a press on the panel as outside.
 The page opens that Workspace only after the core has selected the correlated pane and its checkout lists it, including the first start after setup.
 A newer page visit cancels that pending presentation; the answer never sends a second focus request or closes an Overview opened over work.
 An agent that fails to start after its tab opened puts its text back in the draft with the reason, unless a new draft took its place, so the next ⌘N shows both; the reason stays until the text changes.

@@ -68,20 +68,28 @@ type StartPanelState = {
   overSettings: boolean;
   /** The project and agent this open starts on; null reads what is in front and the remembered agent. */
   preset: StartPreset | null;
+  /**
+   * This open keeps the screen in front when its start goes: one from the
+   * Overview's work map (issue 2514) leaves the operator on the Overview, where
+   * the new session joins the map, instead of bringing its Workspace forward.
+   */
+  stay: boolean;
   /** The id of the request whose answer the panel waits for. */
   request: string | null;
   requestKind: "agent_start" | "worktree_create";
+  /** Whether the request in flight brings its pane forward; false for one sent from an open that asked to `stay`. */
+  present: boolean;
   /** Why the last start did not go, shown inside the panel. */
   failure: StartFailure | null;
   /** The text the request in flight carries. */
   sent: string;
   /** A start whose tab is open but whose agent has not answered yet, with its text. */
   spent: { taskId: number; text: string } | null;
-  open: (overSettings: boolean, preset?: StartPreset | null) => void;
+  open: (overSettings: boolean, preset?: StartPreset | null, stay?: boolean) => void;
   close: () => void;
   setText: (text: string) => void;
   setTarget: (key: string) => void;
-  begin: (requestId: string, kind?: "agent_start" | "worktree_create") => void;
+  begin: (requestId: string, kind?: "agent_start" | "worktree_create", present?: boolean) => void;
   fail: (failure: StartFailure) => void;
   /** The start went: the text is spent and the panel is done; `taskId` names an agent still starting. */
   finish: (taskId: number | null) => void;
@@ -97,17 +105,19 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   target: null,
   overSettings: false,
   preset: null,
+  stay: false,
   request: null,
   requestKind: "agent_start",
+  present: true,
   failure: null,
   sent: "",
   spent: null,
   // A reason the last start did not go stays with its text until the text changes.
-  open: (overSettings, preset = null) => set({ isOpen: true, target: null, overSettings, preset }),
+  open: (overSettings, preset = null, stay = false) => set({ isOpen: true, target: null, overSettings, preset, stay }),
   close: () => set({ isOpen: false }),
   setText: (text) => set({ text, failure: null }),
   setTarget: (target) => set({ target }),
-  begin: (request, requestKind = "agent_start") => set((s) => ({ request, requestKind, failure: null, sent: s.text })),
+  begin: (request, requestKind = "agent_start", present = true) => set((s) => ({ request, requestKind, present, failure: null, sent: s.text })),
   fail: (failure) => set({ request: null, failure }),
   finish: (taskId) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, spent: taskId === null ? null : { taskId, text: s.sent } })),
   restore: (failure) => set((s) => (s.spent ? { text: s.text === "" ? s.spent.text : s.text, failure, spent: null } : {})),

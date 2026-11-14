@@ -5,14 +5,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { OverviewGraphModel } from "./overviewGraphModel";
+import { ADD_PROJECT, type OverviewGraphModel } from "./overviewGraphModel";
 import { projectDropPlaces, useOverviewGraphLayout, type GraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { ForceMap } from "./overviewMapLayout";
 
 const TOKENS = { gap: 8, "root-width": 160, "root-height": 120, "root-orb": 48, "child-width": 120, "child-height": 96, "child-orb": 32 };
 const model = {
   structure: "fixture",
-  projects: [{ id: "p", shown: [{ id: "s1" }, { id: "s2" }], revealSlot: null }, { id: "q", shown: [{ id: "s3" }], revealSlot: null }],
+  projects: [{ id: "p", shown: [{ id: "s1" }, { id: "s2" }], revealSlot: null, startSlot: "p:start" }, { id: "q", shown: [{ id: "s3" }], revealSlot: null, startSlot: "q:start" }],
   layoutParents: new Map([["s1", null], ["s2", "s1"], ["s3", null]]),
   visible: [],
 } as unknown as OverviewGraphModel;
@@ -88,4 +88,34 @@ it("a project drop carries only the pins the core still remembers, at scale one"
   const dropped = projectDropPlaces(map, "p", { anchors: new Map(), pins: new Map([["s1", { x: 1, y: 1 }]]) }, 2);
   expect(dropped).toEqual({ anchor: { x: 150, y: 0 }, pins: [{ id: "s1", at: { x: 100, y: 50 } }] });
   expect(projectDropPlaces(map, "missing", nothing, 1)).toBeNull();
+});
+
+it("places each project's start circle and the Add project place among the sessions, overlapping none (issue 2514)", async () => {
+  const root = await mount(1);
+  await act(async () => root.render(<Probe places={nothing} />));
+  const at = layout!.map!.positions();
+  // A session's room takes in its words; a start circle's is its circle alone.
+  const session = Math.max(TOKENS["root-width"] / 2, TOKENS["root-height"] - TOKENS["root-orb"] / 2) * 0.85 + TOKENS.gap / 2;
+  const circle = (TOKENS["root-orb"] / 2) * 0.85 + TOKENS.gap / 2;
+  const places: [string, number][] = [["s1", session], ["s3", session], ["p:start", circle], ["q:start", circle], [ADD_PROJECT.slot, session]];
+  for (const [id] of places) expect(at.get(id)).toBeDefined();
+  // The places keep their rooms apart, give or take the physics' last settling step.
+  for (const [i, [a, ra]] of places.entries()) for (const [b, rb] of places.slice(i + 1)) expect(Math.hypot(at.get(a)!.x - at.get(b)!.x, at.get(a)!.y - at.get(b)!.y)).toBeGreaterThan((ra + rb) * 0.8);
+  // A start circle moves with its project; the Add project place belongs to none.
+  layout!.map!.moveProject("p", { x: 30, y: 0 });
+  expect(layout!.map!.positions().get("p:start")!.x).toBeCloseTo(at.get("p:start")!.x + 30);
+  expect(layout!.map!.positions().get(ADD_PROJECT.slot)).toEqual(at.get(ADD_PROJECT.slot));
+  await act(async () => root.unmount());
+});
+
+it("gathers the Add project place in the gap between projects, leaving every project's place as it was (issue 2514)", () => {
+  const sessions = [{ id: "a1", projectId: "a", parent: null, radius: 40 }, { id: "b1", projectId: "b", parent: null, radius: 40 }];
+  const without = new ForceMap({ projects: ["a", "b"], sessions, operator: 40 });
+  const withFree = new ForceMap({ projects: ["a", "b", ADD_PROJECT.project], sessions: [...sessions, { id: ADD_PROJECT.slot, projectId: ADD_PROJECT.project, parent: null, radius: 40 }], operator: 40, free: ADD_PROJECT.project });
+  expect(withFree.anchorOf("a")).toEqual(without.anchorOf("a"));
+  expect(withFree.anchorOf("b")).toEqual(without.anchorOf("b"));
+  // Two projects stand above and below the operator; the place goes to the side between them.
+  expect(Math.abs(withFree.anchorOf(ADD_PROJECT.project)!.y)).toBeLessThan(1e-9);
+  without.stop();
+  withFree.stop();
 });

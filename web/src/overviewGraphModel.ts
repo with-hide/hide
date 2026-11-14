@@ -4,7 +4,10 @@ import type { BoardProject } from "./projectBoard";
 import type { AgentRow, GraphProjectKey, OverviewGraphFocus, GraphScope, GraphSessionKey, OverviewGraphChoices, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null; launchEffort: string | null };
-export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
+/** `startSlot`: the place the project's next session would take, where the map draws its start circle (issue 2514). */
+export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null; startSlot: string };
+/** The map's `Add project` place: one project of its own with one place in it, held out of every admission. */
+export const ADD_PROJECT = { project: "\u0000add-project", slot: "\u0000add-project:slot", nodes: 2 } as const;
 export type GraphFocus = OverviewGraphFocus;
 /** `chosen`: the session whose details are open, drawn whatever the filter says (PRD pane-open-in-overview D-05). */
 export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null; chosen?: string | null };
@@ -212,16 +215,17 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   const pinned = new Set(options.pinned ?? []);
   const admissionPriority = new Map(all.map((group) => [group.id, Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2]));
   const priority = [...all].sort((a, b) => admissionPriority.get(b.id)! - admissionPriority.get(a.id)! || a.id.localeCompare(b.id));
-  // Admit complete name + access-slot pairs first. A greedy large project
-  // must not consume the one position another project needs.
+  // Admit complete name + start-slot + access-slot triples first. A greedy large
+  // project must not consume the one position another project needs. The map's
+  // Add project place is held out before any project (issue 2514).
   const groups: GraphProject[] = [];
-  let minimum = 0;
+  let minimum = all.length ? ADD_PROJECT.nodes : 0;
   for (const group of priority) {
     const protectedCount = group.agents.filter((row) => pinned.has(row.id)).length;
     const access = Math.min(group.agents.length, protectedCount + 1);
-    if (minimum + 1 + access > LAYOUT_NODE_LIMIT) break;
-    groups.push({ ...group, shown: [], revealSlot: null, revealed: null });
-    minimum += 1 + access;
+    if (minimum + 2 + access > LAYOUT_NODE_LIMIT) break;
+    groups.push({ ...group, shown: [], revealSlot: null, revealed: null, startSlot: `${group.id}:start` });
+    minimum += 2 + access;
   }
   let room = LAYOUT_NODE_LIMIT - minimum;
   let hidden = all.length - groups.length;
