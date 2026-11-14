@@ -562,11 +562,12 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
-      - name: hided's pane bootstrap, file opener, root identity, its roles, the device node's pane service, the CLI's daemon start and end-to-end tests
+      - name: hided's pane bootstrap, external tools, file opener, root identity, its roles, the device node's pane service, the CLI's daemon start and end-to-end tests
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 25
         run: |
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & (test(pane_auth) | test(opener) | test(open_command) | test(workspace_cli) | test(root_identity_is_the_one_the_node_reads) | test(/^role::/))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & (test(pane_auth) | test(/^access/) | test(opener) | test(open_command) | test(workspace_cli) | test(root_identity_is_the_one_the_node_reads) | test(/^role::/))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^access::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^arguments::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-node) & kind(lib)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^opener_lifecycle::/)'

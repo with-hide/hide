@@ -915,11 +915,13 @@ A delivery command on it (`hide agent`, `hide request`, `hide inbox`, `hide watc
 `code_owned_authority_current` holds it only for the credential of the same connection at Act, so a letter or spawn asked before the operator disconnected the tool or set it to View only is not written (`caller_identity_changed`).
 A pane hint is refused `caller_identity_conflict`, as Desk's is.
 A spawn without `--parent` is a handoff whose origin is the tool's record, registered by its first spawn, so the agent is the operator's own and `hide_started` names its connection (`HideStarted::access`) and leaves it out of Hide AI's work; `hide agent show`, `hide agent list` and `hide ps` carry `origin_tool`, the tool's name, for it and for no other start.
-A spawn with `--parent` is refused `access_spawn_parent`, one with `--beside` or a plan node `access_needs_agent`, and one with a `task` `task_reserved`, before anything of it is read.
+A spawn with `--parent` is refused `access_spawn_parent` and one with `--beside` or a plan node `access_needs_agent`, before anything of it is read (`hide_core::access::delivery_need`, the one table the command boundary reads too); one with a `task` is refused `task_reserved` by the spawn's own rule, which only Hide itself passes (`Actor::hide_itself`).
 A tool's letter goes to its recipient like any other, under the tool's name; the reply waits in the tool's `hide inbox`, whose `ack_command` takes it, and the same intent asked again returns the first letter.
 No agent writes to a tool first: a send to `hide:access:…` is refused `target_unavailable`, as one to `hide:desk` is, so a tool hears only replies to its own letters and its own watches' warnings.
 A tool has no exception to a letter's deadlines or the ledger's limits.
 At Act a tool may also end or put to sleep any registration, which the diagnostic log records with its connection (`agent.ended_by_tool`, `agent.sleep_by_tool`), and type into a pane with `hide pane send`; it opens no pane and names no purpose.
+A tool does what the operator could do through `hide` (D-12, D-27); it is no parent of what it starts, so the agents it starts are the operator's, and a tool that should own none of them stays View only.
+When the connection ends (the operator's disconnect, the tool's leave, or a list restored at start without it), the core asks the store to end what that tool kept (`Mutation::EndTools`): its origin records, the watches it keeps and the answer waits of its letters, so none holds a watch slot or warns a mailbox nobody reads; the agents it started run on and keep its name as their origin.
 
 ## The operator's View feedback
 
