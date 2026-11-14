@@ -113,7 +113,7 @@ class Splitting(unittest.TestCase):
     # shard then pays its own setup before a test runs, so the fixed cost is
     # about 402 seconds whatever the count, and only another shard shortens the
     # wait. The lane's own numbers, medians of 115 successful `web e2e windows`
-    # jobs measured on 2026-11-15: `build hided` 288 s, the shard's setup 114 s.
+    # jobs measured on 2026-11-14: `build hided` 288 s, the shard's setup 114 s.
     # The target is the 720 s the shard's own step is sized to, which the test
     # work alone already met at two shards, so this holds what that does not:
     # that the lane, fixed cost and tests together, clears it at the fewest
