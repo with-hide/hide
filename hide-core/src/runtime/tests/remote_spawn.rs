@@ -807,7 +807,16 @@ fn a_spawn_a_tool_asks_for_starts_as_its_connection_and_names_the_tool_as_origin
         (shown.id.as_str(), shown.agent_count),
         (connection.as_str(), 1)
     );
-    assert_eq!(shown.agents, std::slice::from_ref(&child.id));
+    assert_eq!(
+        shown.agents,
+        [crate::model::AccessAgentSnapshot {
+            agent_id: child.id.clone(),
+            // The core's own id of the device's pane, which the agent's
+            // row carries and a window opens.
+            pane_id: format!("remote:{DEVICE}:pane:{}", started["pane"].as_str().unwrap()),
+        }],
+        "Settings opens the tool's agent by its pane (B15)"
+    );
 }
 
 /// `--machine` may name a dialed device by the SSH alias it was added with,
