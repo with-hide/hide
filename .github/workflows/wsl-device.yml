@@ -47,6 +47,10 @@ on:
         description: The filter of the tests to repeat; empty runs the lane's own selection.
         type: string
         default: ''
+      threads:
+        description: How many walks run at once, for telling one that fails beside another from one that fails alone; empty is nextest's own count.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -253,11 +257,14 @@ jobs:
           HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
           REPEAT: ${{ inputs.repeat || '1' }}
           TESTS: ${{ inputs.tests || '' }}
+          THREADS: ${{ inputs.threads }}
         run: |
           filter="$TESTS"
           if [ -z "$filter" ]; then filter='test(/^windows_ssh_device::/)'; fi
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
-          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate --retries 0 --stress-count "$REPEAT"
+          threads=()
+          if [ -n "$THREADS" ]; then threads=(--test-threads "$THREADS"); fi
+          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate --retries 0 --stress-count "$REPEAT" ${threads[@]+"${threads[@]}"}
       - name: Mint the development issues token
         # Development issues live in this repository (docs/TESTING.md,
         # Flaky tests); the App's token reads this run and files them. A run
