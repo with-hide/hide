@@ -12175,6 +12175,115 @@ fn a_gate_the_conductor_shows_asks_at_once_with_its_views() {
     assert!(question(&runtime).is_some(), "the fixed screens ask again");
 }
 
+/// Screens shown for two gates while the Conductor's own question holds
+/// the decision stay with their own gate (review F1): once that question
+/// goes, each gate asks with only what was shown for it. A node dropped
+/// and taken up again has no showing left (review F2): its gate waits for
+/// a new one, or for its own lines.
+#[test]
+fn a_shown_gate_keeps_its_own_screens_and_new_work_needs_a_new_showing() {
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(json!("the parser"), json!("the guide")),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    for node in ["fix", "docs"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "working", "agent_id": "agent-2"}}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge them later?"}),
+    )
+    .unwrap();
+    let parser = project_view(&mut runtime, "/checkouts/fixture/parser.html");
+    let guide = project_view(&mut runtime, "/checkouts/fixture/guide.html");
+    for (node, view) in [("fix", &parser), ("docs", &guide)] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "gate_show", "node": node, "show": [view]}),
+        )
+        .unwrap();
+    }
+    let asked = |runtime: &mut Runtime| {
+        runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+        let question = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .clone();
+        question.map(|question| (question.key, question.node))
+    };
+    assert_eq!(
+        asked(&mut runtime).unwrap().1,
+        None,
+        "the Conductor's question stands"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    let (key, node) = asked(&mut runtime).expect("a shown gate asks once the decision is free");
+    assert_eq!(node.as_deref(), Some("fix"));
+    assert_eq!(
+        decision_views(&mut runtime),
+        [(parser.clone(), "conductor")]
+    );
+    assert!(runtime.mission_answer_event("mission-1", key, Some(1), None, false));
+    let (_, node) = asked(&mut runtime).expect("the next shown gate asks");
+    assert_eq!(node.as_deref(), Some("docs"));
+    assert_eq!(decision_views(&mut runtime), [(guide.clone(), "conductor")]);
+
+    // Dropped, its question goes; taken up again, the node's gate waits for
+    // a new showing.
+    let patch = |runtime: &mut Runtime, status: &str| {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": "docs", "patch": {"status": status}}),
+        )
+        .unwrap();
+    };
+    patch(&mut runtime, "dropped");
+    assert_eq!(asked(&mut runtime), None);
+    patch(&mut runtime, "working");
+    assert_eq!(asked(&mut runtime), None);
+    assert_eq!(
+        node_view(&runtime, "docs").gate.unwrap().state,
+        GateState::Ahead
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "docs", "show": [guide]}),
+    )
+    .unwrap();
+    assert_eq!(asked(&mut runtime).unwrap().1.as_deref(), Some("docs"));
+}
+
 /// PRD mission-human-gate D-11, B7, B21: an answer that is not `계속 진행`,
 /// here written on the phone, leaves the gate open and sends its words to
 /// the node's worker as a defect with where they came from; the node works

@@ -141,7 +141,7 @@ impl Runtime {
         match line.when {
             GateWhen::End => {
                 node.status == NodeStatus::Working
-                    && (line.shown_at_unix_ms.is_some() || self.own_lines_met(mission, node))
+                    && (!line.shown.is_empty() || self.own_lines_met(mission, node))
             }
             GateWhen::Start => {
                 crate::mission_health::could_start(mission, node) && open_fix(node).is_none()
@@ -346,7 +346,7 @@ impl Runtime {
                     .find(|line| line.kind == CriterionKind::Human)
                 {
                     line.asked = None;
-                    line.shown_at_unix_ms = None;
+                    line.shown.clear();
                 }
                 // Before its start the node has no work to send back: the
                 // words wait as a line, and the gate asks again once the
@@ -474,12 +474,13 @@ impl Runtime {
     /// `hide mission gate <node> --show` (operator decision 2026-11-14): the
     /// Conductor shows the operator what the node's end gate looks at while
     /// the node still works, so the gate asks on the map now rather than
-    /// only in the Conductor's pane. The Views it names join the gate's
-    /// question: the open question's links when it asks already, else the
-    /// Views the Conductor opened, which the question takes when it asks.
-    /// Only the Conductor shows, and only an end gate not passed on a node
-    /// at work in a mission that runs; a start gate asks by itself once its
-    /// node could start, and a gate that passed changes nothing.
+    /// only in the Conductor's pane. The Views it names are kept on the
+    /// gate's line, never in the Conductor's own Views another question
+    /// would take, and join the gate's question: at once when it asks
+    /// already, else when it asks. Only the Conductor shows, and only an end
+    /// gate not passed on a node at work in a mission that runs; a start
+    /// gate asks by itself once its node could start, and a gate that passed
+    /// changes nothing.
     pub(super) fn show_gate(
         &mut self,
         actor: &Actor,
@@ -502,11 +503,10 @@ impl Runtime {
         let asking = asks(mission.question.as_ref(), node);
         let links = self.question_view_links(&id, actor, show, None, false)?;
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
-        for link in links {
-            match target.question.as_mut().filter(|_| asking) {
-                Some(question) => push_view_link(&mut question.views, link),
-                None => push_view_link(&mut target.conductor_views, link),
-            };
+        if let Some(question) = target.question.as_mut().filter(|_| asking) {
+            for link in &links {
+                push_view_link(&mut question.views, link.clone());
+            }
         }
         if let Some(line) = target
             .nodes
@@ -518,7 +518,9 @@ impl Runtime {
                     .find(|line| line.kind == CriterionKind::Human)
             })
         {
-            line.shown_at_unix_ms = Some(now);
+            for link in links {
+                push_view_link(&mut line.shown, link);
+            }
         }
         target.updated_at_unix_ms = now;
         crate::diagnostic!(json!({
@@ -689,7 +691,15 @@ impl Runtime {
             return false;
         };
         let conductor = mission.conductor.actor.clone();
-        let views = match self.question_view_links(id, &conductor, &[], Some(key), true) {
+        // What the Conductor showed for this gate leads, then what it and
+        // the node's worker opened, as a decision about the node links them.
+        let mut views: Vec<_> = mission
+            .node(key)
+            .and_then(|node| {
+                crate::mission_criteria::gate(&node.criteria).map(|line| line.shown.clone())
+            })
+            .unwrap_or_default();
+        let opened = match self.question_view_links(id, &conductor, &[], Some(key), true) {
             Ok(views) => views,
             Err(code) => {
                 // A link that cannot be made never keeps the gate from
@@ -701,6 +711,17 @@ impl Runtime {
                 Vec::new()
             }
         };
+        for link in opened {
+            if views.len() >= crate::missions::VIEW_LINK_LIMIT {
+                break;
+            }
+            if !views
+                .iter()
+                .any(|known: &crate::missions::ViewLink| known.same_view(&link))
+            {
+                views.push(link);
+            }
+        }
         let Some(target) = self.missions.book.get_mut(id) else {
             return false;
         };

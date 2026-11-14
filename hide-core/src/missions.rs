@@ -1540,12 +1540,16 @@ impl MissionNode {
     }
 
     /// The node goes back to work from a finish at `now`: a new round for
-    /// the keys of Hide's acts (B27), and the time its quiet without a push
-    /// counts from.
+    /// the keys of Hide's acts (B27), the time its quiet without a push
+    /// counts from, and no showing of its gate, which was of the work that
+    /// ended (`Criterion::shown`).
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
         self.done_head = None;
+        for line in &mut self.criteria {
+            line.shown.clear();
+        }
     }
 
     /// A change at work delivered by pull request: the node a push is asked
