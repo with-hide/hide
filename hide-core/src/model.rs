@@ -2184,6 +2184,11 @@ pub struct SidebarAgentSnapshot {
     /// nothing.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub wait_count: u32,
+    /// How many of its own subagents the row's wait waits on too
+    /// (`axes.rs::subagents_waited_on`), which a children wait's line adds
+    /// (`자식 1개 · 서브에이전트 2개 기다림`); 0 when it waits on none.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_subagents: u32,
     /// How many of the replies this row awaits are still being made
     /// (`axes.rs::answer_in_progress`), decided on the lineage pass.
     #[serde(skip_serializing)]

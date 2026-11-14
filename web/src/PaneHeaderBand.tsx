@@ -125,7 +125,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // A Conductor's mission line already names the work its children do.
   const waitingOnChildren = band || off || missionLine ? null : header?.waiting_on_children ?? null;
   const waitingOnSubagents = band || off ? null : header?.waiting_on_subagents ?? null;
-  const waiting = waitingOnChildren || waitingOnSubagents ? waitWord(t, waitingOnChildren ? { wait: "children", wait_count: waitingOnChildren, subagents: waitingOnSubagents } : { wait: "subagents", wait_count: waitingOnSubagents }) : null;
+  const waiting = waitingOnChildren || waitingOnSubagents ? waitWord(t, waitingOnChildren ? { wait: "children", wait_count: waitingOnChildren, wait_subagents: waitingOnSubagents } : { wait: "subagents", wait_count: waitingOnSubagents }) : null;
   // Before any early return: a hook runs on every render.
   // A raised ask names the device its pane is on; any other band's pane is looked up in the rows.
   const unreachable = useUnreachable(band?.raised ? { device: band.raised.open_device_id ?? null } : band?.action ? { pane: band.action.pane_id } : null);

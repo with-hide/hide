@@ -888,6 +888,7 @@ mod tests {
             subagents: 0,
             subagents_left: 0,
             wait_count: 0,
+            wait_subagents: 0,
             replies_in_progress: 0,
             children_moving: false,
             own_wait: None,

@@ -252,13 +252,9 @@ pub(crate) fn of(
             && agent.wait == Some(crate::model::AgentWait::Children))
         .then_some(agent.descendant_counts.working)
         .filter(|working| *working > 0);
-        let waiting_on_subagents = (agent.state.verb == super::RequestVerb::Waiting
-            && matches!(
-                agent.wait,
-                Some(crate::model::AgentWait::Children | crate::model::AgentWait::Subagents)
-            )
-            && super::axes::subagents_running(agent))
-        .then_some(agent.subagents);
+        let waiting_on_subagents = (agent.state.verb == super::RequestVerb::Waiting)
+            .then(|| super::axes::subagents_waited_on(agent))
+            .filter(|subagents| *subagents > 0);
         let sentence = |line: Option<&str>| {
             line.map(str::trim)
                 .filter(|line| !line.is_empty())

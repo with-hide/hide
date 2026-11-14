@@ -62,7 +62,7 @@ export const agentPresentationEnglish = {
   "agents.waitCount.reply_one": "Waiting for {{count}} reply",
   "agents.waitCount.reply_other": "Waiting for {{count}} replies",
   "agents.wait.subagents": "Waiting on subagents",
-  "agents.wait.childrenAndSubagents": "Waiting on children {{children}} · subagents {{subagents}}",
+  "agents.wait.childrenAndSubagents": "Waiting on children ({{children}}) and subagents ({{subagents}})",
   "agents.line.subagentsLeft_one": "{{count}} subagent left",
   "agents.line.subagentsLeft_other": "{{count}} subagents left",
   "agents.subagentsLeftWords_one": "{{count}} subagent left",

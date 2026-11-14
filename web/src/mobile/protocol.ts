@@ -35,6 +35,8 @@ export type PhoneAgent = {
   subagents_left?: number;
   /** How many things its `wait` waits on, which its line counts; absent for running checks and when it waits for nothing. */
   wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds; absent when none. */
+  wait_subagents?: number;
   /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
   starred?: true;
   agent_kind: string;

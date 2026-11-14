@@ -423,6 +423,21 @@ pub(crate) fn subagents_running(agent: &SidebarAgentSnapshot) -> bool {
     quiet_itself(agent) && agent.subagents > 0
 }
 
+/// How many of its own subagents a row's settled wait waits on: all that
+/// run while it waits on them or on its children, else none. The one
+/// answer the row's line and its pane head read.
+pub(crate) fn subagents_waited_on(agent: &SidebarAgentSnapshot) -> u32 {
+    let waits = matches!(
+        agent.wait,
+        Some(crate::model::AgentWait::Children | crate::model::AgentWait::Subagents)
+    );
+    if waits && subagents_running(agent) {
+        agent.subagents
+    } else {
+        0
+    }
+}
+
 /// What a row the lineage found quiet over moving work waits on: its
 /// children, unless its own turn completed, the label read it as finished
 /// and the operator has not read that turn yet, which they do not hide, as background tasks do

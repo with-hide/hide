@@ -2,7 +2,7 @@ import { ArrowRightIcon, ChevronRightIcon, ListTreeIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { agentProductName } from "../agentAdapters";
-import { recordWords, lineParts, lineText, lineTone, markTone, rowDimmed, treeLine } from "../agentRow";
+import { recordWords, lineParts, lineText, lineTone, markTone, rowDimmed, subagentsWorkingWords, treeLine } from "../agentRow";
 import { RowLineText } from "./row-line-text";
 import { deviceConnected, localDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -339,7 +339,7 @@ function TreeItem({
       data-tree-pane={child.pane_id}
       data-agent-child={child.pane_id}
       data-depth={line.depth}
-      aria-label={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, reason ?? (childLine ? lineText(t, child, childLine) : statusText(t, child.status_code)), child.mark === "going" && child.subagents ? t("agents.subagents.working", { count: child.subagents }) : null, ask && !unavailable ? `${t(`agentSessions.verb.${ask.verb}`)}: ${askWhat(t, ask.verb, ask.what, ask.subject)}` : null, deviceLabel && device !== parentDevice ? deviceLabel : null].filter(Boolean).join(", ")}
+      aria-label={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, reason ?? (childLine ? lineText(t, child, childLine) : statusText(t, child.status_code)), subagentsWorkingWords(t, child), ask && !unavailable ? `${t(`agentSessions.verb.${ask.verb}`)}: ${askWhat(t, ask.verb, ask.what, ask.subject)}` : null, deviceLabel && device !== parentDevice ? deviceLabel : null].filter(Boolean).join(", ")}
       className={cn("items-stretch gap-none py-none", ask && !unavailable && "ring-1 ring-inset ring-foreground", (unavailable || rowDimmed(child)) && "opacity-(--opacity-dimmed)")}
     >
       <TreeRails place={place} />

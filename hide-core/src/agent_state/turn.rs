@@ -992,6 +992,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         Some(crate::model::AgentWait::Reply) => agent.replies_in_progress,
         Some(crate::model::AgentWait::Checks) | None => 0,
     };
+    agent.wait_subagents = super::axes::subagents_waited_on(agent);
     agent.requires_close_confirmation =
         agent_requires_close_confirmation(activity, demand, agent.blocked, agent.start);
     agent.requires_close_status_check =
@@ -1893,6 +1894,12 @@ mod row_tests {
                 0
             )
         );
+        // Resting or resolving it would end the subagents with its process.
+        assert_eq!(
+            rest_refusal(&rows[0]),
+            Some(crate::model::AgentActionRefusal::Working)
+        );
+        assert!(crate::agent_state::sessions::resolve_refusal(&rows[0]).is_some());
 
         // The finished turn, not read yet, is to read; its line counts them.
         rows[0].own_unread = true;
@@ -1939,7 +1946,7 @@ mod row_tests {
         let mut rows = vec![root, child];
         crate::agent_state::apply_lineage(&mut rows, &[], &[]);
         assert_eq!(
-            (rows[0].wait, rows[0].wait_count, rows[0].subagents),
+            (rows[0].wait, rows[0].wait_count, rows[0].wait_subagents),
             (Some(AgentWait::Children), 1, 1)
         );
         assert_eq!(

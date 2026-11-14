@@ -138,6 +138,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         subagents: index === 5 ? 3 : index === 11 ? 2 : index === 3 ? 1 : undefined,
         subagents_left: index === 3 ? 1 : undefined,
         wait_count: example.wait === "children" ? 2 : undefined,
+        wait_subagents: index === 11 ? 2 : undefined,
         lineage_child_pane_ids: index === 5 ? ["a1c1", "a1c2"] : [],
         // One Working root is a fork of the row beside it (PRD fork-operator-root B8).
         forked_from: index === 4 ? { pane_id: "s5", label: EXAMPLES[5]!.title } : null,

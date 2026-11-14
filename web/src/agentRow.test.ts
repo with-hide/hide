@@ -91,6 +91,9 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     expect(markWords(t, { mark: "done", status_code: "done", subagents_left: 2 })).toBe("읽을 것 · 끝남 · 서브에이전트 2개 남음");
     expect(markWords(t, { mark: "going", status_code: "working", subagents: 3 })).toBe("진행 중 · 서브에이전트 3개 작업 중");
     expect(markWords(t, { mark: "waiting", status_code: "waiting", wait: "subagents", wait_count: 2, subagents: 2 })).toBe("진행 중 · 서브에이전트 2개 기다림");
+    expect(markWords(t, { mark: "waiting", status_code: "waiting", wait: "children", wait_count: 1, wait_subagents: 2, subagents: 2 })).toBe("진행 중 · 자식 1개 · 서브에이전트 2개 기다림");
+    // Whatever else the row says, the subagents its title's mark counts are said once (the mark itself is hidden from a screen reader in a row).
+    expect(markWords(t, { mark: "turn", status_code: "question", subagents: 2 })).toBe("내 차례 · 질문 · 서브에이전트 2개 작업 중");
     expect(markWords(t, { mark: "asleep", status_code: "sleeping" })).toBe("재움 · 열면 깨어남");
     // Slept for memory, it says so; a waking row says only that it wakes.
     expect(markWords(t, { mark: "asleep", status_code: "sleeping", sleep: { cause: "memory_pressure" } })).toBe("재움 · 메모리 부족 · 열면 깨어남");
@@ -238,8 +241,8 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const working = row("x", { detail: "파서 고치는 중", unread: true });
     expect(lineText(t, working, sidebarLine(working)!)).toBe("파서 고치는 중");
     expect(treeLine(working)).toBeNull();
-    const waiting = (wait: AgentRow["wait"], wait_count?: number, pull_request?: number, subagents?: number) => {
-      const agent = row("w", { activity: "stopped", status_code: "waiting", wait, wait_count, subagents });
+    const waiting = (wait: AgentRow["wait"], wait_count?: number, pull_request?: number, wait_subagents?: number) => {
+      const agent = row("w", { activity: "stopped", status_code: "waiting", wait, wait_count, wait_subagents, subagents: wait_subagents });
       agent.state = { ...agent.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request } };
       return lineText(t, agent, sidebarLine(agent)!);
     };

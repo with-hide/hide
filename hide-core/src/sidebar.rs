@@ -461,19 +461,7 @@ pub fn project_pane_children(
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
 ) -> Option<crate::model::PaneChildrenSnapshot> {
     let agent = agents.iter().find(|agent| agent.pane_id == pane_id)?;
-    let dialect =
-        hide_agent_adapter::adapter(&agent.agent_kind).and_then(|row| row.subagent_counts);
-    let status = dialect.and_then(status_of);
-    let instrumentation = hide_agent_hooks::diagnosis::instrumentation(
-        hide_agent_hooks::diagnosis::PaneObservation {
-            dialect,
-            token_version: tokens.version,
-            working: tokens.working,
-            done: tokens.done,
-            blocked: tokens.blocked,
-        },
-        status.as_ref(),
-    );
+    let instrumentation = pane_instrumentation(&agent.agent_kind, tokens, status_of);
     // Pane children come from the lineage, which the engine reports directly, so
     // they are known whether or not the hook is installed. Only the
     // in-process count depends on instrumentation (PRD D-24).
@@ -512,7 +500,7 @@ pub fn project_pane_children(
 }
 
 /// How many subagents a pane's session runs now, by its hook's count, read
-/// from the same observation as the pane's children
+/// through the same observation as the pane's children
 /// ([`project_pane_children`]); 0 when none run and when the count cannot be
 /// read (an agent that declares none, a hook that is not in, a session older
 /// than it), which no screen tells apart from none (docs/UI_BEHAVIOR.md,
@@ -522,6 +510,18 @@ pub fn running_subagents(
     tokens: crate::agent_hooks::PaneHookTokens,
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
 ) -> u32 {
+    pane_instrumentation(agent_kind, tokens, status_of)
+        .working
+        .unwrap_or(0)
+}
+
+/// The one reading of a pane's hook counts against its agent's dialect and
+/// hook status, which the pane head and the agent's row both ask.
+fn pane_instrumentation(
+    agent_kind: &str,
+    tokens: crate::agent_hooks::PaneHookTokens,
+    status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
+) -> hide_agent_hooks::diagnosis::PaneInstrumentation {
     let dialect = hide_agent_adapter::adapter(agent_kind).and_then(|row| row.subagent_counts);
     let status = dialect.and_then(status_of);
     hide_agent_hooks::diagnosis::instrumentation(
@@ -534,8 +534,6 @@ pub fn running_subagents(
         },
         status.as_ref(),
     )
-    .working
-    .unwrap_or(0)
 }
 
 /// What a machine's kit says about updating its agents, for the judgement of
@@ -951,6 +949,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         subagents: 0,
         subagents_left: 0,
         wait_count: 0,
+        wait_subagents: 0,
         replies_in_progress: 0,
         children_moving: false,
         own_wait: None,

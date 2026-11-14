@@ -192,6 +192,8 @@ export type AgentRow = {
   subagents_left?: number;
   /** How many things its `wait` waits on, which its line counts (`자식 2개 기다림`); absent for running checks and when it waits for nothing. */
   wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds (`자식 1개 · 서브에이전트 2개 기다림`); absent when none. */
+  wait_subagents?: number;
   /** How deep under its lineage root; a root is 0. */
   lineage_depth?: number;
   /** Whether the operator has this row's descendants folded away; folded is the default. */
