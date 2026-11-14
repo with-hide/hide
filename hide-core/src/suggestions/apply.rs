@@ -58,6 +58,9 @@ pub(crate) struct ApplyBrief {
     pub fix: Option<String>,
     /// The document fix the operator read on the row before pressing it.
     pub plan: Option<super::notebook::FixPlan>,
+    /// The signal and the command, check or step the line rests on: what the
+    /// grouping by tag wrote it from, or, for a line the investigation wrote,
+    /// the failure its records name most (`named_by_records`).
     pub basis: Option<(Signal, String)>,
     /// How strong a fix the line asks for (D-13): 0 a document, 1 a script
     /// or check, 2 a hook.
@@ -197,20 +200,27 @@ pub(crate) fn begin(
 /// rests on and the pull requests it happened in, and nothing an agent's
 /// session said, whatever the repository's visibility.
 pub(crate) fn issue_text(brief: &ApplyBrief) -> (String, String) {
-    let (signal, tag) = brief
-        .basis
-        .clone()
-        .unwrap_or((Signal::FailedTool, "unknown".to_owned()));
-    let title = match signal {
-        Signal::CheckFailed => format!("CI check `{tag}` keeps failing"),
-        Signal::ChangeRequest => format!("Reviews keep asking for changes: `{tag}`"),
-        _ => format!("Recurring failure: `{tag}`"),
+    let title = match &brief.basis {
+        Some((Signal::CheckFailed, tag)) => format!("CI check `{tag}` keeps failing"),
+        Some((Signal::ChangeRequest, tag)) => {
+            format!("Reviews keep asking for changes: `{tag}`")
+        }
+        Some((_, tag)) => format!("Recurring failure: `{tag}`"),
+        // Its records were pruned, or name no command or check this page may
+        // quote, and a made-up name would be filed as a real one.
+        None => "Recurring failure with no command or check to name".to_owned(),
     };
-    let mut body = vec![format!(
-        "Hide found this {} recurring in {} records.",
-        signal.as_str(),
-        brief.records
-    )];
+    let mut body = vec![match &brief.basis {
+        Some((signal, _)) => format!(
+            "Hide found this {} recurring in {} records.",
+            signal.as_str(),
+            brief.records
+        ),
+        None => format!(
+            "Hide found this recurring in {} records, none of which names a command or check.",
+            brief.records
+        ),
+    }];
     if !brief.prs.is_empty() {
         body.push(format!(
             "Pull requests: {}",
@@ -244,13 +254,38 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
         cause: line.cause.clone(),
         fix: line.fix.clone().or_else(|| said_fix(line, index)),
         plan: line.plan.clone(),
-        basis: line.basis.clone(),
+        // The grouping writes a line's basis; an investigation's line has
+        // none, so the issue it files names what its records shared instead.
+        basis: line.basis.clone().or_else(|| named_by_records(&entries)),
         level: line.level,
         prs,
         records: line.records.len(),
         pr,
         base: None,
     }
+}
+
+/// The signal and tag a line's records name most, the newest first on a tie:
+/// what a line the grouping did not write rests on (B14). Only a signal whose
+/// tag is a command or a check's name counts, because that tag is the one an
+/// issue may quote on a public page (D-29). `entries` is newest first, so the
+/// first record of a key is the newest one. `None` when every record the line
+/// named was pruned or names no work.
+fn named_by_records(entries: &[&super::ledger::RecordEntry]) -> Option<(Signal, String)> {
+    let mut counts: BTreeMap<(Signal, String), (usize, usize)> = BTreeMap::new();
+    for (newest, entry) in entries.iter().enumerate() {
+        if !entry.signal.tag_names_work() {
+            continue;
+        }
+        counts
+            .entry((entry.signal, entry.tag.clone()))
+            .or_insert((0, newest))
+            .0 += 1;
+    }
+    counts
+        .into_iter()
+        .min_by_key(|(_, (count, newest))| (std::cmp::Reverse(*count), *newest))
+        .map(|(basis, _)| basis)
 }
 
 /// What a line of the operator's repeated request or ignored card asks the
@@ -490,6 +525,7 @@ fn base36(mut value: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ledger::RecordId;
     use super::*;
 
     fn line(stage: Stage) -> Line {
@@ -544,6 +580,103 @@ mod tests {
             let attempt = life.attempt.as_ref().unwrap();
             assert_eq!(attempt.issue_title, first.issue_title);
             assert_eq!(attempt.issue_since, Some(100), "since the first try");
+        }
+    }
+
+    /// B14: the records a line rests on, numbered. A line the investigation
+    /// wrote carries no basis, so the issue it files names the failure its
+    /// records shared.
+    fn records(facts: &[(Signal, &str, u64)]) -> RecordIndex {
+        RecordIndex {
+            entries: facts
+                .iter()
+                .enumerate()
+                .map(
+                    |(at, (signal, tag, time))| super::super::ledger::RecordEntry {
+                        id: RecordId(at as u64 + 1),
+                        signal: *signal,
+                        tag: (*tag).into(),
+                        session: None,
+                        pr: None,
+                        at_unix_ms: *time,
+                        always: false,
+                        improvement: None,
+                        said: None,
+                        line: None,
+                        fresh: false,
+                    },
+                )
+                .collect(),
+        }
+    }
+
+    /// B14, D-29: an issue line the investigation wrote has no basis, and its
+    /// issue named the failure `unknown` however much its records said. The
+    /// title, and the retry that keeps it, now name the failure the records
+    /// share; a line whose records were all pruned names none of them.
+    #[test]
+    fn an_issue_line_the_investigation_wrote_names_the_failure_its_records_share() {
+        let index = records(&[
+            (Signal::FailedTool, "cargo test", 10),
+            (Signal::FailedTool, "cargo test", 20),
+            (Signal::FailedTool, "pnpm lint", 30),
+        ]);
+        let mut investigated = line(Stage::Suggested);
+        investigated.basis = None;
+        investigated.outcome = Some(Outcome::Issue);
+        investigated.records = vec![RecordId(1), RecordId(2), RecordId(3)];
+        let mut life = LineLife::default();
+        begin(&mut investigated, &mut life, &index, Begin::New, false, 100).unwrap();
+        let first = life.attempt.clone().unwrap();
+        assert_eq!(
+            first.issue_title.as_deref(),
+            Some("Recurring failure: `cargo test`"),
+            "the command two of its three records name"
+        );
+        life.attempt.as_mut().unwrap().phase = AttemptPhase::Failed;
+        begin(
+            &mut investigated,
+            &mut life,
+            &index,
+            Begin::Retry,
+            false,
+            300,
+        )
+        .unwrap();
+        assert_eq!(
+            life.attempt.as_ref().unwrap().issue_title,
+            first.issue_title,
+            "a retry looks for the first try's title"
+        );
+
+        // Its records were pruned, or name only a session's words, which a
+        // public page may not quote (D-29).
+        let words = records(&[(Signal::Improvement, "6 config files searched", 40)]);
+        for (id, index) in [(9, &index), (1, &words)] {
+            let mut unnamed = line(Stage::Suggested);
+            unnamed.id = LineId(5);
+            unnamed.basis = None;
+            unnamed.outcome = Some(Outcome::Issue);
+            unnamed.records = vec![RecordId(id)];
+            let mut unnamed_life = LineLife::default();
+            begin(
+                &mut unnamed,
+                &mut unnamed_life,
+                index,
+                Begin::New,
+                false,
+                400,
+            )
+            .unwrap();
+            assert_eq!(
+                unnamed_life
+                    .attempt
+                    .as_ref()
+                    .unwrap()
+                    .issue_title
+                    .as_deref(),
+                Some("Recurring failure with no command or check to name")
+            );
         }
     }
 
