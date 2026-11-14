@@ -886,6 +886,34 @@ impl Runtime {
             .any(|registration| registration.actor.same_identity(actor))
     }
 
+    /// Whether Hide is carrying registration `id` over to a pane its
+    /// conversation comes back in: a wake, an archive resume or Reopen
+    /// closed on its way to that pane, or a move the delivery store has
+    /// still to make (`registration_rebinds`).
+    pub(super) fn registration_continues(&self, id: &str) -> bool {
+        let ui = &self.snapshot.ui_state;
+        let holds = |registration: Option<&crate::agent_sleep::DormantRegistration>| {
+            registration.is_some_and(|registration| registration.id == id)
+        };
+        self.registration_rebinds.contains_key(id)
+            || ui
+                .agent_sleep
+                .dormant
+                .values()
+                .any(|record| record.wake_pane_id.is_some() && holds(record.registration.as_ref()))
+            || ui
+                .session_archive
+                .records
+                .values()
+                .flat_map(|record| &record.members)
+                .any(|member| {
+                    (member.resume.in_flight()
+                        || matches!(member.resume, crate::session_archive::Resume::Done { .. }))
+                        && holds(member.registration.as_ref())
+                })
+            || self.reopen_continuation_holds(id)
+    }
+
     /// The registrations the delivery store has still to point at a woken
     /// pane.
     pub(crate) fn delivery_registration_rebinds(

@@ -501,11 +501,15 @@ fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_wo
     // A Conductor registers at its first start, after `hide mission create`,
     // so the mission does not name that registration; one that was
     // registered before it created the mission is named.
-    resumed_in_a_pane_with_no_registration(false);
-    resumed_in_a_pane_with_no_registration(true);
+    resumed_in_a_pane_with_no_registration(false, false);
+    resumed_in_a_pane_with_no_registration(true, false);
+    // Hide's own wake, archive resume or Reopen closed carries the former
+    // registration to the pane, once it confirms: the pane keeps that one,
+    // with its children, and the move does not register it first.
+    resumed_in_a_pane_with_no_registration(false, true);
 }
 
-fn resumed_in_a_pane_with_no_registration(registered_before_the_mission: bool) {
+fn resumed_in_a_pane_with_no_registration(registered_before_the_mission: bool, carried: bool) {
     use crate::coordination::{AgentRecord, Mutation};
     let fixture = conducting();
     let digest = crate::engine::tokens::session_digest;
@@ -621,6 +625,28 @@ fn resumed_in_a_pane_with_no_registration(registered_before_the_mission: bool) {
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
         runtime.refresh_missions();
     };
+    // The conversation's archive resume is on its way to `recipient`: it
+    // holds the former registration and moves it over once it confirms.
+    if carried {
+        let record: crate::session_archive::ArchiveRecord = serde_json::from_value(json!({
+            "phase": "archived", "revision": 1, "archived_at_unix_ms": 1,
+            "project_root": PROJECT, "project_label": "fixture",
+            "members": [{
+                "machine": crate::node::TEST_NODE, "pane_id": "sender", "kind": "codex",
+                "native_session_id": "sender-session", "checkout_path": PROJECT,
+                "title": "Conductor", "depth": 0, "closed": true,
+                "registration": {"id": former, "actor": conductor},
+                "resume": {"state": "confirming", "pane_id": "recipient", "since_unix_ms": 1},
+            }],
+        }))
+        .unwrap();
+        runtime
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .insert(crate::session_archive::ArchiveId::new().unwrap(), record);
+    }
     seen(&mut runtime);
     assert_eq!(
         runtime.snapshot.missions.items[0].conductor.pane_id,
@@ -628,6 +654,25 @@ fn resumed_in_a_pane_with_no_registration(registered_before_the_mission: bool) {
     );
     let heir = runtime.delivery_observations["recipient"].actor.clone();
     drop(runtime);
+    if carried {
+        // Whatever the move asked of the store lands first; then the resume
+        // confirms and asks the store to move the registration over.
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        fixture.runtime.lock().unwrap().registration_rebinds.insert(
+            former.clone(),
+            crate::coordination::Rebind {
+                from: conductor.clone(),
+                to: heir.clone(),
+                pane: "recipient".into(),
+                terminal_id: None,
+            },
+        );
+    }
 
     // Ending the worker from the pane it came back in is its parent's end.
     let ended = submit(
@@ -646,6 +691,7 @@ fn resumed_in_a_pane_with_no_registration(registered_before_the_mission: bool) {
         .find(|record| !record.ended && record.actor.same_identity(&heir))
         .expect("the pane the conversation came back in is registered");
     assert_eq!(heir_record.parent, None);
+    assert_eq!(heir_record.id == former, carried);
     let child = ledger
         .agents
         .iter()

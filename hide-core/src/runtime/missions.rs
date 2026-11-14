@@ -744,9 +744,10 @@ pub(crate) struct MissionRuntime {
     /// one again.
     pub(crate) answers_typing: std::collections::HashSet<String>,
     /// The missions whose move to the pane their Conductor's conversation
-    /// came back in registered that pane, until the mission names the
-    /// registration the store made (`note_conductor_registrations`). Memory
-    /// only, at most one entry per open mission.
+    /// came back in registered that pane, or left it to a registration Hide
+    /// carries there, until the mission names the registration the store
+    /// holds for the pane (`note_conductor_registrations`). Memory only, at
+    /// most one entry per open mission.
     heirs: std::collections::HashSet<String>,
     /// When each mission's Conductor was first seen missing while its
     /// answer waited; only those missions are kept.
@@ -3237,6 +3238,14 @@ impl Runtime {
                 .then(|| self.registration_of(&former))
                 .flatten();
             let handed = match (agent_id.as_deref(), former_registration.as_deref()) {
+                // Hide's own wake, archive resume or Reopen closed carries the
+                // former registration itself to the pane, children and
+                // letters with it; a second registration would take the pane
+                // first and the store would refuse that move.
+                (None, Some(former_id)) if self.registration_continues(former_id) => {
+                    self.missions.heirs.insert(id.clone());
+                    Ok(())
+                }
                 (None, Some(former_id)) => match self.heir_record(device, &pane, project) {
                     Some(heir) => self
                         .adopt_mission_workers_as_heir(&id, heir, former_id)
@@ -3285,8 +3294,9 @@ impl Runtime {
     }
 
     /// A mission whose move registered the pane its Conductor's
-    /// conversation came back in names that registration once the store
-    /// holds it, so the next take or return hands its children on in turn.
+    /// conversation came back in, or found its former registration carried
+    /// there, names that registration once the store holds it for the pane,
+    /// so the next take or return hands its children on in turn.
     /// Whether any mission changed. The ledger is the core's own copy in
     /// memory, read only while such a move waits, at most once per waiting
     /// mission per pass.
