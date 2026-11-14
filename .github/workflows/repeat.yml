@@ -266,11 +266,14 @@ jobs:
           while IFS=$'\t' read -r package file; do
             echo "::group::$file x $REPEAT"
             report="$RUNNER_TEMP/junit-$package-$(echo "$file" | tr '/.' '--')"
+            # The package's Vitest matches a filter from its own folder, so the
+            # file is spelled without the package's name.
+            filter="${file#"$package"/}"
             for iteration in $(seq 1 "$REPEAT"); do
               echo "::group::$file, iteration $iteration of $REPEAT"
               # The package's own `test` script, which builds what the tests
               # import (the relay WebAssembly) before the file runs.
-              bash scripts/verify-web.sh "$package" test --retry=0 "$file" \
+              bash scripts/verify-web.sh "$package" test --retry=0 "$filter" \
                 --reporter=junit "--outputFile=$report.$iteration.xml" \
                 || echo "::error title=Failed run::$file failed on iteration $iteration of $REPEAT"
               echo "::endgroup::"

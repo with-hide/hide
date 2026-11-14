@@ -266,6 +266,40 @@ class Playwright(unittest.TestCase):
         self.assertFalse(pattern.search("/work/hide/web/e2e/s3.spec.tsx"))
 
 
+class UnitFiles(unittest.TestCase):
+    """A unit test file is named from the repository root and listed from its
+    package's folder: the two are different strings, and Vitest matches only
+    the second."""
+
+    def test_a_hand_run_name_finds_its_package_and_must_exist(self):
+        self.assertEqual(repeat.unit_path("web/src/searchDetail.test.ts"), "web/src/searchDetail.test.ts")
+        self.assertEqual(repeat.unit_path("searchDetail.test.ts"), "web/src/searchDetail.test.ts")
+        self.assertEqual(repeat.unit_path("env.test.ts"), "desktop/src/main/env.test.ts")
+        for name in ("web/src/nothere.test.ts", "site/tests/legal.test.mjs", "../web/src/a.test.ts", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                repeat.unit_path(name)
+
+    def test_the_plan_names_the_file_from_the_root_and_lists_it_from_the_package(self):
+        # What the lister receives is the package's spelling, which is what
+        # `vitest list` matches; the plan keeps the root's, so a job can find
+        # the file. A root-spelled filter listed 0 tests and would have failed
+        # every units run at its count.
+        asked = []
+
+        def lister(package, files):
+            asked.append((package, files))
+            return 4
+
+        plan = repeat.units_plan(["web/src/searchDetail.test.ts", "desktop/src/main/env.test.ts"], lister)
+        self.assertEqual(asked, [("desktop", ["desktop/src/main/env.test.ts"]), ("web", ["web/src/searchDetail.test.ts"])])
+        self.assertEqual(plan, [{"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 4},
+                                {"package": "web", "files": ["web/src/searchDetail.test.ts"], "tests": 4}])
+
+    def test_a_file_that_lists_no_test_fails_the_count(self):
+        with self.assertRaises(ValueError):
+            repeat.units_plan(["web/src/searchDetail.test.ts"], lambda package, files: 0)
+
+
 class Nextest(unittest.TestCase):
     def test_the_modules_of_a_target_are_one_filterset_over_it(self):
         modules = [

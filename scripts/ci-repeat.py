@@ -330,15 +330,25 @@ def spec_pattern(path):
 
 
 def unit_path(name):
-    """A hand-run unit test name (`searchDetail.test.ts` or its full path) as
-    the path of a unit test file the package's Vitest config collects."""
+    """A hand-run unit test name as the path of a file the package's Vitest
+    config collects: its path from the repository root, or a name a search of
+    the three packages finds once."""
     name = name.strip()
     path = name if UNIT_TEST.match(name) else ""
     if not path:
-        path = next((f"{package}/{name}" for package in UNIT_PACKAGES if (ROOT / package / name).is_file()), "")
-    if not UNIT_TEST.match(path):
-        raise ValueError(f"not a unit test file: {name!r} (expected a path like web/src/searchDetail.test.ts)")
-    if not (ROOT / path).is_file():
+        # A name alone is found anywhere below one of the three packages, and
+        # only when exactly one file has it: two files of one name are two
+        # different tests.
+        found = sorted(
+            candidate.relative_to(ROOT).as_posix()
+            for package in UNIT_PACKAGES
+            for candidate in (ROOT / package).rglob(name)
+            if candidate.is_file() and "node_modules" not in candidate.parts
+        )
+        if len(found) != 1:
+            raise ValueError(f"not a unit test file: {name!r} (expected a path like web/src/searchDetail.test.ts)")
+        path = found[0]
+    if not UNIT_TEST.match(path) or not (ROOT / path).is_file():
         raise ValueError(f"no such unit test: {path}")
     return path
 
@@ -360,10 +370,18 @@ def units_plan(units, lister):
 
 
 def units_lister(package, files):
-    """The tests `vitest list` says the package would run for these files."""
+    """The tests `vitest list` says the package would run for these files.
+
+    The file filters are the ones the package's own Vitest matches, so they
+    are spelled from the package's folder: `desktop/src/main/env.test.ts` is
+    `src/main/env.test.ts` to a run in `desktop/`, and a path from the
+    repository root matches nothing there (measured: it listed 0 tests, which
+    would have made every units run fail its count).
+    """
+    relative = [PurePosixPath(path).relative_to(package).as_posix() for path in files]
     with tempfile.TemporaryDirectory() as directory:
         listed = Path(directory) / "listed.json"
-        command = ["pnpm", "--dir", package, "exec", "vitest", "list", *files, f"--json={listed}"]
+        command = ["pnpm", "--dir", package, "exec", "vitest", "list", *relative, f"--json={listed}"]
         subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
         return len(json.loads(listed.read_text(encoding="utf-8")))
 
