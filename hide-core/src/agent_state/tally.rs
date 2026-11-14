@@ -1035,18 +1035,12 @@ pub mod phone {
                     .get("children_left")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
-                subagents: agent
-                    .get("subagents")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
+                subagents: agent.get("subagents").and_then(Value::as_u64).unwrap_or(0),
                 subagents_left: agent
                     .get("subagents_left")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
-                wait_count: agent
-                    .get("wait_count")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
+                wait_count: agent.get("wait_count").and_then(Value::as_u64).unwrap_or(0),
                 unread: agent
                     .get("unread")
                     .and_then(Value::as_bool)

@@ -1996,9 +1996,10 @@ impl Runtime {
                 .get(&agent.pane_id)
                 .copied()
                 .unwrap_or_default();
-            agent.subagents = crate::sidebar::running_subagents(&agent.agent_kind, tokens, &|dialect| {
-                statuses.status_of(dialect)
-            });
+            agent.subagents =
+                crate::sidebar::running_subagents(&agent.agent_kind, tokens, &|dialect| {
+                    statuses.status_of(dialect)
+                });
         }
     }
 
