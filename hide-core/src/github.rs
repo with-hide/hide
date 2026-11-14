@@ -131,6 +131,55 @@ struct CachedProject {
 /// receives a whole snapshot every time and does not know which half is new.
 type Cache = Arc<Mutex<HashMap<PathBuf, CachedProject>>>;
 
+/// The Projects fields of an issue read that GitHub refused, with `gh`'s
+/// reason, for the signed-in token that was refused (`ProjectFields`).
+type RefusedProjects = Mutex<Option<(u64, String)>>;
+
+/// What a pass knows about the Projects fields of an issue read. A token
+/// without `read:project`, or a GitHub Enterprise server with no Projects,
+/// refuses them while it answers the rest of the read, and goes on refusing
+/// until the token changes: such a refusal is remembered for the token, and
+/// every read until then asks without them, once instead of twice. A
+/// refusal for another reason (the network) is not remembered.
+pub(crate) struct ProjectFields<'a> {
+    /// The signed-in token, as `gh auth status`'s answer names it with its
+    /// account and scopes, hashed: `gh auth refresh -s read:project` or
+    /// another login is another token.
+    token: u64,
+    refused: &'a RefusedProjects,
+}
+
+impl ProjectFields<'_> {
+    fn refusal(&self) -> Option<String> {
+        match &*self.refused.lock().unwrap_or_else(PoisonError::into_inner) {
+            Some((token, reason)) if *token == self.token => Some(reason.clone()),
+            _ => None,
+        }
+    }
+
+    fn remember(&self, reason: &str) {
+        *self.refused.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((self.token, reason.to_owned()));
+    }
+}
+
+/// Whether `gh` refused an issue read for its Projects fields alone: the
+/// token lacks `read:project`, or the server has no Projects. These are
+/// `gh`'s own words for the two, the ones it ignores the same refusal by
+/// (`ProjectsV2IgnorableError`, cli/cli `api/queries_projects_v2.go`).
+fn projects_refused(reason: &str) -> bool {
+    reason.contains("field requires one of the following scopes: ['read:project']")
+        || reason.contains("Field 'projectItems' doesn't exist on type 'Issue'")
+}
+
+/// The signed-in account `gh` reads GitHub as.
+struct Signed {
+    /// The account's login, `None` when it could not be read.
+    viewer: Option<String>,
+    /// The token, as [`ProjectFields::token`] names it.
+    token: u64,
+}
+
 pub struct GithubReader {
     inner: BackgroundRead<GithubRequest, GithubAnswer>,
 }
@@ -145,11 +194,12 @@ impl GithubReader {
     /// where the operator's GitHub login is.
     pub fn new(node: Arc<dyn NodeLink>) -> Self {
         let cache: Cache = Arc::default();
+        let refused = RefusedProjects::default();
         Self {
             inner: BackgroundRead::on_change(Duration::ZERO, move |request: &GithubRequest| {
                 GithubAnswer {
                     request: request.clone(),
-                    snapshot: read(&cache, node.as_ref(), request),
+                    snapshot: read(&cache, &refused, node.as_ref(), request),
                 }
             }),
         }
@@ -162,6 +212,7 @@ impl GithubReader {
 
 fn read(
     cache: &Mutex<HashMap<PathBuf, CachedProject>>,
+    refused: &RefusedProjects,
     node: &dyn NodeLink,
     request: &GithubRequest,
 ) -> GithubSnapshot {
@@ -210,7 +261,13 @@ fn read(
             let mut unresolved = cached
                 .map(|cached| cached.unresolved.clone())
                 .unwrap_or_default();
-            let answer = read_root(node, &authentication, project, &known, &mut unresolved);
+            let answer = read_root(
+                node,
+                (&authentication, refused),
+                project,
+                &known,
+                &mut unresolved,
+            );
             let checks = carried_checks(&answer, known);
             cache.insert(
                 project.root.clone(),
@@ -246,7 +303,10 @@ fn read(
 /// inside a git repository at all and so has nothing to report.
 fn read_root(
     node: &dyn NodeLink,
-    authentication: &std::cell::OnceCell<Result<Option<String>, GhFailure>>,
+    (authentication, refused): (
+        &std::cell::OnceCell<Result<Signed, GhFailure>>,
+        &RefusedProjects,
+    ),
     request: &GithubProjectRequest,
     known: &KnownChecks,
     unresolved: &mut UnresolvedLinks,
@@ -270,25 +330,34 @@ fn read_root(
     // failed, and was asked again forever.
     let no_remote = request.repository.is_none()
         && request.remotes.as_deref().is_some_and(<[String]>::is_empty);
-    let project = if no_remote {
-        no_github_remote(root_path)
+    let (project, warning) = if no_remote {
+        (no_github_remote(root_path), None)
     } else {
         match authentication.get_or_init(|| self::authentication(node)) {
-            Err(reason) => GithubProjectSnapshot {
-                root_path,
-                status: GithubStatusSnapshot {
-                    available: false,
-                    unavailable_reason: Some(reason.reason.clone()),
-                    failure_category: Some(reason.category),
-                    ..GithubStatusSnapshot::default()
+            Err(reason) => (
+                GithubProjectSnapshot {
+                    root_path,
+                    status: GithubStatusSnapshot {
+                        available: false,
+                        unavailable_reason: Some(reason.reason.clone()),
+                        failure_category: Some(reason.category),
+                        ..GithubStatusSnapshot::default()
+                    },
+                    ..GithubProjectSnapshot::default()
                 },
-                ..GithubProjectSnapshot::default()
-            },
-            Ok(viewer) => read_project(
+                None,
+            ),
+            Ok(signed) => read_project(
                 node,
                 &place,
                 root_path,
-                viewer.as_deref(),
+                (
+                    signed.viewer.as_deref(),
+                    &ProjectFields {
+                        token: signed.token,
+                        refused,
+                    },
+                ),
                 &request.links,
                 known,
                 unresolved,
@@ -296,7 +365,9 @@ fn read_root(
         }
     };
     // A failure and an empty answer are both stated, separately: an empty
-    // list with no reason is a repository with no pull requests.
+    // list with no reason is a repository with no pull requests. A read that
+    // answered without its Projects fields is a success, with the reason
+    // they were not read as its warning.
     crate::diagnostic!(serde_json::json!({
         "component": "github",
         "kind": if project.read_outcome() == crate::model::GithubReadOutcome::NoRemote {
@@ -314,6 +385,7 @@ fn read_root(
         "pull_requests": project.pull_requests.len(),
         "duration_ms": started.elapsed().as_millis() as u64,
         "message": project.status.unavailable_reason,
+        "warning": warning,
     }));
     project
 }
@@ -324,22 +396,31 @@ fn read_root(
 /// account's login, read once per pass, only tells the operator's own pull
 /// requests from others' (PRD work-tab-pr-lens D-25), so failing to read it
 /// is `Ok(None)`: the read goes on with "mine" unknown (issue #1189).
-fn authentication(node: &dyn NodeLink) -> Result<Option<String>, GhFailure> {
+fn authentication(node: &dyn NodeLink) -> Result<Signed, GhFailure> {
+    use std::hash::{Hash, Hasher};
     supported_version(gh(node, None, &VERSION))?;
-    gh(node, None, &["auth", "status"])?;
+    let status = gh(node, None, &["auth", "status"])?;
+    let mut token = std::collections::hash_map::DefaultHasher::new();
+    status.hash(&mut token);
+    let token = token.finish();
     let login = match gh(node, None, &VIEWER_LOGIN) {
         Ok(login) => login,
         Err(reason) => {
             unread(ExtraQuery::Account, &reason.reason);
-            return Ok(None);
+            return Ok(Signed {
+                viewer: None,
+                token,
+            });
         }
     };
     let login = login.trim();
     if login.is_empty() {
         unread(ExtraQuery::Account, "gh did not name the signed-in account");
-        return Ok(None);
     }
-    Ok(Some(login.to_owned()))
+    Ok(Signed {
+        viewer: (!login.is_empty()).then(|| login.to_owned()),
+        token,
+    })
 }
 
 /// Refuses a `gh` older than [`MINIMUM_VERSION`]: it would refuse one of the
@@ -414,21 +495,23 @@ fn unread(query: ExtraQuery, reason: &str) {
     }));
 }
 
+/// One repository's answer, and the warning of a read that succeeded
+/// without its issues' Projects fields.
 fn read_project(
     node: &dyn NodeLink,
     root: &Where,
     root_path: String,
-    viewer: Option<&str>,
+    (viewer, fields): (Option<&str>, &ProjectFields),
     links: &[crate::issues::IssueReference],
     known: &KnownChecks,
     unresolved: &mut UnresolvedLinks,
-) -> GithubProjectSnapshot {
+) -> (GithubProjectSnapshot, Option<String>) {
     let run = |arguments: &[&str]| gh_at(node, root, arguments);
     // The issues share nothing with the pull requests but the repository, so
     // they are read beside them: read one after the other, the issues held
     // every pull request's state back by as long again.
     let (listed, repository, issues) = std::thread::scope(|scope| {
-        let issues = scope.spawn(|| read_issues(node, root, links, unresolved));
+        let issues = scope.spawn(|| read_issues(node, root, Some(fields), links, unresolved));
         let repository = scope.spawn(|| issue_repository(node, root).map_err(GhFailure::network));
         let listed = list_pull_requests(&run, known);
         let repository = repository
@@ -445,7 +528,7 @@ fn read_project(
     let mut pull_requests = match listed {
         Ok(value) => value,
         Err(reason) if reason.category == GithubFailureCategory::NoGithubRemote => {
-            return no_github_remote(root_path);
+            return (no_github_remote(root_path), None);
         }
         // The issues and the repository's identity were read beside the
         // list and stand on their own: a mission admits a worker on another
@@ -453,17 +536,20 @@ fn read_project(
         // away with every issue. The previous pull requests are kept as
         // stale (`keep_previous_reads`).
         Err(reason) => {
-            let (issues, issues_read) = match issues {
-                Ok((issues, _)) => (issues, true),
-                Err(_) => (Default::default(), false),
+            let (issues, issues_read, warning) = match issues {
+                Ok((issues, warning)) => (issues, true, warning),
+                Err(_) => (Default::default(), false, None),
             };
-            return GithubProjectSnapshot {
-                root_path,
-                issues,
-                issues_read,
-                status: failed(reason),
-                ..GithubProjectSnapshot::default()
-            };
+            return (
+                GithubProjectSnapshot {
+                    root_path,
+                    issues,
+                    issues_read,
+                    status: failed(reason),
+                    ..GithubProjectSnapshot::default()
+                },
+                warning,
+            );
         }
     };
     // The pull request list alone decides whether the read succeeds. The
@@ -476,36 +562,40 @@ fn read_project(
     }
     let unread_queries = add_extra_facts(&run, repository, viewer, &mut pull_requests);
     match issues {
-        Ok((issues, warning)) => GithubProjectSnapshot {
-            root_path,
-            viewer: viewer.map(str::to_owned),
-            issues,
-            pull_requests,
-            pull_requests_read: true,
-            issues_read: true,
-            status: GithubStatusSnapshot {
-                available: true,
-                loading: false,
-                stale: false,
-                last_success_at_unix_ms: Some(now_unix_ms()),
-                unavailable_reason: warning
-                    .as_ref()
-                    .map(|reason| format!("Project metadata unavailable: {}", reason.reason)),
-                failure_category: warning.map(|reason| reason.category),
-                unread_queries,
+        Ok((issues, warning)) => (
+            GithubProjectSnapshot {
+                root_path,
+                viewer: viewer.map(str::to_owned),
+                issues,
+                pull_requests,
+                pull_requests_read: true,
+                issues_read: true,
+                status: GithubStatusSnapshot {
+                    available: true,
+                    loading: false,
+                    stale: false,
+                    last_success_at_unix_ms: Some(now_unix_ms()),
+                    unavailable_reason: None,
+                    failure_category: None,
+                    unread_queries,
+                },
             },
-        },
-        Err(reason) => GithubProjectSnapshot {
-            root_path,
-            viewer: viewer.map(str::to_owned),
-            pull_requests,
-            pull_requests_read: true,
-            status: GithubStatusSnapshot {
-                unread_queries,
-                ..failed(reason)
+            warning,
+        ),
+        Err(reason) => (
+            GithubProjectSnapshot {
+                root_path,
+                viewer: viewer.map(str::to_owned),
+                pull_requests,
+                pull_requests_read: true,
+                status: GithubStatusSnapshot {
+                    unread_queries,
+                    ..failed(reason)
+                },
+                ..Default::default()
             },
-            ..Default::default()
-        },
+            None,
+        ),
     }
 }
 
@@ -1305,17 +1395,31 @@ fn remembered_checks(pull_requests: &[PullRequestSnapshot]) -> KnownChecks {
 }
 
 /// Optional Project fields may be inaccessible with otherwise valid issue
-/// permissions. Retry exactly once without them, and retain the diagnostic.
+/// permissions. A read with them that fails is asked once more without them,
+/// and the reason is the answer's warning. A refusal `fields` remembers for
+/// the token is not asked again: the read goes without them at once, and the
+/// refusal is logged when it is learned, not on every read.
 fn with_optional_projects<T>(
+    fields: Option<&ProjectFields>,
     mut read: impl FnMut(bool) -> Result<T, GhFailure>,
-) -> Result<(T, Option<GhFailure>), GhFailure> {
+) -> Result<(T, Option<String>), GhFailure> {
+    if let Some(reason) = fields.and_then(ProjectFields::refusal) {
+        return read(false).map(|value| (value, Some(reason)));
+    }
     match read(true) {
         Ok(value) => Ok((value, None)),
         Err(reason) => {
-            crate::diagnostic!(
-                serde_json::json!({"component":"github","kind":"project_metadata.unavailable","message":reason.reason})
-            );
-            read(false).map(|value| (value, Some(reason)))
+            let remembered = projects_refused(&reason.reason)
+                && fields
+                    .inspect(|fields| fields.remember(&reason.reason))
+                    .is_some();
+            crate::diagnostic!(serde_json::json!({
+                "component": "github",
+                "kind": "project_metadata.unavailable",
+                "message": reason.reason,
+                "remembered": remembered,
+            }));
+            read(false).map(|value| (value, Some(reason.reason)))
         }
     }
 }
@@ -1323,9 +1427,10 @@ fn with_optional_projects<T>(
 fn read_issues(
     node: &dyn NodeLink,
     root: &Where,
+    fields: Option<&ProjectFields>,
     links: &[crate::issues::IssueReference],
     unresolved: &mut UnresolvedLinks,
-) -> Result<(crate::issues::ProjectIssuesSnapshot, Option<GhFailure>), GhFailure> {
+) -> Result<(crate::issues::ProjectIssuesSnapshot, Option<String>), GhFailure> {
     let repository_json = gh_at(
         node,
         root,
@@ -1371,7 +1476,7 @@ fn read_issues(
         .to_owned();
     crate::issues::IssueReference::parse(&format!("{repository}#1"), None)
         .map_err(GhFailure::network)?;
-    let (listed, mut warning) = with_optional_projects(|include_projects| {
+    let (listed, mut warning) = with_optional_projects(fields, |include_projects| {
         list_issues(&|arguments| gh_at(node, root, arguments), include_projects)
     })?;
     let mut overflow = listed.iter().filter(|issue| issue.state == "OPEN").count()
@@ -1399,7 +1504,7 @@ fn read_issues(
     let linked = if missing.is_empty() {
         Vec::new()
     } else {
-        let (linked, linked_warning) = read_linked_issues(node, root, &missing)?;
+        let (linked, linked_warning) = read_linked_issues(node, root, fields, &missing)?;
         if warning.is_none() {
             warning = linked_warning;
         }
@@ -1689,7 +1794,7 @@ pub(crate) fn read_linked_issue(
     place: &Where,
     reference: &crate::issues::IssueReference,
 ) -> Result<crate::issues::IssueSnapshot, String> {
-    read_linked_issues(node, place, &[reference])
+    read_linked_issues(node, place, None, &[reference])
         .map_err(|error| error.reason)?
         .0
         .into_iter()
@@ -2607,9 +2712,10 @@ fn with_closing_line(body: &str, issue: u32) -> String {
 fn read_linked_issues(
     node: &dyn NodeLink,
     root: &Where,
+    fields: Option<&ProjectFields>,
     links: &[&crate::issues::IssueReference],
-) -> Result<(Vec<crate::issues::IssueSnapshot>, Option<GhFailure>), GhFailure> {
-    with_optional_projects(|include_projects| {
+) -> Result<(Vec<crate::issues::IssueSnapshot>, Option<String>), GhFailure> {
+    with_optional_projects(fields, |include_projects| {
         let query = issue_query(links, include_projects)?;
         let output = gh_at(
             node,
@@ -3515,14 +3621,35 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed)
         };
 
-        read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
+        read_issues(
+            &node,
+            &root,
+            None,
+            std::slice::from_ref(&gone),
+            &mut unresolved,
+        )
+        .unwrap();
         assert_eq!(asked(), 1);
-        read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
+        read_issues(
+            &node,
+            &root,
+            None,
+            std::slice::from_ref(&gone),
+            &mut unresolved,
+        )
+        .unwrap();
         assert_eq!(asked(), 1, "the second read asks nothing for it");
 
-        read_issues(&node, &root, &[], &mut unresolved).unwrap();
+        read_issues(&node, &root, None, &[], &mut unresolved).unwrap();
         assert!(unresolved.is_empty(), "a link nothing holds is let go");
-        read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
+        read_issues(
+            &node,
+            &root,
+            None,
+            std::slice::from_ref(&gone),
+            &mut unresolved,
+        )
+        .unwrap();
         assert_eq!(asked(), 2, "linked again, it is asked again");
     }
 
@@ -3532,7 +3659,13 @@ mod tests {
         version: &'static str,
         list_fails: bool,
         asked: Mutex<Vec<Vec<String>>>,
+        /// What `gh auth status` prints; when its scopes leave out
+        /// `read:project`, an issue list with Projects fields is refused.
+        auth_status: Mutex<&'static str>,
     }
+
+    const SCOPED: &str = "github.com\n  - Token scopes: 'gist', 'project', 'read:org', 'repo'\n";
+    const UNSCOPED: &str = "github.com\n  - Token scopes: 'gist', 'read:org', 'repo'\n";
 
     impl Repository {
         fn new(version: &'static str, list_fails: bool) -> Self {
@@ -3540,10 +3673,16 @@ mod tests {
                 version,
                 list_fails,
                 asked: Mutex::default(),
+                auth_status: Mutex::new(SCOPED),
             }
         }
 
         fn read(&self) -> GithubProjectSnapshot {
+            self.read_with(&RefusedProjects::default())
+        }
+
+        /// One pass's read, with what earlier passes learned.
+        fn read_with(&self, refused: &RefusedProjects) -> GithubProjectSnapshot {
             let request = GithubProjectRequest {
                 links: Vec::new(),
                 root: PathBuf::from("/repo"),
@@ -3553,7 +3692,7 @@ mod tests {
             };
             read_root(
                 self,
-                &std::cell::OnceCell::new(),
+                (&std::cell::OnceCell::new(), refused),
                 &request,
                 &KnownChecks::default(),
                 &mut UnresolvedLinks::new(),
@@ -3583,11 +3722,18 @@ mod tests {
             let output = |stdout: &str| GhAnswer::Output {
                 stdout: stdout.to_owned(),
             };
+            let unscoped = *self.auth_status.lock().unwrap() == UNSCOPED;
             let answer = match words.as_slice() {
                 ["--version"] => output(self.version),
-                ["auth", "status"] | ["issue", ..] | ["pr", "list", "--state", "open", ..] => {
-                    output("[]")
+                ["auth", "status"] => output(*self.auth_status.lock().unwrap()),
+                // What GitHub answers a token without `read:project` (gh 2.76).
+                ["issue", ..] if unscoped && words.iter().any(|w| w.contains("projectItems")) => {
+                    GhAnswer::Failed {
+                        category: GithubFailureCategory::NetworkOrRateLimit,
+                        reason: "GraphQL: Your token has not been granted the required scopes to execute this query. The 'projectItems' field requires one of the following scopes: ['read:project'], but your token has only been granted the: ['gist', 'read:org', 'repo'] scopes. Please modify your token's scopes at: https://github.com/settings/tokens.".to_owned(),
+                    }
                 }
+                ["issue", ..] | ["pr", "list", "--state", "open", ..] => output("[]"),
                 ["api", "user", ..] => output("example-user"),
                 ["repo", ..] => output(
                     r#"{"nameWithOwner":"acme/project","id":"R1","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#,
@@ -3645,6 +3791,107 @@ mod tests {
         assert_eq!(project.issues.repository_id.as_deref(), Some("R1"));
     }
 
+    /// A token without `read:project` is refused the issues' Projects
+    /// fields on every read. The read succeeds without them, is logged as a
+    /// success with the refusal as its warning and shows no failure, and the
+    /// refusal is remembered: until the token changes no read asks for them.
+    #[test]
+    fn a_token_without_read_project_is_asked_for_projects_until_it_is_refused_and_after_it_changes()
+    {
+        let repository = Repository::new("gh version 2.76.2 (2025-07-30)\n", false);
+        *repository.auth_status.lock().unwrap() = UNSCOPED;
+        let refused = RefusedProjects::default();
+        let asked_projects = || {
+            repository
+                .asked
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|args| {
+                    args[0] == "issue" && args.iter().any(|a| a.contains("projectItems"))
+                })
+                .count()
+        };
+        let (first, records) = crate::diagnostics::capture(|| repository.read_with(&refused));
+        assert!(first.pull_requests_read && first.issues_read);
+        assert_eq!(first.status.unavailable_reason, None);
+        assert_eq!(first.status.failure_category, None);
+        let outcome: Vec<_> = records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record["kind"].as_str(),
+                    Some(
+                        "pull_requests.ok"
+                            | "pull_requests.empty"
+                            | "pull_requests.failed"
+                            | "pull_requests.no_remote"
+                    )
+                )
+            })
+            .collect();
+        assert_eq!(outcome.len(), 1);
+        assert_eq!(outcome[0]["kind"], "pull_requests.empty");
+        assert!(
+            outcome[0]["warning"]
+                .as_str()
+                .is_some_and(|warning| warning.contains("read:project")),
+            "{outcome:?}"
+        );
+        // The open and the closed list are asked side by side.
+        let refusals = asked_projects();
+        assert!((1..=2).contains(&refusals), "{refusals}");
+
+        for _ in 0..3 {
+            let again = repository.read_with(&refused);
+            assert!(again.issues_read);
+            assert_eq!(again.status.unavailable_reason, None);
+        }
+        assert_eq!(
+            asked_projects(),
+            refusals,
+            "the same token is not asked again"
+        );
+
+        // `gh auth refresh -s read:project`
+        *repository.auth_status.lock().unwrap() = SCOPED;
+        repository.read_with(&refused);
+        assert_eq!(asked_projects(), refusals + 2, "another token is asked");
+        repository.read_with(&refused);
+        assert_eq!(
+            asked_projects(),
+            refusals + 4,
+            "and keeps being asked while it answers"
+        );
+    }
+
+    /// A Projects read that failed for any reason but a refusal of the
+    /// fields, such as the network, is asked again on the next read.
+    #[test]
+    fn a_projects_read_the_network_failed_is_asked_again() {
+        let refused = RefusedProjects::default();
+        let fields = ProjectFields {
+            token: 1,
+            refused: &refused,
+        };
+        for _ in 0..2 {
+            let mut attempts = Vec::new();
+            let (_, warning) = with_optional_projects(Some(&fields), |include_projects| {
+                attempts.push(include_projects);
+                if include_projects {
+                    return Err(GhFailure::network(
+                        "gh: Post \"https://api.github.com/graphql\": i/o timeout".into(),
+                    ));
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(attempts, [true, false]);
+            assert!(warning.is_some_and(|warning| warning.contains("timeout")));
+        }
+        assert!(refused.lock().unwrap().is_none());
+    }
+
     #[test]
     fn a_compare_says_contains_only_for_ahead_or_identical() {
         assert_eq!(parse_compare_status("ahead\n"), Ok(true));
@@ -3668,7 +3915,7 @@ mod tests {
     fn optional_project_permission_does_not_prevent_basic_issue_resolution() {
         let reference = crate::issues::IssueReference::parse("acme/project#42", None).unwrap();
         let mut attempts = Vec::new();
-        let (issues, warning) = with_optional_projects(|include_projects| {
+        let (issues, warning) = with_optional_projects(None, |include_projects| {
             attempts.push(include_projects);
             let query = issue_query(&[&reference], include_projects)?;
             if include_projects {

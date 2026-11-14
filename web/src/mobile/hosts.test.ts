@@ -5,16 +5,17 @@ import { APP_HOSTS_KEY, appStore, browserStore, bundlePath, HOSTS_KEY, hostToOpe
 const held = vi.hoisted(() => new Map<string, { noiseKey: string; credential: string | null }>());
 // How long a native call takes, so a test can interleave two operations the way a slow Keychain does.
 const delay = vi.hoisted(() => ({ save: 0, list: 0 }));
+const failing = vi.hoisted(() => ({ list: false }));
 const later = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 vi.mock("./appBridge", () => ({
   keychain: {
     save: async (room: string, item: { noiseKey: string; credential: string | null }) => { await later(delay.save); held.set(room, item); },
     read: async (room: string) => held.get(room) ?? null,
     remove: async (room: string) => { held.delete(room); },
-    list: async () => { const rooms = [...held.keys()]; await later(delay.list); return rooms.concat([...held.keys()].filter((room) => !rooms.includes(room))); },
+    list: async () => { if (failing.list) throw Object.assign(new Error("keychain_failed"), { code: "keychain_failed" }); const rooms = [...held.keys()]; await later(delay.list); return rooms.concat([...held.keys()].filter((room) => !rooms.includes(room))); },
   },
 }));
-beforeEach(() => { held.clear(); delay.save = 0; delay.list = 0; });
+beforeEach(() => { held.clear(); delay.save = 0; delay.list = 0; failing.list = false; });
 
 function storage() {
   const entries = new Map<string, string>();
@@ -88,6 +89,19 @@ it("drops a row whose Keychain item is gone and removes an item no row names", a
   expect((await hosts.list()).map((entry) => entry.room)).toEqual(["c".repeat(43)]);
   expect(JSON.parse(store.getItem(APP_HOSTS_KEY) ?? "[]").map((row: PairedHost) => row.room)).toEqual(["c".repeat(43)]);
   expect([...held.keys()]).toEqual(["c".repeat(43)]);
+});
+
+it("keeps every saved computer and its secret when the app cannot list its secrets", async () => {
+  const store = storage();
+  const hosts = appStore(store);
+  await hosts.save(host);
+  const rows = store.getItem(APP_HOSTS_KEY);
+  failing.list = true;
+  await expect(hosts.list()).rejects.toThrow("keychain_failed");
+  expect(store.getItem(APP_HOSTS_KEY)).toBe(rows);
+  expect([...held.keys()]).toEqual([host.room]);
+  failing.list = false;
+  expect((await hosts.list()).map((entry) => entry.room)).toEqual([host.room]);
 });
 
 it("refuses a seventeenth computer in the app before it writes a secret", async () => {

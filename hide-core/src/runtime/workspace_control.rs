@@ -839,6 +839,13 @@ impl Runtime {
         if caller == Caller::Desk {
             return Err(DESK_REFUSAL);
         }
+        // The folder a checkout caller, or an external tool, ran its command
+        // in; a tool the kernel named no folder for resolves none (D-28).
+        let folder = match caller {
+            Caller::Checkout { path, .. } => Some(path),
+            Caller::Access { path, .. } => path,
+            Caller::Pane(_) | Caller::Desk => None,
+        };
         let mut found: Option<Context> = None;
         for workspace in self.catalog_workspaces() {
             if workspace.device_id != device_id {
@@ -877,7 +884,10 @@ impl Runtime {
                             found = Some(context());
                         }
                     }
-                    Caller::Checkout { path, .. } => {
+                    Caller::Checkout { .. } | Caller::Access { .. } => {
+                        let Some(path) = folder else {
+                            continue;
+                        };
                         let root = checkout.path.trim_end_matches('/');
                         if root.is_empty() || !path_within(path, root) {
                             continue;
@@ -909,7 +919,7 @@ impl Runtime {
                 reason: "pane_not_connected",
                 next_action: "Reconnect the pane in Hide and run hide workspace info again",
             },
-            Caller::Checkout { .. } => Refusal {
+            Caller::Checkout { .. } | Caller::Access { .. } => Refusal {
                 reason: "checkout_not_registered",
                 next_action: "Run the command from a shell inside a registered project checkout, or reconnect Hide, and retry",
             },
@@ -936,7 +946,7 @@ impl Runtime {
         let layout = self.view_layout_of(&key).unwrap_or(&empty);
         let caller_session = match Caller::parse(pane_id) {
             Caller::Pane(pane) => self.session_scope_of_pane(pane),
-            Caller::Checkout { .. } | Caller::Desk => None,
+            Caller::Checkout { .. } | Caller::Access { .. } | Caller::Desk => None,
         };
         let views = (query == Query::ViewList).then(|| {
             layout
@@ -1065,7 +1075,7 @@ fn caller_changed(caller_id: &str) -> Refusal {
             reason: "pane_changed",
             next_action: "Reconnect the pane and run hide workspace info again",
         },
-        Caller::Checkout { .. } => Refusal {
+        Caller::Checkout { .. } | Caller::Access { .. } => Refusal {
             reason: "checkout_not_registered",
             next_action: "Run the command from a shell inside a registered project checkout, or reconnect Hide, and retry",
         },

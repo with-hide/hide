@@ -179,6 +179,7 @@ pub fn parse<'a>(
                     id: subject,
                     intent,
                     body,
+                    now: false,
                 })
             }
         }

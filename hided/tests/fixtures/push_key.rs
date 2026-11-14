@@ -1,8 +1,9 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
-/// A phone's push key pair, as the iOS app makes one per computer: the
-/// private half stays here to decrypt what Apple would carry.
+/// A phone's push key pair, as the iOS and Android apps make one per
+/// computer: the private half stays here to decrypt what Apple or Google
+/// would carry.
 pub struct AppKey {
     private: ring::agreement::EphemeralPrivateKey,
     public: Vec<u8>,
@@ -26,6 +27,19 @@ impl AppKey {
             "type": "apns_registration",
             "token": token,
             "environment": "sandbox",
+            "key": {
+                "p256dh": URL_SAFE_NO_PAD.encode(&self.public),
+                "auth": URL_SAFE_NO_PAD.encode(self.auth),
+            },
+        })
+    }
+    /// The Android app's registration: Google's token and the same key, with
+    /// no environment. The unit tests that include this file send none.
+    #[allow(dead_code)]
+    pub fn fcm_registration(&self, token: &str) -> Value {
+        json!({
+            "type": "fcm_registration",
+            "token": token,
             "key": {
                 "p256dh": URL_SAFE_NO_PAD.encode(&self.public),
                 "auth": URL_SAFE_NO_PAD.encode(self.auth),

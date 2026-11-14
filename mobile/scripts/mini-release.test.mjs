@@ -138,7 +138,15 @@ exit 0`);
 
   const env = (extra = {}) => ({ PATH: `${bin}:/usr/bin:/bin`, HOME: home, TMPDIR: accountTmp, ...extra });
   const args = (slug = 'branch', build = '20261110120000', again = '0') => ['release', slug, '1.2.5', build, COMMIT, again];
-  const run = (extra = {}, argv = args()) => spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: env(extra), timeout: 100000 });
+  // A whole run, awaited: a worker that runs its tests on synchronous children reads none of vitest's replies until the
+  // file ends, and a file that a loaded machine stretches past a minute then fails on vitest's own message timeout.
+  const run = (extra = {}, argv = args()) => new Promise((done) => {
+    const child = spawn('bash', [script, ...argv], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
+    const result = { stdout: '', stderr: '', status: null };
+    child.stdout.on('data', (chunk) => { result.stdout += chunk; });
+    child.stderr.on('data', (chunk) => { result.stderr += chunk; });
+    child.once('close', (code) => { result.status = code; done(result); });
+  });
   // A run that keeps going in the background; `out` grows as it prints.
   const start = (extra = {}, argv = args()) => {
     const child = spawn('bash', [script, ...argv], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -162,9 +170,9 @@ exit 0`);
   };
 
   describe('the secrets', () => {
-    it('stop it before it builds anything when one is missing, naming the key and no value', () => {
+    it('stop it before it builds anything when one is missing, naming the key and no value', async () => {
       put(join(home, '.config/hide-ios/release.env'), `HIDE_IOS_ASC_KEY_ID=${KEY_ID}\n`);
-      const result = run();
+      const result = await run();
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('HIDE_IOS_ASC_ISSUER_ID is missing');
       expect(result.stderr).toContain('HIDE_IOS_ASC_KEY_PATH is missing');
@@ -172,33 +180,33 @@ exit 0`);
       leftNothing();
     });
 
-    it('are refused when not shaped as the registry says, without printing the value', () => {
+    it('are refused when not shaped as the registry says, without printing the value', async () => {
       put(join(home, '.config/hide-ios/release.env'), `HIDE_IOS_ASC_KEY_ID=${KEY_ID}\nHIDE_IOS_ASC_ISSUER_ID=not-an-issuer\nHIDE_IOS_ASC_KEY_PATH=${keyPath()}\n`);
-      const result = run();
+      const result = await run();
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('HIDE_IOS_ASC_ISSUER_ID is not shaped');
       expect(everything(result)).not.toContain('not-an-issuer');
     });
 
-    it('are refused when the key file can be read by another account', () => {
+    it('are refused when the key file can be read by another account', async () => {
       writeFileSync(`${keyPath()}.mode`, '644');
-      const result = run();
+      const result = await run();
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('other accounts can read');
     });
 
-    it('do not make a key path that names no file appear in the output, whatever the last run left', () => {
+    it('do not make a key path that names no file appear in the output, whatever the last run left', async () => {
       writeFileSync(join(base(), 'release.log'), 'a log from the last run\n');
       rmSync(keyPath());
-      const result = run();
+      const result = await run();
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('names no file here');
       expect(everything(result)).not.toContain(keyPath());
     });
 
-    it.skipIf(process.getuid?.() === 0)('leave the key file to Apple\'s tools: the script never reads it, copies it or puts a value in an argument', () => {
+    it.skipIf(process.getuid?.() === 0)('leave the key file to Apple\'s tools: the script never reads it, copies it or puts a value in an argument', async () => {
       chmodSync(keyPath(), 0o000); // the stand-in stat still says 600: only a read by the script itself would fail
-      const result = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      const result = await run({ HIDE_IOS_NO_UPLOAD: '1' });
       chmodSync(keyPath(), 0o600);
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
@@ -207,8 +215,8 @@ exit 0`);
       for (const secret of [KEY_ID, ISSUER, keyPath()]) expect(argv, secret).not.toContain(secret);
     });
 
-    it('stay out of the output and the log when the export fails, and the run leaves nothing', () => {
-      const result = run({ STUB_EXPORT_FAILS: '1' });
+    it('stay out of the output and the log when the export fails, and the run leaves nothing', async () => {
+      const result = await run({ STUB_EXPORT_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release stopped at "export and sign"');
       for (const secret of [KEY_ID, ISSUER, ISSUER.toUpperCase(), keyPath(), SECRET_LINE, TOKEN]) {
@@ -223,8 +231,8 @@ exit 0`);
       leftNothing();
     });
 
-    it('withhold the end of a failed step\'s log, and delete the log, when a key reached it that redaction cannot replace', () => {
-      const result = run({ STUB_PRINTS_KEY: '1', STUB_XCODEBUILD_FAILS: '1' });
+    it('withhold the end of a failed step\'s log, and delete the log, when a key reached it that redaction cannot replace', async () => {
+      const result = await run({ STUB_PRINTS_KEY: '1', STUB_XCODEBUILD_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(everything(result)).not.toContain(SECRET_LINE);
       expect(result.stderr).not.toContain('the end of its log');
@@ -235,8 +243,8 @@ exit 0`);
   });
 
   describe('a run that reaches Apple', () => {
-    it('stops before the upload when asked, having validated, and leaves no record, work, lock or Apple file', () => {
-      const result = run({ HIDE_IOS_NO_UPLOAD: '1' });
+    it('stops before the upload when asked, having validated, and leaves no record, work, lock or Apple file', async () => {
+      const result = await run({ HIDE_IOS_NO_UPLOAD: '1' });
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('stopped before the upload');
@@ -249,34 +257,34 @@ exit 0`);
       leftNothing();
     });
 
-    it('signs the extension and then the app with entitlements whose build settings are resolved', () => {
-      expect(run({ HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
+    it('signs the extension and then the app with entitlements whose build settings are resolved', async () => {
+      expect((await run({ HIDE_IOS_NO_UPLOAD: '1' })).status).toBe(0);
       expect(readFileSync(join(home, 'embedded'), 'utf8').trim().split('\n')).toEqual([
         'HideNotification.appex: shared=GH6F6ZA497.me.grab.hide.ios.push-keys',
         'App.app: aps=production own=GH6F6ZA497.me.grab.hide.ios shared=GH6F6ZA497.me.grab.hide.ios.push-keys',
       ]);
     });
 
-    it('writes the team prefix into the Info.plist of the extension and of the app before it signs them', () => {
-      expect(run({ HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
+    it('writes the team prefix into the Info.plist of the extension and of the app before it signs them', async () => {
+      expect((await run({ HIDE_IOS_NO_UPLOAD: '1' })).status).toBe(0);
       expect(readFileSync(join(home, 'replaced'), 'utf8').trim().split('\n')).toEqual([
         'HideNotification.appex: AppIdentifierPrefix=GH6F6ZA497.',
         'App.app: AppIdentifierPrefix=GH6F6ZA497.',
       ]);
     });
 
-    it('stops before it signs anything when an entitlements file names a build setting it does not resolve', () => {
+    it('stops before it signs anything when an entitlements file names a build setting it does not resolve', async () => {
       put(join(base(), 'ios/App/App/App.entitlements'), 'group=$(SOME_OTHER_SETTING)');
-      const result = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      const result = await run({ HIDE_IOS_NO_UPLOAD: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('App.entitlements names a build setting the release does not resolve');
       expect(log()).not.toContain('No errors validating archive');
       leftNothing();
     });
 
-    it('records the upload as it starts and ends, and does not upload the same commit twice, under any branch name', () => {
+    it('records the upload as it starts and ends, and does not upload the same commit twice, under any branch name', async () => {
       branch('main');
-      const first = run();
+      const first = await run();
       expect(first.status).toBe(0);
       expect(first.stdout).toContain(`delivery id ${DELIVERY}`);
       expect(records().map((line) => line.split(' ').slice(1))).toEqual([
@@ -285,29 +293,29 @@ exit 0`);
       ]);
 
       for (const slug of ['branch', 'main']) {
-        const again = run({}, args(slug, '20261110120100'));
+        const again = await run({}, args(slug, '20261110120100'));
         expect(again.status, slug).toBe(1);
         expect(again.stderr, slug).toContain('already has an upload record');
         expect(again.stderr, slug).toContain(DELIVERY);
       }
       expect(records()).toHaveLength(2);
 
-      const asked = run({}, args('main', '20261110120200', '1'));
+      const asked = await run({}, args('main', '20261110120200', '1'));
       expect(asked.status).toBe(0);
       expect(records()).toHaveLength(4);
     });
 
-    it('prints the record for a caller that lost the connection, and says so when there is none', () => {
-      const none = run({}, ['uploads', 'branch']);
+    it('prints the record for a caller that lost the connection, and says so when there is none', async () => {
+      const none = await run({}, ['uploads', 'branch']);
       expect(none.stdout).toContain('no upload has started');
-      run();
-      const some = run({}, ['uploads', 'other']);
+      await run();
+      const some = await run({}, ['uploads', 'other']);
       expect(some.stdout).toContain(DELIVERY);
       expect(some.stdout).not.toContain(KEY_ID);
     });
 
     it('ends an upload that outlives its time bound with everything it started, and the record says it started', async () => {
-      const result = run({ STUB_UPLOAD_HANGS: '1', HIDE_IOS_TEST_UPLOAD_LIMIT: '2' });
+      const result = await run({ STUB_UPLOAD_HANGS: '1', HIDE_IOS_TEST_UPLOAD_LIMIT: '2' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release stopped at "upload": it did not finish in 2 seconds');
       expect(result.stderr).toContain('may have gone without its delivery id');
@@ -317,42 +325,42 @@ exit 0`);
       leftNothing();
     });
 
-    it('starts with 5 GB free and refuses below that, before it builds anything', () => {
-      expect(run({ STUB_FREE_GB: '5', HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
-      const low = run({ STUB_FREE_GB: '4', HIDE_IOS_NO_UPLOAD: '1' });
+    it('starts with 5 GB free and refuses below that, before it builds anything', async () => {
+      expect((await run({ STUB_FREE_GB: '5', HIDE_IOS_NO_UPLOAD: '1' })).status).toBe(0);
+      const low = await run({ STUB_FREE_GB: '4', HIDE_IOS_NO_UPLOAD: '1' });
       expect(low.status).toBe(1);
       expect(low.stderr).toContain('4 GB free and a release build needs at least 5 GB');
       expect(low.stdout).not.toContain('== archive');
       leftNothing();
     });
 
-    it('refuses an app that is not signed with a distribution certificate', () => {
-      const result = run({ STUB_AUTHORITY: 'Apple Development: Someone (ABCDE12345)' });
+    it('refuses an app that is not signed with a distribution certificate', async () => {
+      const result = await run({ STUB_AUTHORITY: 'Apple Development: Someone (ABCDE12345)' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('not signed with an Apple Distribution certificate');
       expect(existsSync(join(home, 'hide-ios-build/uploads.log'))).toBe(false);
       leftNothing();
     });
 
-    it('names the step that failed when a step outside the logged ones fails', () => {
+    it('names the step that failed when a step outside the logged ones fails', async () => {
       stub('unzip', 'exit 9');
-      const result = run();
+      const result = await run();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain('release stopped during "unpack the signed app"');
       leftNothing();
     });
 
-    it('fails a state read whose altool call failed, instead of reporting success with no answer', () => {
-      const result = run({ STUB_STATUS_FAILS: '1' }, ['status', 'branch', DELIVERY]);
+    it('fails a state read whose altool call failed, instead of reporting success with no answer', async () => {
+      const result = await run({ STUB_STATUS_FAILS: '1' }, ['status', 'branch', DELIVERY]);
       expect(result.status).toBe(1);
       expect(result.stdout).toContain('Unable to reach the service');
       expect(result.stderr).toContain('altool --build-status failed (status 1)');
       expect(readdirSync(base()).filter((name) => name.startsWith('status'))).toEqual([]);
     });
 
-    it('reads a build\'s state without touching a running release, and leaves no scratch folder', () => {
+    it('reads a build\'s state without touching a running release, and leaves no scratch folder', async () => {
       put(join(base(), 'release/App.xcarchive/keep'), 'x');
-      const result = run({}, ['status', 'branch', DELIVERY]);
+      const result = await run({}, ['status', 'branch', DELIVERY]);
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('BUILD-STATUS: VALID');
       expect(existsSync(join(base(), 'release/App.xcarchive/keep'))).toBe(true);
@@ -389,7 +397,7 @@ exit 0`);
       branch('other');
       const { child, seen } = start({ STUB_EXPORT_HOLDS: '1', HIDE_IOS_NO_UPLOAD: '1' });
       await pidIn('grandchild'); // the export has started
-      const refused = run({ HIDE_IOS_NO_UPLOAD: '1' }, args('other'));
+      const refused = await run({ HIDE_IOS_NO_UPLOAD: '1' }, args('other'));
       expect(refused.status).toBe(1);
       expect(refused.stderr).toContain(`another release is running on this machine (pid ${child.pid}, started `);
       expect(refused.stderr).toContain(', branch branch)');
@@ -400,22 +408,22 @@ exit 0`);
       writeFileSync(join(home, 'go'), '');
       await until('the first run to end', () => seen.exit !== null);
       expect(seen.exit).toEqual({ code: 0, signal: null });
-      expect(run({ HIDE_IOS_NO_UPLOAD: '1' }, args('other')).status).toBe(0);
+      expect((await run({ HIDE_IOS_NO_UPLOAD: '1' }, args('other'))).status).toBe(0);
     });
 
     it('lets the lock go with the run even when a tool leaves a helper of its own running', async () => {
-      const result = run({ STUB_LEAVES_DAEMON: '1', HIDE_IOS_NO_UPLOAD: '1' });
+      const result = await run({ STUB_LEAVES_DAEMON: '1', HIDE_IOS_NO_UPLOAD: '1' });
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
       expect(alive(await pidIn('daemon'))).toBe(true); // it escaped the step's group, as a real daemon can
       leftNothing(); // and still holds no descriptor of the lock
     });
 
-    it('names a lock it cannot take or read, and never reads that as a running release', () => {
+    it('names a lock it cannot take or read, and never reads that as a running release', async () => {
       stub('perl', 'exit 2');
       mkdirSync(dirname(lockFile()), { recursive: true });
       writeFileSync(lockFile(), '');
-      const release = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      const release = await run({ HIDE_IOS_NO_UPLOAD: '1' });
       expect(release.status).toBe(1);
       expect(release.stderr).toContain('could not be taken (perl status 2)');
       expect(release.stderr).not.toContain('another release is running');
@@ -425,11 +433,11 @@ exit 0`);
       expect(busy.stderr).not.toContain('a release is running');
     });
 
-    it('does not believe a lock whose text names a live process the kernel does not hold the lock for', () => {
+    it('does not believe a lock whose text names a live process the kernel does not hold the lock for', async () => {
       mkdirSync(dirname(lockFile()), { recursive: true });
       writeFileSync(lockFile(), `pid ${process.pid}, started ${new Date().toUTCString()}, branch branch\n`);
       expect(lockHeld()).toBe(false);
-      const result = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      const result = await run({ HIDE_IOS_NO_UPLOAD: '1' });
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
       leftNothing();

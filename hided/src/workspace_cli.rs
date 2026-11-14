@@ -21,7 +21,7 @@ use hide_platform::ipc::LocalStream;
 use crate::env::Env;
 use crate::pane_auth::{Reference, Route};
 use crate::state_file::SCHEMA_VERSION;
-use hide_agent_hooks::hook_request::install::{self, Ask, PaneRequest};
+use hide_agent_hooks::hook_request::install::{self, AccessAsk, Ask, PaneRequest};
 use hide_agent_hooks::hook_request::node_socket;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,8 +65,29 @@ impl<'a> Credential<'a> {
         match std::env::var(crate::env::HIDE_CAP_REF) {
             Ok(value) if !value.is_empty() => Ok(Self::named(env, PathBuf::from(value))),
             Ok(_) => Err("invalid_reference".to_owned()),
-            Err(_) => Self::one_shot(env),
+            // Outside Hide's panes, a connected external tool runs as its
+            // connection (B18); any other caller as before. A process the
+            // daemon finds under a pane's program is never the tool, whatever
+            // key its home holds: it runs as its folder, as it did (B37).
+            Err(_) => match crate::access_cli::tool_key(env)? {
+                Some(key) => match Self::tool(env, key) {
+                    Err(code) if code == "access_from_pane" => Self::one_shot(env),
+                    credential => credential,
+                },
+                None => Self::one_shot(env),
+            },
         }
+    }
+
+    /// A one-shot credential for the external tool whose key is `key`.
+    fn tool(env: &'a Env, key: String) -> Result<Self, String> {
+        let path = bootstrap_tool(&crate::access_cli::state_dir(env), key)?;
+        Ok(Self {
+            env,
+            path: path.clone(),
+            named: false,
+            _one_shot: Some(OneShotReference(path)),
+        })
     }
 
     /// The credential a `HIDE_CAP_REF` naming `path` gives.
@@ -171,6 +192,7 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
         one_shot,
         hook: None,
         install: env.install.clone(),
+        access: None,
     };
     let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
     let install = env.install.as_deref();
@@ -206,6 +228,66 @@ fn in_pane_order(
             Err(remote_reason) => Err(remote_reason),
         },
     }
+}
+
+/// An external tool's one-shot credential, proved by its key on the
+/// bootstrap socket of the daemon in `state_dir` (PRD hide-external-control
+/// B18): never a device bridge, since a tool runs on the core's machine.
+fn bootstrap_tool(state_dir: &Path, key: String) -> Result<PathBuf, String> {
+    let request = access_request(AccessAsk::Use { key }, true)?;
+    let mut stream = connect_bootstrap(state_dir)?;
+    writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
+    read_bootstrap_answer(&mut stream, None)
+}
+
+/// `hide access request|status|leave`: one ask on the bootstrap socket of the
+/// daemon in `state_dir`, answered with the core's `access` value, or a
+/// refusal's code and the daemon's next action when it gave one.
+pub fn access_bootstrap(
+    state_dir: &Path,
+    ask: AccessAsk,
+) -> Result<Value, (String, Option<String>)> {
+    let unavailable = |code: String| (code, None);
+    let request = access_request(ask, false).map_err(unavailable)?;
+    let mut stream = connect_bootstrap(state_dir).map_err(unavailable)?;
+    writeln!(stream, "{request}").map_err(|_| unavailable("hide_unavailable".to_owned()))?;
+    let mut line = String::new();
+    BufReader::new(&mut stream)
+        .take(4096)
+        .read_line(&mut line)
+        .map_err(|_| unavailable("hide_unavailable".to_owned()))?;
+    let answer: Value =
+        serde_json::from_str(&line).map_err(|_| unavailable("hide_unavailable".to_owned()))?;
+    if answer["ok"] == true {
+        return Ok(answer["access"].clone());
+    }
+    Err((
+        answer["reason"]
+            .as_str()
+            .unwrap_or("bootstrap_refused")
+            .to_owned(),
+        answer["next_action"].as_str().map(str::to_owned),
+    ))
+}
+
+fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
+    serde_json::to_value(PaneRequest {
+        pane_id: String::new(),
+        nonce: hex::encode(nonce),
+        one_shot,
+        hook: None,
+        install: None,
+        access: Some(ask),
+    })
+    .map_err(|_| "reference_unavailable".to_owned())
+}
+
+fn connect_bootstrap(state_dir: &Path) -> Result<LocalStream, String> {
+    let socket = crate::pane_auth::bootstrap_socket_path(state_dir)?;
+    LocalStream::connect_until(&socket, Instant::now() + TIMEOUT)
+        .map_err(|_| "hide_unavailable".to_owned())
 }
 
 fn bootstrap_local(env: &Env, request: &Value, install: Option<&str>) -> Result<PathBuf, String> {
@@ -674,6 +756,22 @@ fn request_with_token(
         })
         .await
         .map_err(|_| "request_timeout".to_owned())?
+    })
+}
+
+/// `hide access list`: read by a connected tool from what the core holds.
+pub fn request_access_list(credential: &mut Credential) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"access_list","request_id":request_id}),
+            &request_id,
+            false,
+            after,
+        )
     })
 }
 
@@ -2197,6 +2295,7 @@ mod tests {
             host_cli_dir: None,
             pane_id: None,
             install: None,
+            access: None,
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
             search_path: None,

@@ -20,8 +20,9 @@ import { LookButton, StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneDeskReturn } from "./DeskScreen";
-import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
+import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, PaneSubagentChip, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
+import { ToolMark } from "./components/tool-mark";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
 import { PaneMention } from "./PaneMention";
@@ -429,6 +430,8 @@ export const PaneView = memo(function PaneView({
             </Hint>
           </>
         )}
+        {/* The external tool's name stays at every width too, cut short, since it says why no list of the operator's holds the agent. */}
+        {agentKind ? <ToolMark tool={recordAgent?.tool} /> : null}
         {/* The fork mark stays at every width: an icon alone, and a side fork is what makes a narrow pane. */}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
         {/* The PR mark gives way below the tight breakpoint, since the session record also holds it; the work chip stays, its mark and count alone, since a Conductor's pane opens its map from it. */}
@@ -438,6 +441,7 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={title} actions={actions} /></span> : null}
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind ? <PaneOpenAsksMark paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneSubagentChip paneId={paneId} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>

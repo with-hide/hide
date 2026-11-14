@@ -169,6 +169,7 @@ impl Runtime {
                 })
                 .unwrap_or_default(),
             crate::workspace_control::Caller::Checkout { .. }
+            | crate::workspace_control::Caller::Access { .. }
             | crate::workspace_control::Caller::Desk => Vec::new(),
         };
         // The pane's agent on the caller's own machine: a node's pane is
@@ -192,6 +193,7 @@ impl Runtime {
                 None => crate::memory_command::MemoryCaller::Person,
             },
             crate::workspace_control::Caller::Checkout { .. }
+            | crate::workspace_control::Caller::Access { .. }
             | crate::workspace_control::Caller::Desk => {
                 crate::memory_command::MemoryCaller::Checkout
             }

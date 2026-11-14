@@ -1065,6 +1065,13 @@ fn run_hook(arguments: &[String], started: Instant) {
         .as_ref()
         .map(|(bytes, truncated)| SubagentInput::read(bytes, *truncated))
         .unwrap_or_default();
+    // A subagent's prompt (Codex's older subagent tools open each of a
+    // subagent's turns with one, under the main session's id) is not the
+    // pane's: it takes no letter, no Memory and no guidance. The outer
+    // prompt hook counts it (`report_recorded_turn`).
+    if event == HookEvent::UserPromptSubmit && input.subagent.is_some() {
+        return;
+    }
     let who = Reporter {
         agent: runtime.map(AgentRuntime::id),
         session: input.session.as_deref(),
@@ -1190,8 +1197,15 @@ fn run_hook(arguments: &[String], started: Instant) {
         }
         return;
     }
+    // A turn end whose stops could not be read keeps the counts, and says
+    // why in the pane's report failure.
+    let (stopped, unread) = match counted.then(|| input.stopped(runtime, event)).flatten() {
+        Some(Ok(ids)) => (Some(ids), None),
+        Some(Err(why)) => (None, Some(why)),
+        None => (None, None),
+    };
     let change = if counted {
-        Change::of(runtime, event, &input)
+        Change::of(runtime, event, &input, stopped.as_deref())
     } else {
         Change::None
     };
@@ -1223,6 +1237,7 @@ fn run_hook(arguments: &[String], started: Instant) {
             said,
             transcript: transcript.as_deref(),
             refused: refused.as_ref(),
+            unread: unread.as_deref(),
         },
         counted,
         runtime.map_or(Instant::now() + report::REPORT_TIMEOUT, |runtime| {
@@ -1232,13 +1247,15 @@ fn run_hook(arguments: &[String], started: Instant) {
 }
 
 /// What one event said of its session ([`counters::Said`]), the session
-/// file its input names, which records a refusal no event reports, and why
-/// the provider refused the turn the event ended.
+/// file its input names, which records a refusal no event reports, why
+/// the provider refused the turn the event ended, and why a Codex turn end
+/// could not read the subagents its main agent stopped.
 #[derive(Clone, Copy)]
 struct Heard<'a> {
     said: Said<'a>,
     transcript: Option<&'a std::path::Path>,
     refused: Option<&'a HookRefusal>,
+    unread: Option<&'a str>,
 }
 
 impl<'a> Heard<'a> {
@@ -1247,6 +1264,7 @@ impl<'a> Heard<'a> {
             said,
             transcript: None,
             refused: None,
+            unread: None,
         }
     }
 }
@@ -1275,6 +1293,7 @@ fn report_pane(
         said,
         transcript,
         refused,
+        unread,
     }: Heard<'_>,
     counted: bool,
     deadline: Instant,
@@ -1302,7 +1321,14 @@ fn report_pane(
                 Said::Turn(_) | Said::Asks(_) => true,
                 Said::Tool { .. } => applied.moved,
             };
-            if !(starts || change != Change::None || speaks) {
+            let changed = match change {
+                Change::None => false,
+                // A subagent's every tool call says it works; only the one
+                // that moved a count is news.
+                Change::Working(_) => applied.counted,
+                _ => true,
+            };
+            if !(starts || changed || speaks) {
                 return;
             }
             (
@@ -1349,10 +1375,16 @@ fn report_pane(
         },
         deadline,
     );
-    let record_error = kept
-        .err()
-        .map(|error| format!("the pane's count could not be changed: {error}"))
-        .map_or(Ok(()), Err);
+    let record_error = match (
+        kept.err()
+            .map(|error| format!("the pane's count could not be changed: {error}")),
+        unread,
+    ) {
+        (None, None) => Ok(()),
+        (Some(kept), None) => Err(kept),
+        (None, Some(unread)) => Err(unread.to_owned()),
+        (Some(kept), Some(unread)) => Err(format!("{kept}; {unread}")),
+    };
     // The outcome is written down rather than surfaced here: a hook's
     // stderr reaches nobody, and the record is what `doctor` and Settings
     // show (engineering rule 10). A record that cannot be written is said on
@@ -1398,15 +1430,28 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
     let call = payload
         .map(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated))
         .unwrap_or_default();
-    let said = if event == HookEvent::UserPromptSubmit {
-        Said::Turn(HookTurn::Working)
+    let counted = runtime.dialect().adapter().subagent_counts.is_some();
+    // A prompt that names a subagent is that subagent's turn starting, not
+    // the session's, and a subagent's tool call says it works (`Change::of`).
+    // The session's own tool call's input is not read again.
+    let input = payload
+        .filter(|_| event == HookEvent::UserPromptSubmit || call.subagent)
+        .map(|(bytes, truncated)| SubagentInput::read(bytes, *truncated))
+        .unwrap_or_default();
+    let change = if counted {
+        Change::of(Some(runtime), event, &input, None)
     } else {
-        Said::Tool { event, call: &call }
+        Change::None
+    };
+    let said = match event {
+        HookEvent::UserPromptSubmit if input.subagent.is_some() => Said::Nothing,
+        HookEvent::UserPromptSubmit => Said::Turn(HookTurn::Working),
+        _ => Said::Tool { event, call: &call },
     };
     report_pane(
         &home,
         event,
-        Change::None,
+        change,
         Reporter {
             agent: Some(runtime.id()),
             session: session.as_deref(),
@@ -1415,8 +1460,9 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
             said,
             transcript: call.transcript.as_deref(),
             refused: None,
+            unread: None,
         },
-        runtime.dialect().adapter().subagent_counts.is_some(),
+        counted,
         report::deadline(started, runtime, event),
     );
 }

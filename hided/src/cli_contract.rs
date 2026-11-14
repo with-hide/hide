@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `workspace
+//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `workspace
 //! purpose`, `workspace remove`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
@@ -20,7 +20,7 @@ pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane",
+    "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane", "access",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -644,6 +644,75 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["ps"],
         refusals: &["here_unavailable", "ps_answer_unreadable"],
+    },
+    // An external tool's own connection (PRD hide-external-control D-25),
+    // run outside Hide's panes on the core's machine. Approving, refusing,
+    // the level and disconnecting are the operator's, in Settings ›
+    // External tools; no command does them (B8).
+    Spec {
+        words: &["access", "request"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--name", Key), switch("--json")],
+        rest: None,
+        answers: &["access_standing"],
+        refusals: &[
+            "access_from_pane",
+            "access_refused",
+            "access_request_expired",
+            "access_revoked",
+            "access_limit",
+            "access_name_taken",
+            "access_key_unreadable",
+        ],
+    },
+    Spec {
+        words: &["access", "status"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_standing"],
+        refusals: &[
+            "access_from_pane",
+            "access_ambiguous",
+            "access_refused",
+            "access_request_expired",
+            "access_revoked",
+            "access_key_unreadable",
+        ],
+    },
+    Spec {
+        words: &["access", "leave"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_left"],
+        refusals: &[
+            "access_from_pane",
+            "access_ambiguous",
+            "access_not_connected",
+            "access_key_unreadable",
+        ],
+    },
+    Spec {
+        words: &["access", "list"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_list"],
+        refusals: &[
+            "access_not_connected",
+            "access_ambiguous",
+            "access_revoked",
+            "access_key_unreadable",
+        ],
     },
     // Only the core's own machine may run these. Add registers the device
     // without Hide's helper, which the operator allows on its row. A device
@@ -1672,6 +1741,21 @@ fn body() -> Value {
             "device": {"ok": "ok", "answer": "value", "code": "error.code"},
             "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
             "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "access": {"ok": "ok", "answer": "value", "code": "error.code"},
+        },
+        // An external tool runs the commands above as its connection, at
+        // the level the operator chose; any of them may answer one of
+        // these, with its next_action (PRD hide-external-control B20-B23).
+        "access": {
+            "choose": crate::env::HIDE_ACCESS,
+            "levels": ["view", "act"],
+            "refusals": crate::access::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::access::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
         },
         "answers": answers(),
     })
@@ -1723,6 +1807,14 @@ fn answers() -> Value {
     map.insert(
         "agent_profile_removed".into(),
         shape(&["machine", "removed", "projects_back_to_default"]),
+    );
+    // Where a tool stands: not_connected, pending (with next_action) or
+    // connected (with level); its leave; and the tools and requests.
+    map.insert("access_standing".into(), shape(&["state"]));
+    map.insert("access_left".into(), shape(&["state", "name"]));
+    map.insert(
+        "access_list".into(),
+        shape(&["machine", "limit", "pending", "connections"]),
     );
     map.insert("device_list".into(), shape(&["devices"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
@@ -1879,6 +1971,7 @@ mod tests {
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
                 | CommandKind::Device(_)
+                | CommandKind::Access(_)
                 | CommandKind::Pane(_)
                 | CommandKind::WorkspaceRemove(_))
         )

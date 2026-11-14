@@ -48,6 +48,7 @@ import { useUiStore } from "./ui";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 import { DeskScreen } from "./DeskScreen";
 import { MissionScreen } from "./MissionScreen";
+import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -403,8 +404,13 @@ function CenterScreen({ actions }: { actions: Actions }) {
       </div>
     );
   }
-  if (screen.kind === "desk") return <DeskScreen actions={actions} />;
-  if (screen.kind === "missions") return <MissionScreen actions={actions} />;
   if (screen.kind === "workspace" && front && hasView) return <WorkspaceScreen actions={actions} />;
-  return <OverviewPage actions={actions} />;
+  // An open pressed on any other screen says here that it is on its way, or
+  // why it did not come (B2, B21; issue 2505).
+  return (
+    <>
+      <OpeningStatus actions={actions} />
+      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : <OverviewPage actions={actions} />}
+    </>
+  );
 }

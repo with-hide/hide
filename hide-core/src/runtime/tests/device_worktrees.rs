@@ -677,6 +677,11 @@ fn a_branch_made_on_a_device_is_read_again_without_a_reconnect() {
     };
     assert_eq!(roots, [std::path::PathBuf::from(&repo.root)]);
     shared.lock().unwrap().device_git_changed(DEVICE, roots);
+    // The fetch pump's tick starts the read once the spacing has passed.
+    shared
+        .lock()
+        .unwrap()
+        .retry_device_reads(std::time::Instant::now() + crate::worktrees::WATCH_READ_SPACING);
     wait(
         &shared,
         "the device's catalog to read the new branch",
@@ -737,12 +742,32 @@ fn a_watched_change_reuses_unmoved_worktrees_and_a_failed_read_is_tried_again() 
     // The first read measures every worktree.
     assert_eq!(*host.reuse.lock().unwrap(), [false]);
 
-    // A change the Git watch reports is read from the worktrees that moved.
+    // A change the Git watch reports is read from the worktrees that moved,
+    // once the spacing since the last read landed has passed, and not
+    // before: every change inside the wait is that one read.
     git(&repo.root, &["branch", "made-there"]);
-    shared
-        .lock()
-        .unwrap()
-        .device_git_changed(DEVICE, vec![repo.root.clone().into()]);
+    let spaced = || std::time::Instant::now() + crate::worktrees::WATCH_READ_SPACING;
+    for _ in 0..3 {
+        assert!(
+            !shared
+                .lock()
+                .unwrap()
+                .device_git_changed(DEVICE, vec![repo.root.clone().into()])
+        );
+        assert!(
+            !shared
+                .lock()
+                .unwrap()
+                .retry_device_reads(std::time::Instant::now())
+        );
+    }
+    assert!(
+        shared.lock().unwrap().device_worktrees[DEVICE]
+            .in_flight
+            .is_none()
+    );
+    assert_eq!(*host.reuse.lock().unwrap(), [false]);
+    shared.lock().unwrap().retry_device_reads(spaced());
     wait(&shared, "the watched change's read", |runtime| {
         runtime.device_worktrees[DEVICE].in_flight.is_none()
             && runtime.device_worktrees[DEVICE].projects[&repo.root]
@@ -761,6 +786,7 @@ fn a_watched_change_reuses_unmoved_worktrees_and_a_failed_read_is_tried_again() 
         .lock()
         .unwrap()
         .device_git_changed(DEVICE, vec![repo.root.clone().into()]);
+    shared.lock().unwrap().retry_device_reads(spaced());
     wait(&shared, "the failed read", |runtime| {
         runtime.device_worktrees[DEVICE].unavailable.is_some()
     });

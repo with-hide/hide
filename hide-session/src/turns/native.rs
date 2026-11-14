@@ -197,7 +197,8 @@ pub(crate) fn claude(item: &Value) -> Mark {
         let kind = block.get("type").and_then(Value::as_str);
         let mark = match (role, kind) {
             (Some("assistant"), Some("tool_use"))
-                if block.get("name").and_then(Value::as_str) == Some("AskUserQuestion") =>
+                if block.get("name").and_then(Value::as_str)
+                    == Some(crate::calls::CLAUDE_QUESTION_TOOL) =>
             {
                 let call = id(block.get("id"))?.ok_or(SkipReason::UserTurnInvalid)?;
                 Some(ToolTurnMark::Asked {

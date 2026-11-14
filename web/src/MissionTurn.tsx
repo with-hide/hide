@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AttentionChoices } from "./components/mission-attention";
 import { useElapsed } from "./components/elapsed";
+import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { MissionPrMark } from "./components/mission-pr";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
@@ -10,7 +11,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
 import { mergePull, attentionReasonText, heldLettersText, turnItems, type TurnItem } from "./missions";
 import { MissionTakeOver } from "./MissionTakeOver";
-import { useWorkerEscalation } from "./missionWorkers";
+import { useWorkerEscalation, useWorkerHumanTurn } from "./missionWorkers";
 import type { Mission, MissionHeldNode, MissionNode, MissionSafetyNet } from "./snapshot";
 
 // What only the operator can do in a mission now, above its map (PRD
@@ -19,7 +20,8 @@ import type { Mission, MissionHeldNode, MissionNode, MissionSafetyNet } from "./
 // Conductor's decision, answered here as it always was, the one safety net
 // card for the raises the Conductor has not settled, a raise only the
 // operator settles with the choices its reason takes, a worker the core raised
-// past its Conductor, the order to merge or join what waits for main, and,
+// past its Conductor, a step only a person can take that a worker declared,
+// with Done (operator decision 2026-11-13), the order to merge or join what waits for main, and,
 // while the mission runs, a ready pull request the plan left to the operator
 // (PRD mission-destination D-11). A
 // node raised to the Conductor is not here, nor is work an agent carries, and
@@ -72,6 +74,8 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
           {item.node.pane_id ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(item.node.pane_id!)} data-mission-turn-terminal="true">{t("mission.toTerminal")}</Button> : null}
         </Row>
       );
+    case "human_turn":
+      return <HumanTurnItem node={item.node} actions={actions} onSelect={onSelect} />;
     case "takeover":
     case "safety_net":
       return item.net ? <SafetyNetCard mission={mission} net={item.net} actions={actions} onSelect={onSelect} /> : null;
@@ -152,6 +156,28 @@ function HeldRow({ mission, held, onSelect }: { mission: Mission; held: MissionH
       <span className="min-w-0 flex-1 truncate" title={reason}>{reason}</span>
       {age ? <span className="shrink-0 text-caption text-muted-foreground">{t("mission.net.age", { age })}</span> : null}
     </li>
+  );
+}
+
+/**
+ * A worker's person's turn (operator decision 2026-11-13): the key mark, the
+ * node, what and where as the agent wrote it with Copy and its device, and
+ * Done, the one event every surface of the turn sends, which settles it in
+ * Needs You and the pane's head too. The declaration is the one its worker
+ * row leads with, the same row whose escalation made this item.
+ */
+function HumanTurnItem({ node, actions, onSelect }: { node: MissionNode; actions: Actions; onSelect: (key: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const turn = useWorkerHumanTurn(node);
+  if (!turn) return null;
+  return (
+    <Row data-mission-turn-item="human_turn">
+      <StatusMark mark="turn" human label={t("agents.human.mark")} />
+      <NodeChip node={node} onSelect={onSelect} />
+      <HumanTurnLine turn={turn} copy={actions.copyText} className="flex-1 text-body" />
+      <HumanTurnDone turn={turn} actions={actions} className="shrink-0" />
+      {node.pane_id ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(node.pane_id!)} data-mission-turn-terminal="true">{t("mission.toTerminal")}</Button> : null}
+    </Row>
   );
 }
 

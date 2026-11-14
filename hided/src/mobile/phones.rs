@@ -19,7 +19,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use subtle::ConstantTimeEq;
 
 use super::store::{
-    self, ApnsRegistration, Notifications, PhoneOrigin, PhoneRecord, PhonesFile, PushSubscription,
+    self, ApnsRegistration, FcmRegistration, Notifications, PhoneOrigin, PhoneRecord, PhonesFile,
+    PushSubscription,
 };
 
 pub const MAX_PHONES: usize = 4;
@@ -219,6 +220,7 @@ impl Phones {
             notifications: Notifications::Unasked,
             push: None,
             apns: None,
+            fcm: None,
             origin,
         };
         self.file.phones.push(record.clone());
@@ -275,55 +277,29 @@ impl Phones {
         stale
     }
 
-    /// Stores a Web Push subscription, which replaces any APNs registration:
-    /// a phone has one way to be reached at a time.
-    pub fn set_subscription(&mut self, id: &str, push: Option<PushSubscription>) -> bool {
+    /// Stores the way a phone is reached, which replaces the other two: a
+    /// phone has one way to be reached at a time, and storing one turns its
+    /// notifications on.
+    pub fn set_way(&mut self, id: &str, way: Way) -> bool {
         let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
             return false;
         };
-        let notifications = if push.is_some() {
-            Notifications::On
-        } else {
-            phone.notifications
+        let (push, apns, fcm) = match way {
+            Way::Web(push) => (Some(push), None, None),
+            Way::Apns(apns) => (None, Some(apns), None),
+            Way::Fcm(fcm) => (None, None, Some(fcm)),
         };
-        let apns = if push.is_some() {
-            None
-        } else {
-            phone.apns.clone()
-        };
-        if phone.push == push && phone.notifications == notifications && phone.apns == apns {
-            return false;
-        }
-        phone.push = push;
-        phone.notifications = notifications;
-        phone.apns = apns;
-        self.save();
-        true
-    }
-
-    /// Stores an iOS app phone's registration, which replaces a Web Push
-    /// subscription for the same reason.
-    pub fn set_apns(&mut self, id: &str, registration: Option<ApnsRegistration>) -> bool {
-        let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
-            return false;
-        };
-        let notifications = if registration.is_some() {
-            Notifications::On
-        } else {
-            phone.notifications
-        };
-        let push = if registration.is_some() {
-            None
-        } else {
-            phone.push.clone()
-        };
-        if phone.apns == registration && phone.notifications == notifications && phone.push == push
+        if phone.push == push
+            && phone.apns == apns
+            && phone.fcm == fcm
+            && phone.notifications == Notifications::On
         {
             return false;
         }
-        phone.apns = registration;
         phone.push = push;
-        phone.notifications = notifications;
+        phone.apns = apns;
+        phone.fcm = fcm;
+        phone.notifications = Notifications::On;
         self.save();
         true
     }
@@ -332,17 +308,17 @@ impl Phones {
         let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
             return false;
         };
-        let (push, apns) = if notifications == Notifications::Off {
-            (None, None)
-        } else {
-            (phone.push.clone(), phone.apns.clone())
-        };
-        if phone.notifications == notifications && phone.push == push && phone.apns == apns {
+        let off = notifications == Notifications::Off;
+        let reachable = phone.reachable();
+        if phone.notifications == notifications && !(off && reachable) {
             return false;
         }
         phone.notifications = notifications;
-        phone.push = push;
-        phone.apns = apns;
+        if off {
+            phone.push = None;
+            phone.apns = None;
+            phone.fcm = None;
+        }
         self.save();
         true
     }
@@ -364,18 +340,30 @@ impl Phones {
         true
     }
 
-    /// Drops an APNs registration Apple called gone; the app registers a new
-    /// one on its next connection.
-    pub fn drop_apns(&mut self, id: &str, token: &str) -> bool {
-        let Some(phone) = self.file.phones.iter_mut().find(|phone| {
-            phone.id == id && phone.apns.as_ref().is_some_and(|apns| apns.token == token)
-        }) else {
+    /// Drops an app registration the push service called gone (Apple's or
+    /// Google's), only while `token` is the one stored; the app registers a
+    /// new one on its next connection.
+    pub fn drop_app(&mut self, id: &str, token: &str) -> bool {
+        let Some(phone) = self.file.phones.iter_mut().find(|phone| phone.id == id) else {
             return false;
         };
-        phone.apns = None;
+        if phone.apns.as_ref().is_some_and(|apns| apns.token == token) {
+            phone.apns = None;
+        } else if phone.fcm.as_ref().is_some_and(|fcm| fcm.token == token) {
+            phone.fcm = None;
+        } else {
+            return false;
+        }
         self.save();
         true
     }
+}
+
+/// The one way a phone is reached (`Phones::set_way`).
+pub enum Way {
+    Web(PushSubscription),
+    Apns(ApnsRegistration),
+    Fcm(FcmRegistration),
 }
 
 #[cfg(test)]
@@ -401,46 +389,78 @@ mod tests {
         phones.pair(&code, UA, now).unwrap()
     }
 
-    /// A phone is reached one way at a time: a Web Push subscription and an
-    /// iOS app registration replace each other, a token Apple called gone is
-    /// dropped only while it is the one stored, and turning notifications off
-    /// clears either, on disk too.
+    /// A phone is reached one way at a time: a Web Push subscription, an iOS
+    /// app registration and an Android app registration replace each other in
+    /// every order, a token the push service called gone is dropped only while
+    /// it is the one stored, and turning notifications off clears whichever is
+    /// stored, on disk too.
     #[test]
-    fn a_web_push_subscription_and_an_app_registration_replace_each_other() {
+    fn a_web_push_subscription_and_both_app_registrations_replace_each_other() {
         let (dir, mut phones) = phones();
         let (phone, _) = pair_one(&mut phones, 1);
-        let subscription = PushSubscription {
-            endpoint: "https://web.push.apple.com/abc".into(),
-            p256dh: "key".into(),
-            auth: "auth".into(),
+        let web = || {
+            Way::Web(PushSubscription {
+                endpoint: "https://web.push.apple.com/abc".into(),
+                p256dh: "key".into(),
+                auth: "auth".into(),
+            })
         };
-        let registration = |token: &str| ApnsRegistration {
-            token: token.into(),
-            environment: hide_relay_protocol::admission::PushEnvironment::Production,
-            p256dh: "key".into(),
-            auth: "auth".into(),
+        let apns = |token: &str| {
+            Way::Apns(ApnsRegistration {
+                token: token.into(),
+                environment: hide_relay_protocol::admission::PushEnvironment::Production,
+                p256dh: "key".into(),
+                auth: "auth".into(),
+            })
         };
-        let stored = |dir: &tempfile::TempDir| -> PhoneRecord {
-            store::read::<PhonesFile>(&store::phones_path(dir.path())).phones[0].clone()
+        let fcm = |token: &str| {
+            Way::Fcm(FcmRegistration {
+                token: token.into(),
+                p256dh: "key".into(),
+                auth: "auth".into(),
+            })
         };
-        assert!(phones.set_subscription(&phone.id, Some(subscription.clone())));
-        assert!(phones.set_apns(&phone.id, Some(registration("aa"))));
-        let record = stored(&dir);
-        assert_eq!((record.push, record.apns.is_some()), (None, true));
-        assert_eq!(record.notifications, Notifications::On);
-        assert!(phones.set_subscription(&phone.id, Some(subscription.clone())));
-        let record = stored(&dir);
-        assert_eq!((record.push.is_some(), record.apns), (true, None));
-        assert!(phones.set_apns(&phone.id, Some(registration("aa"))));
+        // Which of the three the record on disk holds.
+        let stored = |dir: &tempfile::TempDir| -> (bool, bool, bool, Notifications) {
+            let record =
+                store::read::<PhonesFile>(&store::phones_path(dir.path())).phones[0].clone();
+            (
+                record.push.is_some(),
+                record.apns.is_some(),
+                record.fcm.is_some(),
+                record.notifications,
+            )
+        };
+        let on = Notifications::On;
+        assert!(phones.set_way(&phone.id, web()));
+        assert!(phones.set_way(&phone.id, fcm("ff")));
+        assert_eq!(stored(&dir), (false, false, true, on));
+        assert!(phones.set_way(&phone.id, apns("aa")));
+        assert_eq!(stored(&dir), (false, true, false, on));
+        assert!(phones.set_way(&phone.id, fcm("ff")));
+        assert_eq!(stored(&dir), (false, false, true, on));
+        assert!(phones.set_way(&phone.id, web()));
+        assert_eq!(stored(&dir), (true, false, false, on));
+        assert!(phones.set_way(&phone.id, apns("aa")));
+        assert!(
+            !phones.set_way(&phone.id, apns("aa")),
+            "the same way again changes nothing"
+        );
         // A gone answer for a token since replaced leaves the new one.
-        assert!(phones.set_apns(&phone.id, Some(registration("bb"))));
-        assert!(!phones.drop_apns(&phone.id, "aa"));
-        assert!(phones.drop_apns(&phone.id, "bb"));
-        assert_eq!(stored(&dir).apns, None);
-        assert!(phones.set_apns(&phone.id, Some(registration("cc"))));
-        phones.set_notifications(&phone.id, Notifications::Off);
-        let record = stored(&dir);
-        assert_eq!((record.push, record.apns), (None, None));
+        assert!(phones.set_way(&phone.id, apns("bb")));
+        assert!(!phones.drop_app(&phone.id, "aa"));
+        assert!(phones.drop_app(&phone.id, "bb"));
+        assert_eq!(stored(&dir), (false, false, false, on));
+        assert!(phones.set_way(&phone.id, fcm("f1")));
+        assert!(phones.set_way(&phone.id, fcm("f2")));
+        assert!(!phones.drop_app(&phone.id, "f1"));
+        assert!(phones.drop_app(&phone.id, "f2"));
+        assert_eq!(stored(&dir), (false, false, false, on));
+        for way in [web(), apns("cc"), fcm("fc")] {
+            phones.set_way(&phone.id, way);
+            phones.set_notifications(&phone.id, Notifications::Off);
+            assert_eq!(stored(&dir), (false, false, false, Notifications::Off));
+        }
     }
 
     /// A phone paired before phones kept their address takes the exposure
@@ -588,9 +608,9 @@ mod tests {
         let (dir, mut phones) = phones();
         let (code, _) = phones.new_code(0);
         let (record, credential) = phones.pair(&code, UA, 1).unwrap();
-        phones.set_subscription(
+        phones.set_way(
             &record.id,
-            Some(PushSubscription {
+            Way::Web(PushSubscription {
                 endpoint: "https://web.push.apple.com/x".into(),
                 p256dh: "k".into(),
                 auth: "a".into(),

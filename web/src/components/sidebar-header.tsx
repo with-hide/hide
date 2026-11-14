@@ -1,5 +1,6 @@
 import { useInterfaceTranslation } from "../i18n/client";
 import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, SearchIcon, ServerIcon, WaypointsIcon } from "lucide-react";
+import { tileMonogram } from "../devices";
 import { cn } from "../lib/utils";
 import { Kbd } from "./ui/kbd";
 import { RowButton } from "./ui/row-button";
@@ -11,10 +12,17 @@ import { Hint } from "./ui/tooltip";
 
 export type MenuDevice = { id: string; label: string; remote: boolean; connected: boolean };
 
+/** A tool the hidden rail's menu lists, with its grey number. */
+export type MenuTool = { connection: string; name: string; turn: number };
+
 /** What the top-line name opens while the rail is hidden: the way to every device and back to the rail. */
 export type DeviceMenu = {
   devices: readonly MenuDevice[];
   frontId: string;
+  /** The tools connected at Act, listed apart under the devices (PRD hide-external-control B44), and the one in front, if any. */
+  tools: readonly MenuTool[];
+  toolFront: string | null;
+  onSelectTool: (connection: string) => void;
   onSelect: (deviceId: string) => void;
   onAddDevice: () => void;
   onShowRail: () => void;
@@ -137,7 +145,7 @@ export function HiddenRailMenu({ title, menu }: { title: { name: string; note: s
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" aria-label={t("sidebar.devices")} data-device-menu="true">
-        <DropdownMenuRadioGroup value={menu.frontId} onValueChange={menu.onSelect}>
+        <DropdownMenuRadioGroup value={menu.toolFront === null ? menu.frontId : ""} onValueChange={menu.onSelect}>
           {menu.devices.map((device) => {
             const Icon = device.remote ? ServerIcon : LaptopIcon;
             return (
@@ -149,6 +157,20 @@ export function HiddenRailMenu({ title, menu }: { title: { name: string; note: s
             );
           })}
         </DropdownMenuRadioGroup>
+        {menu.tools.length > 0 ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuRadioGroup value={menu.toolFront ?? ""} onValueChange={menu.onSelectTool} aria-label={t("devices.rail.tool")}>
+              {menu.tools.map((tool) => (
+                <DropdownMenuRadioItem key={tool.connection} value={tool.connection} data-device-menu-tool={tool.connection}>
+                  <span aria-hidden="true" className="flex size-(--size-icon) shrink-0 items-center justify-center rounded-full border border-border text-micro font-semibold">{tileMonogram(tool.name)}</span>
+                  <span className="min-w-0 flex-1 truncate">{tool.name}</span>
+                  <span className="shrink-0 text-caption text-muted-foreground">{tool.turn > 0 ? t("devices.rail.toolTurn", { count: tool.turn }) : t("devices.rail.tool")}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem data-device-menu-add="true" onSelect={menu.onAddDevice}>
           <PlusIcon aria-hidden="true" />

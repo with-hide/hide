@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, PlugIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MobileTab } from "./MobileTab";
+import { ExternalToolsTab } from "./settings/ExternalToolsTab";
 import { awayDevice, coreMachineName, machineName } from "./screenMachine";
 import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
@@ -49,6 +50,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   hideAi: SparklesIcon,
   conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
+  externalTools: PlugIcon,
   github: GithubIcon,
   labs: FlaskConicalIcon,
   about: InfoIcon,
@@ -130,6 +132,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
+              {tab === "externalTools" ? <ExternalToolsTab actions={actions} /> : null}
               {tab === "github" ? <GithubTab actions={actions} /> : null}
               {tab === "labs" ? <LabsTab actions={actions} /> : null}
               {tab === "about" ? <AboutTab actions={actions} /> : null}

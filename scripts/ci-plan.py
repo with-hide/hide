@@ -54,6 +54,7 @@ LANES = (
     "policy",
     "rust",
     "checks",
+    "android",
     "docs",
     "relay-protocol",
     "os-contract",
@@ -530,6 +531,7 @@ HELP_SOURCES = (
     "hided/src/agent_cli.rs",
     "hided/src/ps_cli.rs",
     "hided/src/device_cli.rs",
+    "hided/src/access_cli.rs",
     "hided/src/mission_cli.rs",
     "hided/src/plan_cli.rs",
     "hided/src/pane_cli.rs",
@@ -757,6 +759,11 @@ def classify(path, status, crates, root):
                 lanes.update(SHARED_WEB_LANES)
                 return lanes, f"web shared with the desktop host: {path}", set()
             return lanes, f"web shell: {path}", set()
+    if parts[:2] == ("mobile", "android") and len(parts) > 2:
+        # The Android app host's Gradle project: its JVM tests and debug build, and
+        # `checks`, whose mobile unit test reads its plugin and library lists
+        # (`mobile/scripts/check-versions.mjs`). The rest of `mobile/` plans every lane.
+        return {"android", "checks"}, f"Android app host: {path}", set()
     if parts[0] == "desktop" and len(parts) > 1:
         if parts[1] == "e2e" and len(parts) == 3 and path.name.endswith(".spec.ts"):
             lanes = {"checks"}

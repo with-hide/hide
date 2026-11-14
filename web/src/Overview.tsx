@@ -9,6 +9,8 @@ import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMach
 import { useShellStore } from "./store";
 import { overviewDeviceOf } from "./overviewTasks";
 import { useUiStore } from "./ui";
+import type { ToolCell } from "./agentScope";
+import { useFrontTool } from "./toolCells";
 import { MainScreen } from "./MainScreen";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
@@ -20,7 +22,10 @@ import { cn } from "./lib/utils";
 
 /** The same selected-device group that the Agents sidebar draws, less the Factory's workers, which 내 차례 counts (PRD software-factory-ui B13). */
 export function useOverviewCount() {
-  return useShellStore((s) => deviceScope(s.rest, frontDeviceId(s.rest))?.overview_needs_you ?? 0);
+  // A tool's cell in front has no count of the operator's (PRD hide-external-control B41).
+  const tool = useFrontTool();
+  const count = useShellStore((s) => deviceScope(s.rest, frontDeviceId(s.rest))?.overview_needs_you ?? 0);
+  return tool ? 0 : count;
 }
 
 export function OverviewButton({ actions }: { actions: Actions }) {
@@ -56,16 +61,37 @@ export function useOverviewDevice(): string {
 export function OverviewPage({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const deviceId = useOverviewDevice();
-  return <div className="flex min-h-0 flex-1 flex-col" data-overview-page="true" data-overview-device={deviceId}>
+  const tool = useOverviewTool();
+  return <div className="flex min-h-0 flex-1 flex-col" data-overview-page="true" data-overview-device={deviceId} data-overview-tool={tool?.connection}>
     <div className="flex shrink-0 flex-wrap items-center gap-md border-b border-border px-lg py-md">
       <h1 className="shrink-0 text-headline font-semibold">{t("overview.title")}</h1>
       <span className="flex-1" />
       <Hint label={t("commands.search")}><Button variant="ghost" size="icon-sm" aria-label={t("commands.search")} onClick={actions.openSearch}><SearchIcon /></Button></Hint>
-      <DeviceSwitch selected={deviceId} />
+      {tool ? <ToolLabelChip name={tool.name} /> : <DeviceSwitch selected={deviceId} />}
       <Button variant="ghost" size="sm" aria-label={t("overview.close")} onClick={actions.closeOverview}><Kbd>Esc</Kbd></Button>
     </div>
-    <MainScreen actions={actions} deviceId={deviceId} />
+    <MainScreen actions={actions} deviceId={deviceId} tool={tool} />
   </div>;
+}
+
+/**
+ * The tool's cell the Overview shows (PRD hide-external-control D-48, B40):
+ * the one in front while the Overview's own switch picked no device.
+ */
+export function useOverviewTool(): ToolCell | null {
+  const picked = useUiStore((s) => s.overview.deviceId);
+  const tool = useFrontTool();
+  return picked === null ? tool : null;
+}
+
+/** A tool's cell in place of the device switch: its letters, its name and that it is an external tool. */
+function ToolLabelChip({ name }: { name: string }) {
+  const { t } = useInterfaceTranslation();
+  return <span className="flex min-w-0 items-center gap-xs text-caption" data-overview-tool-name="true">
+    <span aria-hidden="true" className="flex size-(--size-icon) shrink-0 items-center justify-center rounded-full border border-border text-micro font-semibold text-muted-foreground">{tileMonogram(name)}</span>
+    <span className="truncate font-medium">{name}</span>
+    <span className="shrink-0 text-micro text-muted-foreground">{t("devices.rail.tool")}</span>
+  </span>;
 }
 
 /**

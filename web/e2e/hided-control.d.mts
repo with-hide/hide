@@ -19,5 +19,5 @@ export type HidedControl = {
   close: () => void;
 };
 
-export function connectControl(daemon: { origin: string; token: string }, ms?: number, terminalEvidence?: (chunks: unknown[]) => void): Promise<HidedControl>;
+export function connectControl(daemon: { origin: string; token: string; clientKind?: "web" }, ms?: number, terminalEvidence?: (chunks: unknown[]) => void): Promise<HidedControl>;
 export function connectStateDir(stateDir: string, ms?: number): Promise<HidedControl>;

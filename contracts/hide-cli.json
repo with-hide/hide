@@ -1,5 +1,78 @@
 {
+    "access": {
+        "choose": "HIDE_ACCESS",
+        "levels": [
+            "view",
+            "act"
+        ],
+        "refusals": {
+            "access_ambiguous": "This home keeps several tools' keys; set HIDE_ACCESS=<name> to choose one",
+            "access_core_only": "Run the tool on the machine where Hide's core runs",
+            "access_from_pane": "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes",
+            "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
+            "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > External tools, then run hide access request again",
+            "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again",
+            "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
+            "access_not_connected": "Run hide access request --name <name> first",
+            "access_pending": "Wait until the operator approves the request in Settings > External tools, then run hide access request again",
+            "access_refused": "The operator refused this tool; run hide access request --name <name> to ask again",
+            "access_request_expired": "The request was dropped; run hide access request --name <name> to ask again",
+            "access_revoked": "The operator disconnected this tool; run hide access request --name <name> to ask again",
+            "access_spawn_parent": "A tool is no agent's parent; run hide agent spawn without --parent and follow the agent with hide agent show and hide inbox",
+            "access_unavailable": "Start Hide on this machine, then run the same command again",
+            "access_view_only": "This tool is View only; ask the operator to switch it to Act in Settings > External tools"
+        }
+    },
     "answers": {
+        "access_left": {
+            "properties": {
+                "name": {
+                    "type": "object"
+                },
+                "state": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "state",
+                "name"
+            ],
+            "type": "object"
+        },
+        "access_list": {
+            "properties": {
+                "connections": {
+                    "type": "object"
+                },
+                "limit": {
+                    "type": "object"
+                },
+                "machine": {
+                    "type": "object"
+                },
+                "pending": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "limit",
+                "pending",
+                "connections"
+            ],
+            "type": "object"
+        },
+        "access_standing": {
+            "properties": {
+                "state": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "state"
+            ],
+            "type": "object"
+        },
         "acknowledged": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide inbox --ack`: the bundle it took and how many letters were in it.",
@@ -204,6 +277,13 @@
                         "null"
                     ]
                 },
+                "origin_tool": {
+                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "pane": {
                     "type": "string"
                 },
@@ -257,6 +337,7 @@
                 "pane",
                 "parent",
                 "origin",
+                "origin_tool",
                 "project",
                 "profile",
                 "runtime",
@@ -554,6 +635,13 @@
                         "null"
                     ]
                 },
+                "origin_tool": {
+                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "pane": {
                     "type": "string"
                 },
@@ -608,6 +696,7 @@
                 "instance",
                 "parent",
                 "origin",
+                "origin_tool",
                 "project",
                 "profile",
                 "runtime",
@@ -690,6 +779,13 @@
                                 "null"
                             ]
                         },
+                        "origin_tool": {
+                            "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "pane": {
                             "type": "string"
                         },
@@ -743,6 +839,7 @@
                         "pane",
                         "parent",
                         "origin",
+                        "origin_tool",
                         "project",
                         "profile",
                         "runtime",
@@ -1414,6 +1511,13 @@
                         "null"
                     ]
                 },
+                "origin_tool": {
+                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "pane": {
                     "type": "string"
                 },
@@ -1471,6 +1575,7 @@
                 "pane",
                 "parent",
                 "origin",
+                "origin_tool",
                 "project",
                 "profile",
                 "runtime",
@@ -2831,6 +2936,13 @@
                                 "null"
                             ]
                         },
+                        "origin_tool": {
+                            "description": "The name of the external tool whose connection started this agent; absent for every other start.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "pane": {
                             "type": "string"
                         },
@@ -2884,6 +2996,7 @@
                         "parent_machine",
                         "parent_pane",
                         "parent",
+                        "origin_tool",
                         "watched_by",
                         "mission",
                         "project"
@@ -4679,6 +4792,111 @@
             "refusals": [
                 "here_unavailable",
                 "ps_answer_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_standing"
+            ],
+            "arguments": [],
+            "command": "access request",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_refused",
+                "access_request_expired",
+                "access_revoked",
+                "access_limit",
+                "access_name_taken",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_standing"
+            ],
+            "arguments": [],
+            "command": "access status",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_ambiguous",
+                "access_refused",
+                "access_request_expired",
+                "access_revoked",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_left"
+            ],
+            "arguments": [],
+            "command": "access leave",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_ambiguous",
+                "access_not_connected",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_list"
+            ],
+            "arguments": [],
+            "command": "access list",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_not_connected",
+                "access_ambiguous",
+                "access_revoked",
+                "access_key_unreadable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6688,8 +6906,13 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a5c9f1ebd58588c990e84766349638efa5bbb783df0a2b899309000e66e52cc8",
+    "digest": "sha256:8b2d38dcf0db9f6e909d5209f587d670b01c4431d267735de198e442e5dd6c54",
     "envelopes": {
+        "access": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
         "agent": {
             "answer": "value",
             "code": "error.code",

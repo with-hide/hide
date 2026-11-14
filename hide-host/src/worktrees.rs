@@ -495,6 +495,7 @@ fn read_project_until(
     };
     let refs = Refs::read(root, until);
     let branches = refs.as_ref().map(Refs::branches).unwrap_or_default();
+    let refs = refs.as_ref().map_err(String::as_str);
     let valid_override = base_override.filter(|base| resolvable_base(root, base, until).is_some());
     let base_branch = valid_override
         .map(str::to_owned)
@@ -557,7 +558,7 @@ fn read_project_until(
         root,
         listed,
         &bases,
-        refs.as_ref(),
+        refs,
         reuse_unchanged,
         (until, WORKTREE_MEASURE_TIME),
     );
@@ -629,29 +630,38 @@ impl Bases<'_> {
 /// worktree whose inputs did not move keeps its last measurement when the
 /// caller accepts that, one its own time cut short included; the others are
 /// measured, the longest unmeasured first, while the read has time, so the
-/// worktrees one read had no time for are the next read's first. A worktree
-/// the read had no time for answers its last measurement only if its inputs
-/// did not move, and is otherwise named unmeasured. `time` is when the read
-/// ends and how long one worktree may take of it.
+/// worktrees one read had no time for are the next read's first. Until then
+/// a worktree the read had no time for answers its last full measurement,
+/// as of when it was taken (`measured_at_unix_ms`), and only one never
+/// measured is named unmeasured: a busy repository whose moved worktrees do
+/// not all fit in one read keeps showing what it last knew of each, where it
+/// once named the same rows unmeasured on every read.
+///
+/// When the caller accepts reuse (a read a Git watch asked for), a worktree
+/// that is measured again also keeps what its moved inputs cannot change:
+/// Git's answers about commits that did not move ([`CommitFacts`]), and its
+/// ignored-folder scan, which no Git input follows and which a removal runs
+/// again before it deletes anything. `time` is when the read ends and how
+/// long one worktree may take of it.
 fn measure(
     measured: &Measured,
     root: &Path,
     listed: Vec<ListedWorktree>,
     bases: &Bases<'_>,
-    refs: Option<&Refs>,
+    refs: Result<&Refs, &str>,
     reuse_unchanged: bool,
     (until, worktree_time): (Instant, Duration),
 ) -> Vec<WorktreeFacts> {
-    let inputs: Vec<Option<Inputs>> = listed
+    let inputs: Vec<Result<Inputs, &str>> = listed
         .iter()
         .map(|worktree| refs.map(|refs| Inputs::of(worktree, bases, refs)))
         .collect();
     let earlier = measured.earlier(root);
+    let last = |index: usize| earlier.get(&listed[index].path);
     let unchanged = |index: usize| {
-        earlier
-            .get(&listed[index].path)
-            .filter(|(seen, _)| inputs[index].as_ref() == Some(seen))
-            .map(|(_, facts)| facts.clone())
+        last(index)
+            .filter(|kept| inputs[index].as_ref().ok() == Some(&kept.inputs))
+            .map(|kept| kept.facts.clone())
     };
     let mut answers: Vec<Option<WorktreeFacts>> = (0..listed.len())
         .map(|index| unchanged(index).filter(|_| reuse_unchanged))
@@ -659,11 +669,7 @@ fn measure(
     let mut due: Vec<usize> = (0..listed.len())
         .filter(|index| answers[*index].is_none())
         .collect();
-    due.sort_by_key(|index| {
-        earlier
-            .get(&listed[*index].path)
-            .and_then(|(_, facts)| facts.measured_at_unix_ms)
-    });
+    due.sort_by_key(|index| last(*index).and_then(|kept| kept.facts.measured_at_unix_ms));
     let mut kept = Kept::new();
     for index in due {
         let now = Instant::now();
@@ -671,16 +677,29 @@ fn measure(
             break;
         }
         let own = now + worktree_time;
-        let facts = describe_within(listed[index].clone(), bases, own.min(until));
+        let (facts, commits) = describe_within(
+            &listed[index],
+            bases,
+            inputs[index].as_ref().map_err(|reason| *reason),
+            last(index).filter(|_| reuse_unchanged),
+            own.min(until),
+        );
         // Cut short by the read's end rather than its own time, a worktree
         // is measured first by the next read, and until then answers its
-        // last full measurement if nothing moved.
+        // last full measurement.
         if own > until && Instant::now() >= until {
-            answers[index] = Some(unchanged(index).unwrap_or(facts));
+            answers[index] = Some(last(index).map_or(facts, |kept| kept.facts.clone()));
             continue;
         }
-        if let Some(inputs) = inputs[index].clone() {
-            kept.insert(listed[index].path.clone(), (inputs, facts.clone()));
+        if let Ok(inputs) = &inputs[index] {
+            kept.insert(
+                listed[index].path.clone(),
+                KeptWorktree {
+                    inputs: inputs.clone(),
+                    facts: facts.clone(),
+                    commits,
+                },
+            );
         }
         answers[index] = Some(facts);
     }
@@ -689,7 +708,7 @@ fn measure(
         .enumerate()
         .map(|(index, answer)| {
             answer
-                .or_else(|| unchanged(index))
+                .or_else(|| last(index).map(|kept| kept.facts.clone()))
                 .unwrap_or_else(|| unmeasured(&listed[index]))
         })
         .collect();
@@ -704,7 +723,8 @@ fn measure(
     answers
 }
 
-/// A worktree the read ran out of time for before it began.
+/// A worktree the read ran out of time for before it began, and that no
+/// earlier read measured.
 fn unmeasured(listed: &ListedWorktree) -> WorktreeFacts {
     WorktreeFacts {
         path: crate::root::wire(&listed.path),
@@ -752,21 +772,32 @@ pub struct Measured {
     folder: Option<PathBuf>,
 }
 
-type Kept = BTreeMap<PathBuf, (Inputs, WorktreeFacts)>;
+type Kept = BTreeMap<PathBuf, KeptWorktree>;
+
+/// One worktree's last measurement: the inputs it was taken from, the facts
+/// it answered, and Git's settled answers about its commits, apart, so a
+/// later measurement whose commits did not move reuses them.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct KeptWorktree {
+    inputs: Inputs,
+    facts: WorktreeFacts,
+    /// `None` when a question about its commits went unanswered.
+    commits: Option<CommitFacts>,
+}
 
 /// The shape of a repository's file; a file of another version, or one that
 /// does not read, is taken as nothing kept.
-const KEPT_FILE_VERSION: u32 = 2;
+const KEPT_FILE_VERSION: u32 = 3;
 /// The largest repository file read back: some thousands of worktrees' facts.
 const KEPT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// One repository's file: the root it was written for, and each kept
-/// worktree with the inputs its facts were measured from.
+/// worktree.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeptFile {
     version: u32,
     root: PathBuf,
-    worktrees: Vec<(PathBuf, Inputs, WorktreeFacts)>,
+    worktrees: Vec<(PathBuf, KeptWorktree)>,
 }
 
 impl Measured {
@@ -891,11 +922,7 @@ fn read_kept(folder: &Path, root: &Path) -> Kept {
         }
     }
     match serde_json::from_slice::<KeptFile>(&bytes) {
-        Ok(file) if file.root == root => file
-            .worktrees
-            .into_iter()
-            .map(|(path, inputs, facts)| (path, (inputs, facts)))
-            .collect(),
+        Ok(file) if file.root == root => file.worktrees.into_iter().collect(),
         Ok(_) => {
             kept_record(
                 "worktrees.facts_unread",
@@ -917,10 +944,7 @@ fn write_kept(folder: &Path, root: &Path, kept: Kept) {
     let file = KeptFile {
         version: KEPT_FILE_VERSION,
         root: root.to_path_buf(),
-        worktrees: kept
-            .into_iter()
-            .map(|(path, (inputs, facts))| (path, inputs, facts))
-            .collect(),
+        worktrees: kept.into_iter().collect(),
     };
     let written = serde_json::to_vec(&file)
         .map_err(|error| error.to_string())
@@ -1017,6 +1041,17 @@ impl Inputs {
             commits,
         }
     }
+
+    /// Whether `other` names the same commits, the only thing Git's answers
+    /// in [`CommitFacts`] depend on: HEAD, the base and the repository base
+    /// with the commits their refs name, and the upstream with its commit.
+    fn same_commits(&self, other: &Self) -> bool {
+        self.listed.head_sha == other.listed.head_sha
+            && self.base == other.base
+            && self.default_base == other.default_base
+            && self.upstream == other.upstream
+            && self.commits == other.commits
+    }
 }
 
 /// The repository's branches and remote-tracking refs, each with its short
@@ -1024,7 +1059,7 @@ impl Inputs {
 struct Refs(BTreeMap<String, (String, String, String)>);
 
 impl Refs {
-    fn read(root: &Path, until: Instant) -> Option<Self> {
+    fn read(root: &Path, until: Instant) -> Result<Self, String> {
         let output = git_until(
             root,
             &[
@@ -1034,9 +1069,8 @@ impl Refs {
                 "refs/remotes",
             ],
             until,
-        )
-        .ok()?;
-        Some(Self(
+        )?;
+        Ok(Self(
             output
                 .lines()
                 .filter_map(|line| {
@@ -1129,52 +1163,65 @@ pub fn parse_worktree_list(output: &str) -> Vec<ListedWorktree> {
 /// starts after it and one still running then is stopped, the ignored-folder
 /// scan included. A worktree measured only in part names itself in its
 /// unavailable reason, and what was not measured stays unknown.
-fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) -> WorktreeFacts {
+///
+/// `inputs` are what the measurement is taken from, or why the repository's
+/// refs could not be read. `earlier` is the worktree's last measurement when
+/// the caller reuses what did not move: its [`CommitFacts`] while
+/// [`Inputs::same_commits`] holds, and its ignored-folder scan. Beside the
+/// facts it answers its own commit facts when every question about them was
+/// answered, for the next measurement to reuse.
+fn describe_within(
+    listed: &ListedWorktree,
+    bases: &Bases<'_>,
+    inputs: Result<&Inputs, &str>,
+    earlier: Option<&KeptWorktree>,
+    until: Instant,
+) -> (WorktreeFacts, Option<CommitFacts>) {
     let path = crate::root::wire(&listed.path);
     if !listed.path.exists() {
         // Nothing can be counted against a path that is not there, and
         // reporting zeros would read as a clean checkout rather than a gone
         // one. The row shows `missing` and stops.
-        return WorktreeFacts {
+        let facts = WorktreeFacts {
             path,
-            branch: listed.branch,
+            branch: listed.branch.clone(),
             missing: true,
             is_main: listed.is_main,
-            head_sha: listed.head_sha,
-            lock_reason: listed.lock_reason,
+            head_sha: listed.head_sha.clone(),
+            lock_reason: listed.lock_reason.clone(),
             ..WorktreeFacts::default()
         };
+        return (facts, None);
     }
 
     let mut unavailable_reason = None;
-    let (dirty, changed_file_count) = record_failure(
-        working_tree_state(&listed.path, until),
-        &mut unavailable_reason,
-        (false, 0),
-    );
-    let base_branch = bases.of(listed.branch.as_deref());
-    let (ahead, behind) = base_branch
-        .as_deref()
-        .map(|base| ahead_behind(&listed.path, base, until))
-        .map(|result| record_failure(result, &mut unavailable_reason, (0, 0)))
-        .unwrap_or((0, 0));
-    let (added_lines, removed_lines) = base_branch
-        .as_deref()
-        .map(|base| committed_line_delta(&listed.path, base, until))
-        .map(|result| record_failure(result, &mut unavailable_reason, (0, 0)))
-        .unwrap_or((0, 0));
-
-    // Merged means in the repository's base, the one judgment the sidebar
-    // and the cleanup review share (PRD git-freshness D-06); a stacked pull
-    // request's parent branch is what `ahead` counts against, not this.
-    let merged = bases
-        .default_branch
-        .and_then(|base| merged_into(&listed.path, base, until));
-    let (upstream_state, unpushed, behind_upstream) = record_failure(
-        upstream(&listed.path, listed.branch.as_deref(), until),
-        &mut unavailable_reason,
-        ("unavailable".into(), None, None),
-    );
+    let (dirty, changed_file_count) = match working_tree_state(&listed.path, until) {
+        Ok(state) => state,
+        Err(reason) => {
+            unavailable_reason = Some(reason);
+            (false, 0)
+        }
+    };
+    let reused = earlier
+        .zip(inputs.ok())
+        .filter(|(kept, inputs)| kept.inputs.same_commits(inputs))
+        .and_then(|(kept, _)| kept.commits.clone());
+    let (commits, settled) = match (reused, inputs) {
+        (Some(commits), _) => (commits, true),
+        (None, Ok(inputs)) => commit_facts(&listed.path, inputs, until),
+        (None, Err(reason)) => (
+            CommitFacts {
+                failure: Some(format!(
+                    "The repository's branches could not be read: {reason}"
+                )),
+                ..CommitFacts::default()
+            },
+            false,
+        ),
+    };
+    if commits.failure.is_some() {
+        unavailable_reason.clone_from(&commits.failure);
+    }
     // A linked worktree is as old as its `.git/worktrees/<name>` entry, which
     // git writes once at `worktree add` and never touches again. It is read
     // off the gitfile, not asked of git, so the pass forks nothing extra for
@@ -1188,14 +1235,13 @@ fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) ->
             .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|elapsed| elapsed.as_millis() as u64)
     };
-    let last_commit = git_until(&listed.path, &["log", "-1", "--format=%ct%x00%s"], until).ok();
-    let commit_fields = last_commit
-        .as_deref()
-        .and_then(|value| value.trim_end().split_once('\0'));
-    let last_commit_unix_seconds = commit_fields.and_then(|(time, _)| time.parse().ok());
-    let last_commit_subject = commit_fields.map(|(_, subject)| subject.to_owned());
     let (ignored_repositories, ignored_scan_unavailable) = if listed.is_main {
         (Vec::new(), None)
+    } else if let Some(earlier) = earlier {
+        (
+            earlier.facts.ignored_repositories.clone(),
+            earlier.facts.ignored_scan_unavailable.clone(),
+        )
     } else {
         let left = until.saturating_duration_since(Instant::now());
         match scan_ignored_repositories(
@@ -1209,33 +1255,33 @@ fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) ->
     if Instant::now() >= until {
         unavailable_reason = Some(format!(
             "Worktree {} was not fully measured in the time it had; refresh to measure it again",
-            worktree_name(&listed)
+            worktree_name(listed)
         ));
     }
-    WorktreeFacts {
+    let facts = WorktreeFacts {
         path,
-        branch: listed.branch,
+        branch: listed.branch.clone(),
         missing: false,
         is_main: listed.is_main,
-        lock_reason: listed.lock_reason,
+        lock_reason: listed.lock_reason.clone(),
         ignored_repositories,
         ignored_scan_unavailable,
         nested: false,
         dirty,
         changed_file_count,
-        base_branch,
-        ahead,
-        behind,
-        added_lines,
-        removed_lines,
-        unpushed,
-        upstream_state,
-        behind_upstream,
+        base_branch: bases.of(listed.branch.as_deref()),
+        ahead: commits.ahead,
+        behind: commits.behind,
+        added_lines: commits.added_lines,
+        removed_lines: commits.removed_lines,
+        unpushed: commits.unpushed.clone(),
+        upstream_state: commits.upstream_state.clone(),
+        behind_upstream: commits.behind_upstream,
         created_at_unix_ms,
-        merged,
-        head_sha: listed.head_sha,
-        last_commit_unix_seconds,
-        last_commit_subject,
+        merged: commits.merged,
+        head_sha: listed.head_sha.clone(),
+        last_commit_unix_seconds: commits.last_commit_unix_seconds,
+        last_commit_subject: commits.last_commit_subject.clone(),
         last_fetch_at_unix_ms: None,
         measured_at_unix_ms: Some(
             std::time::SystemTime::now()
@@ -1244,20 +1290,181 @@ fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) ->
                 .as_millis() as u64,
         ),
         unavailable_reason,
-    }
+    };
+    (facts, settled.then_some(commits))
 }
 
-fn record_failure<T>(
-    result: Result<T, String>,
-    unavailable_reason: &mut Option<String>,
-    default: T,
-) -> T {
-    match result {
-        Ok(value) => value,
-        Err(reason) => {
-            *unavailable_reason = Some(reason);
-            default
+/// What Git says about a worktree's commits: where HEAD stands against its
+/// base and its upstream, whether the repository base holds it, and its last
+/// commit. Every answer depends on the commits [`Inputs`] names alone, so it
+/// stands while they do (`Inputs::same_commits`), Git's refusals included:
+/// two unrelated histories have no merge base however often `git diff` asks.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CommitFacts {
+    ahead: u32,
+    behind: u32,
+    added_lines: u32,
+    removed_lines: u32,
+    merged: Option<bool>,
+    upstream_state: String,
+    unpushed: Option<Unpushed>,
+    behind_upstream: Option<u32>,
+    last_commit_unix_seconds: Option<u64>,
+    last_commit_subject: Option<String>,
+    /// Why a count is not there: Git refused, or did not answer.
+    failure: Option<String>,
+}
+
+/// Asks Git about the commits `inputs` names, by commit, so every answer is
+/// about what the inputs name rather than what a ref says by the time Git
+/// runs. Beside the facts: whether Git answered every question, refusals
+/// included; a question it did not answer (out of time, or Git could not
+/// run) is asked again by the next measurement.
+fn commit_facts(path: &Path, inputs: &Inputs, until: Instant) -> (CommitFacts, bool) {
+    let mut git = CommitQuestions {
+        path,
+        until,
+        answered: true,
+        failure: None,
+    };
+    let head = inputs.listed.head_sha.as_deref();
+    let mut facts = CommitFacts::default();
+    // The base's local branch, else its remote-tracking copy as last fetched.
+    let base_commit = inputs.commits[0]
+        .as_deref()
+        .or(inputs.commits[1].as_deref());
+    if let Some(base) = inputs.base.as_deref() {
+        match (base_commit, head) {
+            (None, _) => git.fail(format!("Base branch {base} is unavailable")),
+            (Some(_), None) => git.fail(format!("Worktree has no commit to compare with {base}")),
+            (Some(base_commit), Some(head)) => {
+                // `base...HEAD` is the merge-base comparison the card's
+                // `↑A ↓B` states, not a raw two-dot range.
+                let range = format!("{base_commit}...{head}");
+                if let Some(counts) = git.printed(&["rev-list", "--left-right", "--count", &range])
+                {
+                    (facts.ahead, facts.behind) = parse_ahead_behind(&counts);
+                }
+                if let Some(stat) = git.printed(&["diff", "--shortstat", &range]) {
+                    (facts.added_lines, facts.removed_lines) = parse_shortstat(&stat);
+                }
+            }
         }
+    }
+    // Merged means in the repository's base, local or as last fetched,
+    // whichever has it, the one judgment the sidebar and the cleanup review
+    // share (PRD git-freshness D-06); a stacked pull request's parent branch
+    // is what `ahead` counts against, not this. `None` when no ref names the
+    // base or Git could not answer, which is never read as "not merged".
+    facts.merged = head.and_then(|head| git.merged(head, [&inputs.commits[2], &inputs.commits[3]]));
+    // A branch with no upstream has nowhere to push and nothing to be
+    // behind, which the card states by omitting the row rather than by a
+    // zero that would read as "fully pushed" or "up to date"; an upstream
+    // whose ref is gone is told apart from both.
+    facts.upstream_state = match (inputs.listed.branch.as_ref(), inputs.upstream.as_deref()) {
+        (Some(_), Some(upstream)) => match (inputs.commits[4].as_deref(), head) {
+            (None, _) => "gone",
+            (Some(upstream_commit), Some(head)) => match git
+                .printed(&[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    &format!("{upstream_commit}...{head}"),
+                ])
+                .map(|output| parse_left_right(&output))
+            {
+                Some(Some((behind, count))) => {
+                    let remote = upstream
+                        .trim_start_matches("refs/remotes/")
+                        .split('/')
+                        .next()
+                        .unwrap_or("")
+                        .to_owned();
+                    facts.unpushed = Some(Unpushed { remote, count });
+                    facts.behind_upstream = Some(behind);
+                    if count == 0 { "pushed" } else { "unpushed" }
+                }
+                Some(None) => {
+                    git.fail("git rev-list could not determine upstream commit count".into());
+                    "unavailable"
+                }
+                None => "unavailable",
+            },
+            (Some(_), None) => {
+                git.fail("git rev-list could not determine upstream commit count".into());
+                "unavailable"
+            }
+        },
+        _ => "no_upstream",
+    }
+    .to_owned();
+    let last_commit = head
+        .and_then(|head| git.said(&["log", "-1", "--format=%ct%x00%s", head]))
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    if let Some((time, subject)) = last_commit
+        .as_deref()
+        .and_then(|value| value.trim_end().split_once('\0'))
+    {
+        facts.last_commit_unix_seconds = time.parse().ok();
+        facts.last_commit_subject = Some(subject.to_owned());
+    }
+    facts.failure = git.failure;
+    (facts, git.answered)
+}
+
+/// The questions one [`commit_facts`] asks in one worktree, and what came of
+/// them: the last failure, and whether Git answered every one.
+struct CommitQuestions<'a> {
+    path: &'a Path,
+    until: Instant,
+    answered: bool,
+    failure: Option<String>,
+}
+
+impl CommitQuestions<'_> {
+    fn fail(&mut self, reason: String) {
+        self.failure = Some(reason);
+    }
+
+    /// Git's answer, whatever its exit status; `None`, and the facts not
+    /// settled, when it gave none.
+    fn said(&mut self, arguments: &[&str]) -> Option<std::process::Output> {
+        let said = git_ran(self.path, arguments, self.until);
+        self.answered &= said.is_ok();
+        said.ok()
+    }
+
+    /// What Git printed; `None` with the failure named when it refused or
+    /// gave no answer.
+    fn printed(&mut self, arguments: &[&str]) -> Option<String> {
+        let refused = match git_ran(self.path, arguments, self.until) {
+            Ok(output) => match stdout_of(arguments, output) {
+                Ok(stdout) => return Some(stdout),
+                Err(refusal) => refusal,
+            },
+            Err(unanswered) => {
+                self.answered = false;
+                unanswered
+            }
+        };
+        self.fail(refused);
+        None
+    }
+
+    /// Whether `head` is in either of `bases`: `Some(true)` at the first
+    /// that holds it, `Some(false)` when one said no and none holds it.
+    fn merged(&mut self, head: &str, bases: [&Option<String>; 2]) -> Option<bool> {
+        let mut answered = false;
+        for base in bases.into_iter().flatten() {
+            let output = self.said(&["merge-base", "--is-ancestor", head, base])?;
+            match output.status.code() {
+                Some(0) => return Some(true),
+                Some(1) => answered = true,
+                _ => return None,
+            }
+        }
+        answered.then_some(false)
     }
 }
 
@@ -1300,25 +1507,6 @@ fn working_tree_state(path: &Path, until: Instant) -> Result<(bool, u32), String
     Ok((count > 0, count))
 }
 
-/// Commits on this branch since the base, and commits on the base this branch
-/// does not have. `base...HEAD` is the merge-base comparison the card's
-/// `↑A ↓B` states, not a raw two-dot range.
-fn ahead_behind(path: &Path, base: &str, until: Instant) -> Result<(u32, u32), String> {
-    let base_ref = resolvable_base(path, base, until)
-        .ok_or_else(|| format!("Base branch {base} is unavailable"))?;
-    let output = git_until(
-        path,
-        &[
-            "rev-list",
-            "--left-right",
-            "--count",
-            &format!("{base_ref}...HEAD"),
-        ],
-        until,
-    )?;
-    Ok(parse_ahead_behind(&output))
-}
-
 /// `--left-right --count` prints `<behind>\t<ahead>`: the left side is the
 /// base, so its count is what this branch is missing.
 pub fn parse_ahead_behind(output: &str) -> (u32, u32) {
@@ -1332,17 +1520,6 @@ pub fn parse_ahead_behind(output: &str) -> (u32, u32) {
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
     (ahead, behind)
-}
-
-fn committed_line_delta(path: &Path, base: &str, until: Instant) -> Result<(u32, u32), String> {
-    let base_ref = resolvable_base(path, base, until)
-        .ok_or_else(|| format!("Base branch {base} is unavailable"))?;
-    let output = git_until(
-        path,
-        &["diff", "--shortstat", &format!("{base_ref}...HEAD")],
-        until,
-    )?;
-    Ok(parse_shortstat(&output))
 }
 
 /// `git diff --shortstat` prints, for example,
@@ -1369,7 +1546,7 @@ pub fn parse_shortstat(output: &str) -> (u32, u32) {
     (added, removed)
 }
 
-/// The base branch as a ref this worktree can actually resolve.
+/// The base branch as a ref the repository can actually resolve.
 ///
 /// A base is a branch name from a pull request or a repository default, so it
 /// may exist only as a remote-tracking ref in this clone. The local branch is
@@ -1397,90 +1574,6 @@ fn resolves(path: &Path, candidate: &str, until: Instant) -> bool {
         until,
     )
     .is_ok()
-}
-
-/// Whether HEAD is already in `base`, in the local branch or in its
-/// remote-tracking copy, whichever has it; a local base that stopped following
-/// its remote is one of two answers, never the only one. `None` when no ref names the base or
-/// Git could not answer, which is never read as "not merged".
-fn merged_into(path: &Path, base: &str, until: Instant) -> Option<bool> {
-    let mut answered = false;
-    for candidate in base_candidates(base).filter(|candidate| resolves(path, candidate, until)) {
-        let left = until.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return None;
-        }
-        let output = crate::git_run::output(
-            crate::git_run::at(path).args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
-            left.min(GIT_DEADLINE),
-            None,
-        )
-        .ok()??;
-        match output.status.code() {
-            Some(0) => return Some(true),
-            Some(1) => answered = true,
-            _ => return None,
-        }
-    }
-    answered.then_some(false)
-}
-
-/// Commits this branch has that its upstream does not, with the remote's
-/// name, and the commits the upstream has that this branch does not.
-///
-/// A branch with no upstream returns `None` for both: it has nowhere to push
-/// and nothing to be behind, which the card states by omitting the row rather
-/// than by showing a zero that would read as "fully pushed" or "up to date".
-/// One `rev-list --left-right --count @{u}...HEAD` answers both directions,
-/// the same shape `ahead_behind` already reads against the base, so the
-/// second number costs no second process.
-type UpstreamFacts = (String, Option<Unpushed>, Option<u32>);
-
-fn upstream(path: &Path, branch: Option<&str>, until: Instant) -> Result<UpstreamFacts, String> {
-    let Some(branch) = branch else {
-        return Ok(("no_upstream".into(), None, None));
-    };
-    let configured = git_until(
-        path,
-        &[
-            "for-each-ref",
-            "--format=%(upstream)",
-            &format!("refs/heads/{branch}"),
-        ],
-        until,
-    )?;
-    if configured.trim().is_empty() {
-        return Ok(("no_upstream".into(), None, None));
-    }
-    if let Err(reason) = git_until(path, &["rev-parse", "--verify", "@{u}"], until) {
-        // A read out of time knows nothing of the upstream.
-        if Instant::now() >= until {
-            return Err(reason);
-        }
-        return Ok(("gone".into(), None, None));
-    }
-    let counts = git_until(
-        path,
-        &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
-        until,
-    )
-    .ok()
-    .and_then(|output| parse_left_right(&output));
-    let Some((behind, count)) = counts else {
-        return Err("git rev-list could not determine upstream commit count".into());
-    };
-    let remote = configured
-        .trim()
-        .trim_start_matches("refs/remotes/")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_owned();
-    Ok((
-        if count == 0 { "pushed" } else { "unpushed" }.into(),
-        Some(Unpushed { remote, count }),
-        Some(behind),
-    ))
 }
 
 /// `--left-right --count` prints `<left>\t<right>`; both fields have to be
@@ -1573,6 +1666,13 @@ pub fn git(cwd: &Path, arguments: &[&str]) -> Result<String, String> {
 
 /// [`git`] that also ends by `until`, and does not start once it has passed.
 fn git_until(cwd: &Path, arguments: &[&str], until: Instant) -> Result<String, String> {
+    git_ran(cwd, arguments, until).and_then(|output| stdout_of(arguments, output))
+}
+
+/// Runs `git` in `cwd` to its end within `until` and answers what it said,
+/// whatever its exit status: a refusal is an answer too. `Err` is no answer,
+/// with why: it could not run, it was out of time, or `until` had passed.
+fn git_ran(cwd: &Path, arguments: &[&str], until: Instant) -> Result<std::process::Output, String> {
     let left = until.saturating_duration_since(Instant::now());
     if left.is_zero() {
         return Err(format!(
@@ -1580,7 +1680,13 @@ fn git_until(cwd: &Path, arguments: &[&str], until: Instant) -> Result<String, S
             arguments[0]
         ));
     }
-    git_within(cwd, arguments, left.min(GIT_DEADLINE))
+    record_git_call(cwd, arguments);
+    run_to_end(
+        crate::git_run::at(cwd),
+        arguments,
+        left.min(GIT_DEADLINE),
+        None,
+    )
 }
 
 /// [`git`] with its own bound, for the one command that may legitimately
@@ -1595,6 +1701,12 @@ fn git_within_limit(
     deadline: Duration,
     limit: Option<u64>,
 ) -> Result<String, String> {
+    record_git_call(cwd, arguments);
+    git_output(crate::git_run::at(cwd), arguments, deadline, limit)
+}
+
+/// Notes one `git` in `cwd` for [`git_calls`], when a test asked for that.
+fn record_git_call(cwd: &Path, arguments: &[&str]) {
     if let Some(calls) = GIT_CALLS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1602,7 +1714,6 @@ fn git_within_limit(
     {
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
-    git_output(crate::git_run::at(cwd), arguments, deadline, limit)
 }
 
 /// [`git`] in a held folder (`hide_platform::fs::held`): the folder a node
@@ -1611,16 +1722,7 @@ pub fn git_in(
     folder: &hide_platform::fs::held::HeldFolder,
     arguments: &[&str],
 ) -> Result<String, String> {
-    if let Some(calls) = GIT_CALLS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .as_mut()
-    {
-        calls.push((
-            folder.path().to_owned(),
-            arguments.first().unwrap_or(&"").to_string(),
-        ));
-    }
+    record_git_call(folder.path(), arguments);
     git_output(
         crate::git_run::in_folder(folder),
         arguments,
@@ -1631,20 +1733,35 @@ pub fn git_in(
 
 /// Runs `git` with `arguments` and answers its stdout, or why it failed.
 fn git_output(
-    mut git: std::process::Command,
+    git: std::process::Command,
     arguments: &[&str],
     deadline: Duration,
     limit: Option<u64>,
 ) -> Result<String, String> {
-    let output = crate::git_run::output(git.args(arguments), deadline, limit)
-        .map_err(|error| format!("git could not be run: {error}"))?;
-    let Some(output) = output else {
-        return Err(format!(
-            "git {} did not finish within {} s",
-            arguments[0],
-            deadline.as_secs()
-        ));
-    };
+    run_to_end(git, arguments, deadline, limit).and_then(|output| stdout_of(arguments, output))
+}
+
+/// Runs `git` with `arguments` to its end within `deadline`, whatever its
+/// exit status, or answers why it did not end.
+fn run_to_end(
+    mut git: std::process::Command,
+    arguments: &[&str],
+    deadline: Duration,
+    limit: Option<u64>,
+) -> Result<std::process::Output, String> {
+    crate::git_run::output(git.args(arguments), deadline, limit)
+        .map_err(|error| format!("git could not be run: {error}"))?
+        .ok_or_else(|| {
+            format!(
+                "git {} did not finish within {} s",
+                arguments[0],
+                deadline.as_secs()
+            )
+        })
+}
+
+/// What `git` printed, or the words it refused with.
+fn stdout_of(arguments: &[&str], output: std::process::Output) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         return Err(if stderr.is_empty() {
@@ -3112,8 +3229,8 @@ mod measure_tests {
     /// counts, so an absent checkout never reads as a clean one.
     #[test]
     fn a_missing_worktree_reports_no_counts() {
-        let described = describe_within(
-            ListedWorktree {
+        let (described, _) = describe_within(
+            &ListedWorktree {
                 path: PathBuf::from("/definitely/not/here/hide-test"),
                 branch: Some("gone".to_owned()),
                 is_main: false,
@@ -3126,6 +3243,8 @@ mod measure_tests {
                 default_branch: Some("main"),
                 chosen: None,
             },
+            Err("no refs in a folder that is not there"),
+            None,
             Instant::now() + WORKTREE_MEASURE_TIME,
         );
         assert!(described.missing);
@@ -3200,12 +3319,13 @@ mod measure_tests {
                 default_branch: Some("main"),
                 chosen: None,
             };
+            let refs = Refs::read(&self.root, Instant::now() + GIT_DEADLINE);
             measure(
                 measured,
                 &self.root,
                 listed_worktrees(&self.root, Instant::now() + GIT_DEADLINE).unwrap(),
                 &bases,
-                Refs::read(&self.root, Instant::now() + GIT_DEADLINE).as_ref(),
+                refs.as_ref().map_err(String::as_str),
                 reuse_unchanged,
                 time,
             )
@@ -3268,41 +3388,172 @@ mod measure_tests {
         assert_eq!(facts["after"].ignored_scan_unavailable, None);
     }
 
-    /// A read with no time left measures nothing: a worktree whose inputs
-    /// did not move answers its last measurement, and one that moved is
-    /// named, never shown with the facts of its old commit.
+    /// A read with no time left measures nothing: every worktree an earlier
+    /// read measured answers that measurement, a moved one included, and only
+    /// one never measured is named unmeasured. A repository whose moved
+    /// worktrees did not fit in its read once named the same rows unmeasured
+    /// on every read; the next read with time measures the moved one first.
     #[test]
-    fn a_read_out_of_time_keeps_what_did_not_move_and_names_what_did() {
+    fn a_read_out_of_time_answers_each_worktree_its_last_measurement() {
         let fixture = Fixture::new(&["moved", "quiet"]);
         let measured = Measured::default();
-        let ample = || {
-            (
-                Instant::now() + Duration::from_secs(120),
-                WORKTREE_MEASURE_TIME,
-            )
-        };
         let first = fixture.measure(&measured, false, ample());
         run(
             &fixture.linked("moved"),
             &["commit", "-q", "--allow-empty", "-m", "moved"],
         );
-        let spent = fixture.measure(&measured, true, (Instant::now(), WORKTREE_MEASURE_TIME));
-        assert_eq!(spent["quiet"], first["quiet"]);
-        assert_eq!(spent["main"], first["main"]);
-        let moved = &spent["moved"];
-        assert!(
-            moved
-                .unavailable_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("Worktree moved was not measured")),
-            "{moved:?}"
+        let new = fixture.linked("new");
+        run(
+            &fixture.root,
+            &["worktree", "add", "-q", "-b", "new", new.to_str().unwrap()],
         );
-        assert_eq!(moved.ahead, 0);
-        // The next read with time measures it, and only it.
+        for _ in 0..2 {
+            let spent = fixture.measure(&measured, true, spent());
+            assert_eq!(spent["quiet"], first["quiet"]);
+            assert_eq!(spent["main"], first["main"]);
+            assert_eq!(spent["moved"], first["moved"]);
+            assert!(
+                spent["new"]
+                    .unavailable_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("Worktree new was not measured")),
+                "{:?}",
+                spent["new"]
+            );
+        }
         let next = fixture.measure(&measured, true, ample());
         assert_eq!(next["moved"].unavailable_reason, None);
         assert_eq!(next["moved"].ahead, 1);
+        assert_eq!(next["new"].unavailable_reason, None);
         assert_eq!(next["quiet"], first["quiet"]);
+    }
+
+    /// A read a Git watch asked for measures a worktree whose index moved
+    /// with one `git status`: what Git said about commits that did not move
+    /// stands, its refusals included, since two unrelated histories have no
+    /// merge base however often it is asked. A moved commit, or an explicit
+    /// read, asks again.
+    #[test]
+    fn a_watch_read_asks_git_again_only_about_commits_that_moved() {
+        let fixture = Fixture::new(&[]);
+        let orphan = fixture.linked("orphan");
+        run(
+            &fixture.root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                orphan.to_str().unwrap(),
+            ],
+        );
+        run(&orphan, &["checkout", "-q", "--orphan", "orphan"]);
+        run(
+            &orphan,
+            &["commit", "-q", "--allow-empty", "-m", "unrelated"],
+        );
+        record_git_calls();
+        let asked =
+            || ["rev-list", "diff", "merge-base", "log"].map(|command| git_calls(&orphan, command));
+        let measured = Measured::default();
+        let first = fixture.measure(&measured, false, ample());
+        let refusal = first["orphan"].unavailable_reason.clone();
+        assert!(
+            refusal
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no merge base")),
+            "{refusal:?}"
+        );
+        assert_eq!(first["orphan"].merged, Some(false));
+        let commits_asked = asked();
+        let statuses = git_calls(&orphan, "status");
+
+        // An agent's `git add` moves the index and no commit.
+        std::fs::write(orphan.join("note.txt"), "draft").unwrap();
+        run(&orphan, &["add", "note.txt"]);
+        let watched = fixture.measure(&measured, true, ample());
+        assert!(watched["orphan"].dirty);
+        assert_eq!(watched["orphan"].unavailable_reason, refusal);
+        assert_eq!(watched["orphan"].merged, Some(false));
+        assert_eq!(git_calls(&orphan, "status"), statuses + 1);
+        assert_eq!(asked(), commits_asked, "no commit moved");
+
+        run(&orphan, &["commit", "-q", "-m", "note"]);
+        fixture.measure(&measured, true, ample());
+        let after_commit = asked();
+        assert!(
+            after_commit
+                .iter()
+                .zip(commits_asked)
+                .all(|(after, before)| *after > before),
+            "a moved HEAD is asked about again: {after_commit:?} after {commits_asked:?}"
+        );
+        fixture.measure(&measured, false, ample());
+        assert!(
+            asked()
+                .iter()
+                .zip(after_commit)
+                .all(|(after, before)| *after > before),
+            "an explicit read asks again"
+        );
+    }
+
+    /// A read a Git watch asked for keeps a measured worktree's
+    /// ignored-folder scan, which no Git input follows and which the walk
+    /// of every ignored folder (a build tree of millions of entries) makes
+    /// the costliest part of a measurement; an explicit read scans again,
+    /// as a removal does before it deletes anything.
+    #[test]
+    fn a_watch_read_keeps_the_ignored_folder_scan_and_an_explicit_read_scans_again() {
+        let fixture = Fixture::new(&["build"]);
+        let worktree = fixture.linked("build");
+        std::fs::write(worktree.join(".gitignore"), "out/\n").unwrap();
+        let nested = worktree.join("out").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        run(&nested, &["init", "-q"]);
+        let measured = Measured::default();
+        let first = fixture.measure(&measured, false, ample());
+        assert_eq!(first["build"].ignored_repositories, vec!["out/nested"]);
+
+        std::fs::remove_dir_all(&nested).unwrap();
+        run(&worktree, &["add", ".gitignore"]);
+        let watched = fixture.measure(&measured, true, ample());
+        assert_eq!(watched["build"].changed_file_count, 1, "the index was read");
+        assert_eq!(watched["build"].ignored_repositories, vec!["out/nested"]);
+
+        let explicit = fixture.measure(&measured, false, ample());
+        assert_eq!(explicit["build"].ignored_repositories, Vec::<String>::new());
+    }
+
+    /// Commit facts are kept for reuse only when Git answered every
+    /// question: one the read's time cut off is asked again.
+    #[test]
+    fn commit_facts_out_of_time_are_not_kept_for_reuse() {
+        let fixture = Fixture::new(&["late"]);
+        let listed = listed_worktrees(&fixture.root, Instant::now() + GIT_DEADLINE).unwrap();
+        let late = listed
+            .iter()
+            .find(|worktree| worktree.branch.as_deref() == Some("late"))
+            .unwrap();
+        let by_branch = BTreeMap::new();
+        let bases = Bases {
+            by_branch: &by_branch,
+            default_branch: Some("main"),
+            chosen: None,
+        };
+        let refs = Refs::read(&fixture.root, Instant::now() + GIT_DEADLINE).unwrap();
+        let inputs = Inputs::of(late, &bases, &refs);
+        let (_, kept) = describe_within(late, &bases, Ok(&inputs), None, Instant::now());
+        assert_eq!(kept, None);
+        let (facts, kept) = describe_within(
+            late,
+            &bases,
+            Ok(&inputs),
+            None,
+            Instant::now() + WORKTREE_MEASURE_TIME,
+        );
+        assert_eq!(facts.unavailable_reason, None);
+        assert_eq!(kept.map(|commits| commits.merged), Some(Some(true)));
     }
 
     fn ample() -> (Instant, Duration) {
@@ -3317,11 +3568,11 @@ mod measure_tests {
     }
 
     /// A node that started again reads what it measured before from its
-    /// folder: a worktree whose inputs did not move answers its last
-    /// measurement with no time to measure it, and one that moved is not
-    /// answered from it. Without the folder the same read has nothing.
+    /// folder: with no time to measure, every worktree answers its last
+    /// measurement from there, and with time only the one whose inputs moved
+    /// is measured again. Without the folder the same read has nothing.
     #[test]
-    fn a_restarted_node_reuses_from_its_folder_only_what_did_not_move() {
+    fn a_restarted_node_answers_from_its_folder_and_measures_only_what_moved() {
         let fixture = Fixture::new(&["moved", "quiet"]);
         let folder = fixture.folder.path().join("worktree-facts");
         let first = fixture.measure(&Measured::kept_in(folder.clone()), false, ample());
@@ -3330,17 +3581,15 @@ mod measure_tests {
             &["commit", "-q", "--allow-empty", "-m", "moved"],
         );
 
-        let restarted = fixture.measure(&Measured::kept_in(folder), true, spent());
-        assert_eq!(restarted["quiet"], first["quiet"]);
-        assert_eq!(restarted["main"], first["main"]);
-        assert!(
-            restarted["moved"]
-                .unavailable_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("Worktree moved was not measured")),
-            "{:?}",
-            restarted["moved"]
-        );
+        let restarted = fixture.measure(&Measured::kept_in(folder.clone()), true, spent());
+        assert_eq!(restarted, first);
+        record_git_calls();
+        let quiet = fixture.linked("quiet");
+        let statuses = git_calls(&quiet, "status");
+        let measured = fixture.measure(&Measured::kept_in(folder), true, ample());
+        assert_eq!(measured["quiet"], first["quiet"]);
+        assert_eq!(git_calls(&quiet, "status"), statuses);
+        assert_eq!(measured["moved"].ahead, 1);
         let forgotten = fixture.measure(&Measured::default(), true, spent());
         assert!(forgotten["quiet"].unavailable_reason.is_some());
     }

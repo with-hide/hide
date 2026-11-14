@@ -12,7 +12,7 @@ public struct Notice: Equatable {
     public let deviceId: String
     public let paneId: String
     public let room: String
-    /// The largest notice the app reads: hided's own plaintext bound is 2,897 bytes (`push::MAX_APNS_PLAINTEXT`).
+    /// The largest notice the app reads: hided's own plaintext bound is 2,897 bytes (`push::MAX_APP_PLAINTEXT`).
     static let maxBytes = 4096
 
     /// The notice of the demo's sample question: the shape a real one has, for a computer that does not exist, so the

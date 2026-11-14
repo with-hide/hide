@@ -83,9 +83,12 @@ pub(crate) fn revisit_of(
 }
 
 /// A read, unanswered question or approval at rest on a root, whether or not
-/// 치우기 put it away.
+/// 치우기 put it away. An external tool's agent asks its tool, which answers
+/// it, so the operator reading its pane leaves it no ask of theirs (PRD
+/// hide-external-control B28).
 fn read_open_ask(agent: &SidebarAgentSnapshot) -> bool {
     agent.lineage_parent_pane_id.is_none()
+        && !super::axes::tool_keeps(agent)
         && matches!(agent.demand.as_str(), "question" | "approval")
         && !agent.blocked
         && !agent.unread

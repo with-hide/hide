@@ -44,8 +44,8 @@ use hide_relay_protocol::admission::PushOutcome;
 use phones::{PairRefusal, Phones};
 use projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use store::{
-    ApnsRegistration, Method, MobileSettings, Notifications, PhoneOrigin, PhoneRecord, PushMode,
-    PushSubscription, ServeRecord,
+    ApnsRegistration, FcmRegistration, Method, MobileSettings, Notifications, PhoneOrigin,
+    PhoneRecord, PushMode, PushSubscription, ServeRecord,
 };
 use tailscale::{Checklist, CliSource, CommandFailure, Ownership, StepState};
 
@@ -98,20 +98,27 @@ enum Exposure {
     },
 }
 
-/// Where a phone's notices go: its Web Push subscription, or Apple through
-/// the relay for the iOS app, whose registration is read again at send.
+/// Where a phone's notices go: its Web Push subscription, or the relay for an
+/// app (Apple for the iOS app, Google's FCM for the Android app), whose
+/// registration is read again at send.
 #[derive(Clone)]
 enum Route {
     Web(PushSubscription),
     App,
 }
 
+/// An app phone's registration, read at send: one of the two a record holds.
+enum AppRegistration {
+    Apns(ApnsRegistration),
+    Fcm(FcmRegistration),
+}
+
 impl Route {
     fn of(phone: &PhoneRecord) -> Option<Self> {
-        match (&phone.push, &phone.apns) {
-            (Some(subscription), _) => Some(Self::Web(subscription.clone())),
-            (None, Some(_)) => Some(Self::App),
-            (None, None) => None,
+        match &phone.push {
+            Some(subscription) => Some(Self::Web(subscription.clone())),
+            None if phone.apns.is_some() || phone.fcm.is_some() => Some(Self::App),
+            None => None,
         }
     }
 }
@@ -2016,7 +2023,7 @@ impl Mobile {
             }));
             return false;
         }
-        let changed = self.lock().phones.set_subscription(phone_id, Some(push));
+        let changed = self.lock().phones.set_way(phone_id, phones::Way::Web(push));
         if changed {
             hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "subscription.stored", "phone_id": phone_id,
@@ -2030,16 +2037,30 @@ impl Mobile {
     /// encrypted session; `false` when its shape is wrong. Neither the token
     /// nor the key reaches a log.
     pub fn set_apns(&self, phone_id: &str, registration: ApnsRegistration) -> bool {
-        if !push::registration_valid(&registration) {
+        let valid = push::registration_valid(&registration);
+        self.set_app(phone_id, "apns", valid, phones::Way::Apns(registration))
+    }
+
+    /// Stores an Android app phone's FCM registration, as `set_apns` stores
+    /// an iOS app's.
+    pub fn set_fcm(&self, phone_id: &str, registration: FcmRegistration) -> bool {
+        let valid = push::fcm_registration_valid(&registration);
+        self.set_app(phone_id, "fcm", valid, phones::Way::Fcm(registration))
+    }
+
+    fn set_app(&self, phone_id: &str, service: &str, valid: bool, way: phones::Way) -> bool {
+        if !valid {
             hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "registration.refused", "phone_id": phone_id,
+                "service": service,
             }));
             return false;
         }
-        let changed = self.lock().phones.set_apns(phone_id, Some(registration));
+        let changed = self.lock().phones.set_way(phone_id, way);
         if changed {
             hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "registration.stored", "phone_id": phone_id,
+                "service": service,
             }));
             self.publish();
         }
@@ -2103,47 +2124,62 @@ impl Mobile {
         }
     }
 
-    /// Sends one notice to an iOS app phone: encrypted for the key it
-    /// registered, handed to the relay over the running link, and answered by
-    /// the relay with Apple's outcome. Blocking, on a thread where Web Push
-    /// sends run. A token Apple calls gone is dropped (`token_gone`); every
-    /// other `Err` names why nothing was delivered, and none is retried
-    /// (`docs/RELAY_PROTOCOL.md`, Push relay).
+    /// Sends one notice to an app phone: encrypted for the key it registered,
+    /// handed to the relay over the running link as a `push_request` (the
+    /// iOS app, Apple) or an `fcm_request` (the Android app, Google), and
+    /// answered by the relay with the push service's outcome. Blocking, on a
+    /// thread where Web Push sends run. A token the service calls gone is
+    /// dropped (`token_gone`); every other `Err` names why nothing was
+    /// delivered, and none is retried (`docs/RELAY_PROTOCOL.md`, Push relay).
     pub fn push_to_app(&self, phone_id: &str, payload: &Value) -> Result<(), &'static str> {
         let (registration, link) = {
             let inner = self.lock();
-            let registration = inner
-                .phones
-                .current()
-                .find(|phone| phone.id == phone_id)
-                .and_then(|phone| phone.apns.clone())
+            let phone = inner.phones.current().find(|phone| phone.id == phone_id);
+            let registration = phone
+                .and_then(|phone| {
+                    (phone.apns.clone().map(AppRegistration::Apns))
+                        .or_else(|| phone.fcm.clone().map(AppRegistration::Fcm))
+                })
                 .ok_or("no_registration")?;
             let link = inner.relay_link.clone().ok_or("relay_unavailable")?;
             (registration, link)
         };
-        let request = self.prepare_with_clear(phone_id, payload, |payload| {
-            push::app_request(&registration, payload)
-        })?;
+        // The token the answer is about, the service for the diagnostic, and
+        // Apple's environment, which says which build a refused token is for.
+        let (token, service, environment) = match &registration {
+            AppRegistration::Apns(apns) => (apns.token.clone(), "apns", Some(apns.environment)),
+            AppRegistration::Fcm(fcm) => (fcm.token.clone(), "fcm", None),
+        };
+        let request =
+            self.prepare_with_clear(phone_id, payload, |payload| match &registration {
+                AppRegistration::Apns(apns) => {
+                    push::app_request(apns, payload).map(relay::AppRequest::Apns)
+                }
+                AppRegistration::Fcm(fcm) => {
+                    push::fcm_request(fcm, payload).map(relay::AppRequest::Fcm)
+                }
+            })?;
         match link.push(request)? {
             PushOutcome::Delivered => Ok(()),
             PushOutcome::TokenGone => {
-                let dropped = self.lock().phones.drop_apns(phone_id, &registration.token);
+                let dropped = self.lock().phones.drop_app(phone_id, &token);
                 if dropped {
                     hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "registration.dropped", "phone_id": phone_id,
+                        "service": service,
                     }));
                     self.publish();
                 }
                 Err("token_gone")
             }
-            // Apple refuses the token itself: the build's environment or topic and the relay's do not agree, or the
-            // token is malformed. That is a configuration problem to read in the log, not a gone install, so the
-            // registration stays: dropping it would only make the app register the same token again on the next
-            // connection and be refused again.
+            // The push service refuses the token itself: for Apple the build's environment or topic and the relay's
+            // do not agree, for Google the app's Firebase project and the relay's, or the token is malformed. That is
+            // a configuration problem to read in the log, not a gone install, so the registration stays: dropping it
+            // would only make the app register the same token again on the next connection and be refused again.
             PushOutcome::TokenRejected => {
                 hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "registration.rejected", "phone_id": phone_id,
-                    "environment": registration.environment,
+                    "service": service, "environment": environment,
                 }));
                 Err("token_rejected")
             }

@@ -443,6 +443,7 @@ impl HookFacts {
         for agent in &mut payload.agents {
             agent.hook = None;
             agent.hook_refused = None;
+            agent.hook_question = false;
             let Some(pane) = agent.pane_id.clone().or_else(|| agent.id.clone()) else {
                 continue;
             };
@@ -473,6 +474,15 @@ impl HookFacts {
             } else {
                 Some(HookTurn::Waiting)
             };
+            // The dialog still holds the pane, but it asks a question: the
+            // session read words it while it holds for the engine's state, and
+            // between that state's change and its read the row stays a question
+            // rather than turning into an approval (`axes::native_user_turn`).
+            agent.hook_question = !fact.waiting.is_empty()
+                && fact
+                    .waiting
+                    .iter()
+                    .all(|call| hide_session::calls::asks_question(call));
             agent.hook_refused = fact
                 .refused
                 .clone()

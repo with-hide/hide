@@ -3222,8 +3222,10 @@ impl Runtime {
             let node = self.node.as_str().to_owned();
             self.lay_plan_reviews(&node, &mut agents);
             // A pull request's checks are a wait the lineage decides and an
-            // end the read axis compares, so they are laid before both.
+            // end the read axis compares, so they are laid before both, and
+            // so are the subagents a session runs.
             self.lay_checks(&mut agents);
+            self.lay_subagents(&mut agents);
             // Views to look at go to Needs You or up to the ancestors, which
             // the lineage and the read axis decide.
             self.lay_unseen_views(&mut agents);

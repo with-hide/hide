@@ -113,6 +113,7 @@
   --color-mission-failed: var(--mission-failed);
   --color-mission-waiting: var(--mission-waiting);
   --color-mission-cancelled: var(--mission-cancelled);
+  --color-mission-stopped: var(--mission-stopped);
   --color-diff-added: var(--diff-added);
   --color-diff-removed: var(--diff-removed);
   --color-qr-foreground: var(--qr-foreground);
@@ -284,6 +285,7 @@
   --size-tab-icon-identity: 40px;
   --size-tab-overflow-control: 28px;
   --size-tab-status-dot: 5px;
+  --size-subagent-dot: 4px;
   --size-editor-line-number-col: 44px;
   --size-editor-diff-line-number-col: 40px;
   --size-editor-min-content: 720px;
@@ -418,6 +420,8 @@
   --motion-brand-sweep: 1.8;
   --size-update-ring: 3px;
   --motion-update-pulse: 1.2;
+  --motion-working-turn: 1.6;
+  --motion-subagent-orbit: 9;
   --size-overview-projects-min: 960px;
   --size-overview-usage-content: 1120px;
   --size-overview-usage-plot: 180px;
@@ -590,6 +594,7 @@
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
+  --mission-stopped: var(--status-seen);
   --diff-added: var(--green-53);
   --diff-removed: var(--red-56);
   --qr-foreground: #000000;
@@ -707,6 +712,7 @@
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
+  --mission-stopped: var(--status-seen);
   --diff-added: var(--green-83);
   --diff-removed: var(--red-69);
   --qr-foreground: #000000;

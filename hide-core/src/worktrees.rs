@@ -89,6 +89,12 @@ type ObservedRequest = (u64, u64, Vec<ProjectObservation>);
 /// contributes no project entry at all.
 type ProjectAnswer = (PathBuf, Option<ProjectWorktreesSnapshot>);
 
+/// How long after a project's first unread change it is read, so the
+/// writes of one Git command (index, objects, refs) land in one read.
+/// Counted from the first change, not the last: agents that keep running Git
+/// never leave a repository quiet that long, and a quiet period counted from
+/// the last change never ended, so their repository was never read again.
+/// The changes after the first wait for [`WATCH_READ_SPACING`] instead.
 const GIT_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 /// How long a Git watch that ended is left before it is started again.
 const GIT_WATCH_RETRY: Duration = Duration::from_secs(30);
@@ -109,8 +115,8 @@ const GIT_WATCH_STOP_WAIT: Duration = Duration::from_secs(3);
 /// One Git watch on the node that holds the repositories, over every
 /// project's common directory (`Call::GitWatch`). The coordinator drains its
 /// reports on each wake, keeps only the projects whose Git facts changed,
-/// and lets its existing background reader do the Git work once a project
-/// has been quiet for [`GIT_WATCH_DEBOUNCE`]. A change of the watched set
+/// and lets its existing background reader do the Git work
+/// [`GIT_WATCH_DEBOUNCE`] after a project's first change. A change of the watched set
 /// starts a new watch and keeps the old one until the new one is watching,
 /// so a repository in both is never unwatched. Any lapse in that cover (a
 /// watch that ended or could not start, which is tried again after
@@ -136,7 +142,8 @@ struct GitWatch {
     owes_reread: bool,
     /// Each watched Git common directory and the projects that share it.
     roots: BTreeMap<PathBuf, Vec<PathBuf>>,
-    /// Projects whose Git facts changed, with the last time they did.
+    /// Projects whose Git facts changed since they were last read, with the
+    /// first time they did.
     pending: BTreeMap<PathBuf, Instant>,
     registered: BTreeMap<PathBuf, PathBuf>,
     requested_roots: Vec<PathBuf>,
@@ -497,7 +504,7 @@ impl GitWatch {
         self.mark(&changed, now);
         if every {
             for project in self.registered.keys() {
-                self.pending.insert(project.clone(), now);
+                self.pending.entry(project.clone()).or_insert(now);
             }
         }
         if let Some(reason) = ended {
@@ -555,7 +562,7 @@ impl GitWatch {
     fn mark(&mut self, common_dirs: &[String], now: Instant) {
         for common in common_dirs {
             for project in self.roots.get(Path::new(common)).into_iter().flatten() {
-                self.pending.insert(project.clone(), now);
+                self.pending.entry(project.clone()).or_insert(now);
             }
         }
     }
@@ -566,7 +573,7 @@ impl GitWatch {
         let settled: Vec<_> = self
             .pending
             .iter()
-            .filter(|(_, last)| now.duration_since(**last) >= GIT_WATCH_DEBOUNCE)
+            .filter(|(_, first)| now.duration_since(**first) >= GIT_WATCH_DEBOUNCE)
             .map(|(project, _)| project.clone())
             .collect();
         for project in &settled {
@@ -670,15 +677,41 @@ impl DeviceGitWatch {
     }
 }
 
+/// The least time between one read landing and a read a Git watch asked
+/// for starting. An agent's `git status`, `git add` or commit moves a
+/// worktree's index, and a repository whose agents keep running Git moves
+/// one every few hundred milliseconds, so without it the project is read
+/// again the moment each read lands, back to back. Every change inside the
+/// wait coalesces into the one read after it; an explicit read, a new
+/// project or a new base is not held. Five seconds
+/// keeps a device's change in the sidebar "within seconds" of it
+/// (`docs/UI_BEHAVIOR.md`) and a busy repository's reads to one per five
+/// seconds plus the read's own time.
+pub(crate) const WATCH_READ_SPACING: Duration = Duration::from_secs(5);
+
 pub struct WorktreeReader {
     inner: BackgroundRead<ObservedRequest, (ObservedRequest, Vec<ProjectAnswer>)>,
     git_watch: GitWatch,
     git_generations: BTreeMap<PathBuf, u64>,
+    /// Projects the Git watch saw change, read once [`Self::spacing`] has
+    /// passed since the last read landed.
+    owed: BTreeSet<PathBuf>,
+    landed_at: Option<Instant>,
+    spacing: Duration,
 }
 
 impl WorktreeReader {
     /// Reads the repositories of the node `node` links to.
     pub fn new(node: std::sync::Arc<dyn crate::node_access::NodeLink>) -> Self {
+        Self::spaced(node, WATCH_READ_SPACING)
+    }
+
+    /// A reader whose watch reads are `spacing` apart; tests about what a
+    /// read measures, not when, hold none.
+    pub(crate) fn spaced(
+        node: std::sync::Arc<dyn crate::node_access::NodeLink>,
+        spacing: Duration,
+    ) -> Self {
         let git_watch = GitWatch::new(std::sync::Arc::clone(&node));
         Self {
             inner: BackgroundRead::on_change(Duration::ZERO, {
@@ -687,6 +720,9 @@ impl WorktreeReader {
             }),
             git_watch,
             git_generations: BTreeMap::new(),
+            owed: BTreeSet::new(),
+            landed_at: None,
+            spacing,
         }
     }
 
@@ -697,10 +733,29 @@ impl WorktreeReader {
     }
 
     pub fn read_if_due(&mut self, request: WorktreeRequest) -> Option<WorktreeAnswer> {
+        self.read_if_due_at(request, Instant::now())
+    }
+
+    pub(crate) fn read_if_due_at(
+        &mut self,
+        request: WorktreeRequest,
+        now: Instant,
+    ) -> Option<WorktreeAnswer> {
         self.git_watch.reconcile(&request.projects);
-        for project in self.git_watch.settled() {
-            let generation = self.git_generations.entry(project).or_insert(0);
-            *generation = generation.wrapping_add(1);
+        self.owed.extend(self.git_watch.settled());
+        self.owed
+            .retain(|root| request.projects.iter().any(|p| &p.root_path == root));
+        // A change waits while a read runs, since that read may have begun
+        // before it, and then until the spacing has passed since a read
+        // landed: one read covers every change inside the wait.
+        let spaced = self
+            .landed_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= self.spacing);
+        if spaced && !self.inner.busy() {
+            for project in std::mem::take(&mut self.owed) {
+                let generation = self.git_generations.entry(project).or_insert(0);
+                *generation = generation.wrapping_add(1);
+            }
         }
         let observations = request
             .projects
@@ -716,8 +771,10 @@ impl WorktreeReader {
             .collect();
         let observed_request = (request.generation, request.removals, observations);
         let (answered_request, answers) = self.inner.poll(observed_request.clone())?;
-        let observations_current =
-            answered_request == observed_request && !self.git_watch.has_pending();
+        self.landed_at = Some(now);
+        let observations_current = answered_request == observed_request
+            && self.owed.is_empty()
+            && !self.git_watch.has_pending();
         let mut projects: Vec<ProjectWorktreesSnapshot> = Vec::new();
         for (_, project) in answers {
             // Two registrations inside one repository describe one project.
@@ -790,6 +847,9 @@ fn read_observed(
                 None => *generation == 0 && observation.request.generation == 0,
             };
             let project = read(node, &observation.request, reuse_unchanged);
+            if let Some(project) = project.as_ref() {
+                log_new_failures(None, cached.and_then(|(_, _, last)| last.as_ref()), project);
+            }
             cache.insert(
                 root.clone(),
                 (*generation, observation.clone(), project.clone()),
@@ -1007,14 +1067,6 @@ fn read_project(
 pub fn project_snapshot(
     facts: hide_node_link::worktrees::RepositoryWorktrees,
 ) -> ProjectWorktreesSnapshot {
-    if let Some(reason) = facts.unavailable_reason.as_deref() {
-        crate::diagnostic!(serde_json::json!({
-            "component": "worktrees",
-            "kind": "worktree_list.failed",
-            "project": facts.root_path,
-            "message": reason,
-        }));
-    }
     let base_branch = facts.base_branch.clone();
     ProjectWorktreesSnapshot {
         repository: facts
@@ -1046,15 +1098,47 @@ pub fn project_snapshot(
     }
 }
 
-fn worktree_snapshot(facts: hide_node_link::worktrees::WorktreeFacts) -> WorktreeSnapshot {
-    if let Some(reason) = facts.unavailable_reason.as_deref() {
+/// Logs each failure `current` names that `previous`, the same project's
+/// last answer, did not name with the same reason: a repository that cannot
+/// be listed, or a worktree Git could not fully describe, is logged when
+/// that starts or its reason changes, never again on each answer that
+/// repeats it. `device` names the connected device the project is on.
+pub(crate) fn log_new_failures(
+    device: Option<&str>,
+    previous: Option<&ProjectWorktreesSnapshot>,
+    current: &ProjectWorktreesSnapshot,
+) {
+    if let Some(reason) = current.unavailable_reason.as_deref()
+        && previous.and_then(|last| last.unavailable_reason.as_deref()) != Some(reason)
+    {
         crate::diagnostic!(serde_json::json!({
             "component": "worktrees",
-            "kind": "worktree_status.unavailable",
-            "path": facts.path,
+            "kind": "worktree_list.failed",
+            "target": device,
+            "project": current.root_path,
             "message": reason,
         }));
     }
+    for row in &current.worktrees {
+        let Some(reason) = row.unavailable_reason.as_deref() else {
+            continue;
+        };
+        let last = previous
+            .and_then(|last| last.worktrees.iter().find(|last| last.path == row.path))
+            .and_then(|last| last.unavailable_reason.as_deref());
+        if last != Some(reason) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "worktrees",
+                "kind": "worktree_status.unavailable",
+                "target": device,
+                "path": row.path,
+                "message": reason,
+            }));
+        }
+    }
+}
+
+fn worktree_snapshot(facts: hide_node_link::worktrees::WorktreeFacts) -> WorktreeSnapshot {
     WorktreeSnapshot {
         path: facts.path,
         branch: facts.branch,
@@ -1424,10 +1508,196 @@ mod tests {
         assert_eq!(asked(0, 1), [false], "an Overview opening");
     }
 
+    /// A node that answers each `Worktrees` call with `answer`, counting the
+    /// calls, and whose Git watch never reports.
+    struct Answering {
+        answer: std::sync::Mutex<hide_node_link::worktrees::RepositoryWorktrees>,
+        reads: std::sync::atomic::AtomicUsize,
+        watches: DrivenWatches,
+    }
+
+    impl Answering {
+        fn new(answer: hide_node_link::worktrees::RepositoryWorktrees) -> Self {
+            let (forwarded, _) = std::sync::mpsc::channel();
+            Self {
+                answer: std::sync::Mutex::new(answer),
+                reads: 0.into(),
+                watches: DrivenWatches {
+                    watches: std::sync::Arc::default(),
+                    forwarded: std::sync::Mutex::new(forwarded),
+                },
+            }
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl crate::node_access::NodeLink for Answering {
+        fn call(
+            &self,
+            call: Call,
+            timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, hide_node_link::link::LinkError> {
+            if let Call::Worktrees { .. } = call {
+                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(serde_json::json!(Some(self.answer.lock().unwrap().clone())).into());
+            }
+            self.watches.call(call, timeout)
+        }
+
+        fn call_with_progress(
+            &self,
+            call: Call,
+            timeout: Duration,
+            progress: &mut dyn FnMut(serde_json::Value) -> bool,
+        ) -> Result<hide_node_link::link::LinkAnswer, hide_node_link::link::LinkError> {
+            self.watches.call_with_progress(call, timeout, progress)
+        }
+    }
+
+    /// The answer of the read the reader starts on a poll at `now`.
+    fn landed(reader: &mut WorktreeReader, request: &WorktreeRequest, now: Instant) -> bool {
+        if reader.read_if_due_at(request.clone(), now).is_some() {
+            return true;
+        }
+        reader.inner.join_pending();
+        reader.read_if_due_at(request.clone(), now).is_some()
+    }
+
+    /// A project its Git watch keeps reporting is read again once the
+    /// spacing since the last read landed has passed, once for every change
+    /// inside the wait; an explicit read is not held.
+    #[test]
+    fn watch_changes_inside_the_spacing_are_one_read_after_it() {
+        let node = std::sync::Arc::new(Answering::new(Default::default()));
+        let (watch, reports) = std::sync::mpsc::channel::<GitWatchReport>();
+        node.watches
+            .watches
+            .lock()
+            .unwrap()
+            .push((vec!["/a/.git".to_owned()], reports));
+        let mut reader = WorktreeReader::spaced(node.clone(), WATCH_READ_SPACING);
+        let mut request = WorktreeRequest {
+            projects: projects(&["/a"]),
+            generation: 0,
+            removals: 0,
+        };
+        let start = Instant::now();
+        assert!(landed(&mut reader, &request, start));
+        assert_eq!(node.reads(), 1);
+
+        let changed = || Instant::now() - GIT_WATCH_DEBOUNCE;
+        for second in 1..WATCH_READ_SPACING.as_secs() {
+            reader
+                .git_watch
+                .pending
+                .insert(PathBuf::from("/a"), changed());
+            let at = start + Duration::from_secs(second);
+            assert!(!landed(&mut reader, &request, at), "{second} s after");
+        }
+        assert_eq!(node.reads(), 1, "nothing is read inside the spacing");
+
+        assert!(landed(&mut reader, &request, start + WATCH_READ_SPACING));
+        assert_eq!(node.reads(), 2, "every change inside the wait is one read");
+        assert!(!landed(
+            &mut reader,
+            &request,
+            start + WATCH_READ_SPACING * 3
+        ));
+        assert_eq!(node.reads(), 2);
+
+        reader
+            .git_watch
+            .pending
+            .insert(PathBuf::from("/a"), changed());
+        request.generation += 1;
+        let explicit = start + WATCH_READ_SPACING + Duration::from_secs(1);
+        assert!(landed(&mut reader, &request, explicit));
+        assert_eq!(node.reads(), 3, "an explicit read is not held");
+        // The node's watch ends before the reader, which then waits for none.
+        drop(watch);
+    }
+
+    /// A worktree Git cannot describe, or a repository it cannot list, is
+    /// logged when that starts and when its reason changes, not on each read
+    /// that repeats it.
+    #[test]
+    fn a_failure_is_logged_when_it_starts_or_changes() {
+        use hide_node_link::worktrees::{RepositoryWorktrees, WorktreeFacts};
+        let failing = |reason: &str| RepositoryWorktrees {
+            root_path: "/a".into(),
+            worktrees: vec![WorktreeFacts {
+                path: "/a/orphan".into(),
+                unavailable_reason: Some(reason.into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let node = Answering::new(failing("no merge base"));
+        let cache = std::sync::Mutex::default();
+        let read = |git_generation: u64| {
+            let observation = ProjectObservation {
+                request: projects(&["/a"]).remove(0),
+                git_generation,
+            };
+            crate::diagnostics::capture(|| read_observed(&node, &cache, &(0, 0, vec![observation])))
+                .1
+                .into_iter()
+                .map(|record| (record["kind"].clone(), record["message"].clone()))
+                .collect::<Vec<_>>()
+        };
+        let logged = |kind: &str, message: &str| vec![(kind.into(), message.into())];
+        assert_eq!(
+            read(0),
+            logged("worktree_status.unavailable", "no merge base")
+        );
+        assert_eq!(read(1), []);
+        assert_eq!(read(2), []);
+        assert_eq!(node.reads(), 3);
+
+        *node.answer.lock().unwrap() = failing("Base branch main is unavailable");
+        assert_eq!(
+            read(3),
+            logged(
+                "worktree_status.unavailable",
+                "Base branch main is unavailable"
+            )
+        );
+        *node.answer.lock().unwrap() = RepositoryWorktrees {
+            root_path: "/a".into(),
+            unavailable_reason: Some("git worktree list timed out".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            read(4),
+            logged("worktree_list.failed", "git worktree list timed out")
+        );
+        assert_eq!(read(5), []);
+    }
+
     fn watching() -> GitWatchReport {
         GitWatchReport::Watching {
             unwatched: Vec::new(),
         }
+    }
+
+    /// A repository whose agents keep running Git is never quiet: it is
+    /// read the debounce after its first change, not once changes stop.
+    #[test]
+    fn a_repository_that_keeps_changing_settles_after_its_first_change() {
+        let mut driver = Driver::new();
+        let watch = driver.next_watch(&["/a"]);
+        driver.watch.reconcile(&projects(&["/a"]));
+        driver.report(&watch, watching());
+        let now = Instant::now();
+        let common = ["/a/.git".to_owned()];
+        driver.watch.mark(&common, now - GIT_WATCH_DEBOUNCE);
+        driver.watch.mark(&common, now);
+        assert_eq!(driver.watch.settled(), [PathBuf::from("/a")]);
+        assert!(driver.watch.pending.is_empty());
+        drop(watch);
     }
 
     /// A watch that ended may have missed any change, so once its restart is

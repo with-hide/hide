@@ -1,14 +1,16 @@
-//! The private `CODEX_HOME` each app-server runs under, and the sweep that
-//! releases the ones an owner could not.
+//! The `CODEX_HOME` each app-server runs under, and the sweep that releases
+//! the private ones an owner could not.
 //!
-//! `Drop` removes a home on every exit path the owner survives. A `kill -9`
-//! is the one it does not, so the next owner to start removes the homes whose
-//! owner pid is gone. The sweep only touches directories this module named.
+//! `Drop` removes a private home on every exit path the owner survives. A
+//! `kill -9` is the one it does not, so the next owner to start removes the
+//! homes whose owner pid is gone. The sweep only touches directories this
+//! module named.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hide_platform::fs::link;
 use hide_platform::process::is_alive as pid_alive;
 
 use crate::log::AiLogEvent;
@@ -21,38 +23,64 @@ const PREFIX: &str = "hide-ai-codex-home-";
 /// the next start continues where this one stopped.
 const SWEEP_LIMIT: usize = 32;
 
-/// A private `CODEX_HOME` for one app-server: an owner-only directory holding
-/// nothing but a symlink to the user's `auth.json`. It carries no
-/// `config.toml`, so the app-server starts none of the MCP servers the user's
-/// real config declares, and it is removed when the session ends. The
-/// credential file itself is only referenced, never read.
-pub(crate) struct CodexHome {
-    pub(crate) path: PathBuf,
+/// Where one app-server keeps its state, `CODEX_HOME`.
+pub(crate) enum CodexHome {
+    /// Hide's own owner-only directory, holding nothing but a link to the
+    /// account's `auth.json`. It carries no `config.toml`, so nothing the
+    /// user configured reaches the app-server, and it is removed when the
+    /// session ends. The credential file itself is only referenced, never
+    /// read.
+    Private(PathBuf),
+    /// The account's own folder, taken only when this account may not make
+    /// a link to a file (Windows without Developer Mode or the privilege to
+    /// create symbolic links, error 1314; with-hide/hide#2531). The
+    /// app-server then reads the user's `config.toml`, so the session
+    /// switches off what Hide must not start (`codex.rs`). Hide makes
+    /// nothing in it and removes nothing from it.
+    Account(PathBuf),
 }
 
 /// The value a child of the backend's item reads for a variable.
 pub(crate) type Variable<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
 
 impl CodexHome {
-    /// A home whose `auth.json` links to the login of the account `variable`
-    /// names: an item's own `CODEX_HOME`, else this process's (PRD
-    /// agent-profiles-phase2 D-07).
+    /// A home signed in as the account `variable` names (an item's own
+    /// `CODEX_HOME`, else this process's; PRD agent-profiles-phase2 D-07):
+    /// a private one linking that account's `auth.json`, or the account's
+    /// own folder when the system refuses this account a link to a file.
+    /// Any other failure leaves the provider unavailable, so no fault but
+    /// that one makes the app-server read the user's configuration.
     pub(crate) fn create(variable: Variable<'_>) -> Result<Self, AiError> {
+        let account =
+            source_codex_dir(variable).map_err(|kind| home_unavailable("account", kind))?;
         let dir = std::env::temp_dir().join(format!(
             "{PREFIX}{}-{}",
             std::process::id(),
             unique_suffix()
         ));
         create_private_dir(&dir).map_err(|kind| home_unavailable("mkdir", kind))?;
-        let home = Self { path: dir };
-        link_auth_json(&home.path, variable).map_err(|kind| home_unavailable("symlink", kind))?;
-        Ok(home)
+        let home = Self::Private(dir);
+        match link::create_link(&account.join("auth.json"), &home.path().join("auth.json")) {
+            Ok(()) => Ok(home),
+            // Dropping the private home removes the empty folder.
+            Err(error) if link::needs_privilege(&error) => Ok(Self::Account(account)),
+            Err(error) => Err(home_unavailable("symlink", error.kind())),
+        }
+    }
+
+    /// The folder the app-server is given as `CODEX_HOME`.
+    pub(crate) fn path(&self) -> &Path {
+        match self {
+            Self::Private(path) | Self::Account(path) => path,
+        }
     }
 }
 
 impl Drop for CodexHome {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        if let Self::Private(path) = self {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -250,12 +278,126 @@ fn create_private_dir(dir: &Path) -> Result<(), std::io::ErrorKind> {
     hide_platform::fs::private::create_dir(dir).map_err(|error| error.kind())
 }
 
-/// A link to a file needs a privilege on a Windows account without
-/// Developer Mode; the home is then unavailable with that kind.
-fn link_auth_json(home: &Path, variable: Variable<'_>) -> Result<(), std::io::ErrorKind> {
-    let source = source_codex_dir(variable)?.join("auth.json");
-    hide_platform::fs::link::create_link(&source, &home.join("auth.json"))
-        .map_err(|error| error.kind())
+/// Which home an account gets, on every system: the answer to expect comes
+/// from asking the system for a link to a file directly, never from the code
+/// under test, so the test holds on an account that may link (Unix, an
+/// elevated or Developer Mode Windows account) and on one that may not.
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+
+    /// An account folder signed in: `auth.json` is a file, so a link to it
+    /// is a link to a file on Windows.
+    fn account() -> tempfile::TempDir {
+        let account = tempfile::tempdir().expect("an account folder is creatable");
+        std::fs::write(account.path().join("auth.json"), b"{}").expect("credential writes");
+        account
+    }
+
+    /// Whether this account may make a link to a file, asked of the system.
+    fn may_link_a_file() -> bool {
+        let probe = tempfile::tempdir().expect("a probe folder is creatable");
+        let target = probe.path().join("target");
+        std::fs::write(&target, b"x").expect("target writes");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, probe.path().join("link"));
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, probe.path().join("link"));
+        match made {
+            Ok(()) => true,
+            // ERROR_PRIVILEGE_NOT_HELD: no privilege and no Developer Mode.
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("the probe link failed for another reason: {error}"),
+        }
+    }
+
+    #[test]
+    fn an_account_that_may_link_gets_a_private_home_else_its_own_folder() {
+        let account = account();
+        let codex_home = account.path().as_os_str().to_owned();
+        let home = CodexHome::create(&|name| (name == "CODEX_HOME").then(|| codex_home.clone()))
+            .expect("a home is made either way");
+        if may_link_a_file() {
+            let CodexHome::Private(path) = &home else {
+                panic!("an account that may link runs in a private home");
+            };
+            let entries: Vec<_> = std::fs::read_dir(path)
+                .expect("the private home is readable")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect();
+            assert_eq!(
+                entries,
+                ["auth.json"],
+                "the private home holds the link alone"
+            );
+            assert!(link::is_link_to(
+                &path.join("auth.json"),
+                &account.path().join("auth.json")
+            ));
+            let path = path.clone();
+            drop(home);
+            assert!(!path.exists(), "the private home goes with its session");
+        } else {
+            let CodexHome::Account(path) = &home else {
+                panic!("an account the system refuses a link runs in its own folder");
+            };
+            assert_eq!(path, account.path());
+            drop(home);
+        }
+        let left: Vec<_> = std::fs::read_dir(account.path())
+            .expect("the account folder is readable")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            left,
+            ["auth.json"],
+            "nothing is made in or removed from the account"
+        );
+    }
+
+    /// A link the system refuses for any reason but the privilege, here a
+    /// target longer than the system's longest path (`ENAMETOOLONG`), is a
+    /// fault, not a reason to read the user's configuration.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_refused_for_another_reason_leaves_the_provider_unavailable() {
+        let long = std::path::PathBuf::from("/")
+            .join("a".repeat(250))
+            .join("b".repeat(250));
+        let too_long = (0..20).fold(long, |path, _| path.join("c".repeat(250)));
+        let before = private_homes_of_this_process();
+        let refused = CodexHome::create(&|name| {
+            (name == "CODEX_HOME").then(|| too_long.as_os_str().to_owned())
+        });
+        match refused {
+            Err(AiError::ProviderUnavailable(reason)) => {
+                assert!(
+                    reason.starts_with("codex_home_unavailable:symlink:"),
+                    "{reason}"
+                );
+            }
+            Err(other) => panic!("{other:?}"),
+            Ok(home) => panic!("a home was made: {}", home.path().display()),
+        }
+        assert_eq!(
+            private_homes_of_this_process(),
+            before,
+            "the refused home was removed"
+        );
+    }
+
+    #[cfg(unix)]
+    fn private_homes_of_this_process() -> Vec<std::ffi::OsString> {
+        let own = format!("{PREFIX}{}-", std::process::id());
+        let mut homes: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+            .expect("the temporary folder is readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with(&own))
+            .collect();
+        homes.sort();
+        homes
+    }
 }
 
 #[cfg(all(test, unix))]

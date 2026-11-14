@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
-import { checkoutChip, graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
+import { ADD_PROJECT, checkoutChip, graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
 import type { BoardProject } from "./projectBoard";
 import type { AgentRow, Checkout, OverviewGraphMetadata, OverviewGraphParty, Workspace } from "./snapshot";
 
@@ -152,12 +152,13 @@ describe("current sessions in the Overview graph", () => {
     expect(graph.agents).toHaveLength(400);
     const many = Array.from({ length: 401 }, (_, i) => project(`project${String(i).padStart(3, "0")}`, [agent(`pane${i}`)]));
     const bounded = overviewGraphModel(many, undefined, null);
-    // Every admitted name retains one member position within 400 nodes.
-    expect(bounded.projects).toHaveLength(200);
-    expect(bounded.projects.length + bounded.visible.length).toBe(400);
+    // Every admitted name retains its start circle and one member position within 400 nodes,
+    // after the map's Add project place (issue 2514): 2 + 132 × 3 = 398, and a 133rd would need 401.
+    expect(bounded.projects).toHaveLength(132);
+    expect(ADD_PROJECT.nodes + bounded.projects.length * 2 + bounded.visible.length).toBe(398);
     expect(bounded.agents).toHaveLength(401);
     expect(bounded.limited).toBe(true);
-    expect(bounded.summaries.filter((row) => !row.admitted)).toHaveLength(201);
+    expect(bounded.summaries.filter((row) => !row.admitted)).toHaveLength(269);
     const counts = overviewProjectGraphCounts(many, undefined);
     expect(counts.size).toBe(401);
     expect(counts.get(graphProjectId(many[400]!))).toEqual({ total: 1, roots: 1, children: 0 });

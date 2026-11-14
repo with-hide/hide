@@ -221,9 +221,10 @@ fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
 }
 
 #[test]
-fn needs_you_puts_read_asks_below_unread_ones_each_oldest_first() {
+fn needs_you_puts_read_asks_below_unread_ones_each_newest_first() {
     // Operator decision 2026-11-08: an ask the operator already read sinks
-    // below every unread one, however long it has waited.
+    // below every unread one, however recent it is; 2026-11-14: the newest
+    // ask of each stands on top.
     use crate::agent_state::sessions::Revisit;
     let mut runtime = runtime();
     let mut base = rows().remove(1);
@@ -277,10 +278,10 @@ fn needs_you_puts_read_asks_below_unread_ones_each_oldest_first() {
             .map(|c| (c.root.as_str(), c.state, c.read))
             .collect::<Vec<_>>(),
         [
-            ("unread_old", TaskState::NeedsYou, false),
             ("unread_new", TaskState::NeedsYou, false),
-            ("read_old", TaskState::NeedsYou, true),
+            ("unread_old", TaskState::NeedsYou, false),
             ("read_new", TaskState::NeedsYou, true),
+            ("read_old", TaskState::NeedsYou, true),
         ]
     );
 }

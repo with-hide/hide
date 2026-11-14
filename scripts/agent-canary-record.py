@@ -26,8 +26,8 @@ against Hide, which a run with no such miss closes. A miss with no pinned
 measurement leaves the agent `unknown`, blaming no one.
 The record's state rides in the issue body as one JSON comment, so the next
 run reads what this one measured without a commit to main. Every issue lives in
-the private development repository (`ISSUE_REPOSITORY`), not the public one,
-whose issues are user bug reports; `--run-url` names the run where it ran.
+the public repository (`ISSUE_REPOSITORY`) with the other development issues,
+under the `agent-canary` label; `--run-url` names the run where it ran.
 """
 
 import argparse
@@ -44,7 +44,7 @@ from agent_journey.contract import active_rows, load_contract  # noqa: E402
 from agent_journey.scene import lane_status  # noqa: E402
 
 # Where the record and every failure issue live.
-ISSUE_REPOSITORY = "with-hide/hide-private"
+ISSUE_REPOSITORY = "with-hide/hide"
 LABEL = "agent-canary"
 RECORD_TITLE = "Agent CLI support record"
 HIDE_TITLE = "agent canary: Hide fails the agent journey with the pinned agent CLIs"

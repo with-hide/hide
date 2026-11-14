@@ -33,6 +33,9 @@ import { OverviewGraph } from "./OverviewGraph";
 import { OverviewHistory } from "./OverviewHistory";
 import { workKey } from "./sessionWork";
 import { OverviewProjectHome } from "./OverviewProjectHome";
+import type { ToolCell } from "./agentScope";
+import { toolProjects } from "./toolCells";
+import { InToolCell } from "./components/tool-mark";
 
 // The five Overview tabs share a device and project scope. Account usage
 // keeps its global scope. A wide detail retains the list beneath it, so
@@ -46,7 +49,7 @@ const TAB_LABEL = {
   usage: "usage.title",
 } as const satisfies Record<MainView, string>;
 
-export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: string }) {
+export function MainScreen({ actions, deviceId, tool = null }: { actions: Actions; deviceId: string; tool?: ToolCell | null }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((s) => s.rest);
   const agents = useShellStore((s) => s.agents);
@@ -56,7 +59,8 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const projectId = useUiStore((s) => s.overview.projectId);
   const section = useMemo(() => mainSections(rest, deviceId)[0] ?? null, [rest, deviceId]);
   const availability: DeviceAvailability = section?.availability ?? { state: "ready" };
-  const projects = useMemo(() => boardProjects(rest, agents, deviceId), [rest, agents, deviceId]);
+  // A tool's cell draws the tool's work on every device it reached, and nothing of the operator's (PRD hide-external-control D-48).
+  const projects = useMemo(() => (tool ? toolProjects(boardProjects(rest, agents), tool) : boardProjects(rest, agents, deviceId)), [rest, agents, deviceId, tool]);
   const rows = useMemo(() => everyAgent(rest, agents), [rest, agents]);
   const scoped = useMemo(() => projectId ? projects.filter(({ workspace }) => workspace.id === projectId) : projects, [projects, projectId]);
   const backlog = useMemo(() => backlogTally(scoped), [scoped]);
@@ -75,7 +79,9 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const unavailable = availability.state === "unavailable" && section ? section.device : null;
   const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
-  const noProject = availability.state === "ready" && projects.length === 0;
+  const noProject = availability.state === "ready" && projects.length === 0 && !tool;
+  // A tool's cell with no work says so in the work's place (B42).
+  const noToolWork = tool !== null && projects.length === 0;
   // A count is drawn only once the device has answered; before that a 0 would be a number nobody read.
   const counted = availability.state === "ready";
   const counts: Record<MainView, ReactNode> = {
@@ -87,8 +93,8 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   };
   const widePanel = panel?.kind === "item" || (panel?.kind === "record" && panel.returnTo === "history");
   return (
+    <InToolCell.Provider value={tool !== null}>
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label={t("overview.title")} data-main-screen="true" data-main-view={view}>
-      <OpeningStatus actions={actions} />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
         <Tabs className="-mb-[calc(var(--spacing-xs)+var(--size-hairline))] min-w-0 self-end overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
           <TabsList variant="underline" aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
@@ -116,8 +122,10 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
               <OverviewHistory projects={projects} deviceId={deviceId} actions={actions} />
             ) : noProject ? (
               <NoProjectView actions={actions} />
+            ) : noToolWork ? (
+              <p className="px-lg py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
             ) : view === "work" ? (
-              <OverviewGraph projects={projects} deviceId={deviceId} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
+              <OverviewGraph projects={projects} deviceId={deviceId} tool={tool} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
             ) : view === "backlog" ? (
               <OverviewBacklog projects={projects} deviceId={deviceId} actions={actions} />
             ) : selectedProject ? (
@@ -140,6 +148,7 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
         </div>
       )}
     </section>
+    </InToolCell.Provider>
   );
 }
 
@@ -241,28 +250,3 @@ function NoProjectView({ actions }: { actions: Actions }) {
   );
 }
 
-/**
- * A Workspace or agent asked for from here that is not in front yet: a quiet
- * line while it is on its way, and the refusal with Dismiss when it was not
- * brought forward, so the operator stays where they were (B2, B21).
- */
-export function OpeningStatus({ actions }: { actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const opening = useUiStore((s) => s.opening);
-  if (!opening) return null;
-  if (!opening.failure) {
-    return (
-      <p role="status" className="shrink-0 px-md pt-sm text-caption text-muted-foreground" data-opening="pending">
-        {t("overview.opening")}
-      </p>
-    );
-  }
-  return (
-    <div role="alert" className="mx-md mt-sm flex shrink-0 items-center gap-sm rounded-sm bg-card px-sm py-xs text-caption text-warning" data-opening="failed">
-      <span className="min-w-0 flex-1 break-words">{t("overview.notOpened", { reason: opening.failure })}</span>
-      <Button variant="secondary" onClick={() => actions.dismissOpening()} data-opening-dismiss="true">
-        {t("workspace.dismiss")}
-      </Button>
-    </div>
-  );
-}

@@ -729,9 +729,14 @@ pub(crate) fn run(
         Command::List { live } => {
             let (ledger, sleeping) = registrations(&client)?;
             Ok(json!(crate::delivery::answer::AgentList {
+                // A code-owned identity (Hide's own, such as Desk's, an
+                // external tool's, the operator's) is the origin of the work
+                // it starts, not an agent: it runs in no pane, so the list
+                // of agents leaves it out, and `origin_tool` names a tool.
                 items: ledger
                     .agents
                     .iter()
+                    .filter(|record| !record.actor.code_owned())
                     .filter(|record| !live || !record.ended)
                     .map(|record| super::agent_view(record, &ledger, &sleeping))
                     .collect(),
@@ -1664,6 +1669,7 @@ fn spawn(
                     seed_tab,
                     id: reserved.id.clone(),
                     path: Some(checkout),
+                    made,
                     pane: Some(pane),
                     terminal: Some(terminal),
                     shell: shell.program().map(str::to_owned),
@@ -3100,6 +3106,7 @@ mod tests {
                         seed_tab: None,
                         id: reserved["id"].as_str().unwrap().into(),
                         path: Some("/fixture.worktrees/801".into()),
+                        made: false,
                         pane: Some(pane.into()),
                         terminal: terminal.map(Into::into),
                         shell: None,
@@ -3359,6 +3366,7 @@ mod tests {
                     seed_tab: None,
                     id: spawn.clone(),
                     path: Some("/fixture/topic".into()),
+                    made: false,
                     pane: Some("recipient".into()),
                     terminal: None,
                     shell: None,

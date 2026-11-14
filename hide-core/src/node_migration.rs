@@ -106,6 +106,9 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     "factory-files",
     "mobile.json",
     "phones.json",
+    // External tools' connections, which name no machine: each is a tool on
+    // the core's own machine.
+    hide_kit::layout::ACCESS_STORE,
     MARKER_FILE,
 ];
 
@@ -1142,6 +1145,7 @@ pub const UNBOUND: &[&str] = &[
     "host-id",
     "mobile.json",
     "phones.json",
+    hide_kit::layout::ACCESS_STORE,
     "pane-capabilities",
     "attachments",
     "TerminalClipboard",

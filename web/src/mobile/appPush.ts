@@ -1,5 +1,6 @@
 /**
- * The iOS app's notifications as the page lives them (`HidePush`, PRD ios-push). One preference, kept on this phone only;
+ * The app's notifications as the page lives them (`HidePush`, PRD ios-push): the iOS app's through Apple, the Android
+ * app's through Google's FCM, the same row and the same steps, only the registration message differs. One preference, kept on this phone only;
  * the keys are per computer and made natively. The row in Settings is one switch with a state the person can read:
  *
  * - off: nothing is registered with any computer;
@@ -13,10 +14,11 @@
  */
 import { create } from "zustand";
 import { translate } from "../i18n/translator";
-import { appHost } from "./appHost";
-import { nativeCode, push, type PushPermission } from "./appBridge";
+import { appPushAvailable } from "./appHost";
+import { nativeCode, push, type PushPermission, type PushRegistration } from "./appBridge";
 import { currentHost, send } from "./connection";
 import { hostStore } from "./hosts";
+import type { PhoneMessage } from "./protocol";
 import { usePhone } from "./store";
 
 const PREF_KEY = "hide.phone.app-push";
@@ -57,19 +59,27 @@ export function appPushRow(state: Pick<AppPushState, "pref" | "demo" | "permissi
 
 /** Reads what iOS allows now; called when the Settings tab opens and after a return from iOS Settings. */
 export async function refreshAppPush(): Promise<void> {
-  if (!appHost()) return;
+  if (!appPushAvailable()) return;
   try { set({ permission: await push.state() }); } catch { /* an older app bundle has no push plugin: the row stays off */ }
+}
+
+/** The message that gives a computer this phone's registration: Apple's for the iOS app, Google's for the Android app. */
+function registrationMessage(registration: PushRegistration): PhoneMessage {
+  const key = { p256dh: registration.p256dh, auth: registration.auth };
+  return registration.service === "fcm"
+    ? { type: "fcm_registration", token: registration.token, key }
+    : { type: "apns_registration", token: registration.token, environment: registration.environment, key };
 }
 
 async function registerWith(room: string, create: boolean): Promise<boolean> {
   const registration = create ? await push.enable(room) : await push.registration(room);
   if (!registration) return false;
-  return send({ type: "apns_registration", token: registration.token, environment: registration.environment, key: { p256dh: registration.p256dh, auth: registration.auth } });
+  return send(registrationMessage(registration));
 }
 
 /** After every `meta` of a connected computer: register again, or unregister when the person turned notifications off. */
 export async function syncAppPush(): Promise<void> {
-  if (!appHost() || usePhone.getState().demo) return;
+  if (!appPushAvailable() || usePhone.getState().demo) return;
   const room = currentHost()?.room;
   if (!room) return;
   try {
@@ -91,7 +101,7 @@ export async function syncAppPush(): Promise<void> {
   }
 }
 
-/** The computer answered `refused_request` to the registration: its hided does not know the message yet. */
+/** The computer answered `refused_request` to the registration (`apns_registration`, or `fcm_registration` from the Android app): its hided does not know the message yet, and the session goes on. */
 export function appPushRefused(): void {
   set({ outdated: true });
 }
@@ -111,7 +121,7 @@ export async function turnOnAppPush(): Promise<void> {
     const registration = await push.enable(room);
     writePref(true);
     set({ permission: "granted", outdated: false });
-    send({ type: "apns_registration", token: registration.token, environment: registration.environment, key: { p256dh: registration.p256dh, auth: registration.auth } });
+    send(registrationMessage(registration));
   } catch (error) {
     if (nativeCode(error) === "denied") set({ permission: "denied" });
     else set({ failed: true });
@@ -138,7 +148,7 @@ export async function turnOffAppPush(): Promise<void> {
 
 /** A computer is removed: unregister it when it is the one connected, then delete its key. */
 export async function leaveHostPush(room: string): Promise<void> {
-  if (!appHost()) return;
+  if (!appPushAvailable()) return;
   if (currentHost()?.room === room) send({ type: "push_permission", state: "denied" });
   try { await push.forget(room); } catch (error) { console.warn("phone.app_push_forget_failed", { code: nativeCode(error) }); }
 }

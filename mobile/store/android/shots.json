@@ -1,0 +1,28 @@
+{
+  "canvas": {
+    "width": 1080,
+    "height": 1920
+  },
+  "featureGraphic": {
+    "width": 1024,
+    "height": 500,
+    "shot": "agents"
+  },
+  "icon": {
+    "size": 512,
+    "source": "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+  },
+  "clock": "2026-11-09T09:41:00",
+  "appearance": "light",
+  "languages": {
+    "ko": {
+      "tag": "ko-KR",
+      "folder": "ko-KR"
+    },
+    "en": {
+      "tag": "en-US",
+      "folder": "en-US"
+    }
+  },
+  "shots": ["agents", "conversation", "missions", "pull-requests", "looks"]
+}

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+pub(crate) mod access;
 mod account_reports;
 mod agent_areas;
 mod agent_catalog;
@@ -1264,6 +1265,10 @@ pub struct Runtime {
     /// 다시 볼 것 changes waiting on their save; `None` removes the mark.
     pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
+    /// The pending letters whose recipient the doorbell's last pass saw in
+    /// its pane (`Hold::recipient_present`), whose deadline the delivery
+    /// upkeep renews. Memory only, as the holds are.
+    delivery_present: std::collections::HashSet<String>,
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
     letters_waiting: BTreeMap<String, u32>,
@@ -1465,6 +1470,8 @@ pub struct Runtime {
     herdr_import: herdr_import::Import,
     /// The Desk room and its one Desk process (`runtime/desk.rs`).
     desk: desk::Desk,
+    /// External tools' connections (PRD hide-external-control).
+    access: access::AccessRuntime,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -2509,6 +2516,7 @@ impl Runtime {
             first_run_apply: None,
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
+            access: access::AccessRuntime::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
@@ -2605,6 +2613,7 @@ impl Runtime {
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),
             delivery_holds: BTreeMap::new(),
+            delivery_present: std::collections::HashSet::new(),
             letters_waiting: BTreeMap::new(),
             session_window_deadline_unix_ms: 0,
             #[cfg(test)]

@@ -15,6 +15,7 @@ export const TONE_FILL: Record<CellTone, string> = {
   done: "bg-mission-done",
   review: "bg-mission-review",
   working: "bg-mission-working",
+  stopped: "bg-mission-stopped",
   hold: "bg-mission-hold",
   waiting: "bg-muted",
   cancelled: "bg-mission-cancelled",
@@ -25,15 +26,17 @@ export const HEAD_FILL: Record<HeadCell, string> = {
   waiting: "bg-muted",
   external: "bg-muted",
   working: "bg-mission-working",
+  stopped: "bg-mission-stopped",
   attention: "bg-mission-hold",
   done: "bg-mission-done",
   cancelled: "bg-mission-cancelled",
 };
 
-/** A node step's cell on its card: finished, being worked, or a dashed outline for a step only planned. */
+/** A node step's cell on its card: finished, being worked, stopped at, or a dashed outline for a step only planned. */
 export const STEP_FILL: Record<StepTone, string> = {
   done: "bg-mission-done",
   working: "bg-mission-working",
+  stopped: "bg-mission-stopped",
   plan: "border border-dashed border-border",
 };
 
@@ -42,6 +45,7 @@ export const TONE_TEXT: Record<CellTone, string> = {
   done: "text-mission-done",
   review: "text-mission-review",
   working: "text-mission-working",
+  stopped: "text-mission-stopped",
   hold: "text-mission-hold",
   waiting: "text-muted-foreground",
   cancelled: "text-mission-cancelled",

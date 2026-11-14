@@ -179,6 +179,12 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
+    /// External tools: requests waiting and approved connections (PRD
+    /// hide-external-control). Its own section, so a tool's use never
+    /// resends anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub access: Option<Arc<AccessSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -882,7 +888,8 @@ pub struct NavigatorSnapshot {
     /// search, focus, and project navigation never lose a folded project.
     pub inactive_projects: Vec<InactiveProjectGroupSnapshot>,
     pub agents: Vec<SidebarAgentSnapshot>,
-    /// The checkouts Hide AI started an agent in, by device and path. A list
+    /// The checkouts Hide AI, or an external tool that keeps its work, started
+    /// an agent in, by device and path. A list
     /// beside the checkouts, not a field on them, because a checkout row is
     /// rebuilt from Git and the engine at several places and would lose a value
     /// laid on it; the shell joins it by `(device_id, path)`.
@@ -893,6 +900,11 @@ pub struct NavigatorSnapshot {
     /// D-09); a row whose root is live again only feeds that root's record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
+    /// One cell per external tool connected at Act, beside the devices
+    /// (PRD hide-external-control D-45, D-47): the work it keeps, which the
+    /// operator's own scopes leave out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<crate::agent_state::ToolCell>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -920,6 +932,22 @@ pub struct HideAiSnapshot {
     pub turn: Option<HomeTurn>,
 }
 
+/// An external tool's work on a row (PRD hide-external-control D-09, D-15).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolWorkSnapshot {
+    /// The tool's connection, by id (`AccessConnectionSnapshot::id`): a new
+    /// connection of the same name is another id, and takes none of this
+    /// work (D-40).
+    pub connection: String,
+    /// The name the tool connected with, which the pane head writes.
+    pub name: String,
+    /// The tool keeps the work now: its connection stands at Act. Read from
+    /// the connection list on every projection, never stored, so a
+    /// disconnect, a leave or View only hands the work to the operator at
+    /// once and Act again takes it back (D-14, D-40).
+    pub owns: bool,
+}
+
 /// The home's turn: the operator is to act on the work the agent did
 /// (D-14). The agent's own question, approval or block is the row's demand,
 /// not this.
@@ -937,13 +965,20 @@ pub enum HomeTurn {
     BranchReady,
 }
 
-/// A checkout Hide AI made for an agent it started.
+/// A checkout Hide made for an agent Hide AI started, or for one an external
+/// tool started while the tool keeps its work.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HideAiCheckoutSnapshot {
     pub device_id: String,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::coordination::SpawnTask>,
+    /// The name of the external tool whose work the checkout is, while its
+    /// connection stands at Act (PRD hide-external-control D-14); absent for
+    /// Hide AI's. Once the tool lets go the checkout is the operator's and
+    /// leaves this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -2170,6 +2205,34 @@ pub struct SidebarAgentSnapshot {
     /// on any other row.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub children_left: u32,
+    /// How many subagents the pane's session runs inside itself now, by its
+    /// hook's count (`sidebar::running_subagents`); 0 when none run and when
+    /// Hide cannot read the count, which no screen tells apart from none
+    /// (docs/UI_BEHAVIOR.md, Subagents). Laid before the lineage, which waits
+    /// on them, by `Runtime::lay_subagents` and, for a device's rows,
+    /// `Runtime::judge_device_pane_children`.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub subagents: u32,
+    /// How many subagents still run under a finished turn the operator has
+    /// not read yet, which its line ends with, as `children_left` does; 0 on
+    /// any other row.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub subagents_left: u32,
+    /// How many things the row's `wait` waits on, which its line counts
+    /// (`자식 2개 기다림`): working descendants, subagents, background tasks or
+    /// replies being made; 0 for running checks and on a row that waits for
+    /// nothing.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_count: u32,
+    /// How many of its own subagents the row's wait waits on too
+    /// (`axes.rs::subagents_waited_on`), which a children wait's line adds
+    /// (`자식 1개 · 서브에이전트 2개 기다림`); 0 when it waits on none.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_subagents: u32,
+    /// How many of the replies this row awaits are still being made
+    /// (`axes.rs::answer_in_progress`), decided on the lineage pass.
+    #[serde(skip_serializing)]
+    pub replies_in_progress: u32,
     /// The lineage's half of a children wait: a root, quiet itself, with work
     /// moving on below it. Whether it waits on them is decided with the read
     /// axis (`axes.rs::settle_wait`).
@@ -2238,6 +2301,20 @@ pub struct SidebarAgentSnapshot {
     /// it; absent from the wire for every other agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_ai: Option<HideAiSnapshot>,
+    /// An external tool's work (PRD hide-external-control D-09): an agent
+    /// the tool started, or one started under it with `--parent`. Set by
+    /// the runtime from the coordination ledger and the tool's connection,
+    /// so a session read never makes it; absent from the wire for every
+    /// other agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolWorkSnapshot>,
+    /// The operator's own lists leave this row out
+    /// (`agent_state::listed_for_operator`): work Hide AI's home or an
+    /// external tool keeps, while it asks nothing of the operator. Written
+    /// with the group, so a wire reader (the phone) follows the core's one
+    /// decision instead of making its own; absent while the row is listed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     /// The request view's part of the row: the verb and since when, the
     /// request and reply lines, the pull requests (`request_view.rs`).
     /// Absent until the core has built it.
@@ -2855,6 +2932,9 @@ pub enum AgentWait {
     /// A pull request the row holds the duty of has checks running, or one
     /// its session just printed has not been read from GitHub yet.
     Checks,
+    /// Subagents the agent runs inside its own session are still running,
+    /// by its hook's count.
+    Subagents,
 }
 
 /// How the checks a row waited on ended, for the pull request `number`.
@@ -8182,6 +8262,7 @@ impl Snapshot {
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
                 archived_sessions: Vec::new(),
+                tools: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,
@@ -8293,6 +8374,7 @@ impl Snapshot {
             desk_live: None,
             desk_jobs: None,
             desk_mentions: None,
+            access: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -8304,6 +8386,7 @@ impl Snapshot {
     }
 }
 
+mod access;
 mod desk;
 mod overview_graph;
 pub(crate) mod overview_graph_choices;
@@ -8317,6 +8400,7 @@ mod pane_replies;
 mod rest;
 mod session_thread;
 mod suggestions;
+pub use access::*;
 pub use desk::*;
 pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
@@ -8353,6 +8437,7 @@ pub struct SnapshotDeltaPayload {
     pub desk_live: Option<Arc<DeskLiveSnapshot>>,
     pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
+    pub access: Option<Arc<AccessSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -8413,6 +8498,8 @@ pub struct SnapshotDeltaWire<'a> {
     pub desk_jobs: Option<&'a DeskJobsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desk_mentions: Option<&'a DeskMentionsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<&'a AccessSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8475,6 +8562,7 @@ impl<'a> SnapshotDeltaWire<'a> {
             desk_live: payload.desk_live.as_deref(),
             desk_jobs: payload.desk_jobs.as_deref(),
             desk_mentions: payload.desk_mentions.as_deref(),
+            access: payload.access.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
@@ -8808,13 +8896,15 @@ mod wire_enum_tests {
             AgentWait::Background,
             AgentWait::Reply,
             AgentWait::Checks,
+            AgentWait::Subagents,
         ];
         for variant in waits {
             match variant {
                 AgentWait::Children
                 | AgentWait::Background
                 | AgentWait::Reply
-                | AgentWait::Checks => {}
+                | AgentWait::Checks
+                | AgentWait::Subagents => {}
             }
         }
         assert_wire(&contract, "agent_wait", &waits);
@@ -10499,7 +10589,6 @@ mod wire_enum_tests {
             use crate::delivery::held::HeldFor;
             let held = [
                 HeldFor::Unreachable,
-                HeldFor::Undelivered,
                 HeldFor::Approval,
                 HeldFor::Draft,
                 HeldFor::Unanswered,
@@ -10507,7 +10596,6 @@ mod wire_enum_tests {
             for variant in held {
                 match variant {
                     HeldFor::Unreachable
-                    | HeldFor::Undelivered
                     | HeldFor::Approval
                     | HeldFor::Draft
                     | HeldFor::Unanswered => {}
@@ -10525,14 +10613,16 @@ mod wire_enum_tests {
                     cause: None,
                     since_unix_ms: 0,
                 },
-                NodeWork::NoWorker,
+                NodeWork::NoWorker {
+                    since_unix_ms: None,
+                },
             ];
             for variant in &work {
                 match variant {
                     NodeWork::Working
                     | NodeWork::Waiting { .. }
                     | NodeWork::Stopped { .. }
-                    | NodeWork::NoWorker => {}
+                    | NodeWork::NoWorker { .. } => {}
                 }
             }
             let states: Vec<String> = work

@@ -17,7 +17,7 @@ import { AgentMark } from "../AgentMark";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import type { BranchLine, ResultLine } from "../missionLine";
-import type { NodeLook, NodeStep } from "../missions";
+import { pacedSteps, type NodeLook, type NodePace, type NodeStep } from "../missions";
 import { lookWord, type RunLabel } from "../missionParts";
 import { planCount } from "../plans";
 import { PR_LOOK } from "../prMark";
@@ -30,10 +30,10 @@ import { ProgressCells, STEP_FILL } from "./mission-tone";
 import { Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui/tooltip";
 
 export type NodeHoverFacts = {
-  /** The card's state: its look, its mark's word and whether its ring stands still, and a resting or absent worker's words. */
+  /** The card's state: its look, its mark's word and how it moves now (`nodePace`), and a resting or absent worker's words. */
   look: NodeLook;
   word: string;
-  still: boolean;
+  pace: NodePace | null;
   /** A done general node that ended on a failed verdict: the mark is red, as on the card (PRD node-presets D-08). */
   failed: boolean;
   doing: string | null;
@@ -95,13 +95,13 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
   return (
     <div className="flex min-w-0 flex-col gap-sm text-caption">
       <span className="flex min-w-0 items-center gap-xs">
-        <MissionNodeMark look={facts.look} label={facts.word} still={facts.still} failed={facts.failed} hint={false} />
+        <MissionNodeMark look={facts.look} label={facts.word} pace={facts.pace} failed={facts.failed} hint={false} />
         <span className="min-w-0 break-words text-body font-semibold text-foreground" data-node-hover-title="true">{node.title}</span>
       </span>
       <OperatorBand gate={facts.gate} mergeDue={facts.mergeDue} />
       <dl className="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-md gap-y-xs">
         <Row label={t("mission.popover.status")} data="status">
-          <span className={cn("font-medium", LOOK_TONE[facts.look])}>{lookWord(facts.look, t)}</span>
+          <span className={cn("font-medium", facts.pace === "stopped" ? "text-mission-stopped" : LOOK_TONE[facts.look])}>{lookWord(facts.look, t)}</span>
           {facts.doing ? <span className="text-muted-foreground">· {facts.doing}</span> : null}
           {facts.took ? <span className="text-muted-foreground">· {facts.took}</span> : null}
         </Row>
@@ -116,10 +116,10 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
         {work ? (
           <Row label={t("mission.popover.steps")} data="steps" column>
             <span className="flex min-w-0 items-center gap-xs">
-              <ProgressCells tones={work.steps.map((step) => step.tone)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) min-w-0 flex-1" />
+              <ProgressCells tones={pacedSteps(work.steps, facts.pace)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) min-w-0 flex-1" />
               {count ? <span className="shrink-0 tabular-nums text-muted-foreground" data-node-hover-count="true">{count}</span> : null}
             </span>
-            {work.now && node.status === "working" ? <span className="break-words text-subtle-foreground">{t("mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span> : null}
+            {work.now && node.status === "working" ? <span className="break-words text-subtle-foreground">{t(facts.pace === "stopped" ? "mission.steps.stoppedAt" : "mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span> : null}
           </Row>
         ) : null}
         {facts.branch ? (

@@ -100,7 +100,13 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   // A child pane's header leads with its parent's name, and drops it below the pane breakpoint (state=child).
   ["child-wide", "20 · 자식 pane · 부모 이름", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
   ["child-narrow", "21 · 좁은 자식 pane · 화살표만", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
+  // The subagents a session runs inside itself (state=subagents; operator decision 2026-11-14).
+  ["sub-working", "22 · 서브에이전트 3개와 작업 중", { ...NO_NOTICE, request: { text: "로그인 버그 조사", images: 0 }, progress: "세션 저장 경로 읽는 중" }],
+  ["sub-waiting", "23 · 쉬는 중 · 서브에이전트 기다림", { ...NO_NOTICE, request: { text: "결제 모듈 정리", images: 0 }, waiting_on_subagents: 2 }],
+  ["sub-both", "24 · 자식과 서브에이전트 기다림", { ...NO_NOTICE, request: { text: "Hide 미션 기능 계획", images: 0 }, waiting_on_children: 1, waiting_on_subagents: 2 }],
 ];
+/** Each subagent case's running subagents. */
+const SUBAGENT_CASES: Record<string, number> = { "sub-working": 3, "sub-waiting": 2, "sub-both": 2 };
 const CHILD_CASES = ["child-wide", "child-narrow"];
 /** state=widths: a wide head, then one width inside each fold of the pane head (`--size-pane-head-narrow` and `--size-pane-head-tight`). */
 const HEAD_WIDTHS = [640, 420, 340, 280, 200, 140];
@@ -128,6 +134,11 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       return {
         ...seed, status_code: example.read ? "question" : seed.status_code, id: `s${index}`, pane_id: `s${index}`, mark, agent_kind: index % 2 ? "codex" : "claude",
         identity_label: content === "long" ? `${example.title} - 긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업` : example.title,
+        // Subagents its session runs: the working root with children three; the root waiting on two children two more, its line counting both; the finished turn one still running (operator decision 2026-11-14).
+        subagents: index === 5 ? 3 : index === 11 ? 2 : index === 3 ? 1 : undefined,
+        subagents_left: index === 3 ? 1 : undefined,
+        wait_count: example.wait === "children" ? 2 : undefined,
+        wait_subagents: index === 11 ? 2 : undefined,
         lineage_child_pane_ids: index === 5 ? ["a1c1", "a1c2"] : [],
         // One Working root is a fork of the row beside it (PRD fork-operator-root B8).
         forked_from: index === 4 ? { pane_id: "s5", label: EXAMPLES[5]!.title } : null,
@@ -194,7 +205,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     const childPanes = children.map((child) => ({ ...pane, id: child.pane_id, identity_label: child.identity_label }));
     feature.tabs[0]!.panes.push(childPanes[0]!);
     checkout.tabs[0]!.panes.push(...childPanes.slice(1));
-    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image", "turn-request-only"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
+    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image", "turn-request-only", "sub-working"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
     // The fix and merge panes own one PR each: their header's PR chip is all
     // that says it, with no second row (B21, B22).
     const ownPr = (id: string): Pick<AgentRow, "pulls" | "request"> => {
@@ -219,7 +230,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       const id = `pane-narrow-child-${index}`;
       return { ...childExamples[0]!, id, pane_id: id, identity_label: `자식 ${index + 1}`, lineage_parent_pane_id: "narrow", lineage_path_pane_ids: ["narrow", id], lineage_child_pane_ids: [], state: { ...childExamples[0]!.state, tree_rank: index + 1 } };
     });
-    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id,
+    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id, subagents: SUBAGENT_CASES[id],
       identity_label: PANE_HEADER_CASES.some(([caseId]) => caseId === id) ? "Group tab 기능 설계" : seed.identity_label,
       device_id: id === "device" ? "mini" : seed.device_id,
       lineage_path_pane_ids: [id],
@@ -276,5 +287,5 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     ];
     return <TooltipProvider><div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{cases.map(([id, label, agentKind, connection]) => <div key={id} data-pane-header-case={id} className="min-w-0"><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={header(id, connection)} transport={undefined} focused={false} scale={1} actions={actions} agentKind={agentKind} markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;
   }
-  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-sidebar text-foreground" data-gallery-scene={kind} data-gallery-state={state}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{(state === "child" ? PANE_HEADER_CASES.filter(([id]) => CHILD_CASES.includes(id)) : PANE_HEADER_CASES.slice(turn ? 12 : state === "edge" ? 6 : 0, turn ? 12 + TURN_CASES.length : state === "edge" ? 12 : 6)).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" || id === "child-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: CHILD_CASES.includes(id) ? "UI 검증" : content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", lineage_path: CHILD_CASES.includes(id) ? [{ pane_id: "progress", label: content === "long" ? "긴 한국어 부모 작업 이름을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", siblings: [] }, { pane_id: id, label: "UI 검증", siblings: [] }] : undefined }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
+  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-sidebar text-foreground" data-gallery-scene={kind} data-gallery-state={state}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{(state === "child" ? PANE_HEADER_CASES.filter(([id]) => CHILD_CASES.includes(id)) : state === "subagents" ? PANE_HEADER_CASES.filter(([id]) => id in SUBAGENT_CASES) : PANE_HEADER_CASES.slice(turn ? 12 : state === "edge" ? 6 : 0, turn ? 12 + TURN_CASES.length : state === "edge" ? 12 : 6)).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" || id === "child-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: CHILD_CASES.includes(id) ? "UI 검증" : content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", lineage_path: CHILD_CASES.includes(id) ? [{ pane_id: "progress", label: content === "long" ? "긴 한국어 부모 작업 이름을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", siblings: [] }, { pane_id: id, label: "UI 검증", siblings: [] }] : undefined }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : id === "sub-working" ? "going" : id === "sub-waiting" || id === "sub-both" ? "waiting" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
 }

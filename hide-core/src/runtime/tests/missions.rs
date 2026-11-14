@@ -7435,6 +7435,125 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     );
 }
 
+/// PRD hide-external-control B30, D-36, D-46, B41: while an external tool
+/// keeps the mission its agent conducts, the mission asks the tool, in the
+/// tool's cell and its grey number, and not the operator: not in a device's
+/// Needs You, on the phone's list or in a notice. A disconnect hands it to
+/// the operator, who is told then, and the mission still names the tool.
+#[test]
+fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
+    use crate::access::{Call, Level, key_hash};
+    use crate::delivery::worker::HumanNoticeKind;
+    use crate::missions::AttentionReason;
+    use crate::runtime::access::AccessEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let (asked, _) = runtime.access_call(Call::Request {
+        name: "nightly".into(),
+        key_sha256: key_hash(&"7".repeat(64)),
+        program: None,
+        id: "00000000000000a7".into(),
+    });
+    let connection = asked.unwrap()["id"].as_str().unwrap().to_owned();
+    assert!(runtime.access_event(AccessEvent::Approve {
+        id: connection.clone(),
+        level: Level::Act,
+    }));
+    let conductor = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .conductor
+        .clone();
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: conductor.agent_id.clone().unwrap_or_default(),
+        pane_id: conductor.actor.pane_id.clone(),
+        session: conductor.actor.session.clone(),
+        ended: false,
+    }];
+    // A raise only the operator settles, with no row to lay it on.
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::ConductorFailed,
+            None,
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let reach = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let tool = runtime.snapshot.missions.items[0]
+            .tool
+            .as_ref()
+            .map(|tool| (tool.name.clone(), tool.owns));
+        let asks = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .flat_map(|device| device.agent_scope.mission_asks.clone())
+            .collect::<Vec<_>>();
+        let rest = serde_json::json!({ "missions": &runtime.snapshot.missions });
+        let phone = crate::agent_state::phone::PhoneMissions::project(
+            &rest,
+            crate::node::TEST_NODE,
+            &crate::agent_state::phone::project(&rest, crate::node::TEST_NODE),
+        )
+        .items
+        .len();
+        let notices = runtime
+            .claim_mission_notices()
+            .iter()
+            .map(|notice| notice.kind)
+            .collect::<Vec<_>>();
+        let cells = runtime
+            .snapshot
+            .navigator
+            .tools
+            .iter()
+            .map(|cell| (cell.name.clone(), cell.turn, cell.mission_asks.clone()))
+            .collect::<Vec<_>>();
+        (tool, asks, phone, notices, cells)
+    };
+    assert_eq!(
+        reach(&mut runtime),
+        (
+            Some(("nightly".to_owned(), true)),
+            Vec::new(),
+            0,
+            Vec::new(),
+            vec![("nightly".to_owned(), 1, vec!["mission-1".to_owned()])]
+        ),
+        "the tool keeps its mission, which asks the tool's cell alone"
+    );
+
+    assert!(runtime.access_event(AccessEvent::Revoke {
+        id: connection.clone(),
+    }));
+    assert_eq!(
+        reach(&mut runtime),
+        (
+            Some(("nightly".to_owned(), false)),
+            vec!["mission-1".to_owned()],
+            1,
+            vec![HumanNoticeKind::MissionAttention],
+            Vec::new()
+        ),
+        "a disconnect hands the mission to the operator, who is told, and keeps the tool's name"
+    );
+}
+
 /// PRD mission-node-simple B14, letter 19419: a mission whose node waits on
 /// the operator with no row to carry it is counted in its device's Needs You
 /// number, the one the Overview, the device rail and the sidebar read, and
@@ -9293,6 +9412,10 @@ fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
     // It went to work two hours ago, so a push read now is after it.
     let worked = crate::runtime::unix_milliseconds() - 120 * minute;
     runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms = Some(worked);
+    // No worker is bound here: the first judgment times the node as one no
+    // worker stands for, which the map draws from then, and warns nothing.
+    assert!(runtime.warn_missions(worked));
+    assert_eq!(warnings_of(&runtime).0, []);
     assert!(!runtime.warn_missions(worked + 89 * minute));
     assert!(runtime.warn_missions(worked + 90 * minute));
     let (kinds, letters) = warnings_of(&runtime);
@@ -9544,7 +9667,22 @@ fn a_node_in_progress_says_whether_its_worker_works_waits_or_is_gone() {
         json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
     )
     .unwrap();
-    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::NoWorker {
+            since_unix_ms: None
+        }),
+        "no warning judgment has seen it yet"
+    );
+    runtime.warn_missions(STOPPED_SINCE);
+    runtime.warn_missions(STOPPED_SINCE + 3 * MINUTE);
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::NoWorker {
+            since_unix_ms: Some(STOPPED_SINCE)
+        }),
+        "timed from the first judgment that saw it, not the latest"
+    );
     command(
         &mut runtime,
         "sender",
@@ -9586,7 +9724,14 @@ fn a_node_in_progress_says_whether_its_worker_works_waits_or_is_gone() {
         .unwrap()
         .ended = true;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+    runtime.warn_missions(STOPPED_SINCE + 10 * MINUTE);
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::NoWorker {
+            since_unix_ms: Some(STOPPED_SINCE + 10 * MINUTE)
+        }),
+        "a worker that ended is timed from the judgment that saw it gone"
+    );
 }
 
 /// When the `fix` node's worker (`agent-2`, the `recipient` pane) rests in
@@ -10244,8 +10389,8 @@ fn conductor_letter(runtime: &mut Runtime, ago: u64) -> String {
 /// that the doorbell holds for something only the operator can lift, for
 /// two minutes or more, are counted on the mission with what to do (a pane
 /// it cannot reach named first); a hold that ends on its own and a letter
-/// held for less than two minutes are not, and a delivered letter leaves
-/// the count, the line going with the last.
+/// held for less than two minutes are not, a delivered letter leaves the
+/// count, the line going with the last, and an undelivered one never joins.
 #[test]
 fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     use crate::delivery::doorbell::Hold;
@@ -10300,8 +10445,11 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     assert_eq!(held(&runtime), None, "delivered letters leave");
     assert!(runtime.delivery_holds.contains_key(&fresh));
 
-    // A letter that ended undelivered counts at once, until its sender gets
-    // a later one through to the Conductor.
+    // A letter that ended undelivered asks nothing of the operator: one to
+    // a Conductor still in its pane is not ended by its deadline, and the
+    // rest went to a Conductor that is gone or were told to their sender
+    // (operator decision 2026-11-14; a settings worker's report stood here
+    // for good once that worker had ended).
     let lost = conductor_letter(&mut runtime, 0);
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger
@@ -10311,26 +10459,60 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .unwrap()
         .state = crate::delivery::ledger::State::Undelivered;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(held(&runtime), Some((1, HeldFor::Undelivered)));
-    let again = conductor_letter(&mut runtime, 0);
-    assert_eq!(
-        held(&runtime),
-        Some((1, HeldFor::Undelivered)),
-        "sent, not taken in"
-    );
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    ledger
-        .letters
-        .iter_mut()
-        .find(|letter| letter.id == again)
-        .unwrap()
-        .state = crate::delivery::ledger::State::Delivered;
-    runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(
-        held(&runtime),
-        None,
-        "the later letter's bell was answered: the Conductor is reached again, before any ack"
-    );
+    assert_eq!(held(&runtime), None);
+}
+
+/// Operator decision 2026-11-14: an agent's letter to an open mission's
+/// Conductor goes as `--now` with no flag from its sender, so the Conductor
+/// takes it at its next tool call while it works; the same letter to an
+/// agent that conducts nothing waits its five minutes of work.
+#[test]
+fn letters_and_replies_to_an_open_missions_conductor_go_now() {
+    let fixture = conducting();
+    let run = |pane: &str, command: crate::delivery::Command| {
+        let mut guard = fixture.runtime.lock().unwrap();
+        let context = authority(&guard.delivery_observations[pane].actor).context;
+        let prepared = guard
+            .prepare_delivery(crate::node::TEST_NODE, pane, &context, None, command)
+            .unwrap();
+        drop(guard);
+        prepared.run(std::time::Duration::from_secs(10)).unwrap()
+    };
+    let send = |target: &str, intent: &str, kind: &str| crate::delivery::Command::Send {
+        target: target.into(),
+        intent: intent.into(),
+        body: "Done with the fix".into(),
+        kind: kind.into(),
+        now: false,
+        force: false,
+    };
+    // The worker's report, and its reply to the Conductor's question.
+    let report = |intent: &str| run("recipient", send("sender", intent, "report"));
+    let reply = |intent: &str| {
+        let asked = run(
+            "sender",
+            send("recipient", &format!("{intent}-ask"), "request"),
+        );
+        run(
+            "recipient",
+            crate::delivery::Command::Reply {
+                id: asked["id"].as_str().unwrap().into(),
+                intent: intent.into(),
+                body: "Yes".into(),
+                now: false,
+            },
+        )
+    };
+    assert_eq!(report("before")["immediate"], false, "no mission yet");
+    assert_eq!(reply("before-reply")["immediate"], false, "no mission yet");
+    command(
+        &mut fixture.runtime.lock().unwrap(),
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    assert_eq!(report("during")["immediate"], true);
+    assert_eq!(reply("during-reply")["immediate"], true);
 }
 
 /// A mission of one direct change (no pull request) whose worker recorded
@@ -10640,6 +10822,159 @@ fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
         raised.len(),
         2,
         "each question has its own entry: {raised:?}"
+    );
+}
+
+/// A mission whose one direct node finished on `HEAD` and whose close Hide
+/// then tried and was refused, the folder having moved on with the node's
+/// `check` line open, as with-hide/hide#2518 began.
+fn refused_close(runtime: &mut Runtime, now: u64) {
+    finished_direct_node(runtime);
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].done_head = None;
+    checkout_at(runtime, OTHER_HEAD);
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        node_view(runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(crate::missions::AttentionReason::CloseRefused)
+    );
+}
+
+/// with-hide/hide#2518: the Conductor skips the line Hide's close was
+/// refused on and closes the mission as done itself. The close that passes
+/// answers the refused close, whoever makes it, so nothing of it is left on
+/// the closed mission: no raise on the node, no safety net, no notice to
+/// the operator and no letter still to go to the Conductor.
+#[test]
+fn the_conductors_close_settles_the_close_hide_was_refused() {
+    use crate::missions::WakeEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    refused_close(&mut runtime, now);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "skip", "node": "fix", "line": "check",
+               "reason": "checked on the merged head"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().safety_net,
+        None
+    );
+    assert!(runtime.claim_mission_notices().is_empty());
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .all(|wake| wake.event != WakeEvent::Attention),
+        "{:?}",
+        mission.wakes
+    );
+}
+
+/// A book an earlier build saved after its Conductor closed over a refused
+/// close (with-hide/hide#2518, 1.2.8) holds the raise on the done mission,
+/// where no close or evaluation would take it off again: it reads settled,
+/// with no safety net.
+#[test]
+fn a_refused_close_an_earlier_build_left_on_a_closed_mission_reads_settled() {
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    let fixture = conducting();
+    let state = fixture._root.path().join("earlier-book");
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    refused_close(&mut runtime, now);
+    let raised = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .attention
+        .clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "skip", "node": "fix", "line": "check",
+               "reason": "checked on the merged head"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    let mut earlier = runtime.missions.book.clone();
+    earlier.get_mut("mission-1").unwrap().nodes[0].attention = raised;
+    let store = MissionStore::new(&state);
+    MissionFiles::new(store.dir().to_owned(), None)
+        .write(&earlier, &mut Vec::new())
+        .unwrap();
+    let Restored::Read(book) = store.restore() else {
+        panic!("the folder loads")
+    };
+    assert!(
+        book.get("mission-1").unwrap().nodes[0].attention.is_some(),
+        "the folder holds the raise as the earlier build saved it"
+    );
+    runtime.install_mission_store(store, Restored::Read(book));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().safety_net,
+        None
+    );
+    drop(runtime.missions.store.take());
+}
+
+/// A close that passed ended that closing: once the mission is opened
+/// again and its close is refused again, the question is asked again
+/// rather than held back as one already answered.
+#[test]
+fn a_refused_close_is_asked_again_after_its_closed_mission_reopened() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    refused_close(&mut runtime, now);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "reopen"})).unwrap();
+    for status in ["working", "done"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": {"status": status}}),
+        )
+        .unwrap();
+    }
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].done_head = None;
+    checkout_at(&mut runtime, HEAD);
+    runtime.drive_mission_health(now + 1);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(AttentionReason::CloseRefused)
     );
 }
 

@@ -728,8 +728,12 @@ pub(crate) struct DeviceWorktrees {
     /// The next read covers every repository, because a new connection has
     /// not confirmed what the last one listed.
     pub reread: bool,
-    /// Repositories the device's Git watch saw change, read on the next read.
+    /// Repositories the device's Git watch saw change, read on the next read
+    /// once the spacing since the last read has passed.
     pub stale: BTreeSet<String>,
+    /// When the last read's answer landed, which the next watch read waits
+    /// [`crate::worktrees::WATCH_READ_SPACING`] after.
+    pub landed_at: Option<std::time::Instant>,
     /// A read that failed is tried again, every repository, at this time
     /// (`Runtime::retry_device_reads`), so a change it carried is not lost.
     pub retry_at: Option<std::time::Instant>,

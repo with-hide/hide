@@ -21,6 +21,7 @@ beforeEach(async () => {
   vi.spyOn(window.navigator, "language", "get").mockReturnValue("en-US");
   vi.stubGlobal("location", { ...window.location, protocol: "capacitor:" });
   vi.stubGlobal("Capacitor", {
+    isPluginAvailable: (name: string) => name === "HidePush",
     nativePromise: async (_plugin: string, method: string) => {
       if (method === "state") return { permission };
       if (method === "openSettings") { opened.push("settings"); return {}; }

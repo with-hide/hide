@@ -5,13 +5,14 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
-import type { AgentScope, TaskCardScope, TaskState } from "./agentScope";
+import type { AgentScope, TaskCardScope, TaskState, ToolCell } from "./agentScope";
+import { formatElapsed } from "./components/elapsed";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { withMissionAsk } from "./gallery/MissionScene";
 import { clientI18n } from "./i18n/translator";
 import type { AgentRow, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
-import { TaskLens } from "./TaskLens";
+import { TaskLens, ToolTaskLens } from "./TaskLens";
 import { useUiStore } from "./ui";
 
 // The sidebar's 태스크 list over a device scope the core already decided
@@ -53,7 +54,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | null = null) {
+async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | null = null, tool: ToolCell | null = null) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
@@ -65,7 +66,7 @@ async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | 
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><TaskLens actions={actions} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider>{tool ? <ToolTaskLens tool={tool} actions={actions} /> : <TaskLens actions={actions} />}</TooltipProvider>));
   cleanup = async () => {
     await act(async () => root.unmount());
     container.remove();
@@ -153,6 +154,21 @@ it("ends a mission decision's line with an eye and how many Views it links to lo
   expect(line("looks").querySelector("[data-ask-views]")?.textContent).toBe("2");
   expect(line("looks").textContent).toContain("화면을 보고 머지할까요?");
   expect(line("bare").querySelector("[data-ask-views]")).toBeNull();
+});
+
+it("says a View to look at as its line, ahead of a question the row's own mark does not lead with, and names the tool (PRD hide-external-control B29, D-15)", async () => {
+  // An external tool's agent opened a View for the operator while its Conductor's decision waits on the tool:
+  // the core draws the eye, and the line is the View's, not the tool's question.
+  const look = { group: "seen", count: 1, view_id: "v1", label: "tool-report.md", workspace_id: "hide", checkout_id: "hide-main" };
+  const agent = row("tool", { mark: "look", group: "needs_you", demand: "question", look, tool: { connection: "c0ffee00c0ffee00", name: "nightly", owns: true } } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" });
+  const withLine = { ...agent, state: { ...agent.state, asking: true, line: { text: "Which order?", mode: "request" } } } as AgentRow;
+  const { container } = await render(snapshot([withLine], [card("tool", "needs_you", "hide-main")]), [withLine]);
+  // The row names the tool, as the agent's pane head does (D-15).
+  expect(container.querySelector('[data-task-row="tool"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
+  const line = container.querySelector('[data-task-row="tool"] [data-task-line]')!;
+  expect(line.textContent).toContain("볼 것");
+  expect(line.textContent).toContain("tool-report.md");
+  expect(line.textContent).not.toContain("Which order?");
 });
 
 it("in 상태별 draws 내 차례 and 읽을 것 as the first sections of the one list, arrows crossing them, and only 상태별 does", async () => {
@@ -260,9 +276,12 @@ it("in 프로젝트별 draws one group per project, the asking project first, wi
 });
 
 it.each(["status", "project"] as const)("in %s draws a mission that is its own Needs You item in 내 차례 with 확인하기, counted with the tasks as the 프로젝트 list counts it (UI_BEHAVIOR, Needs You)", async (view) => {
-  const agents = [row("works"), row("ask", {}, { group: "needs_you" })];
+  const now = Date.UTC(2026, 10, 1);
+  const ask = row("ask", {}, { group: "needs_you" });
+  // The ask came a minute ago, after the mission's node began to wait.
+  const agents = [row("works"), { ...ask, state: { ...ask.state, request_since: now - 60_000 } }];
   const cards = [card("works", "working", "hide-main"), card("ask", "needs_you", "site-main")];
-  const rest = withMissionAsk(snapshot(agents, cards, view), "local", Date.UTC(2026, 10, 1));
+  const rest = withMissionAsk(snapshot(agents, cards, view), "local", now);
   const { container, sent } = await render(rest, agents);
   const mission = container.querySelector<HTMLElement>("[data-mission-ask]")!;
   expect(mission.getAttribute("data-mission-ask")).toBe("mission-1");
@@ -276,7 +295,7 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
   expect(container.querySelector('[data-mission-ask] [data-kind-icon="mission"]')).not.toBeNull();
   if (view === "status") {
     expect(heads(container)).toEqual(["내 차례2", "작업 중1"]);
-    // The ask has waited longer than the mission's node, so it stands first, and the arrow keys reach the mission as a row.
+    // The ask is newer than the mission's node, so it stands first, and the arrow keys reach the mission as a row.
     const needsYou = container.querySelector('[data-task-group="needs_you"]')!;
     expect(needsYouOrder(container)).toEqual(["ask", "mission:mission-1"]);
     const head = needsYou.querySelector<HTMLElement>('[data-task-focus="group"]')!;
@@ -299,15 +318,28 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
 const needsYouOrder = (container: HTMLElement) => [...container.querySelectorAll('[data-task-group="needs_you"] [data-task-row], [data-task-group="needs_you"] li[data-mission-ask]')]
   .map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
 
-it.each(["status", "project"] as const)("in %s stands a mission among the unread asks by how long it has waited, and above every read ask (operator decision 2026-11-08)", async (view) => {
+it.each(["status", "project"] as const)("in %s stands a mission among the unread asks newest first, and above every read ask (operator decisions 2026-11-08, 2026-11-14)", async (view) => {
   const now = Date.UTC(2026, 10, 1);
-  // The fixture's mission node has waited six minutes; the core lists the unread asks oldest first, then the read one.
+  // The fixture's mission node has waited six minutes; the core lists the unread asks newest first, then the read one.
   const since = (row: AgentRow, at: number): AgentRow => ({ ...row, state: { ...row.state, request_since: at } });
-  const agents = [since(row("older", {}, { group: "needs_you" }), now - 10 * 60_000), since(row("newer", {}, { group: "needs_you" }), now - 60_000), row("seen", {}, { group: "needs_you" })];
-  const cards = [card("older", "needs_you", "hide-main"), card("newer", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }];
+  const agents = [since(row("newer", {}, { group: "needs_you" }), now - 60_000), since(row("older", {}, { group: "needs_you" }), now - 10 * 60_000), row("seen", {}, { group: "needs_you" })];
+  const cards = [card("newer", "needs_you", "hide-main"), card("older", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }];
   const { container } = await render(withMissionAsk(snapshot(agents, cards, view), "local", now), agents);
   const order = [...container.querySelectorAll("[data-task-row], li[data-mission-ask]")].map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
-  expect(order).toEqual(["older", "mission:mission-1", "newer", "seen"]);
+  expect(order).toEqual(["newer", "mission:mission-1", "older", "seen"]);
+});
+
+it("in 내 차례 times an ask by how long it waited, the time the asks stand by, and every other row by its latest prompt (operator decision 2026-11-14)", async () => {
+  const now = Date.now();
+  // Each asked long after its last prompt, which is the time the row used to show.
+  const prompted = now - 26 * 3_600_000;
+  const asking = row("asking", { last_prompt_at_unix_ms: prompted }, { group: "needs_you" });
+  const seen: AgentRow = { ...row("seen", { last_prompt_at_unix_ms: prompted }, { group: "needs_you" }), revisit: { starred: false, read_ask: true, since_unix_ms: now - 3 * 3_600_000 } };
+  const agents = [{ ...asking, state: { ...asking.state, request_since: now - 9 * 60_000 } }, seen, row("works", { last_prompt_at_unix_ms: now - 2 * 3_600_000 })];
+  const cards = [card("asking", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }, card("works", "working", "hide-main")];
+  const { container } = await render(snapshot(agents, cards), agents);
+  const time = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-agent-elapsed]`)?.textContent;
+  expect(["asking", "seen", "works"].map(time)).toEqual([formatElapsed("ko", 9 * 60_000), formatElapsed("ko", 3 * 3_600_000), formatElapsed("ko", 2 * 3_600_000)]);
 });
 
 it("in 프로젝트별 puts a project whose only turn is a block first, as a block is the operator's turn (status-marks B32)", async () => {
@@ -505,4 +537,51 @@ it("names a profile child's agent and profile in its hover and accessible name, 
   expect(named("plain").getAttribute("aria-label")).toContain("Claude Code");
   expect(named("plain").getAttribute("aria-label")).not.toContain(" · work");
   expect(named("plain").title).not.toContain(" · ");
+});
+
+/** A running mission `pane` conducts, whose decision waits; with `tool`, the tool keeps it. */
+function decidedBy(pane: string, tool: AgentRow["tool"] | null = null) {
+  return { id: "mission-tool", title: "API", workspace_id: "hide", project: "/hide", checkout_path: "/hide", device_id: "local", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: pane, name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: "Which order?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...(tool ? { tool } : {}) };
+}
+
+// Operator decision 2026-11-14: outside a tool's cell a Conductor row's chip keeps the operator's colour for a decision that waits.
+it("keeps the operator's colour on a Conductor row's mission chip outside a tool's cell", async () => {
+  const agents = [row("ask", { demand: "question" }, { group: "needs_you", line: "Which order?" })];
+  const { container } = await render({ ...snapshot(agents, [card("ask", "needs_you", "hide-main")]), missions: { items: [decidedBy("ask")], failed: null } } as unknown as SnapshotRest, agents);
+  const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
+  expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone]).toEqual(["decision", "hold"]);
+});
+
+it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the warning colour, names a task on another device and none by the tool, and says when it holds nothing (PRD hide-external-control B40, B42, B45)", async () => {
+  const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+  const agents = [
+    row("ask", { tool, demand: "question" } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" }),
+    row("works", { tool } as Partial<AgentRow>, { line: "테스트 돌리는 중" }),
+    row("finished", { tool } as Partial<AgentRow>),
+  ];
+  const away = row("away", { tool, device_id: "mini" } as Partial<AgentRow>);
+  const rest = snapshot(agents, []);
+  const withMini = { ...rest, navigator: { ...rest.navigator, devices: [...rest.navigator!.devices!, { id: "mini", kind: "remote", label: "mini", agent_scope: emptyScope() }] }, status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [away], workspaces: [] } }] } } as unknown as SnapshotRest;
+  const cell: ToolCell = {
+    connection: tool.connection, name: "nightly", turn: 1,
+    devices: [
+      { device_id: "local", tasks: { cards: [card("ask", "needs_you", "hide-main"), card("works", "working", "hide-main"), card("finished", "done", "hide-main")], needs_you: 1, recency: "" }, members: [] },
+      { device_id: "mini", tasks: { cards: [card("away", "working", "mini-main")], needs_you: 0, recency: "" }, members: [] },
+    ],
+  };
+  // `ask` conducts a mission whose decision waits: its chip keeps its `!` in the cell's grey, not the operator's colour.
+  const decided = decidedBy("ask", tool);
+  const withMission = { ...withMini, missions: { items: [decided], failed: null } } as unknown as SnapshotRest;
+  const { container } = await render(withMission, agents, null, cell);
+  expect(heads(container)).toEqual(["도구가 답할 차례1", "끝남1", "작업 중2"]);
+  const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
+  expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone, chip?.className.includes("text-mission-hold")]).toEqual(["decision", "waiting", false]);
+  expect(container.querySelector('[data-task-group-head="needs_you"] button')?.className).not.toContain("text-warning");
+  expect(container.querySelector('[data-task-row="ask"] [data-task-line]')?.className).not.toContain("text-warning");
+  expect(container.querySelector("[data-tool-mark]")).toBeNull();
+  expect(container.querySelector('[data-task-row="away"]')?.textContent).toContain("mini");
+  await cleanup?.();
+  cleanup = null;
+  const empty = await render(rest, [], null, { ...cell, turn: 0, devices: [] });
+  expect(empty.container.querySelector("[data-tool-cell-empty]")?.textContent).toBe("아직 맡은 일이 없어요");
 });

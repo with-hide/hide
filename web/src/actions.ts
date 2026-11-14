@@ -1383,6 +1383,24 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     revokePhone(phoneId: string) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
     },
+    /**
+     * Settings › External tools (PRD hide-external-control B3, B4, B12,
+     * B13): the operator's answer to a tool's request and the level or
+     * disconnect of a connected one, each one core event; the `access`
+     * section shows the outcome.
+     */
+    approveAccess(id: string, level: import("./snapshot").AccessLevel) {
+      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, level } });
+    },
+    refuseAccess(id: string) {
+      dispatch({ schema_version: 2, kind: "access_refuse", payload: { id } });
+    },
+    setAccessLevel(id: string, level: import("./snapshot").AccessLevel) {
+      dispatch({ schema_version: 2, kind: "access_level", payload: { id, level } });
+    },
+    revokeAccess(id: string) {
+      dispatch({ schema_version: 2, kind: "access_revoke", payload: { id } });
+    },
     setPushMode(mode: "app_closed" | "always") {
       dispatch({ schema_version: 2, kind: "mobile_push_mode", payload: { mode } });
     },
@@ -1661,6 +1679,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * keep naming the same one.
      */
     focusDevice(deviceId: string) {
+      // A device's tile shows that device, in place of a tool's cell (PRD hide-external-control B40).
+      ui().setToolCell(null);
       const screen = ui().screen;
       // The mission screen follows the rail to the device chosen (PRD mission-screen D-06).
       if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
@@ -1671,6 +1691,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       }
       if (frontDeviceId(rest()) === deviceId) return;
       dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
+    },
+
+    /**
+     * Shows a tool's cell (PRD hide-external-control D-45, B40): the sidebar,
+     * the mission screen and the Overview read the tool's work in place of a
+     * device's. This machine comes to the front under it, so the cell gone
+     * (a disconnect, a leave, View only) leaves the window on This Mac (B44).
+     */
+    focusTool(connection: string) {
+      const screen = ui().screen;
+      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
+      // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
+      const own = windowDeviceId(rest()?.navigator?.devices);
+      if (screen?.kind === "main") {
+        // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
+        ui().setOverview({ deviceId: null, projectId: null, panel: null });
+        if (screen.deviceId !== undefined && screen.deviceId !== own) useUiStore.setState({ screen: { kind: "main", deviceId: own } });
+      }
+      ui().setToolCell(connection);
+      if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11). */
@@ -1780,8 +1820,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
       resumeSessionId?: string;
       resumeSessionPath?: string;
+      /** False keeps the screen in front instead of bringing the started pane's Workspace forward (the start panel's `stay`). */
+      present?: boolean;
     }) {
-      if (!request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
+      if (request.present !== false && !request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
@@ -1812,10 +1854,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Opens the start panel. Over Settings the panel takes Settings' place,
      * because Settings holds the keyboard, and Settings is what was in front (B25).
      */
-    openStartPanel(projectId?: string) {
+    openStartPanel(projectId?: string, options?: { stay?: boolean }) {
       const overSettings = ui().overlay === "settings";
       if (overSettings) ui().closeOverlay("settings");
-      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null);
+      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null, options?.stay === true);
     },
 
     /**
@@ -2621,7 +2663,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     openAgent(paneId: string, look?: LookAt) {
       beginOpening({ paneId });
-      const { event, remote } = openPaneEvent(paneId, { revealUnseen: Boolean(look) });
+      // A request id makes the core answer this click, a pane that is gone
+      // or a device's refusal included, so the opening says why at once
+      // rather than waiting out its bound in silence (issue 2505).
+      const { event, remote } = openPaneEvent(paneId, { requestId: remoteRequestId(), report: true, revealUnseen: Boolean(look) });
       dispatch(event);
       if (remote) {
         if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
@@ -2748,6 +2793,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       prompt?: string | null;
       /** As `startAgent`'s. */
       profile?: string | null;
+      /** As `startAgent`'s. */
+      present?: boolean;
     }) {
       // A worktree on this machine comes forward through its start's follow
       // in the core; the page only presents what the core selected, as for an
@@ -2755,7 +2802,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // (`followStartedPane`).
       const local = request.deviceId === localDeviceId(rest());
       const requestId = request.requestId ?? (local ? startRequestId() : undefined);
-      if (local && requestId) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
+      if (local && requestId && request.present !== false) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
       dispatch({
         schema_version: 2,
         kind: "create_worktree",

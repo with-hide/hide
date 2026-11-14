@@ -29,6 +29,10 @@ pub struct AgentView {
     pub parent: Option<String>,
     /// The spawner, independently of responsibility; null for ordinary roots.
     pub origin: Option<String>,
+    /// The name of the external tool whose connection started this agent
+    /// (PRD hide-external-control B31); absent for every other start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_tool: Option<String>,
     pub project: Option<String>,
     /// The profile the agent runs with, named after its agent (`Claude ·
     /// work`); null for its agent's built-in default (PRD agent-profiles
@@ -297,6 +301,10 @@ pub struct PsAgent {
     pub parent_pane: Option<String>,
     /// The registration id of the parent the registration names.
     pub parent: Option<String>,
+    /// The name of the external tool whose connection started this agent;
+    /// absent for every other start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_tool: Option<String>,
     /// The name of the agent watching this one.
     pub watched_by: Option<String>,
     pub mission: Option<PsMission>,
@@ -535,6 +543,7 @@ mod tests {
                 pane: "worker".into(),
                 parent: parent.map(str::to_owned),
                 origin: origin.map(str::to_owned),
+                origin_tool: None,
                 project: None,
                 runtime: Runtime::Running,
                 connection: Connection::Connected,
@@ -545,6 +554,8 @@ mod tests {
             let list = serde_json::to_value(AgentList { items: vec![agent] }).unwrap();
             for answer in [&single, &list["items"][0]] {
                 assert!(!answer.as_object().unwrap().contains_key("names"));
+                // Only a tool's start names a tool (B37).
+                assert!(!answer.as_object().unwrap().contains_key("origin_tool"));
                 assert!(answer.as_object().unwrap().contains_key("origin"));
                 assert_eq!(answer["origin"], json!(origin));
                 assert_eq!(answer["parent"], json!(parent));

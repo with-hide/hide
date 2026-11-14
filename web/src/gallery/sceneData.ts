@@ -291,6 +291,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       status_code: "working",
       activity: "working",
       elapsed: "1m",
+      subagents: 3,
       lineage_child_pane_ids: A1_CHILDREN,
       lineage_collapsed: !unfolded("a1"),
       descendant_counts: { error: 0, approval: 1, question: 1, working: 1, done: 1 },
@@ -363,7 +364,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     }),
     agent({ pane_id: "q1", identity_label: "브라우저 표시 확인", group: "needs_you", mark: "turn", status_code: "question", demand: "question", elapsed: "40m", detail: "주소 경계를 어디에 둘까요?" }),
     agent({ pane_id: "q2", identity_label: "검색 팔레트", group: "done", mark: "done", status_code: "done", activity: "stopped", elapsed: "1h" }),
-    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h" }),
+    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h", subagents: 6 }),
   ];
 
   if (devices !== "one") agents.push(...HOME_AGENTS[content]);

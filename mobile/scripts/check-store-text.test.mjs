@@ -141,3 +141,57 @@ describe("the screenshots' words", () => {
     expect(await check(copy)).toEqual([expect.stringContaining('agents: en support names claude')]);
   });
 });
+
+describe("Google Play's page", () => {
+  const setPlay = (file, text) => writeFile(join(copy, 'store/android/metadata', file), `${text}\n`);
+
+  it.each([
+    ['en-US/title.txt', 31],
+    ['en-US/short_description.txt', 81],
+    ['en-US/full_description.txt', 4001],
+    ['en-US/changelogs/default.txt', 501],
+    ['ko-KR/short_description.txt', 81],
+    ['ko-KR/changelogs/default.txt', 501],
+  ])('refuses %s at %i characters', async (file, length) => {
+    await setPlay(file, file.endsWith('full_description.txt') ? `withhide.dev\n${'a'.repeat(length - 13)}` : 'a'.repeat(length));
+    expect(await check(copy)).toEqual(expect.arrayContaining([expect.stringContaining(`android/${file} is ${length} characters, over Play's`)]));
+  });
+
+  it('counts a Hangul syllable as one character and accepts a field exactly at its limit', async () => {
+    await setPlay('ko-KR/short_description.txt', '가'.repeat(80));
+    await setPlay('en-US/changelogs/default.txt', 'a'.repeat(500));
+    expect((await check(copy)).filter((line) => line.includes('characters'))).toEqual([]);
+  });
+
+  it('holds the title, the independence line and the works-with-Hide opening', async () => {
+    await setPlay('en-US/title.txt', 'Hide');
+    await setPlay('ko-KR/full_description.txt', '코딩 에이전트를 봐요.\nClaude Code와 함께 써요.');
+    expect(await check(copy)).toEqual(expect.arrayContaining([
+      expect.stringContaining('android/en-US/title.txt is "Hide"'),
+      expect.stringContaining('android/ko-KR/full_description.txt: the first two lines'),
+      expect.stringContaining('android/ko-KR/full_description.txt names an agent without saying Hide is independent'),
+    ]));
+  });
+
+  it("refuses another company's name, an emoji and shouting in a field Play shows first", async () => {
+    await setPlay('en-US/short_description.txt', 'Claude on your phone');
+    await setPlay('en-US/changelogs/default.txt', 'First release 🚀');
+    await setPlay('ko-KR/short_description.txt', '지금 FREE 로 받으세요');
+    expect(await check(copy)).toEqual(expect.arrayContaining([
+      expect.stringContaining('android/en-US/short_description.txt names claude'),
+      expect.stringContaining('android/en-US/changelogs/default.txt has an emoji'),
+      expect.stringContaining('android/ko-KR/short_description.txt has FREE in capitals'),
+    ]));
+  });
+
+  it('refuses a missing file, an em dash and a locale that is not listed', async () => {
+    await rm(join(copy, 'store/android/metadata/ko-KR/changelogs/default.txt'));
+    await setPlay('en-US/full_description.txt', 'withhide.dev — first');
+    await cp(join(copy, 'store/android/metadata/ko-KR'), join(copy, 'store/android/metadata/ja-JP'), { recursive: true });
+    expect(await check(copy)).toEqual(expect.arrayContaining([
+      expect.stringContaining('android/ko-KR/changelogs/default.txt is missing'),
+      expect.stringContaining('android/en-US/full_description.txt has an em dash'),
+      expect.stringContaining('mobile/store/android/metadata holds en-US, ja-JP, ko-KR'),
+    ]));
+  });
+});

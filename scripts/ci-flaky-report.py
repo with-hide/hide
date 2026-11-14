@@ -43,18 +43,17 @@ failures", owns the policy.
     ci-flaky-report.py --nightly --lane-input all
     ci-flaky-report.py --nightly --runs-repo OWNER/REPO --run RUN_ID --dry-run
 
-The issues live in the private development repository (`ISSUE_REPOSITORY`), so
-the public repository's issues hold only user bug reports; the runs, jobs,
-logs, artifacts and pull requests read stay those of GITHUB_REPOSITORY. It
-talks to GitHub through `gh` (GH_TOKEN and the run's GITHUB_* variables come
-from Actions); GH_TOKEN is the issues GitHub App's token, minted for both
-repositories, which writes issues there and reads Actions, checks and pull
-requests here. A lane's step must not fail the lane: the flaky run already
-passed, and the report is a notice, so a GitHub error costs one missed issue
-the next flaky run files. The nightly report reads job logs, which needs gh
-2.97 or newer, and refuses an older gh before the first log read. The report
-job fails when GitHub does, so a failure it could not file is a red job rather
-than a silence.
+The issues live in the public repository with its user bug reports
+(`ISSUE_REPOSITORY`), told apart by their labels; the runs, jobs, logs,
+artifacts and pull requests read are those of GITHUB_REPOSITORY. It talks to
+GitHub through `gh` (GH_TOKEN and the run's GITHUB_* variables come from
+Actions); GH_TOKEN is the issues GitHub App's token, which writes the issues
+and reads Actions, checks and pull requests. A lane's step must not fail the
+lane: the flaky run already passed, and the report is a notice, so a GitHub
+error costs one missed issue the next flaky run files. The nightly report
+reads job logs, which needs gh 2.97 or newer, and refuses an older gh before
+the first log read. The report job fails when GitHub does, so a failure it
+could not file is a red job rather than a silence.
 """
 import argparse
 from datetime import date, datetime, timedelta
@@ -71,9 +70,9 @@ import threading
 import xml.etree.ElementTree as ET
 import zipfile
 
-# Where every issue this script files lives: development issues stay out of the
-# public repository, whose issues are user bug reports.
-ISSUE_REPOSITORY = "with-hide/hide-private"
+# Where every issue this script files lives: the public repository, beside the
+# user bug reports, which the labels below tell them apart from.
+ISSUE_REPOSITORY = "with-hide/hide"
 LABEL = "quarantine"
 EXPIRY_DAYS = 7
 # A run with more flaky tests than this is a broken environment, not flakiness;

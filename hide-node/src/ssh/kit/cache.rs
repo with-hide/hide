@@ -24,6 +24,10 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+};
 
 /// The most the cache holds on disk: every slot, the staging kit and its
 /// archive, beside the small manifest, record and lock.
@@ -35,18 +39,37 @@ const MAX_RECENT: u64 = 4 * 1024;
 /// The most entries a slot may hold, files and folders together, before it
 /// is refused unread; a kit has a few files.
 const MAX_SLOT_ENTRIES: usize = 64;
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a release request may wait on the network.
+pub(super) struct Bounds {
+    /// The longest one wait for bytes, in or out, may last: a download that
+    /// keeps arriving, however slowly, runs on.
+    pub stall: Duration,
+    /// The longest the whole request may last, so a link that sends a byte
+    /// now and then cannot hold the connection worker and the cache lock
+    /// forever.
+    pub whole: Duration,
+}
+
+/// A kit is about 80 MB; one bound of 60 seconds for the whole request
+/// refused it on every link slower than about 11 Mbit/s, on each retry anew.
+/// Half an hour for the whole is about 0.4 Mbit/s for such a kit.
+pub(super) const RELEASE: Bounds = Bounds {
+    stall: Duration::from_secs(30),
+    whole: Duration::from_secs(30 * 60),
+};
+
 /// The kit for `os`/`arch` of the release `identity` names, from the cache
-/// under `home` or fetched from `base` (the release's download address): each
-/// file in contract order, the programs first.
+/// under `home` or fetched from `base` (the release's download address)
+/// within `bounds`: each file in contract order, the programs first.
 pub(super) fn load(
     identity: &ReleaseIdentity,
     os: &str,
     arch: &str,
     home: &Path,
     base: &str,
+    bounds: &Bounds,
 ) -> Result<Vec<Package>> {
     let contract = &*CONTRACT;
     let platform = platform(os, arch);
@@ -87,7 +110,7 @@ pub(super) fn load(
     };
     let result = (|| {
         stage.clean()?;
-        let manifest = manifest(&root, identity, base)?;
+        let manifest = manifest(&root, identity, base, bounds)?;
         let bundle = &manifest.platforms[&platform];
         // Every slot's bytes count against the budget; a slot that is not
         // this release's kit in shape and size is reclaimed now, whichever
@@ -125,7 +148,12 @@ pub(super) fn load(
                 evict(&root, &mut sizes, &recent, incoming)?;
                 private::create_dir(&stage.path)?;
                 let archive = stage.path.join("archive.tar.gz");
-                download(&format!("{base}/{}", bundle.asset), bundle, &archive)?;
+                download(
+                    &format!("{base}/{}", bundle.asset),
+                    bundle,
+                    &archive,
+                    bounds,
+                )?;
                 let unpacked = stage.path.join("kit");
                 private::create_dir(&unpacked)?;
                 archive::unpack(&archive, &unpacked, bundle)?;
@@ -150,7 +178,12 @@ pub(super) fn load(
 /// This build's release manifest: the one kept here when it names this
 /// build, else the release's own, kept for the next connection, which then
 /// needs no network for a kit it holds.
-fn manifest(root: &Path, identity: &ReleaseIdentity, base: &str) -> Result<Manifest> {
+fn manifest(
+    root: &Path,
+    identity: &ReleaseIdentity,
+    base: &str,
+    bounds: &Bounds,
+) -> Result<Manifest> {
     let path = root.join(&CONTRACT.manifest);
     if path.try_exists()? {
         // Another build's manifest, or one damaged on disk, is replaced by
@@ -160,7 +193,7 @@ fn manifest(root: &Path, identity: &ReleaseIdentity, base: &str) -> Result<Manif
         }
     }
     let url = format!("{base}/{}", CONTRACT.manifest);
-    let mut response = agent(&url).get(&url).call().context(
+    let mut response = agent(&url, bounds).get(&url).call().context(
         "The release's device download manifest could not be downloaded; check the network and release availability",
     )?;
     let mut bytes = Vec::new();
@@ -347,19 +380,97 @@ fn remove_slot(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The release's HTTPS client: a 60-second bound for the whole request and
-/// at most five redirects (a release asset redirects to its storage).
-fn agent(url: &str) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(DOWNLOAD_TIMEOUT))
+/// The release's HTTPS client within `bounds`, with at most five redirects
+/// (a release asset redirects to its storage).
+fn agent(url: &str, bounds: &Bounds) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(bounds.whole))
+        .timeout_connect(Some(bounds.stall))
         .https_only(url.starts_with("https://"))
         .max_redirects(5)
-        .build()
-        .into()
+        .build();
+    let connector = DefaultConnector::default().chain(Stall(bounds.stall));
+    ureq::Agent::with_parts(config, connector, DefaultResolver::default())
 }
 
-fn download(url: &str, bundle: &Bundle, target: &Path) -> Result<()> {
-    let mut response = agent(url).get(url).call().context(
+/// Bounds each wait of a connection on the network, the outermost layer over
+/// TLS and TCP. ureq has no such bound of its own: `timeout_recv_body` is one
+/// budget for the whole body, not for each read.
+#[derive(Debug)]
+struct Stall(Duration);
+
+impl Connector<Box<dyn Transport>> for Stall {
+    type Out = Stalling;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<Box<dyn Transport>>,
+    ) -> Result<Option<Stalling>, ureq::Error> {
+        Ok(chained.map(|inner| Stalling {
+            inner,
+            stall: self.0,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct Stalling {
+    inner: Box<dyn Transport>,
+    stall: Duration,
+}
+
+impl Stalling {
+    /// Runs one wait under the sooner of ureq's own deadline and the stall
+    /// bound; a wait the stall bound ended reads as nothing having arrived.
+    fn wait<T>(
+        &mut self,
+        timeout: NextTimeout,
+        step: impl FnOnce(&mut dyn Transport, NextTimeout) -> Result<T, ureq::Error>,
+    ) -> Result<T, ureq::Error> {
+        if *timeout.after <= self.stall {
+            return step(&mut *self.inner, timeout);
+        }
+        let bounded = NextTimeout {
+            after: self.stall.into(),
+            reason: timeout.reason,
+        };
+        step(&mut *self.inner, bounded).map_err(|error| match error {
+            ureq::Error::Timeout(_) => ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Nothing arrived from the release for {:?}", self.stall),
+            )),
+            other => other,
+        })
+    }
+}
+
+impl Transport for Stalling {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.wait(timeout, |inner, timeout| {
+            inner.transmit_output(amount, timeout)
+        })
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        self.wait(timeout, |inner, timeout| inner.await_input(timeout))
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
+}
+
+fn download(url: &str, bundle: &Bundle, target: &Path, bounds: &Bounds) -> Result<()> {
+    let mut response = agent(url, bounds).get(url).call().context(
         "The matching release's device asset could not be downloaded; check the network and release availability",
     )?;
     let mut source = response.body_mut().as_reader().take(bundle.size + 1);

@@ -51,6 +51,15 @@ pub struct MissionsSnapshot {
 pub struct MissionView {
     pub id: String,
     pub title: String,
+    /// The external tool whose agent conducts the mission (PRD
+    /// hide-external-control B30, D-15, D-36): while the tool keeps it
+    /// (`owns`) it is listed, asks and is counted in the tool's cell only,
+    /// never on the operator's mission screen, in their counts or notices;
+    /// once the tool lets go it is the operator's, and its row and map head
+    /// still name the tool as where the work came from. Absent for the
+    /// operator's and Hide AI's missions (B37).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<crate::model::ToolWorkSnapshot>,
     pub workspace_id: String,
     pub project: String,
     pub checkout_path: String,
@@ -321,7 +330,8 @@ pub struct NodeView {
 /// its worker works, its worker rests and the node waits on someone
 /// (`waiting_on`, said beside it), its worker stopped with no one to wait
 /// on (`mission_health::stopped_worker`), since when and why, or no worker
-/// stands for it.
+/// stands for it (`mission_health::worker_gone`), since when a warning
+/// judgment first saw it, absent before one did.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum NodeWork {
@@ -333,21 +343,32 @@ pub enum NodeWork {
         cause: Option<crate::missions::StopCause>,
         since_unix_ms: u64,
     },
-    NoWorker,
+    NoWorker {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        since_unix_ms: Option<u64>,
+    },
 }
 
 /// What `view`, a node of a running mission, is doing now: from its
-/// worker's registration (none or ended is no worker, asleep rests) and,
-/// for a running one, its agent row's activity (`working` works, `stopped`
-/// rests, or stands stopped when `stopped` says so); a row Hide cannot see,
-/// or whose activity it does not know, says nothing rather than a guess.
+/// worker's registration (none or ended is no worker, since `gone_since`;
+/// asleep rests) and, for a running one, its agent row's activity
+/// (`working` works, `stopped` rests, or stands stopped when `stopped` says
+/// so); a row Hide cannot see, or whose activity it does not know, says
+/// nothing rather than a guess.
 fn node_work(
     mission: &Mission,
     view: &NodeView,
     row_activity: Option<&str>,
     stopped: Option<&crate::mission_health::WorkerStopped>,
+    gone_since: Option<u64>,
 ) -> Option<NodeWork> {
-    use crate::delivery::answer::Runtime as Life;
+    use crate::mission_health::WorkerLife;
+    let worker = view.agent_runtime.map(WorkerLife::of);
+    if crate::mission_health::worker_gone(mission, view.status, view.kind, worker) {
+        return Some(NodeWork::NoWorker {
+            since_unix_ms: gone_since,
+        });
+    }
     if !mission.status.open()
         || view.status != NodeStatus::Working
         || view.kind == NodeKind::External
@@ -355,10 +376,11 @@ fn node_work(
         return None;
     }
     let waiting = || view.waiting_on.clone().map(|on| NodeWork::Waiting { on });
-    match view.agent_runtime {
-        None | Some(Life::Ended | Life::Closed) => Some(NodeWork::NoWorker),
-        Some(Life::Asleep) => waiting(),
-        Some(Life::Running) => match row_activity? {
+    match worker? {
+        // Answered above.
+        WorkerLife::Ended => None,
+        WorkerLife::Asleep => waiting(),
+        WorkerLife::Running => match row_activity? {
             "working" => Some(NodeWork::Working),
             "stopped" => match stopped {
                 Some(stop) => Some(NodeWork::Stopped {
@@ -679,6 +701,9 @@ struct Wake {
     intent: String,
     body: String,
     kind: &'static str,
+    /// Sent with `--now`: the Conductor's, taken at its next tool call even
+    /// while it works, since every worker and checker waits on it.
+    now: bool,
 }
 
 #[derive(Default)]
@@ -749,9 +774,11 @@ pub(crate) struct MissionRuntime {
     /// stops standing, so it holds at most one per node standing.
     pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
     /// Since when each node's worker has stood stopped
-    /// (`mission_health::stopped_worker`), by mission, node and worker, as a
+    /// (`mission_health::stopped_worker`) or gone
+    /// (`mission_health::worker_gone`), by mission, node and worker, as a
     /// warning judgment first saw it (`Runtime::warn_missions`): the time
-    /// its warning and the map count from. The row's own last change cannot
+    /// a stop's warning and the map count from. A stop that turns into a
+    /// worker gone keeps its time, since its key does not change. The row's own last change cannot
     /// say it: when a long turn's end lands it still holds the turn's start,
     /// and when a Conductor's letter ends the excuse a report gave it holds
     /// the time before the report, so the five minutes were already spent.
@@ -830,6 +857,10 @@ struct ViewsMadeFrom {
     /// catalog lists it, which a mission that records no destination and
     /// an outside branch are drawn with, and which moves without the book.
     defaults: Vec<Option<String>>,
+    /// Per mission in book order: the external tool its Conductor works
+    /// for, whose keeping a disconnect or a level moves without the book
+    /// (B16).
+    tools: Vec<Option<crate::model::ToolWorkSnapshot>>,
     made: bool,
 }
 
@@ -1463,6 +1494,21 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
     }
 }
 
+/// A book from before every close settled the refused close it passed
+/// (with-hide/hide#2518) may hold one on a mission its Conductor closed,
+/// where nothing could take it off: it is settled now, as that close
+/// settles it today.
+fn settle_closed_refusals(book: &mut crate::missions::MissionBook) {
+    for mission in &mut book.missions {
+        if !matches!(
+            mission.status,
+            MissionStatus::Planning | MissionStatus::Running
+        ) {
+            super::mission_health::settle_refused_close(mission, "hide");
+        }
+    }
+}
+
 impl Runtime {
     pub(crate) fn install_mission_store(
         &mut self,
@@ -1473,6 +1519,7 @@ impl Runtime {
             Restored::Fresh => {}
             Restored::Read(mut book) | Restored::Moving(mut book) => {
                 settle_typed_answers(&mut book);
+                settle_closed_refusals(&mut book);
                 self.missions.book = book;
             }
             Restored::Unreadable(reason) => {
@@ -1565,6 +1612,7 @@ impl Runtime {
             // A cancelled mission wakes no one (D-51).
             target.wakes.clear();
         }
+        super::mission_health::settle_refused_close(target, by);
         let changed = *target != before;
         let mut events = super::mission_events::close_events(&before, target, now);
         events.extend(ended);
@@ -1936,23 +1984,41 @@ impl Runtime {
         if self.missions.unreadable.is_some() {
             return Err("mission_unavailable".into());
         }
-        let context = self
-            .workspace_control_query(device, caller, Query::Info)
-            .map_err(|refusal| refusal.reason.to_owned())?
-            .context;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
-        let Caller::Pane(pane) = Caller::parse(caller) else {
-            return Err("agent_pane_required".into());
+        // An external tool reads every mission on this machine, and leads
+        // none: a Conductor it starts does (PRD hide-external-control D-12).
+        let tool = match Caller::parse(caller) {
+            Caller::Access { connection, .. } => Some(self.access_authority(
+                device,
+                connection,
+                crate::access::mission_need(&command),
+            )?),
+            _ => None,
         };
-        let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
-        let actor = self
-            .delivery_observations
-            .get(&pane)
-            .ok_or("agent_pane_required")?
-            .actor
-            .clone();
+        let every_project = tool.is_some();
+        // A tool reaches only Show and List, which name no pane.
+        let (context, actor, pane) = match tool {
+            Some(actor) => (expected.clone(), actor.clone(), actor.pane_id),
+            None => {
+                let context = self
+                    .workspace_control_query(device, caller, Query::Info)
+                    .map_err(|refusal| refusal.reason.to_owned())?
+                    .context;
+                if context != *expected {
+                    return Err("caller_context_changed".into());
+                }
+                let Caller::Pane(pane) = Caller::parse(caller) else {
+                    return Err("agent_pane_required".into());
+                };
+                let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
+                let actor = self
+                    .delivery_observations
+                    .get(&pane)
+                    .ok_or("agent_pane_required")?
+                    .actor
+                    .clone();
+                (context, actor, pane)
+            }
+        };
         actor.require_native_identity()?;
         let now = super::memory::now_ms();
         // The caller's project: the Git repository the worktree catalog
@@ -2225,8 +2291,9 @@ impl Runtime {
                     }
                 }
                 // The Conductor moving the node settles what waited on it
-                // (B17); a cause it settles is not raised again.
-                if patch.status.is_some() {
+                // (B17), a start by naming its worker included; a cause it
+                // settles is not raised again.
+                if patch.status.is_some() || next.status != current.nodes[index].status {
                     super::mission_health::settle(&id, &mut next, "conductor");
                 }
                 // Taken back to work from a finish, it is not finished again
@@ -2546,7 +2613,8 @@ impl Runtime {
                             .map(|line| (line, true)),
                     )
                     .filter(|(line, _)| {
-                        line.device_id == device && Some(&line.project) == project.as_ref()
+                        every_project
+                            || (line.device_id == device && Some(&line.project) == project.as_ref())
                     })
                     .collect();
                 lines.sort_by_key(|(line, _)| crate::missions::mission_number(&line.id));
@@ -3952,6 +4020,7 @@ impl Runtime {
                     } else {
                         "progress"
                     },
+                    now: wake.to.is_none(),
                 });
             }
         }
@@ -4045,7 +4114,7 @@ impl Runtime {
                                 intent: wake.intent.clone(),
                                 body: wake.body,
                                 kind: wake.kind.into(),
-                                now: false,
+                                now: wake.now,
                                 force: false,
                             },
                         );
@@ -4411,8 +4480,14 @@ impl Runtime {
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
-                // The map draws a stop from when a warning judgment first saw
-                // it (`stop_clock`), so not before one did.
+                // The map draws a stop, and a worker gone, from when a
+                // warning judgment first saw it (`stop_clock`), so not
+                // before one did.
+                let clock = self
+                    .missions
+                    .stop_clock
+                    .get(&super::mission_health::stop_key(mission, node))
+                    .copied();
                 let fact = crate::mission_health::NodeFacts {
                     worker: Some(crate::mission_health::WorkerLife::Running),
                     stopped: record
@@ -4420,12 +4495,9 @@ impl Runtime {
                             self.worker_stopped(record, ledger, &mission.conductor.actor)
                         })
                         .and_then(|stop| {
-                            let key = super::mission_health::stop_key(mission, node);
-                            self.missions.stop_clock.get(&key).map(|since| {
-                                crate::mission_health::WorkerStopped {
-                                    since_unix_ms: *since,
-                                    ..stop
-                                }
+                            clock.map(|since| crate::mission_health::WorkerStopped {
+                                since_unix_ms: since,
+                                ..stop
                             })
                         }),
                     ..Default::default()
@@ -4437,7 +4509,7 @@ impl Runtime {
                     self.mission_pulls(mission),
                     self.gate_open(mission, node),
                 );
-                view.work = node_work(mission, &view, activity, stopped);
+                view.work = node_work(mission, &view, activity, stopped, clock);
                 view
             })
             .collect();
@@ -4453,6 +4525,7 @@ impl Runtime {
         MissionView {
             id: mission.id.clone(),
             title: mission.title.clone(),
+            tool: self.mission_tool(mission),
             workspace_id: mission.workspace_id.clone(),
             project: mission.project.clone(),
             checkout_path: mission.checkout_path.clone(),
@@ -4651,6 +4724,13 @@ impl Runtime {
             .iter()
             .map(|mission| self.project_default_branch(&mission.device_id, &mission.project))
             .collect();
+        let tools: Vec<_> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.mission_tool(mission))
+            .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -4664,7 +4744,8 @@ impl Runtime {
             && before.stale == stale
             && before.sleeping == sleeping
             && before.laid == laid
-            && before.defaults == defaults;
+            && before.defaults == defaults
+            && before.tools == tools;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -4755,6 +4836,7 @@ impl Runtime {
             rows_and_holds,
             views_generation,
             defaults,
+            tools,
             made: true,
         };
     }
@@ -4770,8 +4852,16 @@ impl Runtime {
     /// mission's), waited on since its node was done. One per mission,
     /// however many nodes it holds. Run after the mission views, which
     /// decide `on_row`, the safety net and the merge.
+    ///
+    /// A mission an external tool keeps asks the tool, never the operator:
+    /// it is laid on the tool's cell instead, whose grey number counts it
+    /// (PRD hide-external-control B30, D-46), until the tool lets go of it.
+    /// Every tool connected at Act is named to the cells here too, after
+    /// the access section, so a tool with no work yet has its cell (D-47).
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
+            std::collections::BTreeMap::new();
+        let mut kept: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
         for mission in &self.snapshot.missions.items {
             let oldest = mission
@@ -4783,21 +4873,39 @@ impl Runtime {
                 .chain(mission.nodes.iter().filter_map(merge_due_since))
                 .chain(mission.safety_net.as_ref().map(|net| net.since_unix_ms))
                 .min();
-            if let Some(since) = oldest {
-                waiting
-                    .entry(mission.device_id.clone())
-                    .or_default()
-                    .push((since, mission.id.clone()));
-            }
+            let Some(since) = oldest else { continue };
+            let owner = match mission.tool.as_ref().filter(|tool| tool.owns) {
+                Some(tool) => kept.entry(tool.connection.clone()),
+                None => waiting.entry(mission.device_id.clone()),
+            };
+            owner.or_default().push((since, mission.id.clone()));
         }
-        let asks = waiting
-            .into_iter()
-            .map(|(device, mut missions)| {
-                missions.sort();
-                (device, missions.into_iter().map(|(_, id)| id).collect())
+        let oldest_first = |asks: std::collections::BTreeMap<String, Vec<(u64, String)>>| {
+            asks.into_iter()
+                .map(|(owner, mut missions)| {
+                    missions.sort();
+                    (owner, missions.into_iter().map(|(_, id)| id).collect())
+                })
+                .collect()
+        };
+        let tools = self
+            .snapshot
+            .access
+            .as_deref()
+            .map(|access| {
+                access
+                    .connections
+                    .iter()
+                    .filter(|connection| connection.level == crate::access::Level::Act)
+                    .map(|connection| (connection.id.clone(), connection.name.clone()))
+                    .collect()
             })
-            .collect();
-        self.agent_scope_cache.note_mission_asks(asks) && self.refresh_agent_scopes()
+            .unwrap_or_default();
+        let devices = self
+            .agent_scope_cache
+            .note_mission_asks(oldest_first(waiting));
+        let tools = self.agent_scope_cache.note_tools(tools, oldest_first(kept));
+        (devices || tools) && self.refresh_agent_scopes()
     }
 }
 

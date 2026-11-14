@@ -32,6 +32,8 @@ function pull(repository: string, number: number, title: string, state: PullStat
 }
 
 type AgentSpec = {
+  /** The subagents its session runs inside itself, which orbit its circle. */
+  subagents?: number;
   pane: string;
   title: string;
   look: Look;
@@ -75,6 +77,7 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     lineage_parent_pane_id: spec.parent ?? null,
     lineage_depth: spec.parent ? 1 : 0,
     lineage_child_pane_ids: spec.children ?? [],
+    subagents: spec.subagents,
     request: { verb: spec.look === "working" ? "working" : "idle", verb_since_unix_ms: now - spec.ago, request: null, later_by: null, pull_requests: pulls.map((one) => one.pr) },
     // The core's list; in this scene only roots hold pull requests, so each holds its own.
     pulls: pulls.length ? { pulls: pulls.map((one) => listedPull(one.pr.number, one.pr.title, one.state, null, one.pr.url)) } : null,
@@ -136,10 +139,10 @@ export function overviewWorld(now: number): OverviewWorld {
   const billingPr = pull("example/billing-api", 88, "Verify webhook signatures", "failed");
   const agents: AgentRow[] = [
     agent({ pane: "h-a3", title: "배포 전 변경 확인", look: "asking", ago: 3 * MINUTE, ask: { verb: "answer", what: "프로덕션 배포 전에 이번 변경 범위를 확인해 주세요", more: 0 }, pulls: [{ pr: hidePrs.release, state: "mergeable" }] }, now),
-    agent({ pane: "h-a1", now: "좁은 폭 줄바꿈 고치는 중", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
+    agent({ pane: "h-a1", now: "좁은 폭 줄바꿈 고치는 중", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, subagents: 3, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
     agent({ pane: "h-a1c1", title: "컴포넌트 구조 정리", look: "working", ago: 40_000, kind: "codex", parent: "h-a1", children: ["h-a1g1"] }, now),
     agent({ pane: "h-a1c2", title: "한글 가독성 확인", look: "done", ago: 6 * MINUTE, parent: "h-a1" }, now),
-    agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex" }, now),
+    agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex", subagents: 2 }, now),
     agent({ pane: "h-a1c4", title: "키보드 이동 확인", look: "idle", ago: 15 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1g1", title: "모바일 표 너비 조정", look: "working", ago: 2 * MINUTE, parent: "h-a1c1" }, now),
     agent({ pane: "h-e1", now: "English 화면 단축키 확인 중", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),

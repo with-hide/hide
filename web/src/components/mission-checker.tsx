@@ -54,13 +54,13 @@ export function VerdictReason({ summary, evidence, className }: { summary?: stri
   );
 }
 
-/** The checker's live row and its session: the terminal follows the one, the record the other. */
+/** The checker's live row and its session, which the record follows. */
 function useCheckerWays(checker: MissionChecker) {
   const row = useShellStore((s) => (checker.pane_id ? agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(checker.pane_id) ?? null : null));
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
   const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
-  return { row, session };
+  return { session };
 }
 
 /**
@@ -75,7 +75,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
   const status = useCheckerStatus(kind, checker);
   const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker, checker.worker.agent);
   const device = useMissionDeviceName(checker.machine);
-  const { row, session } = useCheckerWays(checker);
+  const { session } = useCheckerWays(checker);
   const name = agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent;
   const go = (action: () => void) => () => {
     setOpen(false);
@@ -98,7 +98,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
         </span>
         <VerdictReason summary={checker.summary} evidence={checker.evidence} />
         <div className="flex flex-wrap gap-xs">
-          <Button size="sm" variant="secondary" disabled={!checker.pane_id || !row} onClick={go(() => checker.pane_id && actions.openAgent(checker.pane_id))} data-checker-terminal="true">{t("mission.toTerminal")}</Button>
+          <Button size="sm" variant="secondary" disabled={!checker.pane_id} onClick={go(() => checker.pane_id && actions.openAgent(checker.pane_id))} data-checker-terminal="true">{t("mission.toTerminal")}</Button>
           <Button size="sm" variant="secondary" disabled={!session} onClick={go(() => session && actions.openChildRecord(session))} data-checker-record="true">{t("mission.record")}</Button>
           {onNode ? <Button size="sm" variant="text" onClick={go(onNode)} data-checker-node="true">{t("mission.checker.node")}</Button> : null}
         </div>

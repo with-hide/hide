@@ -16,8 +16,12 @@
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type ForceLink, type ForceX, type ForceY, type Simulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 
-/** `parent` names a placed session, or null for a root; `radius` is how much room the session's circle and words need. */
-export type MapSession = { id: string; projectId: string; parent: string | null; radius: number };
+/**
+ * `parent` names a placed session, or null for a root; `radius` is how much room the session's circle and words need.
+ * `quiet`: a place that is no session (a start circle, Add project) keeps its room but pushes nothing away, so it
+ * does not spread the sessions around it.
+ */
+export type MapSession = { id: string; projectId: string; parent: string | null; radius: number; quiet?: boolean };
 export type MapInput = {
   /** Projects in drawing order; a session's project must be listed. */
   projects: readonly string[];
@@ -26,12 +30,14 @@ export type MapInput = {
   operator: number;
   /** Where the operator dropped projects (their anchors) and sessions (pinned there). */
   remembered?: { anchors: ReadonlyMap<string, Point>; pins: ReadonlyMap<string, Point> };
+  /** A listed project that takes no place among the others: it gathers in the widest gap between them, so the rest keep their places. */
+  free?: string;
 };
 export type Point = { x: number; y: number };
 /** An orb center, and the session whose team it belongs to (a root names its own). */
 export type MapPoint = Point & { team: string };
 
-type Body = SimulationNodeDatum & { id: string; projectId: string; parent: string | null; radius: number; team: string; root: boolean };
+type Body = SimulationNodeDatum & { id: string; projectId: string; parent: string | null; radius: number; team: string; root: boolean; quiet: boolean };
 type Tie = SimulationLinkDatum<Body> & { kind: "team" | "operator"; length: number };
 
 const OPERATOR = "\u0000operator";
@@ -58,7 +64,7 @@ export class ForceMap {
   private listener: (() => void) | null = null;
 
   constructor(input: MapInput, previous?: ForceMap) {
-    this.operator = { id: OPERATOR, projectId: "", parent: null, radius: input.operator, team: OPERATOR, root: false, x: 0, y: 0, fx: 0, fy: 0 };
+    this.operator = { id: OPERATOR, projectId: "", parent: null, radius: input.operator, team: OPERATOR, root: false, quiet: false, x: 0, y: 0, fx: 0, fy: 0 };
     this.simulation = forceSimulation<Body, Tie>().alphaDecay(DECAY).stop();
     this.place(input, previous);
   }
@@ -190,11 +196,17 @@ export class ForceMap {
     };
     // Projects gather on an ellipse around the operator, wider than tall like the screen and wide enough for how many sessions there are.
     const reach = Math.max(380, 72 * Math.sqrt(input.sessions.length + 1));
-    input.projects.forEach((id, index) => {
+    const placed = input.projects.filter((id) => id !== input.free);
+    placed.forEach((id, index) => {
       const kept = previous?.anchors.get(id) ?? input.remembered?.anchors.get(id);
-      const angle = -Math.PI / 2 + (index / Math.max(input.projects.length, 1)) * Math.PI * 2;
-      this.anchors.set(id, kept ? { ...kept } : input.projects.length === 1 ? { x: 0, y: -reach * 0.6 } : { x: Math.cos(angle) * reach, y: Math.sin(angle) * reach * 0.7 });
+      const angle = -Math.PI / 2 + (index / Math.max(placed.length, 1)) * Math.PI * 2;
+      this.anchors.set(id, kept ? { ...kept } : placed.length === 1 ? { x: 0, y: -reach * 0.6 } : { x: Math.cos(angle) * reach, y: Math.sin(angle) * reach * 0.7 });
     });
+    if (input.free !== undefined && projects.has(input.free)) {
+      // Halfway between the last project and the first, where the ellipse has room; opposite a lone project.
+      const angle = -Math.PI / 2 - Math.PI / Math.max(placed.length, 1);
+      this.anchors.set(input.free, previous?.anchors.get(input.free) ?? { x: Math.cos(angle) * reach, y: Math.sin(angle) * reach * 0.6 });
+    }
     // Parents start before their children, so a new child starts beside its parent.
     const ordered: MapSession[] = [];
     const queued = new Set<string>();
@@ -209,7 +221,7 @@ export class ForceMap {
     const held: Body[] = [];
     for (const session of ordered) {
       const old = previous?.bodies.get(session.id);
-      const body: Body = { id: session.id, projectId: session.projectId, parent: session.parent, radius: session.radius, team: teamOf(session), root: session.parent === null };
+      const body: Body = { id: session.id, projectId: session.projectId, parent: session.parent, radius: session.radius, team: teamOf(session), root: session.parent === null, quiet: session.quiet === true };
       if (old) {
         // Already placed: it keeps its place, and an operator's pin, while the new ones settle.
         body.x = old.x; body.y = old.y;
@@ -242,7 +254,7 @@ export class ForceMap {
     this.simulation
       .nodes([this.operator, ...this.bodies.values()])
       .force("tie", forceLink<Body, Tie>(ties).id((body) => body.id).distance((tie) => tie.length).strength((tie) => (tie.kind === "team" ? 0.9 : 0.04)))
-      .force("charge", forceManyBody<Body>().strength((body) => (body.id === OPERATOR ? -600 : body.root ? -320 : -140)))
+      .force("charge", forceManyBody<Body>().strength((body) => (body.id === OPERATOR ? -600 : body.quiet ? 0 : body.root ? -320 : -140)))
       .force("collide", forceCollide<Body>((body) => body.radius).iterations(3))
       .force("x", forceX<Body>(this.anchorX).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.28 : 0.02)))
       .force("y", forceY<Body>(this.anchorY).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.28 : 0.02)))

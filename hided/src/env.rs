@@ -38,6 +38,9 @@ pub const HIDE_PANE_ID: &str = hide_agent_hooks::pane::HIDE_PANE_ID;
 pub const HIDE_INSTALL: &str = hide_agent_hooks::route::INSTALL_VARIABLE;
 pub const HIDE_INSTALL_CLI: &str = hide_agent_hooks::route::CLI_VARIABLE;
 pub const HIDE_CAP_REF: &str = "HIDE_CAP_REF";
+/// Which of an external tool's connections a `hide` command runs as, when
+/// its home keeps several (`access_cli`).
+pub const HIDE_ACCESS: &str = "HIDE_ACCESS";
 pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
 pub const HIDE_RELAY_URL: &str = "HIDE_RELAY_URL";
 pub const RELAY_URL: &str = "wss://relay.withhide.dev/ws";
@@ -181,6 +184,12 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "Pane callers try kernel peer bootstrap; detached agent tools require a session-scoped reference",
     },
     EnvKey {
+        key: HIDE_ACCESS,
+        required: false,
+        format: "the --name an external tool connected with: letters, digits, '.', '_' or '-', starting with a letter or digit, at most 64",
+        absent_behavior: "A command outside Hide's panes runs as the one tool whose key is in $HOME/.hide/access, and is refused with access_ambiguous when there are several; with no key it runs as the folder it was started in",
+    },
+    EnvKey {
         key: HIDE_TAILSCALE_BIN,
         required: false,
         format: "absolute path of the tailscale CLI Settings > Mobile runs; a path that does not exist reads as Tailscale not installed",
@@ -288,6 +297,8 @@ pub struct Env {
     pub pane_id: Option<String>,
     /// The Hide installation that started that pane (`HIDE_INSTALL`).
     pub install: Option<String>,
+    /// The external tool connection a command runs as (`HIDE_ACCESS`).
+    pub access: Option<String>,
     /// The only tailscale CLI Mobile runs, when set (`HIDE_TAILSCALE_BIN`).
     pub tailscale_bin: Option<PathBuf>,
     pub relay_url: String,
@@ -501,6 +512,16 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         other => other,
     };
     let install = read(HIDE_INSTALL).filter(|value| !value.is_empty());
+    let access = match read(HIDE_ACCESS) {
+        Some(value) if !hide_core::access::valid_name(&value) => {
+            errors.push(EnvError {
+                key: HIDE_ACCESS,
+                kind: "invalid",
+            });
+            None
+        }
+        other => other,
+    };
     let tailscale_bin = match read(HIDE_TAILSCALE_BIN) {
         Some(value)
             if !Path::new(&value).is_absolute() || value.bytes().any(|b| b.is_ascii_control()) =>
@@ -542,6 +563,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         host_cli_dir,
         pane_id,
         install,
+        access,
         tailscale_bin,
         relay_url,
         search_path,

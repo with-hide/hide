@@ -53,6 +53,7 @@ const words = {
   "overviewGraph.welcomeWhere": ["Starts in {{project}}", "{{project}}에서 시작", "{{project}} で開始", "在 {{project}} 中开始"],
   "overviewGraph.showResting": ["Show sleeping sessions ({{count}})", "잠든 세션 {{count}}개 보기", "眠っているセッションを表示 ({{count}})", "显示休眠会话 ({{count}})"],
   "overviewGraph.newAgent": ["New agent", "새 에이전트", "新しいエージェント", "新建智能体"],
+  "overviewGraph.addProject": ["Add project", "프로젝트 추가", "プロジェクトを追加", "添加项目"],
   "overviewGraph.loading": ["Placing sessions", "세션 배치 중", "セッションを配置中", "正在排列会话"],
   "overviewGraph.failed": ["Couldn't place the graph. Sessions remain available.", "그래프를 그리지 못했어요. 세션 목록은 그대로 쓸 수 있어요.", "グラフを配置できません。セッション一覧は利用できます。", "无法排列图。仍可使用会话列表。"],
   "overviewGraph.retry": ["Retry", "다시 시도", "再試行", "重试"],

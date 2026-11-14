@@ -29,8 +29,16 @@ export type PhoneAgent = {
   background_left?: number;
   /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
   children_left?: number;
+  /** The subagents still running under a finished turn not read yet, which its line ends with; absent when none. */
+  subagents_left?: number;
+  /** How many things its `wait` waits on, which its line counts; absent for running checks and when it waits for nothing. */
+  wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds; absent when none. */
+  wait_subagents?: number;
   /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
   starred?: true;
+  /** The external tool whose work the row is, by name, leading its second line as on the desktop's sidebar row (PRD hide-external-control B46); absent on the operator's own rows, and from a Mac that predates it. */
+  tool?: string;
   agent_kind: string;
   title: string;
   place: string | null;
@@ -376,6 +384,8 @@ export type PhoneMessage =
   | { type: "push_permission"; state: "denied" | "default" }
   /** The iOS app's notifications: Apple's token for this install and the key this computer encrypts each notice with. */
   | { type: "apns_registration"; token: string; environment: "sandbox" | "production"; key: { p256dh: string; auth: string } }
+  /** The Android app's notifications: Google's FCM token for this install and the same per-computer key; FCM has one host, so no environment. */
+  | { type: "fcm_registration"; token: string; key: { p256dh: string; auth: string } }
   /** Asks whether hided still answers; the phone gives up the socket when nothing comes back. */
   | { type: "ping"; id: number };
 

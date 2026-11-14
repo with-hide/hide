@@ -4,6 +4,9 @@
 /** Characters Apple accepts per field (App Store Connect, "Platform version information"). */
 export const LIMITS = { name: 30, subtitle: 30, promotional_text: 170, keywords: 100, description: 4000, release_notes: 4000 };
 
+/** Characters Google Play accepts per field (Play Console, "Main store listing" and "Release notes"). */
+export const PLAY_LIMITS = { title: 30, short_description: 80, full_description: 4000, changelog: 500 };
+
 /** The review notes field of App Review information. */
 export const REVIEW_NOTES_LIMIT = 4000;
 

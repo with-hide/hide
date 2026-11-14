@@ -100,6 +100,7 @@ impl Runtime {
             parent_machine: None,
             parent_pane: None,
             parent: None,
+            origin_tool: None,
             watched_by: None,
             mission: conductors
                 .get(&(machine.to_owned(), pane.to_owned()))
@@ -239,6 +240,7 @@ impl PsRows {
             agent.id = Some(record.id.clone());
             agent.name = Some(record.wire_name().to_owned());
             agent.parent = record.parent.clone();
+            agent.origin_tool = crate::coordination::origin_tool(record, &ledger);
             agent.project = record.project.clone();
             agent.watched_by = watcher(&ledger, record);
             if agent.mission.is_none() {
@@ -278,6 +280,7 @@ impl PsRows {
                     parent_machine: None,
                     parent_pane: None,
                     parent: record.parent.clone(),
+                    origin_tool: crate::coordination::origin_tool(record, &ledger),
                     watched_by: (!record.ended).then(|| watcher(&ledger, record)).flatten(),
                     mission: workers.get(&record.id).cloned(),
                     project: record.project.clone(),

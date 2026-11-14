@@ -172,6 +172,7 @@ impl ProjectionState {
                     record: None,
                     hook: None,
                     hook_refused: None,
+                    hook_question: false,
                     telemetry_stale: false,
                     // Laid on from the pane by `project_agents`.
                     terminal_failed: false,

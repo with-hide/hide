@@ -2,7 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { frameHtml, loadShots, plan, pngInfo, shotProblems, withoutAlpha } from './store-shots.mjs';
+import { androidShotProblems, androidShotsOf, featureHtml, frameHtml, loadAndroidShots, loadShots, plan, planAndroid, pngInfo, shotProblems, withAlpha, withoutAlpha } from './store-shots.mjs';
 
 const real = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -103,5 +103,65 @@ describe('the PNG a shot is written as', () => {
 
   it('refuses a picture that is not fully opaque', () => {
     expect(() => withoutAlpha(rgba(200))).toThrow('not opaque');
+  });
+});
+
+describe('the Play shot list as committed', () => {
+  it('is valid and takes 4 or more of the iOS shots, none of them a notification', async () => {
+    const [android, shots] = await Promise.all([loadAndroidShots(real), loadShots(real)]);
+    expect(androidShotProblems(android, shots)).toEqual([]);
+    expect(androidShotsOf(android, shots).length).toBeGreaterThanOrEqual(4);
+    expect(androidShotsOf(android, shots).every((shot) => shot.capture === 'screen')).toBe(true);
+    expect(Object.values(android.languages).map((one) => one.folder).sort()).toEqual(['en-US', 'ko-KR']);
+  });
+
+  it('plans one line per language and shot with the Play locale and the reply words in the steps', async () => {
+    const [android, shots] = await Promise.all([loadAndroidShots(real), loadShots(real)]);
+    const lines = planAndroid(android, shots, ['ko']).map((line) => line.split('\t'));
+    expect(lines).toHaveLength(android.shots.length);
+    expect(lines[1]).toEqual(['ko', '02-conversation', '12', 'ko-KR', expect.stringContaining('[data-phone-reply]::=네, 3건 모두 반영해 줘.')]);
+    expect(lines.every((line) => line.length === 5 && !line[4].includes('{reply}'))).toBe(true);
+  });
+
+  it('names a wrong size, too few shots, a notification shot and a shot that is not there', async () => {
+    const [android, shots] = await Promise.all([loadAndroidShots(real), loadShots(real)]);
+    const broken = structuredClone(android);
+    broken.canvas = { width: 1206, height: 2622 };
+    broken.featureGraphic.width = 1025;
+    broken.icon.size = 1024;
+    broken.shots = ['agents', 'notification', 'nowhere'];
+    expect(androidShotProblems(broken, shots)).toEqual(expect.arrayContaining([
+      expect.stringContaining('1206x2622'),
+      expect.stringContaining('feature graphic is 1025x500'),
+      expect.stringContaining('icon is 1024'),
+      expect.stringContaining('3 shots'),
+      expect.stringContaining('notification: capture is "notification"'),
+      expect.stringContaining('nowhere is not a shot'),
+    ]));
+  });
+
+  it("wants the feature graphic's shot among the shots", async () => {
+    const [android, shots] = await Promise.all([loadAndroidShots(real), loadShots(real)]);
+    const broken = structuredClone(android);
+    broken.shots = ['conversation', 'missions', 'pull-requests', 'looks'];
+    expect(androidShotProblems(broken, shots)).toEqual([expect.stringContaining("feature graphic's shot agents is not one of the shots")]);
+  });
+
+  it("draws the feature graphic with the shot's words and the capture", async () => {
+    const [android, shots] = await Promise.all([loadAndroidShots(real), loadShots(real)]);
+    const tokens = { field: '#B7C9CC', ink: '#0F1A1C', muted: '#3F5357', accent: '#B9FF66', bezel: '#101112', inter: '/f/Inter.woff2', pretendard: '/f/Pretendard.woff2' };
+    const html = featureHtml({ shot: shots.shots[0], language: 'en', tokens, capturePath: '/raw/en-01-agents.png', canvas: android.canvas, size: android.featureGraphic });
+    expect(html).toContain('<mark>Answer</mark> your agents.');
+    expect(html).toContain('width: 1024px; height: 500px');
+    expect(html).toContain('file:///raw/en-01-agents.png');
+  });
+});
+
+describe('the icon is 32-bit', () => {
+  it('gets an opaque alpha channel and keeps its pixels', () => {
+    const wide = withAlpha(withoutAlpha(rgba()));
+    expect(pngInfo(wide)).toMatchObject({ width: 3, height: 2, colorType: 6 });
+    expect(withAlpha(wide)).toBe(wide);
+    expect(pngInfo(withoutAlpha(wide)).colorType).toBe(2);
   });
 });

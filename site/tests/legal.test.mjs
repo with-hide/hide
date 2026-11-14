@@ -10,6 +10,7 @@ const page = name => readFileSync(fileURLToPath(new URL(`../public/${name}.html`
 const index = page("index");
 const privacy = page("privacy");
 const support = page("support");
+const download = page("download");
 
 test("the site footer links both legal pages, and each page links the other", () => {
   for (const href of ["./privacy", "./support"]) {
@@ -39,7 +40,7 @@ test("both pages carry an English and a Korean body, each labelled with its lang
 });
 
 test("the privacy policy states an effective date, a contact address and the policy sections", () => {
-  // The Conductor writes the launch date over the "from the day" form when the iOS app is released.
+  // The iOS app was released on 13 November 2026, and the policy states that day.
   assert.match(privacy, /<p class="meta">Effective (\d{1,2} [A-Z][a-z]+ \d{4}|from the day the iOS app is released on the App Store)<\/p>/);
   assert.match(privacy, /mailto:hello@withhide\.dev/);
   for (const heading of [
@@ -64,7 +65,7 @@ test("the support page covers what a paired phone needs: connecting, help and re
 });
 
 test("no page loads a third-party script, so the policy's claim about the site stays true", () => {
-  for (const html of [index, privacy, support]) {
+  for (const html of [index, privacy, support, download]) {
     const sources = [...html.matchAll(/<script[^>]*\bsrc="([^"]+)"/g)].map(m => m[1]);
     for (const src of sources) {
       assert.ok(
@@ -81,6 +82,19 @@ test("the pages the policy links live on this site point at a page that exists",
       assert.ok(["privacy", "support", ""].includes(href), `${name} links only to this site's pages, found ./${href}`);
     }
   }
+});
+
+// The Android app is not on Google Play yet, so no page offers a download link that would answer "not found".
+// The privacy policy still names Google Play services, which the app needs; it never links the store.
+test("no site page links Google Play until the Android app is published, and the pages say it is coming", () => {
+  const faq = repoFile("site/src/content/docs/docs/reference/faq.md");
+  for (const [name, text] of [["index", index], ["privacy", privacy], ["support", support], ["download", download], ["faq", faq]]) {
+    assert.doesNotMatch(text, /play\.google\.com/, `${name} does not link Google Play`);
+  }
+  assert.match(index, /Android app coming to Google Play/);
+  assert.match(support, /The Android app is coming to Google Play\./);
+  assert.match(support, /Android 앱은 Google Play에 곧 올라옵니다/);
+  assert.match(faq, /The Android app is coming to Google Play\./);
 });
 
 // The product's own files are the expected answer here: the event names in the Rust
@@ -112,4 +126,40 @@ test("the policy's relay journal retention is not shorter than what the deploy k
   assert.equal(Number(vacuum[1]) + 1, 7, "the page says seven days");
   assert.equal((privacy.match(/at most seven days/g) ?? []).length, 1);
   assert.equal((privacy.match(/최대 7일/g) ?? []).length, 1);
+});
+
+test("the policy names what Google sees through FCM and that the relay passes the token, in each language", () => {
+  // The Android app's notifications go through Google's FCM; the Play data safety form declares the same facts (mobile/store/android/play-forms.md).
+  const claims = {
+    en: [
+      /passes on to Google \(section 4\.4\)/, // 3.1, what the relay sees
+      /<h4>4\.4 The Android app and Google<\/h4>/, /in neither can Google read anything that comes from your computer/,
+      /Firebase Cloud Messaging \(FCM\)/, /Firebase installation ID/, /The relay passes both to Google/, /does not store the token/,
+      /when Google reports the token as no longer valid/, /system version, model, brand and the store that installed the app/,
+      /not even a fixed general line/,
+      /code scanner[\s\S]*device identifier and a per-installation identifier, performance figures, and event types and error codes/,
+    ],
+    ko: [
+      /구글로 전달하며/,
+      /<h4>4\.4 Android 앱과 구글<\/h4>/, /어느 쪽에서도 구글은 사용자의 컴퓨터에서 온 내용을 읽을 수 없습니다/,
+      /Firebase Cloud Messaging\(FCM\)/, /Firebase 설치 ID/, /중계 서버는[^<]*둘을 구글에 전달/, /토큰도 알림도 저장하거나 로그에 남기지 않습니다/,
+      /구글이 토큰을 더 이상 쓸 수 없다고 알려 줄 때도 등록이 끝납니다/, /시스템 버전, 모델, 브랜드, 앱을 설치한 스토어/,
+      /고정된 일반 문구도 없으므로/,
+      /코드 스캐너[\s\S]*기기 식별자와 설치별 식별자, 성능 수치, 이벤트 종류와 오류 코드/,
+    ],
+  };
+  for (const [id, patterns] of Object.entries(claims)) {
+    const body = section(privacy, id);
+    for (const re of patterns) assert.match(body, re, `${id}: the policy carries ${re}`);
+    assert.match(body, /<li>[^<]*FCM[^<]*<\/li>/, `${id}: the relay's list of what it sees names FCM`);
+    // The scan session ID is collected only with auto-zoom, which the app leaves off, so the policy does not claim it.
+    assert.doesNotMatch(body, /session ID|세션 ID/, `${id}: no scan session ID`);
+  }
+});
+
+test("the Play data safety answers say what the policy says about Google's identifiers and diagnostics", () => {
+  const form = repoFile("mobile/store/android/play-forms.md");
+  for (const re of [/Firebase installation ID/, /device identifier and a per-installation identifier/, /performance figures, event types and error codes/, /site\/public\/privacy\.html/]) {
+    assert.match(form, re, `play-forms.md carries ${re}`);
+  }
 });

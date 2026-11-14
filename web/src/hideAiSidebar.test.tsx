@@ -112,6 +112,23 @@ it("draws a checkout Hide AI made only while an operator's agent works in it or 
   }
 });
 
+it("draws a checkout an external tool made by the same rule, and never names it Hide AI's (together check, issue 2)", async () => {
+  const TOOL_MADE: HideAiCheckout[] = [{ device_id: "local", path: "/repo.worktrees/hide-memory-m72-mv4msuko", tool: "nightly" }];
+  const { container, cleanup } = await render(TOOL_MADE);
+  try {
+    const rows = [...container.querySelectorAll("[data-checkout-row]")].map((row) => row.getAttribute("data-checkout-row"));
+    expect(rows).toEqual(["checkout:main", "checkout:m43", "checkout:own"]);
+  } finally {
+    await cleanup();
+  }
+  const front = await render(TOOL_MADE, "checkout:m72");
+  try {
+    expect(front.container.querySelector('[data-checkout-row="checkout:m72"] [data-purpose]')?.textContent).toBe("PR 없이 끝남");
+  } finally {
+    await front.cleanup();
+  }
+});
+
 it("draws every checkout while none is Hide AI's, even when a branch is named like one (B5, B13)", async () => {
   const { container, cleanup } = await render([]);
   try {

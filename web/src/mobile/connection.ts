@@ -342,7 +342,7 @@ function connect(): void {
     // Reconcile this phone's receiving choice after hello.
     if (frame.type === "meta") { void syncPush(); void syncAppPush(); }
     if (frame.type === "push_state" && !appHost()) browserPushResult(frame.notifications);
-    if (frame.type === "refused_request" && frame.request === "apns_registration") appPushRefused();
+    if (frame.type === "refused_request" && (frame.request === "apns_registration" || frame.request === "fcm_registration")) appPushRefused();
   };
   ws.onclose = () => settleLoss(ws, refused);
 }

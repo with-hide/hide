@@ -12,9 +12,10 @@ import { clearTimeout, setTimeout } from "node:timers";
 /**
  * Opens the connection to the daemon at `origin` with its `token` and returns
  * once the daemon sent its first snapshot. `until` waits `ms` unless it names
- * its own bound.
+ * its own bound. `clientKind` names the connection as a window (`web`) for
+ * the events only an operator window sends; by default it names none.
  */
-export async function connectControl({ origin, token }, ms = 15_000, terminalEvidence) {
+export async function connectControl({ origin, token, clientKind }, ms = 15_000, terminalEvidence) {
   // The daemon accepts its own origin only; Node's WebSocket takes undici's headers.
   const ws = new globalThis.WebSocket(`${origin.replace(/^http/, "ws")}/ws`, { headers: { origin } });
   let rest = null;
@@ -37,7 +38,7 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
       reject(closed);
       failAll(closed);
     };
-    ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
+    ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2, ...(clientKind ? { client_kind: clientKind } : {}) }));
     ws.onmessage = (event) => {
       if (typeof event.data !== "string") return;
       const frame = JSON.parse(event.data);

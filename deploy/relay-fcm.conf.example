@@ -1,0 +1,28 @@
+# Google's Firebase Cloud Messaging (FCM) for the relay: a systemd drop-in,
+# installed by hand as /etc/systemd/system/hide-relay.service.d/fcm.conf
+# (docs/RELAY_PROTOCOL.md, Push relay). Without it the relay runs as before
+# and answers every fcm_request `unavailable`.
+#
+# There is no secret here and no key file anywhere: the relay asks the GCE
+# metadata server (169.254.169.254, Metadata-Flavor: Google) for an access
+# token of the VM's own service account, keeps it in memory until shortly
+# before it expires, and sends it only to fcm.googleapis.com. For that token to
+# send messages, the VM's service account needs the IAM role
+# roles/firebasecloudmessaging.admin on the Firebase project, and the VM's
+# access scopes must allow it: the cloud-platform scope, or
+# https://www.googleapis.com/auth/firebase.messaging. Changing a VM's access
+# scopes needs the VM stopped. The private operations document holds the
+# project and the service account.
+#
+# --fcm-project is the Firebase project id of the Android app. No
+# --fcm-endpoint or --fcm-metadata-endpoint here: those name loopback
+# stand-ins for tests only.
+#
+# systemd reads drop-ins in name order and this one comes after apns.conf, so
+# its ExecStart is the one that runs: it repeats deploy/relay/hide-relay.service's
+# line with the Apple arguments of apns.conf and the FCM argument added. Keep
+# the three in step; apns.conf's LoadCredential= still applies. On a host
+# without apns.conf, drop the four --apns-* arguments.
+[Service]
+ExecStart=
+ExecStart=/opt/hide-relay/current/hide-relay --listen 127.0.0.1:8787 --trusted-proxy 127.0.0.1 --apns-key %d/apns.p8 --apns-key-id <key id> --apns-team-id <team id> --apns-topic me.grab.hide.ios --fcm-project <firebase project id>

@@ -2400,9 +2400,23 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             .expect("an agent pane has a children answer")
     };
 
+    // The row's own subagents, read from the same observation: none while
+    // the count cannot be read (operator decision 2026-11-14).
+    let row_subagents = |runtime: &Runtime| {
+        runtime.snapshot.status.remote[0]
+            .session
+            .as_ref()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == pane_id)
+            .map(|agent| agent.subagents)
+    };
+
     // Not registered with consent: Hide installs nothing there.
     let before = children(&runtime);
     assert!(!before.instrumented);
+    assert_eq!(row_subagents(&runtime), Some(0));
     assert_eq!(
         before.uninstrumented_code.as_deref(),
         Some(hide_agent_hooks::diagnosis::UninstrumentedReason::HooksNotInstalled.code())
@@ -2466,6 +2480,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
         (after.subagents.working, after.subagents.done),
         (Some(2), Some(1))
     );
+    assert_eq!(row_subagents(&runtime), Some(2));
 
     // A consent from an older build asks again, but does not unsay the hook
     // the device's kit last reported in place.

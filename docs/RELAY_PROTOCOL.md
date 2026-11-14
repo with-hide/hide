@@ -129,6 +129,7 @@ Do not put multiple callers behind a proxy without this explicit trust setting: 
 ## Push relay
 
 The iOS app cannot receive Web Push, so its notifications reach Apple's push service (APNs) through the relay, which holds Apple's signing key.
+The Android app's notifications reach Google's Firebase Cloud Messaging (FCM) the same way, with the access token of the relay VM's own service account.
 The relay is stateless in the shape of Matrix's sygnal gateway: each request carries the device token and the ciphertext, the relay signs and forwards it while the request is in flight, and it stores neither.
 There is no new HTTP entrance: a request arrives only on an admitted device socket, and Caddy still forwards only `/health` and `/ws`.
 
@@ -136,23 +137,36 @@ There is no new HTTP entrance: a request arrives only on an admitted device sock
 
 | Direction | Message | Fields and bounds |
 | --- | --- | --- |
-| relay → device | `registered {push}` | `push` is true only when this relay was given Apple's key; absent reads as false |
+| relay → device | `registered {push, fcm}` | `push` is true only when this relay was given Apple's key, `fcm` only when it was given an FCM project; an absent field reads as false, and `fcm` is written only when true and only to a device that named it (Compatibility and deploy order) |
 | device → relay | `push_request {id, environment, token, collapse, payload}` | `id` nonzero u32, the device's own and echoed back; `environment` `sandbox` or `production`, no default; `token` hex, 32 to 200 characters, even length (`MIN_TOKEN`, `MAX_TOKEN`); `collapse` base64url, 1 to 64 characters (`MAX_COLLAPSE`); `payload` base64url of 1 to 3,000 bytes of ciphertext (`MAX_CIPHERTEXT`); the whole message at most 6,144 bytes (`MAX_PUSH_CONTROL`) |
-| relay → device | `push_result {id, result}` | `result` is one of `delivered`, `token_gone`, `token_rejected`, `rate_limited`, `unavailable`, `failed` |
+| device → relay | `fcm_request {id, token, payload}` | `id` as above; `token` an FCM registration token, 32 to 1,024 characters of `A-Z a-z 0-9 - _ :` (`MIN_FCM_TOKEN`, `MAX_FCM_TOKEN`, `admission::fcm_token_valid`); `payload` as above, the same body hided builds for Apple; the whole message at most 6,144 bytes (`MAX_PUSH_CONTROL`) |
+| relay → device | `push_result {id, result}` | answers either request; `result` is one of `delivered`, `token_gone`, `token_rejected`, `rate_limited`, `unavailable`, `failed` |
 
-A device sends `push_request` only after a `registered` whose `push` is true.
-A `push_request` from a phone socket, or before admission, is an `invalid_message` refusal like any other message in the wrong place.
+A device sends `push_request` only after a `registered` whose `push` is true, and `fcm_request` only after one whose `fcm` is true.
+A relay without an FCM project answers an `fcm_request` sent anyway `unavailable`, as a relay without Apple's key answers a `push_request`.
+A `push_request` or `fcm_request` from a phone socket, or before admission, is an `invalid_message` refusal like any other message in the wrong place.
 Every other answer is a `push_result` under the request's id and leaves the socket open, because closing a device socket would disconnect every phone in its room.
-A request whose fields are wrong, an extra field or an environment other than the two included, is answered `failed` and reaches Apple with nothing; one whose id cannot be read is an `invalid_message` refusal, since no answer could name it.
-`admission::decode_push` is the relay's one reader of the message: it parses the same `ClientMessage` every other side decodes and reads only the id on its own, to answer a request it refuses.
+A request whose fields are wrong, an extra field or an environment other than the two included, is answered `failed` and reaches Apple or Google with nothing; one whose id cannot be read is an `invalid_message` refusal, since no answer could name it.
+`admission::decode_push` is the relay's one reader of both messages: it parses the same `ClientMessage` every other side decodes and reads only the id on its own, to answer a request it refuses.
 
 The relay fixes everything Apple reads besides the token, the collapse value and the ciphertext: the topic (the app's bundle id, from its configuration), `apns-push-type: alert`, `apns-priority: 10` and `apns-expiration` one hour after it sends.
 A request has no field for them, and an extra field makes it malformed.
 The environment chooses the host: `api.sandbox.push.apple.com` for a development build, `api.push.apple.com` for TestFlight and the App Store.
 
+For FCM the relay fixes everything Google reads besides the token and the ciphertext: the project (from its configuration), a data-only message with no notification block and no collapse key, Android priority `high` and a time to live of one hour.
+It sends `POST https://fcm.googleapis.com/v1/projects/<project>/messages:send` to that host only, with `Authorization: Bearer <access token>`, never follows a redirect, and the body Google receives is exactly:
+
+```json
+{"message":{"token":"<token>","data":{"hide":"<payload>"},"android":{"priority":"high","ttl":"3600s"}}}
+```
+
+`hide` and the ciphertext are the whole data block, at most 4,004 bytes, inside FCM's 4,096.
+Google sees the token, the time and size of each message, and the project it was sent to; it cannot read the ciphertext, and the Android app decrypts it the way the iOS extension does (The notification body).
+
 ### Budgets
 
 `hide-relay/src/limits.rs` holds these constants beside the socket budgets.
+One set of counters serves Apple and Google: a `push_request` and an `fcm_request` each count once against the same per-room, relay-wide and in-flight caps, so a room's budget is the same whichever service its phones use.
 Every request from an admitted device socket is counted, a malformed or refused one included: its bytes are charged to the room's daily byte budget like any forwarded frame, which closes the socket with `daily_limit` once spent, and it counts against the request caps below, so neither bad requests nor requests past a cap spend the relay without a ceiling.
 A cap logs `cap_exceeded` once per window, not once per refused request: once per room for each of the minute and the day window, once per second for the relay-wide cap, and at most once a second for the concurrency cap.
 
@@ -161,16 +175,18 @@ A cap logs `cap_exceeded` once per window, not once per refused request: once pe
 | Requests per room in a fixed 60-second window | 20 | `rate_limited` | `pushes_per_room_per_minute` |
 | Requests per room in a 24-hour window | 1,000 | `rate_limited` | `pushes_per_room_per_day` |
 | Requests across the relay per second | 50 | `rate_limited` | `pushes_per_second` |
-| Requests in flight to Apple, as streams of one HTTP/2 connection | 32 | `rate_limited` | `concurrent_pushes` |
-| One request to Apple, its answer, its body and the one retry included | 10 seconds | `unavailable` | none |
+| Requests in flight to Apple and Google together, as streams of their two HTTP/2 connections | 32 | `rate_limited` | `concurrent_pushes` |
+| One request to Apple or Google, its answer, its body and the one retry included, an access token fetch too | 10 seconds | `unavailable` | none |
 | Apple's answer body read | 4,096 bytes | `unavailable` | none |
+| Google's answer body read | 8,192 bytes | past it, classified by status alone | none |
+| The metadata server's answer read | 8,192 bytes | `unavailable` (`fcm_metadata_unreadable`) | none |
 
 A room's push counters live in its byte record, start their day with it and are bounded by the same `room_records`, so a room's record expiring cannot open a second day's allowance inside one.
 The relay keeps no queue and makes no retry except the one below; a refused request is the sender's to drop.
 
 Known limitation: the caps are per room and relay-wide, with no share per address.
 Admission is self-signed, so one address that opens many rooms can hold the relay-wide 50 a second, and other computers' requests are answered `rate_limited` meanwhile.
-Volume to Apple stays bounded by the relay-wide cap and each room's daily cap, and one address can already hold every socket the relay admits; a share per address would need a record the relay does not keep, since it stores no address past the 60-second admission rate.
+Volume to Apple and Google stays bounded by the relay-wide cap and each room's daily cap, and one address can already hold every socket the relay admits; a share per address would need a record the relay does not keep, since it stores no address past the 60-second admission rate.
 
 ### Apple's answers
 
@@ -187,11 +203,30 @@ One provider token (an ES256 JWT with `kid`, `iss` and `iat` in Unix seconds) se
 One HTTP/2 connection to Apple is kept and reused; a dropped one is replaced by the next request.
 Tests stand in for Apple with a local h2c server, so the production TLS and ALPN path is exercised only by a real deployment; the client code is the same function with a different scheme.
 
+### Google's answers
+
+| Google answers | `result` |
+| --- | --- |
+| 2xx | `delivered` |
+| any answer whose FCM error code is `UNREGISTERED` | `token_gone`: the token names no install of the app any more, and the sender deletes it |
+| 404 without that code | `failed` (`fcm_not_found`): a wrong `--fcm-project` or path, which must not make every computer delete its phones' registrations |
+| 400 with FCM error code `INVALID_ARGUMENT` and no field violation (Google's documented answer to an invalid token), or a field violation on `message.token` | `token_rejected`: Google refuses the token itself, so the sender keeps the registration and writes a configuration diagnostic, as for Apple |
+| 403 `SENDER_ID_MISMATCH` | `token_rejected`: the token belongs to another Firebase project |
+| 401 | the access token is fetched again once and the request sent once more, the only retry, inside the same 10 seconds; a 401 the fresh token does not fix is `unavailable`; any other answer to the retry is mapped by this table |
+| 429, 5xx, no answer within the deadline | `unavailable` |
+| anything else, a 400 whose field violation names another field, a 403 without `SENDER_ID_MISMATCH` and every 3xx included | `failed` |
+
+The relay reads only the FCM error code, from the detail typed `type.googleapis.com/google.firebase.fcm.v1.FcmError` (`errorCode`, one of `UNREGISTERED`, `INVALID_ARGUMENT`, `SENDER_ID_MISMATCH`), and whether the fields a `type.googleapis.com/google.rpc.BadRequest` detail faults are `message.token` or another; nothing else of Google's body is kept or logged.
+The access token is the VM's own: the relay asks the GCE metadata server (`GET http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token`, `Host: metadata.google.internal`, `Metadata-Flavor: Google`) over a connection of its own that closes with the answer, and takes the answer only when it carries `Metadata-Flavor: Google`.
+One token serves every request and is fetched again once it has five minutes or less left (`FCM_ACCESS_TOKEN_MARGIN`), and the relay never keeps one past an hour whatever lifetime the answer names; one fetch serves every send waiting for it.
+A metadata server that cannot be reached, refuses or answers something else makes the request `unavailable` (`fcm_metadata_unreachable`, `fcm_metadata_refused`, `fcm_metadata_unreadable`).
+One HTTP/2 connection to `fcm.googleapis.com` is kept and reused through the same client code as Apple's; tests stand in for FCM with a local h2c server and for the metadata server with a local HTTP/1 server, so the production TLS path and the real metadata server are exercised only by a real deployment.
+
 ### The notification body
 
-This is the contract the iOS app's notification extension implements.
+This is the contract the iOS app's notification extension implements; the Android app receives the same `payload` as the `hide` value of the FCM data message.
 hided encrypts the same notice JSON a Web Push phone receives (`push::payload`, with the `room` of the computer that sent it) for the key the app registered, using RFC 8291 `aes128gcm` in one record: a 16-byte salt, a 4-byte record size of 4096, a 1-byte key length of 65, hided's 65-byte ephemeral P-256 public key, then the AES-128-GCM ciphertext of the JSON followed by the delimiter byte `0x02`.
-The plaintext is at most 2,897 bytes (`push::MAX_APNS_PLAINTEXT`), so the body stays within 3,000 bytes; past it hided drops tags to close from the end of `clear`, and a notice that still does not fit is not sent.
+The plaintext is at most 2,897 bytes (`push::MAX_APP_PLAINTEXT`), so the body stays within 3,000 bytes; past it hided drops tags to close from the end of `clear`, and a notice that still does not fit is not sent.
 The relay sends Apple exactly:
 
 ```json
@@ -230,6 +265,14 @@ The `auth` secret is part of this message, so it crosses the bridge from the pag
 Only the app's main frame can call the plugin (`BridgeGate`), and the secret opens nothing without the private key, which stays in the Keychain's shared group.
 An older hided answers the message `refused_request` and keeps the session, so the addition keeps `PHONE_PROTOCOL` at 5.
 hided sends only while its relay link is up and said `push: true`.
+
+The Android app sends the FCM twin, `fcm_registration {token, key: {p256dh, auth}}`: Google's registration token (`admission::fcm_token_valid`) and a per-computer key in the same shape, with no environment, since FCM has one host.
+hided answers it with the same `push_state` and keeps it in the phone's record as the third registration kind; the Web Push subscription, the APNs registration and the FCM registration each replace the others, and `push_permission {state: "denied"}`, unpairing and a `token_gone` answer remove it, while a `token_rejected` answer keeps it and writes the configuration diagnostic, as for Apple.
+Its notices are the same body, encrypted for the phone's key under the same plaintext bound (`push::MAX_APP_PLAINTEXT`), and go out as `fcm_request {id, token, payload}` with no collapse value; the app replaces an agent's earlier notification by the tag inside the body.
+They share the APNs path's queue, wait, unanswered-request cap and held-notice rule below.
+hided names the field it reads in every dial's upgrade request (`Hide-Registered-Fields: fcm`, Compatibility and deploy order) and sends `fcm_request` only after a `registered` whose `fcm` is true; without the relay method or `fcm: true` a notice for an Android phone is dropped with a diagnostic (`relay_without_fcm`).
+The page sends `fcm_registration` when the app's `HidePush.enable` or `registration` answers `{found: true, service: "fcm", token, p256dh, auth}`; an answer without `service` is the iOS app's, with `environment`.
+A released hided answers `fcm_registration` `refused_request` and keeps the session, and the page then says the computer is older than the app, as for `apns_registration`.
 A notice that finds no link is held for that phone, replaced by a newer notice for the same agent tag, at most 8 per phone and at most 60 seconds, and sent once when the link comes up; past those limits, or when the phone is gone, it is dropped with a diagnostic.
 Notices about the person's own letters (`letter_undelivered`) are not held.
 
@@ -257,9 +300,16 @@ These wire fields and checks remain compatibility paths; the current iOS app has
 An older hided reads `{"type":"registered","push":true}` as the unit `registered` it knew, and never sends `push_request`.
 A newer hided reads an older relay's `{"type":"registered"}` as `push: false` and never sends `push_request`, which that relay would refuse by closing the device socket.
 Both directions are tested (`an_older_device_reads_a_pushing_relay_and_keeps_its_phones`, `an_older_relay_keeps_the_link_and_is_never_sent_a_push_request`).
-Deploy the relay first: a hided released before it simply has no push to send.
 
-### The key on the relay host
+`fcm` cannot be added the same way: a hided released with `push` (1.2.8 and earlier) reads `registered` as a message with a `push` field that denies unknown fields, so `{"type":"registered","push":true,"fcm":true}` would end its link on every connect.
+A device that reads `fcm` therefore says so in its WebSocket upgrade request, with the header `Hide-Registered-Fields: fcm` (`admission::REGISTERED_FIELDS_HEADER`, comma-separated names, spaces around each ignored), and the relay writes `fcm` only to a device that named it and only when it is true.
+A device that named nothing gets exactly the `registered` it got before; a relay that does not know the header ignores it, as it ignores every header but `X-Real-IP`, and its `registered` reads as `fcm: false`, so a newer hided never sends `fcm_request` to a relay that would refuse it by closing the device socket.
+A field added to `registered` later follows the same rule under its own name.
+Both directions are tested: `a_released_device_keeps_its_link_and_phones_on_a_relay_that_forwards_fcm` and `a_released_device_refuses_an_unknown_registered_field_so_fcm_waits_for_the_header` keep a copy of the released reader, and `an_older_side_reads_the_new_registered_and_an_older_relay_reads_the_old_shape` reads an older relay's answer as `fcm: false`.
+Deploy the relay first: a hided released before it simply has no push to send.
+For FCM the order is the relay with `--fcm-project` (`deploy/relay-fcm.conf.example`), then a hided that sends `fcm_request`, then the Android app that registers a token.
+
+### The keys on the relay host
 
 Apple's `.p8` is the relay's only secret.
 It sits at `/etc/hide-relay/apns.p8`, root-owned, mode 0400, in a 0700 directory, and reaches the service only through systemd `LoadCredential=`, never the repository, CI, an environment variable or a log; `deploy/relay-apns.conf.example` is the drop-in.
@@ -267,7 +317,12 @@ It sits at `/etc/hide-relay/apns.p8`, root-owned, mode 0400, in a 0700 directory
 A group read bit is allowed: systemd writes a credential root-owned 0400 and grants the service user read through a POSIX ACL, and with an ACL entry the group bits of the mode show the ACL mask, so the credential the relay is given reads as 0440.
 Checking the drop-in on the production host is part of its deploy check.
 `--apns-endpoint` names a loopback stand-in for tests and is refused for any other host, by the configuration and by `apns::Apns::new` alike.
-A push log line names a fixed event (`delivered`, `unregistered`, `push_token_invalid`, `cap_exceeded` and the rest in `hide-relay/src/apns.rs` and `server.rs`) and a cap, never a token, ciphertext, provider token, Apple's answer body or the room.
+
+FCM has no secret on the relay host and no key file anywhere: `--fcm-project <id>` names the Firebase project, and the access token is the VM's own (Google's answers).
+The VM's service account needs the IAM role `roles/firebasecloudmessaging.admin` on that project, and the VM's access scopes must allow it (`cloud-platform`, or `https://www.googleapis.com/auth/firebase.messaging`); `deploy/relay-fcm.conf.example` is the drop-in.
+The relay refuses to start on a project id that is not Google's shape (6 to 30 lowercase letters, digits and hyphens, starting with a letter).
+`--fcm-endpoint` and `--fcm-metadata-endpoint` name loopback stand-ins for tests and are refused for any other host, by the configuration and by `fcm::Fcm::new` alike.
+A push log line names a fixed event (`delivered`, `unregistered`, `fcm_delivered`, `fcm_unregistered`, `push_token_invalid`, `cap_exceeded` and the rest in `hide-relay/src/apns.rs`, `fcm.rs` and `server.rs`) and a cap, never a token, ciphertext, provider token, access token, Apple's or Google's answer body or the room.
 
 ## Encrypted frames and messages
 

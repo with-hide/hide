@@ -4,6 +4,7 @@ import { decodeQr, type PairingQr } from "../../../hide-relay-protocol/web";
 import { Button } from "../components/ui/button";
 import { CameraOffIcon, XIcon } from "lucide-react";
 import { relayReady } from "./relayRuntime";
+import { appPlatform } from "./appHost";
 import { nativeCode, scanQr } from "./appBridge";
 
 /** The app's own camera view: it asks for the camera when the person taps, reads one Hide link (any other code is ignored) and gives its text to the same decoder. */
@@ -12,7 +13,7 @@ export async function scanInApp(t: TFunction, onPair: (pair: PairingQr) => void,
   try {
     text = await scanQr({
       title: t("mobile.scanner.title"), hint: t("mobile.scanner.hint"), whereTitle: t("mobile.scanner.whereTitle"), whereBody: t("mobile.scanner.whereBody"),
-      deniedTitle: t("mobile.scanner.deniedTitle"), deniedBody: t("mobile.scanner.deniedBody"), openSettings: t("mobile.scanner.openSettings"), close: t("common.close"),
+      deniedTitle: t("mobile.scanner.deniedTitle"), deniedBody: t(appPlatform() === "android" ? "mobile.scanner.deniedBodyAndroid" : "mobile.scanner.deniedBody"), openSettings: t("mobile.scanner.openSettings"), close: t("common.close"),
     });
   } catch (error) { const code = nativeCode(error); if (code !== "cancelled") fail(code === "busy" ? "cameraBusy" : "cameraError"); return; }
   try { await relayReady(); onPair(decodeQr(text)); }

@@ -27,8 +27,8 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(sheet.locator('[data-settings-nav-group="app"]')).toHaveText(/^App/);
     await expect(sheet.locator('[data-settings-nav-group="app"] [data-settings-tab]')).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts"]);
     await expect(sheet.locator('[data-settings-nav-group="machine"]')).toHaveText(/^This (Mac|PC|computer)/);
-    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Hide AI", "Mission", "Mobile", "GitHub", "Labs"]);
-    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Hide AI", "Mission", "Mobile", "GitHub", "Labs", "About", "Privacy"]);
+    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Hide AI", "Mission", "Mobile", "External tools", "GitHub", "Labs"]);
+    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Hide AI", "Mission", "Mobile", "External tools", "GitHub", "Labs", "About", "Privacy"]);
     const tabs = sheet.locator("[data-settings-tab]");
     const githubBox = (await sheet.locator('[data-settings-tab="github"]').boundingBox())!;
     const aboutBox = (await sheet.locator('[data-settings-tab="about"]').boundingBox())!;
@@ -228,7 +228,7 @@ test("General and About read without sideways scrolling in Korean and English, l
       const pages = sheet.locator("[data-settings-page-list]");
       expect(await pages.evaluate(node => node.scrollHeight - node.clientHeight)).toBeGreaterThan(0);
       await sheet.locator('[data-settings-tab="general"]').focus();
-      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "hideAi", "conductor", "mobile", "github", "labs", "about", "privacy"]) {
+      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "hideAi", "conductor", "mobile", "externalTools", "github", "labs", "about", "privacy"]) {
         const tab = sheet.locator(`[data-settings-tab="${name}"]`);
         await expect(tab).toBeFocused();
         await expect(tab).toBeInViewport({ ratio: 1 });

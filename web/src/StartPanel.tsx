@@ -1,5 +1,6 @@
 import { CheckIcon, ChevronDownIcon, FolderIcon, GitBranchIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Actions } from "./actions";
 import { catalogFor, rememberedSelection, modelToSend, selectKind, takesModel, type AgentSelection } from "./agentPicker";
 import { AgentPicker } from "./components/agent-picker";
@@ -62,7 +63,8 @@ function useStartAnswer() {
       // A start's core result owns selection and ordered engine focus.
       // Opening it again here would undo a newer visit made while it waited;
       // only a device's worktree is opened from the page once listed.
-      if (answer.paneId && requestKind === "worktree_create") followStartedPane(answer.paneId, answer.deviceId);
+      // A start sent from an open that asked to stay presents nothing, on a device either.
+      if (answer.paneId && requestKind === "worktree_create" && panel.present) followStartedPane(answer.paneId, answer.deviceId);
       if (answer.agentPhase === "failed") panel.fail(agentFailure(answer.agentReason, answer.agentLine));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;
@@ -108,7 +110,14 @@ export function StartPanelHost({ actions }: { actions: Actions }) {
   useEffect(() => {
     if (covered) useStartPanel.getState().close();
   }, [covered]);
-  return open ? <StartPanel actions={actions} /> : null;
+  // Over the Overview's layer the panel is drawn inside that layer: a modal layer keeps the keyboard
+  // and the pointer to its own subtree, so a panel beside it could be neither typed in nor pressed, and
+  // a press on it would read as outside and close the Overview (issue 2514). The layer is already on
+  // screen whenever the panel opens over it, so it is found while rendering.
+  const overviewLayer = useUiStore((s) => s.overviewOpen);
+  const layer = useMemo(() => (open && overviewLayer ? document.querySelector<HTMLElement>("[data-overview-modal]") : null), [open, overviewLayer]);
+  if (!open) return null;
+  return layer ? createPortal(<StartPanel actions={actions} />, layer) : <StartPanel actions={actions} />;
 }
 
 /** A chip of the where row: a quiet word that names its value and opens its menu. */
@@ -331,9 +340,11 @@ function StartPanel({ actions }: { actions: Actions }) {
   const start = () => {
     if (!canStart || !target || selection.kind === "terminal") return;
     const id = startRequestId();
-    useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start");
+    // An open that asked to stay (from the Overview's work map) leaves the screen where it is when the start goes.
+    const stay = useStartPanel.getState().stay;
+    useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start", !stay);
     if (target.kind === "worktree") {
-      actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(effective), prompt: text.trim() || null, purpose: null, profile: profileToSend });
+      actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(effective), prompt: text.trim() || null, purpose: null, profile: profileToSend, ...(stay ? { present: false } : {}) });
       return;
     }
     actions.startAgent({
@@ -344,6 +355,7 @@ function StartPanel({ actions }: { actions: Actions }) {
       prompt: text.trim() || null,
       requestId: id,
       profile: profileToSend,
+      ...(stay ? { present: false } : {}),
     });
   };
 

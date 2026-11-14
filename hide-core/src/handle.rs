@@ -537,6 +537,8 @@ impl Core {
             let moving = matches!(restored, Restored::Moving(_));
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
+            let (access, access_restored) =
+                crate::runtime::access::restore(hide_kit::layout::access_store(directory));
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
@@ -546,6 +548,7 @@ impl Core {
                 guard.save_missions();
             }
             guard.install_desk_store(desk, desk_restored);
+            guard.install_access_store(access, access_restored);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -746,6 +749,21 @@ impl Core {
             return Err("delivery_unavailable".into());
         }
         lock_recover(&self.runtime).prepare_delivery(device, caller, expected, hint, command)
+    }
+
+    /// One call hided makes for an external tool (PRD
+    /// hide-external-control): its request, status, leave, its key's proof
+    /// or a command's check, under one short lock; the list is saved by its
+    /// own thread, and the screens are told when the section moved.
+    pub fn access(&self, call: crate::access::Call) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "access.call") {
+            return Err("access_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime).access_call(call);
+        if changed {
+            notify_change(self);
+        }
+        answer
     }
 
     /// Runs a Conductor's `hide mission` command (PRD

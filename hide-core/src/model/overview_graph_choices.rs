@@ -44,16 +44,24 @@ pub struct GraphSessionKey {
 }
 
 /// Which map a place belongs to: one device's map of every project, or one
-/// project's own map (D-07).
+/// project's own map (D-07). `tool` names the external tool whose map it is,
+/// by connection id, and is absent on a device's: a tool's map draws only the
+/// tool's work, so where things were dropped there never moves the device's
+/// map (PRD hide-external-control B40). The filter and the hidden and folded
+/// projects are one choice for every map, a tool's included.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GraphScope {
     All {
         device_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
     },
     Project {
         device_id: String,
         workspace_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
     },
 }
 
@@ -402,11 +410,12 @@ fn named(text: &str) -> bool {
 impl GraphScope {
     fn valid(&self) -> bool {
         match self {
-            Self::All { device_id } => named(device_id),
+            Self::All { device_id, tool } => named(device_id) && tool.as_deref().is_none_or(named),
             Self::Project {
                 device_id,
                 workspace_id,
-            } => named(device_id) && named(workspace_id),
+                tool,
+            } => named(device_id) && named(workspace_id) && tool.as_deref().is_none_or(named),
         }
     }
 }
@@ -491,6 +500,7 @@ mod tests {
     fn all() -> GraphScope {
         GraphScope::All {
             device_id: "node-a".into(),
+            tool: None,
         }
     }
 
@@ -498,6 +508,7 @@ mod tests {
         GraphScope::Project {
             device_id: "node-a".into(),
             workspace_id: format!("workspace:{id}"),
+            tool: None,
         }
     }
 
@@ -588,6 +599,61 @@ mod tests {
         assert_eq!(choices.project_places[0].scope, scoped("a"));
         assert_eq!(choices.session_places[0].scope, scoped("a"));
         assert_eq!(choices.hidden_projects, vec![project("b")]);
+    }
+
+    /// PRD hide-external-control B40: a tool's map keeps its own places, so
+    /// a drag or a reset there never moves the device's map, and a device's
+    /// scope is written as before, with no `tool`.
+    #[test]
+    fn a_tools_map_keeps_its_own_places_apart_from_the_devices() {
+        fn x(choices: &OverviewGraphChoices, scope: &GraphScope) -> Option<f64> {
+            choices
+                .project_places
+                .iter()
+                .find(|held| held.scope == *scope)
+                .map(|held| held.x)
+        }
+        let tool = GraphScope::All {
+            device_id: "node-a".into(),
+            tool: Some("c0ffee00c0ffee00".into()),
+        };
+        let place = |scope: GraphScope, x: f64| OverviewGraphChange::Place {
+            scope,
+            projects: vec![GraphDrop {
+                key: project("a"),
+                x,
+                y: 2.0,
+            }],
+            sessions: vec![GraphDrop {
+                key: session("w1:p1"),
+                x,
+                y: 3.0,
+            }],
+        };
+        let mut choices = OverviewGraphChoices::default();
+        choices.apply(place(all(), 1.0)).unwrap();
+        choices.apply(place(tool.clone(), 7.0)).unwrap();
+        assert_eq!(
+            (x(&choices, &all()), x(&choices, &tool)),
+            (Some(1.0), Some(7.0))
+        );
+        choices
+            .apply(OverviewGraphChange::ResetPlaces {
+                scope: tool.clone(),
+            })
+            .unwrap();
+        assert_eq!((x(&choices, &all()), x(&choices, &tool)), (Some(1.0), None));
+        assert_eq!(
+            serde_json::to_value(all()).unwrap(),
+            serde_json::json!({"kind": "all", "device_id": "node-a"})
+        );
+        assert_eq!(
+            serde_json::from_value::<GraphScope>(
+                serde_json::json!({"kind": "all", "device_id": "node-a", "tool": "c0ffee00c0ffee00"})
+            )
+            .unwrap(),
+            tool
+        );
     }
 
     #[test]

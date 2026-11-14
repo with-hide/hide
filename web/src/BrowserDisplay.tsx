@@ -1,8 +1,8 @@
-import { ArrowLeftIcon, ArrowRightIcon, MinusIcon, MonitorIcon, MonitorSmartphoneIcon, PlusIcon, RotateCwIcon, ScanIcon, SmartphoneIcon, TabletIcon, XIcon, type LucideIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, MinusIcon, MonitorIcon, MonitorSmartphoneIcon, PlusIcon, RotateCwIcon, ScanIcon, SmartphoneIcon, TabletIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
-import { addressShown, addressUrl, clearBrowserAttachments, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
+import { addressShown, addressUrl, clearBrowserAttachments, defaultBrowserAddress, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
 import { NewTabBody } from "./components/new-tab-body";
 import { changedFiles } from "./newTab";
 import { useUiStore } from "./ui";
@@ -162,6 +162,7 @@ function HostedPage({ display, workspace, actions, external = false }: { display
             />
             <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
             <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
+            <OpenDefaultBrowserButton address={address} pageDevice={view?.device_id ?? ""} actions={actions} />
             {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
           </>
         )}
@@ -578,6 +579,29 @@ function BrowserCommentButton({ display, workspace, areaId, address, actions }: 
       >
         <MessageSquarePlusIcon />
         {t("feedback.comment")}
+      </Button>
+    </Hint>
+  );
+}
+
+/**
+ * Open in default browser (issue 2293): the page's address in the operating
+ * system's default browser, the way out for a sign-in the page cannot finish
+ * here (SSO, a passkey). It goes the one way a terminal link's does
+ * (`openLink`), which the desktop host hands to the system for a web address
+ * alone, and it shows only while the address is one the default browser
+ * would open as the same page (`defaultBrowserAddress`).
+ */
+function OpenDefaultBrowserButton({ address, pageDevice, actions }: { address: string; pageDevice: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
+  const target = defaultBrowserAddress(address, pageDevice, own);
+  if (!target) return null;
+  const label = t("panes.menu.openDefaultBrowser");
+  return (
+    <Hint label={label}>
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={label} onClick={() => actions.openLink(target, true)} data-browser-open-default="true">
+        <ExternalLinkIcon />
       </Button>
     </Hint>
   );

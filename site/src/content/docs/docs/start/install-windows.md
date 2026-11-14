@@ -14,7 +14,7 @@ sidebar:
 
 ## Install
 
-1. Download `hide-v<version>-windows-x64-setup.exe` and its `.sha256` file from [withhide.dev](https://withhide.dev) or the [Releases page](https://github.com/with-hide/hide/releases).
+1. Download `hide-v<version>-windows-x64-setup.exe` and its `.sha256` file from [the download page](/download) or the [Releases page](https://github.com/with-hide/hide/releases).
 2. In PowerShell, in the folder that holds both, check the download:
 
    ```powershell

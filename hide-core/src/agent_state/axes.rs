@@ -1,5 +1,5 @@
 //! Lifecycle, completion, read and ownership axes, including lineage.
-use super::turn::{AgentGroup, derive_from_axes, group_of, sort_agents};
+use super::turn::{AgentGroup, derive_from_axes, sort_agents};
 use crate::labels::analysis::LabelEnd;
 use crate::model::{AgentWait, PaneReadRecord, SidebarAgentSnapshot};
 use crate::sidebar::SessionAgentPayload;
@@ -79,6 +79,14 @@ pub enum Ownership {
     /// home's own turn (a pull request to review, a failed check), beside
     /// the agent's own demand, which every row carries.
     HideAi { operator_turn: bool },
+    /// Work an external tool started and keeps (PRD hide-external-control
+    /// D-09): a root whose `tool` mark says its connection stands at Act.
+    /// Unlike Hide AI's, the agent's own question, approval or block does
+    /// not call the operator, since the tool reads and answers its agent
+    /// itself (D-09, B28); only a View the agent opened for the operator
+    /// does, and a person's turn, as on every root (B29). It is Seen
+    /// otherwise, never Working or Done.
+    Tool,
 }
 
 /// Names each fork's source (`SidebarAgentSnapshot::forked_from`). A fork is
@@ -233,16 +241,24 @@ pub fn apply_lineage(
             }
         }
     }
-    let own_waits = agents
+    let replies = agents
         .iter()
         .map(|agent| {
-            let answering = agent.awaited_replies.iter().any(|reply| {
-                by_pane
-                    .get(&reply.recipient_pane_id)
-                    .is_some_and(|&to| answer_in_progress(reply, &agents[to], progress_below[to]))
-            });
-            own_wait(agent, answering)
+            agent
+                .awaited_replies
+                .iter()
+                .filter(|reply| {
+                    by_pane.get(&reply.recipient_pane_id).is_some_and(|&to| {
+                        answer_in_progress(reply, &agents[to], progress_below[to])
+                    })
+                })
+                .count()
         })
+        .collect::<Vec<_>>();
+    let own_waits = agents
+        .iter()
+        .zip(&replies)
+        .map(|(agent, replies)| own_wait(agent, *replies > 0))
         .collect::<Vec<_>>();
     let mut descendant_counts =
         vec![crate::model::DescendantCountsSnapshot::default(); agents.len()];
@@ -343,6 +359,7 @@ pub fn apply_lineage(
         agent.children_moving = depth == 0 && quiet_itself(agent) && progress_below[index];
         agent.own_wait = own_waits[index];
         agent.wait = own_waits[index];
+        agent.replies_in_progress = u32::try_from(replies[index]).unwrap_or(u32::MAX);
         agent.descendant_signals = std::mem::take(&mut descendant_signals[index]);
     }
     // Ownership was unknown when the rows were first derived, because it is
@@ -395,12 +412,38 @@ fn background_wait(agent: &SidebarAgentSnapshot) -> bool {
     quiet_itself(agent) && background_left(agent) > 0 && !turn_read_finished(agent)
 }
 
-/// How many background tasks the row's session proves still run.
+/// How many background tasks the row's session proves still run, less the
+/// subagents its hook counts: a stopped Claude Code turn's running subagent
+/// is always one it launched in the background, so its session proves it as
+/// a task too, and it is counted once, as a subagent.
 pub(crate) fn background_left(agent: &SidebarAgentSnapshot) -> u32 {
     agent
         .row_facts
         .as_ref()
         .map_or(0, |facts| facts.wake_devices)
+        .saturating_sub(agent.subagents)
+}
+
+/// A quiet row whose session still runs subagents inside itself, by its
+/// hook's count. Like its children, they do not hide a finished turn the
+/// operator has not read yet, which `settle_wait` decides with the read axis.
+pub(crate) fn subagents_running(agent: &SidebarAgentSnapshot) -> bool {
+    quiet_itself(agent) && agent.subagents > 0
+}
+
+/// How many of its own subagents a row's settled wait waits on: all that
+/// run while it waits on them or on its children, else none. The one
+/// answer the row's line and its pane head read.
+pub(crate) fn subagents_waited_on(agent: &SidebarAgentSnapshot) -> u32 {
+    let waits = matches!(
+        agent.wait,
+        Some(crate::model::AgentWait::Children | crate::model::AgentWait::Subagents)
+    );
+    if waits && subagents_running(agent) {
+        agent.subagents
+    } else {
+        0
+    }
 }
 
 /// What a row the lineage found quiet over moving work waits on: its
@@ -412,14 +455,20 @@ pub(crate) fn background_left(agent: &SidebarAgentSnapshot) -> u32 {
 /// back. Its own wait, a reply or running checks, still holds whatever the
 /// verdict. Called first by `derive_from_axes`, the one place derived again
 /// whenever the read axis moves, so every reader of `wait` sees one answer.
+///
+/// Its own subagents still running are settled the same way, after its
+/// children and before its own wait.
 pub(crate) fn settle_wait(agent: &mut SidebarAgentSnapshot) {
-    if !agent.children_moving {
+    let subagents = subagents_running(agent);
+    if !agent.children_moving && !subagents {
         return;
     }
     agent.wait = if agent.own_unread && agent.completed && turn_read_finished(agent) {
         agent.own_wait
-    } else {
+    } else if agent.children_moving {
         Some(AgentWait::Children)
+    } else {
+        Some(AgentWait::Subagents)
     };
 }
 
@@ -438,6 +487,7 @@ fn turn_read_finished(agent: &SidebarAgentSnapshot) -> bool {
 fn progressing(agent: &SidebarAgentSnapshot) -> bool {
     let (demand, activity, _) = axes_of(agent);
     (demand == AgentDemand::None && activity == AgentActivity::Working)
+        || subagents_running(agent)
         || background_wait(agent)
         || checks_wait(agent)
 }
@@ -574,7 +624,9 @@ fn descendant_state(agent: &SidebarAgentSnapshot, own_wait: Option<AgentWait>) -
         AgentDemand::Question => DescendantState::Question,
         AgentDemand::None => match activity {
             AgentActivity::Working => DescendantState::Working,
-            AgentActivity::Stopped if own_wait.is_some() => DescendantState::Working,
+            AgentActivity::Stopped if own_wait.is_some() || subagents_running(agent) => {
+                DescendantState::Working
+            }
             AgentActivity::Stopped if agent.completed => DescendantState::Done,
             AgentActivity::Stopped => DescendantState::Ready,
             AgentActivity::Unknown => DescendantState::Unknown,
@@ -677,19 +729,39 @@ pub fn ownership_of(agent: &SidebarAgentSnapshot) -> Ownership {
         Ownership::HideAi {
             operator_turn: home.turn.is_some(),
         }
+    } else if tool_keeps(agent) {
+        Ownership::Tool
     } else {
         Ownership::Operator
     }
 }
 
+/// Whether an external tool keeps the row's work now: its agent, or one
+/// delegated under it, while the tool's connection stands at Act (PRD
+/// hide-external-control D-14). A delegated row of the tool's is still
+/// `Delegated` for its group; this is what keeps it off the lists too
+/// (B27).
+pub(crate) fn tool_keeps(agent: &SidebarAgentSnapshot) -> bool {
+    agent.tool.as_ref().is_some_and(|tool| tool.owns)
+}
+
+/// Whether a row's work is kept by someone other than the operator: Hide
+/// AI's home or an external tool.
+pub fn kept_elsewhere(agent: &SidebarAgentSnapshot) -> bool {
+    matches!(ownership_of(agent), Ownership::HideAi { .. }) || tool_keeps(agent)
+}
+
 /// Whether a row belongs in the lists that enumerate the operator's own work
 /// (the sidebar tree's roots, Sessions, Overview's requests and graph, the
-/// phone): a row its home owns is listed only while it is in Needs You, the
-/// one place the home calls the operator out (PRD hide-ai-work-home D-13).
-/// This is the one decision, so no list filters on its own.
+/// 태스크 list, the checkout counts, the phone): a row Hide AI's home or an
+/// external tool keeps is listed only while it is in Needs You, the one
+/// place its owner calls the operator out (PRD hide-ai-work-home D-13, PRD
+/// hide-external-control B26, B29). The group is the row's as derived, a
+/// raise and a person's turn included, so the lists agree with the raised
+/// Needs You and the phone, which read the same group. This is the one
+/// decision, so no list filters on its own; `unlisted` publishes it.
 pub fn listed_for_operator(agent: &SidebarAgentSnapshot) -> bool {
-    !matches!(ownership_of(agent), Ownership::HideAi { .. })
-        || group_of(agent) == AgentGroup::NeedsYou
+    !kept_elsewhere(agent) || agent.group == AgentGroup::NeedsYou.name()
 }
 
 /// The demand axis of a projected row, for callers outside this module.
@@ -1275,11 +1347,30 @@ fn session_wait(agent: &SessionAgentPayload) -> bool {
 /// `request_user_input_async`), and the demand axis shows it so.
 fn native_question(agent: &SessionAgentPayload) -> bool {
     !reports_nothing(agent)
-        && agent
-            .facts
-            .as_ref()
-            .and_then(|facts| facts.user_turn.as_ref())
+        && native_user_turn(agent)
             .is_some_and(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)
+}
+
+/// The agent's own native question or plan: the one the session read holds
+/// for the engine's current state, else, while the hook's open wait is on the
+/// agent's question dialog (`hook_question`), a question no read has worded.
+/// The engine's state moves as the operator answers, before the session read
+/// of that state and the call's end reach the core.
+pub(crate) fn native_user_turn(
+    agent: &SessionAgentPayload,
+) -> Option<hide_session::turns::UserTurnFact> {
+    agent
+        .facts
+        .as_ref()
+        .and_then(|facts| facts.user_turn.clone())
+        .or_else(|| {
+            agent
+                .hook_question
+                .then_some(hide_session::turns::UserTurnFact {
+                    kind: hide_session::turns::UserTurnKind::Question,
+                    content: None,
+                })
+        })
 }
 
 /// The turn and approval the core decides for one agent, from the same ranks

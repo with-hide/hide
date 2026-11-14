@@ -147,6 +147,10 @@ enum Command {
         all: bool,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    Access {
+        call: hide_core::access::Call,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     AgentSleep {
         device_id: String,
         pane_id: String,
@@ -777,6 +781,16 @@ impl CoreHandle {
             })
             .map_err(|_| "ps_unavailable".to_owned())?;
         result.recv().map_err(|_| "ps_unavailable".to_owned())?
+    }
+
+    /// One call for an external tool (PRD hide-external-control): its
+    /// request, status, leave, its key's proof or a command's check.
+    pub fn access(&self, call: hide_core::access::Call) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Access { call, reply })
+            .map_err(|_| "access_unavailable".to_owned())?;
+        result.recv().map_err(|_| "access_unavailable".to_owned())?
     }
 
     /// `hide <path>` for a caller on `device`: started on the owner thread,
@@ -1653,6 +1667,9 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.ps(&device_id, &pane_id, all));
+            }
+            Command::Access { call, reply } => {
+                let _ = reply.send(core.access(call));
             }
             Command::AgentSleep {
                 device_id,

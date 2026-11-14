@@ -148,6 +148,27 @@ impl std::fmt::Debug for ApnsRegistration {
     }
 }
 
+/// An Android app phone's notifications: the FCM registration token and the
+/// key hided encrypts the body with, given inside the paired phone's
+/// encrypted session like `ApnsRegistration`. FCM has one host, so there is
+/// no environment (`docs/RELAY_PROTOCOL.md`, Push relay).
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FcmRegistration {
+    /// Google's registration token (`admission::fcm_token_valid`).
+    pub token: String,
+    /// The phone's P-256 public key, base64url.
+    pub p256dh: String,
+    /// The 16-byte authentication secret, base64url.
+    pub auth: String,
+}
+
+/// Never printed, as `ApnsRegistration` is not.
+impl std::fmt::Debug for FcmRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FcmRegistration([redacted])")
+    }
+}
+
 /// The core address a phone was paired at: the tailnet name of the exposure
 /// whose code it scanned (PRD core-host-node-move B17, amendment 12). A phone
 /// keeps its credential in its home-screen app, which belongs to that address,
@@ -180,15 +201,19 @@ pub struct PhoneRecord {
     /// app cannot receive Web Push, and a phone has one way at a time.
     #[serde(default)]
     pub apns: Option<ApnsRegistration>,
+    /// An Android app phone's registration, the third way, standing instead
+    /// of either of the others.
+    #[serde(default)]
+    pub fcm: Option<FcmRegistration>,
     #[serde(default)]
     pub origin: PhoneOrigin,
 }
 
 impl PhoneRecord {
     /// Whether this phone can be sent a notice: a Web Push subscription or
-    /// an iOS app's registration.
+    /// an app's registration.
     pub fn reachable(&self) -> bool {
-        self.push.is_some() || self.apns.is_some()
+        self.push.is_some() || self.apns.is_some() || self.fcm.is_some()
     }
 }
 
@@ -286,6 +311,7 @@ mod tests {
                 notifications: Notifications::On,
                 push: None,
                 apns: None,
+                fcm: None,
                 origin: PhoneOrigin::Paired("mac.tailnet.ts.net".into()),
             }],
         };

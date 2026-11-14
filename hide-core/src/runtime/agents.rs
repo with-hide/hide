@@ -1960,6 +1960,49 @@ impl Runtime {
         before != conversation.len()
     }
 
+    /// Whether each agent runtime's hook is in on this machine, read once for
+    /// a pass: Claude Code's and Codex's from their files, OpenCode's plugin
+    /// and Grok's and Cursor's from this Mac's kit, the one place that judges
+    /// them, rather than holding the kit across the pass.
+    pub(super) fn local_hook_statuses(&self) -> LocalHookStatuses {
+        let local_kit = self.kit_states.get(self.node.as_str());
+        LocalHookStatuses {
+            diagnosis: self.hook_diagnosis.clone(),
+            from_kit: hide_agent_adapter::HookDialect::ALL
+                .into_iter()
+                .filter(|dialect| hide_agent_hooks::AgentRuntime::from_dialect(*dialect).is_none())
+                .map(|dialect| {
+                    let status =
+                        local_kit.and_then(|kit| crate::agent_hooks::kit_hook_status(kit, dialect));
+                    (dialect, status)
+                })
+                .collect(),
+        }
+    }
+
+    /// Lays on each of this machine's rows how many subagents its session
+    /// runs now, before the lineage that waits on them, from the same hook
+    /// observation the pane header's children are judged from
+    /// (`sidebar::running_subagents`). A device's rows are laid where its
+    /// session is judged (`judge_device_pane_children`).
+    pub(super) fn lay_subagents(&self, agents: &mut [SidebarAgentSnapshot]) {
+        let statuses = self.local_hook_statuses();
+        for agent in agents
+            .iter_mut()
+            .filter(|agent| !crate::address::is_device_scoped(&agent.pane_id))
+        {
+            let tokens = self
+                .pane_hook_tokens
+                .get(&agent.pane_id)
+                .copied()
+                .unwrap_or_default();
+            agent.subagents =
+                crate::sidebar::running_subagents(&agent.agent_kind, tokens, &|dialect| {
+                    statuses.status_of(dialect)
+                });
+        }
+    }
+
     /// Refills every pane's child summary and breadcrumb from the final agent
     /// list.
     ///
@@ -1970,34 +2013,10 @@ impl Runtime {
     /// sidebar had already moved past.
     pub(super) fn sync_pane_lineage(&mut self) -> bool {
         let agents = std::mem::take(&mut self.snapshot.navigator.agents);
-        let diagnosis = self.hook_diagnosis.clone();
+        let statuses = self.local_hook_statuses();
         let local_kit = self.kit_states.get(self.node.as_str());
-        // Claude Code's and Codex's hooks are read from their files; OpenCode's
-        // plugin and Grok's and Cursor's hooks from this Mac's kit, the one
-        // place that judges them, read here once rather than holding the kit
-        // across the pass.
-        let from_kit: Vec<_> = hide_agent_adapter::HookDialect::ALL
-            .into_iter()
-            .filter(|dialect| hide_agent_hooks::AgentRuntime::from_dialect(*dialect).is_none())
-            .map(|dialect| {
-                let status =
-                    local_kit.and_then(|kit| crate::agent_hooks::kit_hook_status(kit, dialect));
-                (dialect, status)
-            })
-            .collect();
         let codex_daemon_on = local_kit.is_some_and(crate::model::KitSnapshot::shares_codex_server);
-        let status_of = |dialect: hide_agent_adapter::HookDialect| {
-            match hide_agent_hooks::AgentRuntime::from_dialect(dialect) {
-                Some(runtime) => diagnosis
-                    .as_ref()
-                    .and_then(|diagnosis| diagnosis.status_of(runtime))
-                    .cloned(),
-                None => from_kit
-                    .iter()
-                    .find(|(known, _)| *known == dialect)
-                    .and_then(|(_, status)| status.clone()),
-            }
-        };
+        let status_of = |dialect| statuses.status_of(dialect);
         let kit_updates: Vec<(&'static str, hide_kit::AgentUpdate)> = local_kit
             .map(|kit| {
                 hide_agent_adapter::ADAPTERS
@@ -4133,17 +4152,51 @@ impl Runtime {
         }
     }
 
-    /// The checkouts Hide made for the agents it started. A spawn's machine
-    /// is the id of the device the shell names its Projects by (this node's
-    /// own id for a local one), so it is the checkout's device as it stands.
+    /// Marks the rows of an external tool's work: the agents it started and
+    /// those delegated under them (`started::ToolWork`), matched as Hide AI's
+    /// are, by pane and the session the registration holds. Whether the tool
+    /// keeps the work is read from its connection now, never stored, so a
+    /// disconnect, a leave or View only hands the work to the operator on
+    /// this pass, and Act again takes it back (PRD hide-external-control
+    /// D-14, D-40).
+    fn lay_tool_work(&self, agents: &mut [SidebarAgentSnapshot]) {
+        let work = &self.hide_started.tool_work;
+        for agent in agents {
+            agent.tool = work
+                .iter()
+                .find(|work| {
+                    !work.ended
+                        && work.pane_id == agent.pane_id
+                        && work.session.is_some()
+                        && work.session == agent.lineage_session
+                })
+                .map(|work| self.tool_work_snapshot(work));
+        }
+    }
+
+    /// The checkouts Hide made for the agents Hide AI started, and for those
+    /// an external tool started while its connection stands at Act, so the
+    /// sidebar tree draws both by one rule (PRD hide-ai-work-home D-17).
+    /// Once the tool lets go its checkout is the operator's and leaves the
+    /// list on the same pass as its rows (PRD hide-external-control D-14). A
+    /// spawn's machine is the id of the device the shell names its Projects
+    /// by (this node's own id for a local one), so it is the checkout's
+    /// device as it stands.
     fn hide_ai_checkouts(&self) -> Vec<crate::model::HideAiCheckoutSnapshot> {
         self.hide_started
             .checkouts
             .iter()
+            .filter(|started| {
+                started
+                    .tool
+                    .as_ref()
+                    .is_none_or(|tool| self.access_keeps_work(&tool.connection))
+            })
             .map(|started| crate::model::HideAiCheckoutSnapshot {
                 device_id: started.machine.clone(),
                 path: started.path.clone(),
                 task: started.task.clone(),
+                tool: started.tool.as_ref().map(|tool| tool.name.clone()),
             })
             .collect()
     }
@@ -4231,6 +4284,7 @@ impl Runtime {
         self.lay_awaited_replies(&mut agents, &unreachable);
         self.lay_checks(&mut agents);
         self.lay_hide_ai(&mut agents);
+        self.lay_tool_work(&mut agents);
         self.lay_unseen_views(&mut agents);
         self.lay_human_turns(&mut agents);
         crate::agent_state::apply_lineage(
@@ -4565,5 +4619,35 @@ fn first_run_ready(
         FirstRun::Waiting
     } else {
         FirstRun::NoneReady
+    }
+}
+
+/// Each agent runtime's hook status on this machine, for one pass
+/// (`Runtime::local_hook_statuses`).
+pub(super) struct LocalHookStatuses {
+    diagnosis: Option<hide_agent_hooks::Diagnosis>,
+    from_kit: Vec<(
+        hide_agent_adapter::HookDialect,
+        Option<hide_agent_hooks::HookStatus>,
+    )>,
+}
+
+impl LocalHookStatuses {
+    pub(super) fn status_of(
+        &self,
+        dialect: hide_agent_adapter::HookDialect,
+    ) -> Option<hide_agent_hooks::HookStatus> {
+        match hide_agent_hooks::AgentRuntime::from_dialect(dialect) {
+            Some(runtime) => self
+                .diagnosis
+                .as_ref()
+                .and_then(|diagnosis| diagnosis.status_of(runtime))
+                .cloned(),
+            None => self
+                .from_kit
+                .iter()
+                .find(|(known, _)| *known == dialect)
+                .and_then(|(_, status)| status.clone()),
+        }
     }
 }

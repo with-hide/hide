@@ -142,6 +142,22 @@
     "line": "Starts a new attempt to connect a device, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt, and only the machine that runs Hide may ask. With --wait it waits until the device connects, needs the operator, the attempt fails or five minutes pass.",
     "example": "hide device retry mini --wait"
   },
+  "access request": {
+    "line": "Asks the operator to let this program, outside Hide's panes, use hide; run it again after the operator answers in Settings > External tools, and once approved the program's later hide commands run as it, at View only or Act.",
+    "example": "hide access request --name nightly-bot"
+  },
+  "access status": {
+    "line": "Says where this program's connection stands (not connected, waiting, connected and at which level, refused or disconnected) without asking anything new.",
+    "example": "hide access status --json"
+  },
+  "access leave": {
+    "line": "Disconnects this program, as the operator's Disconnect does, and removes its key; the agents it started stay the operator's.",
+    "example": "hide access leave"
+  },
+  "access list": {
+    "line": "Lists the connected tools with their level, last use and the agents and missions they started, and the requests waiting for the operator; a connected tool runs it.",
+    "example": "hide access list --json"
+  },
   "mission help": {
     "line": "Prints the guide for a mission's Conductor, the agent that plans a mission and starts the agents that do its work.",
     "example": "hide mission help"

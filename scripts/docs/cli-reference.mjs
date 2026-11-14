@@ -125,6 +125,7 @@ const SECTIONS = [
   ["Panes and workspaces", ["pane", "workspace"]],
   ["The operator's screen", ["file", "diff", "browser", "view"]],
   ["Devices", ["device"]],
+  ["Tools outside Hide", ["access"]],
   ["Past sessions and links", ["session", "links"]],
   ["Project Memory", ["memory"]],
 ];

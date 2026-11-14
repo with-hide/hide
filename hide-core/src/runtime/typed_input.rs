@@ -964,6 +964,7 @@ pub(crate) mod tests {
                 seed_tab: None,
                 id: spawn.clone(),
                 path: Some("/fixture/topic".into()),
+                made: false,
                 pane: Some("child".into()),
                 terminal: Some("term-child".into()),
                 shell: None,

@@ -14,7 +14,7 @@ sidebar:
 
 ## Install
 
-1. Download the package and its `.sha256` file from [withhide.dev](https://withhide.dev) or the [Releases page](https://github.com/with-hide/hide/releases): `hide-v<version>-linux-x64.deb` or `hide-v<version>-linux-x64.rpm`.
+1. Download the package and its `.sha256` file from [the download page](/download) or the [Releases page](https://github.com/with-hide/hide/releases): `hide-v<version>-linux-x64.deb` or `hide-v<version>-linux-x64.rpm`.
 2. In the folder that holds both, check the download and install it with your package manager. Continue only when `sha256sum` prints `OK`.
 
    ```sh

@@ -926,6 +926,14 @@ impl Runtime {
             .collect()
     }
 
+    /// The pending letters whose recipient the doorbell's last pass saw in
+    /// its pane, held by a state that ends on its own or by the operator's
+    /// act: the delivery upkeep renews their deadline rather than ending
+    /// them undelivered (`Ledger::renew_present`).
+    pub(crate) fn delivery_present_holds(&self) -> std::collections::HashSet<String> {
+        self.delivery_present.clone()
+    }
+
     /// The registrations and spawn records the core's books still need,
     /// which a full delivery ledger keeps when it makes room
     /// (`coordination::room`): an open mission's and a plan step's still
@@ -1442,6 +1450,20 @@ impl Runtime {
                 return Err("caller_identity_conflict".into());
             }
             self.desk_authority(device)?
+        } else if let Caller::Access { connection, .. } = Caller::parse(caller) {
+            // An external tool acts as its connection's own identity, as
+            // Desk does (D-10): never a pane's, so no hint names it. Its
+            // credential recorded the context it ran in, which no pane
+            // membership can move.
+            if hint.is_some() {
+                return Err("caller_identity_conflict".into());
+            }
+            // What its level does not allow, a pane agent's own asks among
+            // them, is refused before any of it is read (B20-B23).
+            (
+                expected.clone(),
+                self.access_authority(device, connection, crate::access::delivery_need(&command))?,
+            )
         } else {
             let context = self
                 .workspace_control_query(device, caller, Query::Info)
@@ -1808,6 +1830,34 @@ impl Runtime {
             }
             _ => None,
         };
+        // A letter or a reply to an open mission's Conductor is taken at its
+        // next tool call even while it works, as `--now` asks, rather than
+        // after five minutes of its work: every worker and checker of the
+        // mission waits on it (operator decision 2026-11-14).
+        if !repeated {
+            let conducting =
+                |recipient: &Actor| self.missions.book.conducted_open(recipient).is_some();
+            match (&mut command, &target) {
+                (
+                    Command::Send {
+                        now, force: false, ..
+                    },
+                    Some(target),
+                ) if conducting(&target.actor) => *now = true,
+                (Command::Reply { id, now, .. }, _)
+                    if self.delivery_ledger.as_ref().is_ok_and(|ledger| {
+                        ledger
+                            .letters
+                            .iter()
+                            .find(|letter| letter.id == *id)
+                            .is_some_and(|original| conducting(&original.sender))
+                    }) =>
+                {
+                    *now = true
+                }
+                _ => {}
+            }
+        }
         let also_reads = self.node_exchanges(&actor, &command);
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
@@ -2087,6 +2137,9 @@ impl Runtime {
                 "task_kind": agent.task.as_ref().map(|task| task.kind.as_str().chars().take(64).collect::<String>()),
             }));
         }
+        if started.access != self.hide_started.access {
+            self.access_starts_moved();
+        }
         self.hide_started = started;
         let feedback = self.observe_feedback_letters(&ledger);
         // A person's turn declared, replaced or taken down, or its agent's
@@ -2120,6 +2173,18 @@ impl Runtime {
     /// The authority a code-owned caller acts with: a Factory host's own
     /// recipient, or Hide's own identity for one of its roles; never a pane's.
     pub(crate) fn code_owned_authority_current(&self, caller: &str, actor: &Actor) -> bool {
+        // An external tool's identity holds while its connection stands at
+        // Act, for the credential of that same connection (B12, B13).
+        if let Some(connection) = actor.access_connection() {
+            return matches!(
+                Caller::parse(caller),
+                Caller::Access { connection: id, .. } if id == connection
+            ) && self
+                .access_actor(connection)
+                .is_some_and(|(level, current)| {
+                    level == crate::access::Level::Act && current.same_identity(actor)
+                });
+        }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())

@@ -49,6 +49,9 @@ pub enum CommandKind {
         actor: Option<String>,
     },
     Device(crate::device_cli::DeviceCli),
+    /// `hide access request|status|leave|list`: an external tool's own
+    /// connection.
+    Access(crate::access_cli::AccessCli),
     /// `hide pane …`, `hide agent read` and `hide workspace purpose`.
     Pane(crate::pane_cli::PaneCli),
     Help,
@@ -191,6 +194,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
         "device" => usage(crate::device_cli::USAGE),
+        "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
@@ -245,6 +249,9 @@ fn help_text() -> String {
     ] {
         text.push_str(&indent(lines));
     }
+    text.push_str("\nFor a tool outside Hide's panes, on the machine where Hide's core runs\n");
+    text.push_str(&indent(crate::access_cli::USAGE));
+    text.push_str("  Once the operator approves it, the tool runs the commands above as its connection: View only reads, Act also starts, ends and writes to agents.\n");
     text.push_str(
         "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it: list to scan one line per session, record to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
@@ -469,6 +476,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::device_cli::parse(iter)
                 .map(CommandKind::Device)
                 .map_err(|reason| wrong(reason, crate::device_cli::USAGE))
+        }
+        Some("access") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::access_cli::USAGE)))?;
+            crate::access_cli::parse(iter)
+                .map(CommandKind::Access)
+                .map_err(|reason| wrong(reason, crate::access_cli::USAGE))
         }
         Some(topic @ ("request" | "inbox" | "watch")) => {
             crate::cli_contract::admit(&args[1..])
@@ -889,6 +903,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
                     | CommandKind::Device(_)
+                    | CommandKind::Access(_)
                     | CommandKind::Pane(_)
                     | CommandKind::WorkspaceRemove(_)
                     | CommandKind::WorkspaceInfo
@@ -927,6 +942,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
+        CommandKind::Access(cli) => crate::access_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
         CommandKind::WorkspaceRemove(cli) => crate::worktree_cli::run(&env, cli),
         CommandKind::Delivery(command) => {
@@ -1449,6 +1465,10 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
     if let Some(next_action) = hide_agent_hooks::hook_request::install::next_action(reason) {
         return next_action;
     }
+    // An external tool's credential is refused before any command runs.
+    if let Some(next_action) = crate::access::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" => crate::pane_auth::CHECKOUT_NEXT_ACTION,
         "caller_unavailable" => "Retry from a live shell inside a registered project checkout",
@@ -1460,13 +1480,14 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// named was gone and the bare bootstrap that replaces it was refused;
 /// nothing was sent, and the bootstrap's next step still applies.
 pub(crate) fn bootstrap_refused(reason: &str) -> bool {
-    matches!(
-        reason,
-        "checkout_not_registered"
-            | "caller_unavailable"
-            | hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED
-            | hide_agent_hooks::hook_request::install::OTHER_INSTALL
-    )
+    crate::access::next_action(reason).is_some()
+        || matches!(
+            reason,
+            "checkout_not_registered"
+                | "caller_unavailable"
+                | hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED
+                | hide_agent_hooks::hook_request::install::OTHER_INSTALL
+        )
 }
 
 /// One refused command's line, `{"ok":false,"error":{"code","message"}}`,

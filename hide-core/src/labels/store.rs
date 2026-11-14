@@ -140,6 +140,11 @@ pub(crate) struct PaneRecord {
     /// without reading the difference as a state that moved.
     #[serde(skip)]
     pub(crate) seq_of_earlier_engine: bool,
+    /// The state the agent was in when the worker's engine started, kept
+    /// until the restored pane settles: `changed_unix_ms` stays unless it
+    /// settles in another (`forget_engine_state`).
+    #[serde(skip)]
+    pub(crate) status_before_engine: Option<String>,
     #[serde(default)]
     pub(crate) changed_unix_ms: u64,
     #[serde(default)]
@@ -264,6 +269,7 @@ impl PaneRecord {
         self.notice_owed = None;
         self.notice_finalized = None;
         self.seq_of_earlier_engine = true;
+        self.status_before_engine = self.agent_status.clone();
     }
 
     /// A new session in the pane: nothing the old one said or decided stays.

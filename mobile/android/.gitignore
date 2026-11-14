@@ -1,0 +1,17 @@
+# Gradle and build output.
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+
+# What `cap sync android` writes and the app does not take from it: the web folder and the configuration it copies
+# (the build makes them again), the Cordova plugin project (the app links none, settings.gradle does not include it)
+# and the build script that would link npm plugins (app/build.gradle does not apply it; check-versions.mjs keeps it so).
+capacitor-cordova-android-plugins/
+app/capacitor.build.gradle
+app/src/main/assets/public/
+app/src/main/assets/capacitor.config.json
+app/src/main/assets/capacitor.plugins.json
+app/src/main/res/xml/config.xml

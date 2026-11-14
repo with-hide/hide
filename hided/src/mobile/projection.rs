@@ -238,7 +238,7 @@ mod tests {
     fn phone_rows_take_the_core_mark_and_line() {
         let input = json!({"navigator": {"agents": [
             agent("root", "working", json!({"wait": "children", "mark": "waiting", "lineage_child_pane_ids": ["child"],
-                "descendant_counts": {"working": 2},
+                "descendant_counts": {"working": 2}, "wait_count": 2, "subagents": 3, "wait_subagents": 3,
                 "state": {"line": line("", "waiting", "subtle")}})),
             agent("read-question", "seen", json!({"demand": "question", "mark": "turn",
                 "state": {"line": line("  answer me  ", "request", "warning")}})),
@@ -305,6 +305,8 @@ mod tests {
             (root.wait.as_deref(), root.descendants_working),
             (Some("children"), 2)
         );
+        // The counts its line says reach the phone (operator decision 2026-11-14).
+        assert_eq!((root.wait_count, root.wait_subagents), (2, 3));
     }
 
     /// The request view's words (the operator's request, its summary and

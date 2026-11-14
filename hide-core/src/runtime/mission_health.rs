@@ -300,6 +300,30 @@ pub(super) fn settle(mission: &str, node: &mut MissionNode, by: &str) {
     }
 }
 
+/// Settles the refused close a node of `mission` still holds once the
+/// mission closed (B19): the close that passed answers it, whoever made it
+/// (Hide, the Conductor's `hide mission close`, the operator), so nothing of
+/// it reaches anyone after the close, its letters not yet sent included
+/// (with-hide/hide#2518). That close ended the closing it was about, so its
+/// cause is forgotten as a node going back to work forgets it, and a refusal
+/// after the mission is opened again is asked anew.
+pub(super) fn settle_refused_close(mission: &mut Mission, by: &str) {
+    let id = mission.id.clone();
+    for node in &mut mission.nodes {
+        let Some(cause) = node
+            .attention
+            .as_ref()
+            .filter(|attention| attention.reason == AttentionReason::CloseRefused)
+            .map(crate::missions::Attention::cause)
+        else {
+            continue;
+        };
+        settle(&id, node, by);
+        node.handled.retain(|handled| *handled != cause);
+    }
+    prune_attention_wakes(mission);
+}
+
 /// The words a gate is passed with when the operator's `끝으로` goes past
 /// it with the node's other open lines, as each skipped line's reason is.
 const OPERATOR_DECISION: &str = "운영자 판단";
@@ -885,15 +909,8 @@ impl Runtime {
                     .agent_id
                     .as_deref()
                     .and_then(|id| ledger?.agents.iter().find(|record| record.id == id));
-                let worker =
-                    record.map(
-                        |record| match super::missions::worker_life(record, sleeping) {
-                            crate::delivery::answer::Runtime::Running => WorkerLife::Running,
-                            crate::delivery::answer::Runtime::Asleep => WorkerLife::Asleep,
-                            crate::delivery::answer::Runtime::Ended
-                            | crate::delivery::answer::Runtime::Closed => WorkerLife::Ended,
-                        },
-                    );
+                let worker = record
+                    .map(|record| WorkerLife::of(super::missions::worker_life(record, sleeping)));
                 // The worker's own pull requests, of this project only: a
                 // number names a pull request only beside its repository.
                 let own_prs = record
@@ -944,8 +961,9 @@ impl Runtime {
     /// judgment that saw it (`MissionRuntime::stop_clock`): a node whose
     /// worker stands stopped (`mission_health::stopped_worker`) has its
     /// fact's stop carry the clock's time, or `now` when this judgment is the
-    /// first. The answer is the clock's entries for `mission` now, one per
-    /// node standing stopped.
+    /// first, and a node no worker stands for (`mission_health::worker_gone`)
+    /// is timed the same way for the map alone. The answer is the clock's
+    /// entries for `mission` now, one per node standing stopped or gone.
     fn stops_seen(
         &self,
         mission: &Mission,
@@ -960,7 +978,12 @@ impl Runtime {
                 continue;
             };
             let waits = operator_waits.get(at).copied().unwrap_or(false);
-            if crate::mission_health::stopped_worker(mission, node, fact, pulls, waits).is_none() {
+            let gone =
+                crate::mission_health::worker_gone(mission, node.status, node.kind, fact.worker);
+            if !gone
+                && crate::mission_health::stopped_worker(mission, node, fact, pulls, waits)
+                    .is_none()
+            {
                 continue;
             }
             let key = stop_key(mission, node);
@@ -1393,49 +1416,40 @@ impl Runtime {
         let wake_key = key.clone();
         // The close, the refused close it settles, its letter and its
         // events go together, under one key (B27).
-        let closed =
-            self.close_mission_with(
-                id,
-                MissionEnd::MergeWait,
-                report,
-                "hide",
-                now,
-                Some(&key),
-                |mission| {
-                    for node in &mut mission.nodes {
-                        if node.attention.as_ref().is_some_and(|attention| {
-                            attention.reason == AttentionReason::CloseRefused
-                        }) {
-                            settle(&mission.id, node, "hide");
-                        }
-                    }
-                    prune_attention_wakes(mission);
-                    mission.wake_seq += 1;
-                    let node = mission
-                        .nodes
-                        .last()
-                        .map(|node| node.key.clone())
-                        .unwrap_or_default();
-                    super::missions::push_wake(
-                        mission,
-                        PendingWake {
-                            seq: mission.wake_seq,
-                            node,
-                            pr: None,
-                            event: WakeEvent::Closed,
-                            head: None,
-                            to: None,
-                            reason: None,
-                            why: None,
-                            action: None,
-                            warning: None,
-                            ci: None,
-                            key: Some(wake_key),
-                        },
-                    );
-                    vec![MissionEvent::new(now, EventKind::HideClosed)]
-                },
-            );
+        let closed = self.close_mission_with(
+            id,
+            MissionEnd::MergeWait,
+            report,
+            "hide",
+            now,
+            Some(&key),
+            |mission| {
+                mission.wake_seq += 1;
+                let node = mission
+                    .nodes
+                    .last()
+                    .map(|node| node.key.clone())
+                    .unwrap_or_default();
+                super::missions::push_wake(
+                    mission,
+                    PendingWake {
+                        seq: mission.wake_seq,
+                        node,
+                        pr: None,
+                        event: WakeEvent::Closed,
+                        head: None,
+                        to: None,
+                        reason: None,
+                        why: None,
+                        action: None,
+                        warning: None,
+                        ci: None,
+                        key: Some(wake_key),
+                    },
+                );
+                vec![MissionEvent::new(now, EventKind::HideClosed)]
+            },
+        );
         match closed {
             Ok(_) => true,
             Err(code) => {
@@ -1904,7 +1918,13 @@ impl Runtime {
         // before an earlier raise can leave it, even if this pass is capped.
         let mut inherited = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {
-            if !mission.status.asks() || self.mission_stale(mission) {
+            // A mission an external tool keeps tells the operator nothing;
+            // what it holds unannounced is told once the tool lets go of it
+            // (PRD hide-external-control B30, D-14).
+            if !mission.status.asks()
+                || self.mission_stale(mission)
+                || self.mission_tool(mission).is_some_and(|tool| tool.owns)
+            {
                 continue;
             }
             for (index, node) in mission.nodes.iter().enumerate() {

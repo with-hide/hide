@@ -74,6 +74,10 @@ pub const HIDE_MEMORY_ROLE: &str = "memory";
 /// Desk's agent (PRD Desk 1차): the origin of the sessions it starts, and
 /// the observer of their watches.
 pub const HIDE_DESK_ROLE: &str = "desk";
+/// The role of an external tool's identity (PRD hide-external-control
+/// D-10): `hide:access:<connection id>`, one per connection, which acts as
+/// Desk's does, and only while its connection stands at Act.
+pub const HIDE_ACCESS_ROLE: &str = "access";
 /// The kind of the operator's own code-owned identity: the sender of the
 /// feedback letters the desktop app's Send makes from the operator's View
 /// comments (PRD view-opener-feedback D-17). It has no pane, reads no
@@ -94,6 +98,45 @@ impl Actor {
             device_id: node.into(),
             session: crate::engine::tokens::session_digest(&name),
         }
+    }
+
+    /// An external tool's code-owned identity on `node`, the core's own
+    /// machine (D-07): its pane slot names the connection by id, so a new
+    /// connection under the same name is another identity (D-40), and its
+    /// name carries the tool's name, which a letter's recipient reads as
+    /// the sender (B23).
+    pub fn access(connection: &str, name: &str, node: &str) -> Self {
+        let name = format!("{HIDE_PREFIX}{HIDE_ACCESS_ROLE}:{name}");
+        Self {
+            // A code-owned record keeps its name as its session
+            // (`register_code_owned`), so the digest is of the name.
+            session: crate::engine::tokens::session_digest(&name),
+            pane_id: format!("{HIDE_PREFIX}{HIDE_ACCESS_ROLE}:{connection}"),
+            name,
+            kind: HIDE_KIND.into(),
+            device_id: node.into(),
+        }
+    }
+
+    /// The connection an external tool's identity acts for, by id.
+    pub fn access_connection(&self) -> Option<&str> {
+        if self.kind != HIDE_KIND {
+            return None;
+        }
+        self.pane_id
+            .strip_prefix(HIDE_PREFIX)?
+            .strip_prefix(HIDE_ACCESS_ROLE)?
+            .strip_prefix(':')
+            .filter(|id| !id.is_empty())
+    }
+
+    /// The name an external tool connected with, for its identity.
+    pub fn access_name(&self) -> Option<&str> {
+        self.access_connection()?;
+        self.name
+            .strip_prefix(HIDE_PREFIX)?
+            .strip_prefix(HIDE_ACCESS_ROLE)?
+            .strip_prefix(':')
     }
 
     /// The operator's own code-owned identity on `node`, the core's own:
@@ -123,6 +166,13 @@ impl Actor {
     /// Hide starts itself, as opposed to a pane's.
     pub fn hide_owned(&self) -> bool {
         self.kind == HIDE_KIND && self.pane_id.starts_with(HIDE_PREFIX)
+    }
+
+    /// Whether this is Hide itself: Hide's own identity and never an
+    /// external tool's, which is code-owned too ([`Self::access_connection`]).
+    /// A gate that only Hide may pass asks this, not [`Self::hide_owned`].
+    pub fn hide_itself(&self) -> bool {
+        self.hide_owned() && self.access_connection().is_none()
     }
 
     /// Mailbox authority requires a positively observed native session. Watch

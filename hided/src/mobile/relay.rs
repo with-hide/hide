@@ -5,7 +5,8 @@ use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::{
     Error,
     admission::{
-        ClientMessage, DeviceHello, DeviceKey, PushOutcome, PushRequest, Refusal, ServerMessage,
+        ClientMessage, DeviceHello, DeviceKey, FcmRequest, PushOutcome, PushRequest,
+        REGISTERED_FIELD_FCM, REGISTERED_FIELDS_HEADER, Refusal, ServerMessage,
     },
     frame::{Frame, MAX_FRAME},
     noise::{NoiseKeypair, Session},
@@ -20,7 +21,9 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::{
     connect_async_with_config,
-    tungstenite::{Message, protocol::WebSocketConfig},
+    tungstenite::{
+        Message, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
+    },
 };
 
 use super::{Mobile, phone, store::RelayKeys};
@@ -250,18 +253,50 @@ const PUSH_QUEUE: usize = 8;
 /// deadline and one retry, so a full table means it stopped answering.
 const MAX_PENDING_PUSH: usize = 32;
 /// How long a caller waits for the relay's answer: two of the relay's
-/// ten-second Apple deadlines (the one retry) and a margin.
+/// ten-second Apple or Google deadlines (the one retry) and a margin.
 pub const PUSH_ANSWER_WAIT: Duration = Duration::from_secs(30);
+
+/// A notice for an app phone, for Apple's push service or for Google's FCM.
+/// Both go through the same queue, table of unanswered requests and answer
+/// (`docs/RELAY_PROTOCOL.md`, Push relay).
+#[derive(Debug)]
+pub enum AppRequest {
+    Apns(PushRequest),
+    Fcm(FcmRequest),
+}
+
+impl AppRequest {
+    fn id(&self) -> u32 {
+        match self {
+            Self::Apns(request) => request.id,
+            Self::Fcm(request) => request.id,
+        }
+    }
+
+    fn set_id(&mut self, id: u32) {
+        match self {
+            Self::Apns(request) => request.id = id,
+            Self::Fcm(request) => request.id = id,
+        }
+    }
+
+    fn message(self) -> ClientMessage {
+        match self {
+            Self::Apns(request) => ClientMessage::Push(request),
+            Self::Fcm(request) => ClientMessage::Fcm(request),
+        }
+    }
+}
 
 /// One request the link carries to the relay, and where its answer goes.
 struct PushJob {
-    request: PushRequest,
+    request: AppRequest,
     answer: std::sync::mpsc::SyncSender<PushAnswer>,
 }
 
 /// What a running link offers the rest of Mobile: a push request to the
-/// relay, when the relay said it forwards them. A relay that does not know
-/// the `push` field of `registered` sends `{"type":"registered"}`, which reads
+/// relay, when the relay said it forwards that kind. A relay that does not
+/// know the `push` or `fcm` field of `registered` leaves it out, which reads
 /// as false, so hided never sends a message an older relay would close the
 /// link on (`docs/RELAY_PROTOCOL.md`, Push relay).
 #[derive(Clone)]
@@ -269,17 +304,20 @@ pub struct Link {
     jobs: mpsc::Sender<PushJob>,
     next_id: Arc<AtomicU32>,
     push: bool,
+    fcm: bool,
 }
 
 impl Link {
     /// Sends one push request and waits for the relay's result. Blocking:
     /// every caller is a blocking thread, where Web Push sends already run.
     /// `Err` is why no result came, as the diagnostic names it.
-    pub fn push(&self, mut request: PushRequest) -> Result<PushOutcome, &'static str> {
-        if !self.push {
-            return Err("relay_without_push");
+    pub fn push(&self, mut request: AppRequest) -> Result<PushOutcome, &'static str> {
+        match request {
+            AppRequest::Apns(_) if !self.push => return Err("relay_without_push"),
+            AppRequest::Fcm(_) if !self.fcm => return Err("relay_without_fcm"),
+            _ => {}
         }
-        request.id = self.next_id();
+        request.set_id(self.next_id());
         let (answer, result) = std::sync::mpsc::sync_channel(1);
         self.jobs
             .try_send(PushJob { request, answer })
@@ -329,8 +367,8 @@ impl PendingPushes {
             let _ = job.answer.send(Err("relay_not_answering"));
             return None;
         }
-        let id = job.request.id;
-        let Ok(text) = ClientMessage::Push(job.request).encode() else {
+        let id = job.request.id();
+        let Ok(text) = job.request.message().encode() else {
             let _ = job.answer.send(Err("push_request_invalid"));
             return None;
         };
@@ -396,14 +434,22 @@ async fn connect(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME))
         .max_frame_size(Some(MAX_FRAME));
+    // Names the `registered` field this build reads past `push`, so the relay
+    // writes `fcm` to it and to no released hided, which would refuse it
+    // (`docs/RELAY_PROTOCOL.md`, Compatibility and deploy order).
+    let mut request = mobile.config.relay_url.as_str().into_client_request()?;
+    request.headers_mut().insert(
+        REGISTERED_FIELDS_HEADER,
+        HeaderValue::from_static(REGISTERED_FIELD_FCM),
+    );
     let (mut socket, _) = tokio::time::timeout(
         DEADLINE,
-        connect_async_with_config(&mobile.config.relay_url, Some(config), true),
+        connect_async_with_config(request, Some(config), true),
     )
     .await
     .map_err(|_| LinkError::Closed)??;
     let hello = DeviceHello::new(&keys.device.public_key(), PHONE_PROTOCOL)?;
-    let push = tokio::time::timeout(DEADLINE, async {
+    let (push, fcm) = tokio::time::timeout(DEADLINE, async {
         socket
             .send(Message::Text(
                 ClientMessage::Device {
@@ -431,10 +477,11 @@ async fn connect(
             return Err(LinkError::Closed);
         };
         match ServerMessage::decode(&text)? {
-            // `push` reads as false from a relay that does not know the
-            // field, so an older relay is served every phone frame and no
-            // push request (`docs/RELAY_PROTOCOL.md`, Push relay, deploying).
-            ServerMessage::Registered { push } => Ok(push),
+            // `push` and `fcm` read as false from a relay that does not know
+            // the field, so an older relay is served every phone frame and no
+            // request it would refuse (`docs/RELAY_PROTOCOL.md`, Push relay,
+            // deploying).
+            ServerMessage::Registered { push, fcm } => Ok((push, fcm)),
             ServerMessage::Refused { reason } => Err(LinkError::Refused(reason)),
             _ => Err(LinkError::Closed),
         }
@@ -448,6 +495,7 @@ async fn connect(
         jobs,
         next_id: Arc::new(AtomicU32::new(1)),
         push,
+        fcm,
     };
     // The link is handed out only while this loop runs.
     let _published = Published::new(mobile, link);
@@ -591,14 +639,22 @@ mod tests {
     use super::*;
     use hide_relay_protocol::admission::PushEnvironment;
 
-    fn request(id: u32) -> PushRequest {
-        PushRequest {
+    fn request(id: u32) -> AppRequest {
+        AppRequest::Apns(PushRequest {
             id,
             environment: PushEnvironment::Sandbox,
             token: "ab".repeat(32),
             collapse: "collapse".into(),
             payload: URL_SAFE_NO_PAD.encode([7_u8; 64]),
-        }
+        })
+    }
+
+    fn fcm_request(id: u32) -> AppRequest {
+        AppRequest::Fcm(FcmRequest {
+            id,
+            token: "f".repeat(160),
+            payload: URL_SAFE_NO_PAD.encode([7_u8; 64]),
+        })
     }
 
     fn job(id: u32) -> (PushJob, std::sync::mpsc::Receiver<PushAnswer>) {
@@ -617,18 +673,32 @@ mod tests {
     #[test]
     fn a_push_the_link_cannot_carry_is_answered_at_once() {
         let (jobs, mut queued) = mpsc::channel(1);
-        let link = |push| Link {
+        let link = |push, fcm| Link {
             jobs: jobs.clone(),
             next_id: Arc::new(AtomicU32::new(1)),
             push,
+            fcm,
         };
-        assert_eq!(link(false).push(request(0)), Err("relay_without_push"));
+        // Each kind waits for the relay to name it: Apple's for `push`,
+        // Google's for `fcm`.
+        assert_eq!(
+            link(false, true).push(request(0)),
+            Err("relay_without_push")
+        );
+        assert_eq!(
+            link(true, false).push(fcm_request(0)),
+            Err("relay_without_fcm")
+        );
         let (waiting, _answer) = job(1);
         jobs.try_send(waiting).ok().unwrap();
-        assert_eq!(link(true).push(request(0)), Err("push_queue_full"));
+        assert_eq!(link(true, true).push(request(0)), Err("push_queue_full"));
+        assert_eq!(
+            link(true, true).push(fcm_request(0)),
+            Err("push_queue_full")
+        );
         queued.close();
         let _ = queued.try_recv();
-        assert_eq!(link(true).push(request(0)), Err("relay_link_ended"));
+        assert_eq!(link(true, true).push(request(0)), Err("relay_link_ended"));
     }
 
     /// The table of unanswered requests is capped; an entry goes once its
