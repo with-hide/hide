@@ -64,6 +64,11 @@ mod tests {
     }
 
     #[test]
+    fn the_guide_spells_hide_access_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::access_cli::USAGE));
+    }
+
+    #[test]
     fn the_guide_spells_hide_pane_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::pane_cli::USAGE));
     }

@@ -50,6 +50,26 @@ const VIEW_ONLY: &str = "access_view_only";
 const NEEDS_AGENT: &str = "access_needs_agent";
 const SPAWN_PARENT: &str = "access_spawn_parent";
 
+/// Every refusal a tool's command can get, each with its `next_action`
+/// (`hide contract --json` lists them, B36).
+pub const REFUSALS: &[&str] = &[
+    "access_from_pane",
+    "access_pending",
+    "access_refused",
+    "access_request_expired",
+    "access_limit",
+    "access_name_taken",
+    "access_revoked",
+    "access_ambiguous",
+    "access_not_connected",
+    "access_key_unreadable",
+    VIEW_ONLY,
+    NEEDS_AGENT,
+    SPAWN_PARENT,
+    "access_core_only",
+    "access_unavailable",
+];
+
 /// What each tool refusal says to do, in the words the CLI, `hide guide`
 /// and the contract use (B36); `None` for a reason that is not a tool's.
 pub fn next_action(reason: &str) -> Option<&'static str> {
@@ -266,23 +286,7 @@ mod tests {
 
     #[test]
     fn every_tool_refusal_says_what_to_do() {
-        for reason in [
-            "access_from_pane",
-            "access_pending",
-            "access_refused",
-            "access_request_expired",
-            "access_limit",
-            "access_name_taken",
-            "access_revoked",
-            "access_ambiguous",
-            "access_not_connected",
-            "access_key_unreadable",
-            VIEW_ONLY,
-            NEEDS_AGENT,
-            SPAWN_PARENT,
-            "access_core_only",
-            "access_unavailable",
-        ] {
+        for reason in REFUSALS {
             assert!(next_action(reason).is_some(), "{reason}");
         }
         assert_eq!(next_action("pane_changed"), None);
