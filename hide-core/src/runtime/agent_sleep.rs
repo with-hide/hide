@@ -20,7 +20,7 @@ mod dormant;
 pub(in crate::runtime) mod letters;
 pub(in crate::runtime) mod missions;
 use dormant::SleepRefusal;
-pub(in crate::runtime) use dormant::Takeover;
+pub(in crate::runtime) use dormant::{Takeover, WOKEN_BINDING_LIMIT_MS};
 
 /// Ends in flight at once. A first enable over a long day's panes would
 /// otherwise start one worker per idle agent; the rest wait for the next
