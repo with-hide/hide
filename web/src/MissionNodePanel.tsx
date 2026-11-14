@@ -167,7 +167,7 @@ function WorkerWays({ mission, node, actions }: { mission: Mission; node: Missio
         </Hint>
       ) : null}
       <Hint label={t("mission.toTerminal")}>
-        <Button size="sm" variant="secondary" className="shrink-0 px-xs mission-panel-words:px-sm" aria-label={t("mission.toTerminal")} disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">
+        <Button size="sm" variant="secondary" className="shrink-0 px-xs mission-panel-words:px-sm" aria-label={t("mission.toTerminal")} disabled={!node.pane_id} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">
           <SquareTerminalIcon aria-hidden="true" className="mission-panel-words:hidden" />
           <span className="hidden mission-panel-words:inline">{t("mission.panel.terminal")}</span>
         </Button>

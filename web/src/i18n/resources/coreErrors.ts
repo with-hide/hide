@@ -115,6 +115,7 @@ export const coreErrorsEnglish = {
 
   "coreError.group.changed": "The group changed. Choose it again and try again.",
   "coreError.group.movePending": "A terminal is still being moved. Check that the move finished, then try again.",
+  "coreError.pane.gone": "That terminal is no longer open.",
   "coreError.group.startPending": "A start in this tab is still being confirmed. Check its result, then close it.",
   "coreError.group.checkoutGone": "This checkout is no longer available. Choose it again.",
   "coreError.group.reopenFailed": "The tab could not be restored. Close a tab and try again.",
@@ -264,6 +265,7 @@ const ko = {
 
   "coreError.group.changed": "그룹이 바뀌었어요. 다시 선택한 뒤 시도하세요.",
   "coreError.group.movePending": "옮기는 중인 터미널이 있어요. 이동이 끝났는지 확인한 뒤 다시 시도하세요.",
+  "coreError.pane.gone": "그 터미널은 이제 열려 있지 않아요.",
   "coreError.group.startPending": "이 탭의 시작을 아직 확인하는 중이에요. 결과를 확인한 뒤 닫으세요.",
   "coreError.group.checkoutGone": "이 체크아웃은 더 이상 없어요. 다시 선택하세요.",
   "coreError.group.reopenFailed": "탭을 되살리지 못했어요. 탭 하나를 닫고 다시 시도하세요.",
@@ -413,6 +415,7 @@ const ja = {
 
   "coreError.group.changed": "グループが変わりました。もう一度選んでからお試しください。",
   "coreError.group.movePending": "移動中のペインがあります。移動が終わったか確認してから、もう一度お試しください。",
+  "coreError.pane.gone": "そのターミナルはもう開いていません。",
   "coreError.group.startPending": "このタブの開始をまだ確認しています。結果を確認してから閉じてください。",
   "coreError.group.checkoutGone": "このチェックアウトはもうありません。もう一度選んでください。",
   "coreError.group.reopenFailed": "タブを復元できませんでした。タブを1つ閉じてからもう一度お試しください。",
@@ -562,6 +565,7 @@ const zhCN = {
 
   "coreError.group.changed": "分组已变化。请重新选择后重试。",
   "coreError.group.movePending": "有窗格仍在移动中。请确认移动已完成后重试。",
+  "coreError.pane.gone": "该终端已不再打开。",
   "coreError.group.startPending": "此标签页的启动仍在确认中。请查看结果后再关闭。",
   "coreError.group.checkoutGone": "此检出目录已不可用。请重新选择。",
   "coreError.group.reopenFailed": "无法恢复标签页。请关闭一个标签页后重试。",

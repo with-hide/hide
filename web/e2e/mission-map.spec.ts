@@ -22,6 +22,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 import { git } from "./work-prs-fixture";
+import { closePane, withControl } from "./daemon-actions";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -229,6 +230,50 @@ test("the mission's card closes and opens again from the sidebar, the screen kee
     await page.getByRole("option", { name: "6", exact: true }).click();
     await expect(sheet.locator("[data-conductor-cap]")).toHaveAttribute("data-conductor-cap", "6");
     await expect.poll(async () => JSON.stringify((await mission(conductor, ["mission", "settings"])).result)).toContain('"concurrency":6');
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+test("the screen's 터미널로 이동 brings a node's worker forward, and once that terminal closed says so on the screen instead of doing nothing (with-hide/hide#2505)", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, fixture, "mission-terminal");
+    daemon = opened.daemon;
+    const { conductor, worker } = opened;
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    await mission(conductor, ["mission", "start"]);
+    const listed = (await mission(conductor, ["agent", "list"])).value as { items: { id: string; pane: string }[] };
+    const workerId = listed.items.find((agent) => agent.pane === worker)!.id;
+    await mission(conductor, ["mission", "node", "api", "--status", "working", "--agent-id", workerId, "--line", "엔드포인트 작성 중"]);
+    const screen = page.locator("[data-mission-screen]");
+    const openNode = async () => {
+      await page.locator("[data-sidebar-missions]").click();
+      await screen.locator('[data-slot="row-overlay-button"]').first().click();
+      await screen.locator('[data-mission-screen-detail] [data-mission-node="api"]').click();
+      return screen.locator('[data-mission-panel="api"] [data-node-terminal]');
+    };
+
+    // The worker's pane is not the one in front, so the press moves the Workspace to it.
+    await (await openNode()).click();
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${worker}"]`)).toHaveAttribute("data-focused", "true");
+
+    // Its terminal closed, the node still names it: the press stays on the screen and says why there.
+    await withControl(daemon, (control) => closePane(control, worker));
+    const terminal = await openNode();
+    await expect(terminal).toBeEnabled();
+    await terminal.click();
+    const refusal = page.locator('[data-opening="failed"]');
+    await expect(refusal).toContainText("That terminal is no longer open.");
+    await expect(screen).toBeVisible();
+    await screenshot(page, "mission-terminal-gone");
+    await refusal.locator("[data-opening-dismiss]").click();
+    await expect(refusal).toHaveCount(0);
   } finally {
     daemon?.stop();
     fixture.stop();
