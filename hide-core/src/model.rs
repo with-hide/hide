@@ -2171,6 +2171,34 @@ pub struct SidebarAgentSnapshot {
     /// on any other row.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub children_left: u32,
+    /// How many subagents the pane's session runs inside itself now, by its
+    /// hook's count (`sidebar::running_subagents`); 0 when none run and when
+    /// Hide cannot read the count, which no screen tells apart from none
+    /// (docs/UI_BEHAVIOR.md, Subagents). Laid before the lineage, which waits
+    /// on them, by `Runtime::lay_subagents` and, for a device's rows,
+    /// `Runtime::judge_device_pane_children`.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub subagents: u32,
+    /// How many subagents still run under a finished turn the operator has
+    /// not read yet, which its line ends with, as `children_left` does; 0 on
+    /// any other row.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub subagents_left: u32,
+    /// How many things the row's `wait` waits on, which its line counts
+    /// (`자식 2개 기다림`): working descendants, subagents, background tasks or
+    /// replies being made; 0 for running checks and on a row that waits for
+    /// nothing.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_count: u32,
+    /// How many of its own subagents the row's wait waits on too
+    /// (`axes.rs::subagents_waited_on`), which a children wait's line adds
+    /// (`자식 1개 · 서브에이전트 2개 기다림`); 0 when it waits on none.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_subagents: u32,
+    /// How many of the replies this row awaits are still being made
+    /// (`axes.rs::answer_in_progress`), decided on the lineage pass.
+    #[serde(skip_serializing)]
+    pub replies_in_progress: u32,
     /// The lineage's half of a children wait: a root, quiet itself, with work
     /// moving on below it. Whether it waits on them is decided with the read
     /// axis (`axes.rs::settle_wait`).
@@ -2856,6 +2884,9 @@ pub enum AgentWait {
     /// A pull request the row holds the duty of has checks running, or one
     /// its session just printed has not been read from GitHub yet.
     Checks,
+    /// Subagents the agent runs inside its own session are still running,
+    /// by its hook's count.
+    Subagents,
 }
 
 /// How the checks a row waited on ended, for the pull request `number`.
@@ -8809,13 +8840,15 @@ mod wire_enum_tests {
             AgentWait::Background,
             AgentWait::Reply,
             AgentWait::Checks,
+            AgentWait::Subagents,
         ];
         for variant in waits {
             match variant {
                 AgentWait::Children
                 | AgentWait::Background
                 | AgentWait::Reply
-                | AgentWait::Checks => {}
+                | AgentWait::Checks
+                | AgentWait::Subagents => {}
             }
         }
         assert_wire(&contract, "agent_wait", &waits);

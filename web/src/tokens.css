@@ -285,6 +285,7 @@
   --size-tab-icon-identity: 40px;
   --size-tab-overflow-control: 28px;
   --size-tab-status-dot: 5px;
+  --size-subagent-dot: 4px;
   --size-editor-line-number-col: 44px;
   --size-editor-diff-line-number-col: 40px;
   --size-editor-min-content: 720px;
@@ -420,6 +421,7 @@
   --size-update-ring: 3px;
   --motion-update-pulse: 1.2;
   --motion-working-turn: 1.6;
+  --motion-subagent-orbit: 9;
   --size-overview-projects-min: 960px;
   --size-overview-usage-content: 1120px;
   --size-overview-usage-plot: 180px;

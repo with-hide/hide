@@ -206,7 +206,8 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
       {/* A person's turn says itself under the row, with Done (PRD ask-human B19). */}
       {agent.line && !agent.human_turn ? (
         <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
-          {lineText(t, { wait: agent.wait, status_code: agent.status_code, descendant_counts: { working: agent.descendants_working }, background_left: agent.background_left, children_left: agent.children_left }, agent.line)}
+          {/* A Mac that predates wait counts sends no `wait_count`; its working descendants are the children count. */}
+          {lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line)}
         </span>
       ) : null}
     </RowButton>

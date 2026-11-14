@@ -127,7 +127,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
     <Ports />
     <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null, branch].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
       {/* A delegated session is the same circle, smaller (its size comes from data-root). */}
-      <span className="og-orb og-session-drag" title={[t("overviewGraph.dragSession", { session: row.agent.identity_label }), row.agent.profile ? agentWithProfile(t, row.agent) : null].filter(Boolean).join("\n")}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} /></span></span>
+      <span className="og-orb og-session-drag" title={[t("overviewGraph.dragSession", { session: row.agent.identity_label }), row.agent.profile ? agentWithProfile(t, row.agent) : null].filter(Boolean).join("\n")}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} /></span><SubagentOrbit count={row.agent.subagents} /></span>
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
       {branch ? <span className="og-session-branch" aria-hidden="true"><GitBranchIcon aria-hidden="true" /><span>{branch}</span></span> : null}
@@ -138,6 +138,18 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
       {team.folded ? <span className="og-team-states">{badgeParts({ turn: team.turn, going: team.going, done: team.done }).map((part) => <StatusMark key={part.state} mark={part.mark} />)}</span> : null}
     </button> : null}
   </div>;
+}
+
+/** The most subagent dots one circle carries; the session's name and hint say the exact count. */
+export const ORBIT_DOTS_SHOWN = 8;
+
+/** One small dot per subagent the session runs, evenly spaced round its circle and turning slowly; nothing for none (docs/UI_BEHAVIOR.md, Subagents). */
+function SubagentOrbit({ count }: { count: number | undefined }) {
+  if (!count) return null;
+  const shown = Math.min(count, ORBIT_DOTS_SHOWN);
+  return <span aria-hidden="true" className="og-orbit" data-graph-subagents={count}>
+    {Array.from({ length: shown }, (_, index) => <i key={index} style={{ ["--og-orbit-angle" as string]: `${(360 / shown) * index}deg` }} />)}
+  </span>;
 }
 
 export function LineGraphEdge(props: EdgeProps<LineEdge>) {

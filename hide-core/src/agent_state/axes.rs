@@ -233,16 +233,24 @@ pub fn apply_lineage(
             }
         }
     }
-    let own_waits = agents
+    let replies = agents
         .iter()
         .map(|agent| {
-            let answering = agent.awaited_replies.iter().any(|reply| {
-                by_pane
-                    .get(&reply.recipient_pane_id)
-                    .is_some_and(|&to| answer_in_progress(reply, &agents[to], progress_below[to]))
-            });
-            own_wait(agent, answering)
+            agent
+                .awaited_replies
+                .iter()
+                .filter(|reply| {
+                    by_pane.get(&reply.recipient_pane_id).is_some_and(|&to| {
+                        answer_in_progress(reply, &agents[to], progress_below[to])
+                    })
+                })
+                .count()
         })
+        .collect::<Vec<_>>();
+    let own_waits = agents
+        .iter()
+        .zip(&replies)
+        .map(|(agent, replies)| own_wait(agent, *replies > 0))
         .collect::<Vec<_>>();
     let mut descendant_counts =
         vec![crate::model::DescendantCountsSnapshot::default(); agents.len()];
@@ -343,6 +351,7 @@ pub fn apply_lineage(
         agent.children_moving = depth == 0 && quiet_itself(agent) && progress_below[index];
         agent.own_wait = own_waits[index];
         agent.wait = own_waits[index];
+        agent.replies_in_progress = u32::try_from(replies[index]).unwrap_or(u32::MAX);
         agent.descendant_signals = std::mem::take(&mut descendant_signals[index]);
     }
     // Ownership was unknown when the rows were first derived, because it is
@@ -395,12 +404,38 @@ fn background_wait(agent: &SidebarAgentSnapshot) -> bool {
     quiet_itself(agent) && background_left(agent) > 0 && !turn_read_finished(agent)
 }
 
-/// How many background tasks the row's session proves still run.
+/// How many background tasks the row's session proves still run, less the
+/// subagents its hook counts: a stopped Claude Code turn's running subagent
+/// is always one it launched in the background, so its session proves it as
+/// a task too, and it is counted once, as a subagent.
 pub(crate) fn background_left(agent: &SidebarAgentSnapshot) -> u32 {
     agent
         .row_facts
         .as_ref()
         .map_or(0, |facts| facts.wake_devices)
+        .saturating_sub(agent.subagents)
+}
+
+/// A quiet row whose session still runs subagents inside itself, by its
+/// hook's count. Like its children, they do not hide a finished turn the
+/// operator has not read yet, which `settle_wait` decides with the read axis.
+pub(crate) fn subagents_running(agent: &SidebarAgentSnapshot) -> bool {
+    quiet_itself(agent) && agent.subagents > 0
+}
+
+/// How many of its own subagents a row's settled wait waits on: all that
+/// run while it waits on them or on its children, else none. The one
+/// answer the row's line and its pane head read.
+pub(crate) fn subagents_waited_on(agent: &SidebarAgentSnapshot) -> u32 {
+    let waits = matches!(
+        agent.wait,
+        Some(crate::model::AgentWait::Children | crate::model::AgentWait::Subagents)
+    );
+    if waits && subagents_running(agent) {
+        agent.subagents
+    } else {
+        0
+    }
 }
 
 /// What a row the lineage found quiet over moving work waits on: its
@@ -412,14 +447,20 @@ pub(crate) fn background_left(agent: &SidebarAgentSnapshot) -> u32 {
 /// back. Its own wait, a reply or running checks, still holds whatever the
 /// verdict. Called first by `derive_from_axes`, the one place derived again
 /// whenever the read axis moves, so every reader of `wait` sees one answer.
+///
+/// Its own subagents still running are settled the same way, after its
+/// children and before its own wait.
 pub(crate) fn settle_wait(agent: &mut SidebarAgentSnapshot) {
-    if !agent.children_moving {
+    let subagents = subagents_running(agent);
+    if !agent.children_moving && !subagents {
         return;
     }
     agent.wait = if agent.own_unread && agent.completed && turn_read_finished(agent) {
         agent.own_wait
-    } else {
+    } else if agent.children_moving {
         Some(AgentWait::Children)
+    } else {
+        Some(AgentWait::Subagents)
     };
 }
 
@@ -438,6 +479,7 @@ fn turn_read_finished(agent: &SidebarAgentSnapshot) -> bool {
 fn progressing(agent: &SidebarAgentSnapshot) -> bool {
     let (demand, activity, _) = axes_of(agent);
     (demand == AgentDemand::None && activity == AgentActivity::Working)
+        || subagents_running(agent)
         || background_wait(agent)
         || checks_wait(agent)
 }
@@ -574,7 +616,9 @@ fn descendant_state(agent: &SidebarAgentSnapshot, own_wait: Option<AgentWait>) -
         AgentDemand::Question => DescendantState::Question,
         AgentDemand::None => match activity {
             AgentActivity::Working => DescendantState::Working,
-            AgentActivity::Stopped if own_wait.is_some() => DescendantState::Working,
+            AgentActivity::Stopped if own_wait.is_some() || subagents_running(agent) => {
+                DescendantState::Working
+            }
             AgentActivity::Stopped if agent.completed => DescendantState::Done,
             AgentActivity::Stopped => DescendantState::Ready,
             AgentActivity::Unknown => DescendantState::Unknown,

@@ -29,6 +29,12 @@ export type PhoneAgent = {
   background_left?: number;
   /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
   children_left?: number;
+  /** The subagents still running under a finished turn not read yet, which its line ends with; absent when none. */
+  subagents_left?: number;
+  /** How many things its `wait` waits on, which its line counts; absent for running checks and when it waits for nothing. */
+  wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds; absent when none. */
+  wait_subagents?: number;
   /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
   starred?: true;
   agent_kind: string;

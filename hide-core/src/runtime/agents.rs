@@ -1960,6 +1960,49 @@ impl Runtime {
         before != conversation.len()
     }
 
+    /// Whether each agent runtime's hook is in on this machine, read once for
+    /// a pass: Claude Code's and Codex's from their files, OpenCode's plugin
+    /// and Grok's and Cursor's from this Mac's kit, the one place that judges
+    /// them, rather than holding the kit across the pass.
+    pub(super) fn local_hook_statuses(&self) -> LocalHookStatuses {
+        let local_kit = self.kit_states.get(self.node.as_str());
+        LocalHookStatuses {
+            diagnosis: self.hook_diagnosis.clone(),
+            from_kit: hide_agent_adapter::HookDialect::ALL
+                .into_iter()
+                .filter(|dialect| hide_agent_hooks::AgentRuntime::from_dialect(*dialect).is_none())
+                .map(|dialect| {
+                    let status =
+                        local_kit.and_then(|kit| crate::agent_hooks::kit_hook_status(kit, dialect));
+                    (dialect, status)
+                })
+                .collect(),
+        }
+    }
+
+    /// Lays on each of this machine's rows how many subagents its session
+    /// runs now, before the lineage that waits on them, from the same hook
+    /// observation the pane header's children are judged from
+    /// (`sidebar::running_subagents`). A device's rows are laid where its
+    /// session is judged (`judge_device_pane_children`).
+    pub(super) fn lay_subagents(&self, agents: &mut [SidebarAgentSnapshot]) {
+        let statuses = self.local_hook_statuses();
+        for agent in agents
+            .iter_mut()
+            .filter(|agent| !crate::address::is_device_scoped(&agent.pane_id))
+        {
+            let tokens = self
+                .pane_hook_tokens
+                .get(&agent.pane_id)
+                .copied()
+                .unwrap_or_default();
+            agent.subagents =
+                crate::sidebar::running_subagents(&agent.agent_kind, tokens, &|dialect| {
+                    statuses.status_of(dialect)
+                });
+        }
+    }
+
     /// Refills every pane's child summary and breadcrumb from the final agent
     /// list.
     ///
@@ -1970,34 +2013,10 @@ impl Runtime {
     /// sidebar had already moved past.
     pub(super) fn sync_pane_lineage(&mut self) -> bool {
         let agents = std::mem::take(&mut self.snapshot.navigator.agents);
-        let diagnosis = self.hook_diagnosis.clone();
+        let statuses = self.local_hook_statuses();
         let local_kit = self.kit_states.get(self.node.as_str());
-        // Claude Code's and Codex's hooks are read from their files; OpenCode's
-        // plugin and Grok's and Cursor's hooks from this Mac's kit, the one
-        // place that judges them, read here once rather than holding the kit
-        // across the pass.
-        let from_kit: Vec<_> = hide_agent_adapter::HookDialect::ALL
-            .into_iter()
-            .filter(|dialect| hide_agent_hooks::AgentRuntime::from_dialect(*dialect).is_none())
-            .map(|dialect| {
-                let status =
-                    local_kit.and_then(|kit| crate::agent_hooks::kit_hook_status(kit, dialect));
-                (dialect, status)
-            })
-            .collect();
         let codex_daemon_on = local_kit.is_some_and(crate::model::KitSnapshot::shares_codex_server);
-        let status_of = |dialect: hide_agent_adapter::HookDialect| {
-            match hide_agent_hooks::AgentRuntime::from_dialect(dialect) {
-                Some(runtime) => diagnosis
-                    .as_ref()
-                    .and_then(|diagnosis| diagnosis.status_of(runtime))
-                    .cloned(),
-                None => from_kit
-                    .iter()
-                    .find(|(known, _)| *known == dialect)
-                    .and_then(|(_, status)| status.clone()),
-            }
-        };
+        let status_of = |dialect| statuses.status_of(dialect);
         let kit_updates: Vec<(&'static str, hide_kit::AgentUpdate)> = local_kit
             .map(|kit| {
                 hide_agent_adapter::ADAPTERS
@@ -4565,5 +4584,35 @@ fn first_run_ready(
         FirstRun::Waiting
     } else {
         FirstRun::NoneReady
+    }
+}
+
+/// Each agent runtime's hook status on this machine, for one pass
+/// (`Runtime::local_hook_statuses`).
+pub(super) struct LocalHookStatuses {
+    diagnosis: Option<hide_agent_hooks::Diagnosis>,
+    from_kit: Vec<(
+        hide_agent_adapter::HookDialect,
+        Option<hide_agent_hooks::HookStatus>,
+    )>,
+}
+
+impl LocalHookStatuses {
+    pub(super) fn status_of(
+        &self,
+        dialect: hide_agent_adapter::HookDialect,
+    ) -> Option<hide_agent_hooks::HookStatus> {
+        match hide_agent_hooks::AgentRuntime::from_dialect(dialect) {
+            Some(runtime) => self
+                .diagnosis
+                .as_ref()
+                .and_then(|diagnosis| diagnosis.status_of(runtime))
+                .cloned(),
+            None => self
+                .from_kit
+                .iter()
+                .find(|(known, _)| *known == dialect)
+                .and_then(|(_, status)| status.clone()),
+        }
     }
 }

@@ -463,6 +463,34 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
         (background.waiting_on_children, background.request),
         (None, None)
     );
+    // A quiet agent waiting on its own subagents shows the request and their
+    // count, beside its children's when it waits on them too; subagents of
+    // an agent that waits on anything else are no wait of the head's.
+    let activity = std::mem::replace(&mut agent.activity, "stopped".into());
+    agent.subagents = 3;
+    agent.wait = Some(crate::model::AgentWait::Subagents);
+    let subagents = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (
+            subagents.waiting_on_subagents,
+            subagents.waiting_on_children,
+            subagents.request
+        ),
+        (Some(3), None, summary.clone())
+    );
+    agent.wait = Some(crate::model::AgentWait::Children);
+    let both = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (both.waiting_on_children, both.waiting_on_subagents),
+        (Some(2), Some(3))
+    );
+    agent.wait = Some(crate::model::AgentWait::Background);
+    assert_eq!(
+        header::of(&pane, Some(&agent), None, None).waiting_on_subagents,
+        None
+    );
+    agent.subagents = 0;
+    agent.activity = activity;
     agent.wait = None;
     // A pane whose terminal is not live shows no turn.
     agent.state.verb = RequestVerb::Working;

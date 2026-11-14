@@ -192,7 +192,7 @@ it("says the parent waits on its working children after the request, in the side
     const row = container.querySelector('[data-pane-header-band="waiting"]')!;
     expect(row.querySelector('[data-pane-turn-part="request"]')?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-pane-turn-request-text]")?.textContent).toBe("Find the missing requests");
-    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on children · 2 working");
+    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on 2 children");
     expect(row.querySelector("[data-pane-own-progress]")).toBeNull();
   } finally { await unmount(); }
 });

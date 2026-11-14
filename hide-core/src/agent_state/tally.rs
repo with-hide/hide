@@ -404,6 +404,18 @@ pub mod phone {
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub children_left: u64,
+        /// The subagents still running under a finished turn the operator
+        /// has not read, which its line ends with; 0 otherwise.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub subagents_left: u64,
+        /// How many things its `wait` waits on, which its line counts; 0 for
+        /// running checks and on a row that waits for nothing.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub wait_count: u64,
+        /// How many of its own subagents a children wait waits on too, which
+        /// its line adds; 0 otherwise.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub wait_subagents: u64,
         /// Whether the operator has not read the row since it last changed,
         /// which tells the notices a read from a verdict judged again.
         #[serde(skip)]
@@ -1021,6 +1033,15 @@ pub mod phone {
                     .unwrap_or(0),
                 children_left: agent
                     .get("children_left")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                subagents_left: agent
+                    .get("subagents_left")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                wait_count: agent.get("wait_count").and_then(Value::as_u64).unwrap_or(0),
+                wait_subagents: agent
+                    .get("wait_subagents")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
                 unread: agent
