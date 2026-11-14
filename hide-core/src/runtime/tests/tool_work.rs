@@ -790,8 +790,10 @@ fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
             tool: None,
         },
     ];
-    let listed = |runtime: &mut Runtime| {
-        runtime.refresh_agent_lineage();
+    // The level event itself republishes the list: the snapshot is read right after it, with no refresh of the
+    // test's own.
+    runtime.refresh_agent_lineage();
+    let listed = |runtime: &Runtime| {
         runtime
             .snapshot
             .navigator
@@ -806,7 +808,7 @@ fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        listed(&mut runtime),
+        listed(&runtime),
         [
             ("helper-task".to_owned(), Some("nightly".to_owned())),
             ("hide-memory-m72".to_owned(), None)
@@ -817,7 +819,7 @@ fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
         level: Level::View,
     }));
     assert_eq!(
-        listed(&mut runtime),
+        listed(&runtime),
         [("hide-memory-m72".to_owned(), None)],
         "View only hands the checkout to the operator"
     );

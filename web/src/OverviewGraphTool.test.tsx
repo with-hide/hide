@@ -11,6 +11,7 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import type { ToolCell } from "./agentScope";
+import { InToolCell } from "./components/tool-mark";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { missionFixture } from "./gallery/MissionScene";
 import { initializeInterfaceI18n } from "./i18n/instance";
@@ -136,7 +137,7 @@ async function map(agents: AgentRow[], tool: ToolCell | null) {
 }
 
 /** A session node of the map, drawn alone. */
-async function node(agent: AgentRow) {
+async function node(agent: AgentRow, inCell = false) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   initializeInterfaceI18n("en");
   const container = document.createElement("div");
@@ -144,19 +145,22 @@ async function node(agent: AgentRow) {
   const root = createRoot(container);
   const row = { agent, id: "session:h", projectId: "project:alpha", deviceId: "local", digest: null, launchModel: null, launchEffort: null, activity: "turn", device: null, project: { label: "alpha" }, checkout: { label: "main" } } as unknown as GraphAgent;
   const props = { id: "session:h", data: { row, root: true, branch: null, choose: () => {}, highlight: () => {}, team: null, current: false, context: false, muted: false, highlighted: false }, selected: false } as unknown as Parameters<typeof SessionGraphNode>[0];
-  await act(async () => root.render(<TooltipProvider><ReactFlowProvider><SessionGraphNode {...props} /></ReactFlowProvider></TooltipProvider>));
-  const line = container.querySelector(".og-session-line")?.textContent ?? null;
+  await act(async () => root.render(<TooltipProvider><InToolCell.Provider value={inCell}><ReactFlowProvider><SessionGraphNode {...props} /></ReactFlowProvider></InToolCell.Provider></TooltipProvider>));
+  const line = container.querySelectorAll<HTMLElement>(".og-session-line");
+  const seen = line.length === 1 ? { text: line[0]!.textContent, asking: line[0]!.classList.contains("og-asking") } : { lines: line.length };
   await act(async () => root.unmount());
-  return line;
+  return seen;
 }
 
 it("leads the operator's Waiting on you card and the node's line with the tool's name, as the sidebar row does", async () => {
   const { asks } = await map([WAITING_ON_PERSON], null);
   expect(asks).toHaveLength(1);
   expect(asks[0]!.line).toMatch(/^nightly·/);
-  expect(await node(WAITING_ON_PERSON)).toMatch(/^nightly·/);
-  // The operator's own row names no tool.
-  expect(await node({ ...WAITING_ON_PERSON, tool: undefined })).not.toContain("nightly");
+  expect(await node(WAITING_ON_PERSON)).toEqual({ text: "nightly·Sign-in · github.com/login", asking: true });
+  // The operator's own row names no tool, and in the tool's own cell the line stands alone, as the same one line
+  // with its chip and its asking colour (review of #2586: the cell's lines lost both).
+  expect(await node({ ...WAITING_ON_PERSON, tool: undefined })).toEqual({ text: "Sign-in · github.com/login", asking: true });
+  expect(await node(WAITING_ON_PERSON, true)).toEqual({ text: "Sign-in · github.com/login", asking: true });
 });
 
 it("words and counts a tool's map filter as the tool's cell does: its turn is what waits on the tool", async () => {

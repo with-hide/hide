@@ -182,7 +182,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
       {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
       {branch ? <span className="og-session-branch" aria-hidden="true"><GitBranchIcon aria-hidden="true" /><span>{branch}</span></span> : null}
       {/* A tool's agent leads its line with the tool's name, as its sidebar row does (PRD hide-external-control B31); never inside the tool's own cell. */}
-      {root || asking ? <ToolLed tool={row.agent.tool} className={cn("og-session-line", asking && "og-asking")}><GraphLine agent={row.agent} className={row.agent.tool ? undefined : cn("og-session-line", asking && "og-asking")} /></ToolLed> : null}
+      {root || asking ? <ToolLed tool={row.agent.tool} className={cn("og-session-line", asking && "og-asking")}><GraphLine agent={row.agent} /></ToolLed> : null}
     </button>
     {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>
       <span>{team.folded ? `+${team.count}` : team.count}</span>

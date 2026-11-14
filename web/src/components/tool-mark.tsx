@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { cloneElement, createContext, isValidElement, useContext, type ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { ToolWork } from "../snapshot";
@@ -52,11 +52,15 @@ export function ToolLabel({ tool, className }: { tool: ToolWork | undefined; cla
  * A line that leads with the tool's name where the work is the tool's (`ToolLabel`): the sidebar's row, and
  * the Overview's `나를 기다리는 것` card and graph node of a tool's agent that reached the operator (together
  * check, operator decision 2026-11-14). With no tool to name, or inside the tool's own cell, the line stands
- * alone and unwrapped.
+ * alone and unwrapped. `className` is the line's in both cases, so its caller decides it once: it goes on the
+ * wrapper when the name leads, and on the line itself when it stands alone.
  */
 export function ToolLed({ tool, className, children }: { tool: ToolWork | undefined; className?: string; children: ReactNode }) {
   const inCell = useContext(InToolCell);
-  if (!tool || inCell) return <>{children}</>;
+  if (!tool || inCell) {
+    if (!className || !isValidElement<{ className?: string }>(children)) return <>{children}</>;
+    return cloneElement(children, { className: cn(children.props.className, className) });
+  }
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs", className)} data-tool-line={tool.connection}>
       <ToolLabel tool={tool} />

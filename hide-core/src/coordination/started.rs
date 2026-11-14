@@ -127,7 +127,12 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
             tool_roots.insert(child, tool);
         }
         let machine = super::spawn_machine(ledger, spawn);
-        if let (Some(path), Some(machine)) = (&spawn.path, machine) {
+        // A tool's checkout is one its spawn made: a spawn that started in
+        // a worktree already there, the operator's, or in the repository's
+        // own folder leaves that checkout the operator's.
+        if let (Some(path), Some(machine)) = (&spawn.path, machine)
+            && (tool.is_none() || spawn.made)
+        {
             started.checkouts.push(StartedCheckout {
                 machine: machine.to_owned(),
                 path: path.clone(),
@@ -332,6 +337,7 @@ pub(crate) mod tests {
                 seed_tab: None,
                 id: id.clone(),
                 path: Some(format!("/repo.worktrees/{branch}")),
+                made: true,
                 pane: Some(actor.pane_id.clone()),
                 terminal: None,
                 shell: None,
@@ -427,6 +433,48 @@ pub(crate) mod tests {
         assert_eq!(started.access[0].agent.pane_id, "w1:p1");
         assert_eq!(started.tool_work.len(), 1);
         assert_eq!(started.tool_work[0].name, "hermes");
+    }
+
+    /// Review of #2586: a tool's spawn that starts in a worktree that was
+    /// already there (the operator's, or the repository's own folder) made
+    /// no checkout, so it lists none and that checkout stays the operator's;
+    /// a spawn that made its worktree lists it.
+    #[test]
+    fn a_tools_spawn_lists_only_the_checkout_it_made() {
+        let mut ledger = Ledger::default();
+        let tool = Actor::access("c0ffee00c0ffee00", "hermes", NODE);
+        let origin = register(&mut ledger, &tool);
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "made",
+            here("w1:p1"),
+        )
+        .unwrap();
+        spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            None,
+            "operators",
+            here("w1:p2"),
+        )
+        .unwrap();
+        // The second started in the operator's own worktree of that branch:
+        // the executor advanced it with `made: false`.
+        ledger.spawns[1].made = false;
+        assert_eq!(
+            hide_started(&ledger)
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/repo.worktrees/made"]
+        );
     }
 
     /// B27, D-36: what a tool's agent starts under itself with `--parent`,
