@@ -649,6 +649,36 @@ impl Ledger {
         changed
     }
 
+    /// Gives each pending letter in `present` that reached its delivery
+    /// deadline a new one from `now`, instead of ending it undelivered: its
+    /// recipient is still in its pane, held by a state that ends once it
+    /// works, rests or the operator acts (`doorbell::Hold::recipient_present`),
+    /// such as a Conductor waiting an hour on the operator's answer. A letter
+    /// a hook already handed over ends delivered at its deadline as before.
+    /// Each renewal is one change an hour per letter, never one per pass.
+    pub fn renew_present(&mut self, present: &HashSet<String>, now: u64) -> bool {
+        let mut changed = false;
+        for letter in &mut self.letters {
+            if letter.state != State::Pending
+                || letter.handed
+                || !present.contains(&letter.id)
+                || !letter.intake_overdue(&self.node_clocks, now)
+            {
+                continue;
+            }
+            letter.intake_from = Some(match self.node_clocks.get(&letter.recipient.device_id) {
+                Some(clock) => clock.reading(now),
+                None => now,
+            });
+            crate::diagnostic!(serde_json::json!({
+                "component": "delivery", "kind": "delivery.deadline_renewed",
+                "letter_id": letter.id, "pane_id": letter.recipient.pane_id,
+            }));
+            changed = true;
+        }
+        changed
+    }
+
     /// Ends the wait of each pending letter in `failed`, which cannot be
     /// delivered now: its recipient's wake failed (PRD mission-worker-sleep
     /// D-16), or its bells are spent and none was taken. It is undelivered
@@ -1144,6 +1174,38 @@ mod tests {
         assert_eq!(ledger.letters[1].state, State::Pending);
         ledger.expire(230 * MINUTE);
         assert_eq!(ledger.letters[1].state, State::Undelivered);
+    }
+
+    /// Operator decision 2026-11-14: a letter whose recipient the doorbell
+    /// still sees in its pane, such as a Conductor waiting an hour on the
+    /// operator's answer, gets another hour at its deadline instead of ending
+    /// undelivered, once an hour rather than on every pass; once the pane is
+    /// no longer seen it ends at the end of that hour, and a letter a hook
+    /// already handed over ends delivered as before.
+    #[test]
+    fn a_letter_to_a_recipient_still_in_its_pane_gets_another_hour() {
+        let mut ledger = letter_to("local", 0);
+        let mut handed = letter_to("local", 0).letters.remove(0);
+        handed.id = "letter-2".into();
+        handed.intent = "handed".into();
+        handed.handed = true;
+        ledger.letters.push(handed);
+        let present: HashSet<String> = ["letter-1".to_owned(), "letter-2".to_owned()].into();
+        assert!(!ledger.renew_present(&present, 59 * MINUTE), "not due yet");
+        assert!(ledger.renew_present(&present, 60 * MINUTE));
+        assert!(
+            !ledger.renew_present(&present, 61 * MINUTE),
+            "renewed once, not again on the next pass"
+        );
+        ledger.expire(60 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Pending);
+        assert_eq!(ledger.letters[1].state, State::Delivered);
+        ledger.expire(119 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Pending);
+        let gone = HashSet::new();
+        assert!(!ledger.renew_present(&gone, 120 * MINUTE));
+        ledger.expire(120 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 
     /// A letter that already rang, or whose one wake started before this

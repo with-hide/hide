@@ -1037,17 +1037,19 @@ fn run(
                     guard.delivery_wakes_started(),
                     guard.delivery_undeliverable(),
                     guard.delivery_tool_connections(),
+                    guard.delivery_present_holds(),
                 ))
             });
-        let (state, gone, rebinds, reach, asleep, woken, undeliverable, tools) = match state {
-            Ok(state) => state,
-            Err(code) => {
-                for request in batch {
-                    let _ = request.reply.send(Err(code.clone()));
+        let (state, gone, rebinds, reach, asleep, woken, undeliverable, tools, present) =
+            match state {
+                Ok(state) => state,
+                Err(code) => {
+                    for request in batch {
+                        let _ = request.reply.send(Err(code.clone()));
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         let now = now();
         let woke: ledger::Asleep = asleep_before
             .iter()
@@ -1088,6 +1090,7 @@ fn run(
             woken,
             undeliverable,
             tools,
+            present,
         };
         let Settled {
             ledger: candidate,
@@ -1452,6 +1455,11 @@ struct Upkeep {
     /// is restored: what a tool not among them keeps ends
     /// (`coordination::end_gone_tools`).
     tools: Option<Vec<String>>,
+    /// The pending letters whose recipient the doorbell last saw in its
+    /// pane, held by a state that ends on its own or by the operator's act:
+    /// their deadline is renewed rather than reached
+    /// (`Ledger::renew_present`).
+    present: std::collections::HashSet<String>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1468,6 +1476,7 @@ impl Upkeep {
         // machines' clocks as they are now.
         ledger.observe_reach(&self.reach, now);
         ledger.resume_woken(&self.woke, &self.woken, now);
+        ledger.renew_present(&self.present, now);
         ledger.expire_awake(now, &self.asleep, &self.woken);
         ledger.fail_undeliverable(&self.undeliverable, now);
         ledger.end_overdue_answer_waits(now);
@@ -2530,6 +2539,7 @@ mod tests {
             gone: Default::default(),
             rebinds: Default::default(),
             tools: None,
+            present: Default::default(),
         }
     }
 

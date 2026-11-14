@@ -165,9 +165,8 @@ pub(crate) fn of(
                     Some(HeldFor::Draft) => Cause::Draft,
                     Some(HeldFor::Unanswered) => Cause::BellExhausted,
                     // A parent pane Hide cannot reach is the parent's
-                    // device or session, not the child's to raise; a
-                    // pending letter is never undelivered.
-                    Some(HeldFor::Unreachable | HeldFor::Undelivered) | None => continue,
+                    // device or session, not the child's to raise.
+                    Some(HeldFor::Unreachable) | None => continue,
                 }
             } else {
                 continue;

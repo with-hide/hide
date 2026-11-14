@@ -124,6 +124,35 @@ impl Hold {
         }
     }
 
+    /// Whether the hold is a state of the recipient the doorbell still sees
+    /// in its pane, one that ends once it works, rests or the operator acts,
+    /// so its letter keeps its place past the delivery deadline rather than
+    /// ending undelivered (`Ledger::renew_present`). A pane or device not
+    /// seen, another session or agent there, or bells spent with none taken
+    /// is no such state: those letters end at their deadline as before.
+    pub(crate) fn recipient_present(self) -> bool {
+        match self {
+            Self::Absent | Self::Session | Self::Identity | Self::Exhausted => false,
+            Self::Kind
+            | Self::Working
+            | Self::Blocked
+            | Self::AwaitingOperator
+            | Self::SessionUnread
+            | Self::Status
+            | Self::Draft
+            | Self::Quiet
+            | Self::NotReady
+            | Self::Unprojected
+            | Self::Announced
+            | Self::Launching
+            | Self::Moved
+            | Self::Input
+            | Self::Letter
+            | Self::CorePending
+            | Self::ComposerUnread => true,
+        }
+    }
+
     fn code(self) -> &'static str {
         match self {
             Self::Kind => "kind_not_belled",

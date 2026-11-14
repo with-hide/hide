@@ -926,6 +926,14 @@ impl Runtime {
             .collect()
     }
 
+    /// The pending letters whose recipient the doorbell's last pass saw in
+    /// its pane, held by a state that ends on its own or by the operator's
+    /// act: the delivery upkeep renews their deadline rather than ending
+    /// them undelivered (`Ledger::renew_present`).
+    pub(crate) fn delivery_present_holds(&self) -> std::collections::HashSet<String> {
+        self.delivery_present.clone()
+    }
+
     /// The registrations and spawn records the core's books still need,
     /// which a full delivery ledger keeps when it makes room
     /// (`coordination::room`): an open mission's and a plan step's still
@@ -1822,6 +1830,21 @@ impl Runtime {
             }
             _ => None,
         };
+        // A letter to an open mission's Conductor is taken at its next tool
+        // call even while it works, as `--now` asks, rather than after five
+        // minutes of its work: every worker and checker of the mission waits
+        // on it (operator decision 2026-11-14).
+        if !repeated
+            && let (
+                Command::Send {
+                    now, force: false, ..
+                },
+                Some(target),
+            ) = (&mut command, &target)
+            && self.missions.book.conducted_open(&target.actor).is_some()
+        {
+            *now = true;
+        }
         let also_reads = self.node_exchanges(&actor, &command);
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
