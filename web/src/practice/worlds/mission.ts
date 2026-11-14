@@ -348,13 +348,13 @@ function later(model: MissionModel): { at: number; event: CoreEvent } | null {
 
 // --- The events --------------------------------------------------------------------------
 
-/** A focus moved, by a click, a key, a 내 차례 row or a relationship; opening the Conductor while it asks is looking at the question, and coming back from a worker by its head is not. */
+/** A focus moved, by a click, a key, a 내 차례 row or a relationship; opening the Conductor while it asks, by any of them, is looking at the question, as the core reads it. */
 function focused(model: MissionModel, event: CoreEvent): MissionModel | null {
   const desk = applyDesk(model.desk, event);
   const paneId = String(event.payload.pane_id);
   const requestId = event.payload.request_id;
   const focus: PaneFocusRequest | null = typeof requestId === "string" ? { request_id: requestId, target_pane_id: paneId, phase: "succeeded", message: null, retryable: false } : model.focus;
-  const looked = model.looked || (model.stage === ASKING && paneId === CONDUCTOR && typeof requestId !== "string");
+  const looked = model.looked || (model.stage === ASKING && paneId === CONDUCTOR);
   if (!desk && looked === model.looked && focus === model.focus) return null;
   return { ...model, desk: desk ?? model.desk, focus, looked };
 }
