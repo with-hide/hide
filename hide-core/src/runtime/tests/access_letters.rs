@@ -33,7 +33,7 @@ impl Fixture {
             json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
                 "terminal_id":format!("terminal-{pane}"),"revision":1,"focused":false,
                 "agent_status":"working","agent":"codex",
-                "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id",
+                "agent_session":{"source":"hook:codex","agent":"codex","kind":"id",
                     "value":format!("{pane}-session")}})
         };
         let fake = FakeEngine::start(move |method, _| {

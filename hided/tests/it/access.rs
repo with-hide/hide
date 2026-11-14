@@ -91,7 +91,7 @@ impl Window {
 }
 
 /// A fake tool: the built `hide`, run with its own home, in that home, with
-/// every `HIDE_*` and `HERDR_*` of this process removed but the state folder
+/// every `HIDE_*` of this process removed but the state folder
 /// of the daemon it asks.
 struct Tool {
     home: PathBuf,
@@ -139,7 +139,7 @@ impl Tool {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hide"));
         for (key, _) in std::env::vars_os() {
             let upper = key.to_string_lossy().to_uppercase();
-            if upper.starts_with("HERDR_") || upper.starts_with("HIDE_") {
+            if upper.starts_with("HIDE_") {
                 command.env_remove(key);
             }
         }
@@ -187,7 +187,7 @@ impl Tool {
                 return ran;
             }
             assert!(Instant::now() < deadline, "still pending: {}", ran.out);
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's approval reached the core; the tool's next request reads it
         }
     }
 
@@ -275,7 +275,7 @@ async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
     let deadline = Instant::now() + Duration::from_secs(20);
     while tool.run(&["access", "status", "--json"]).json()["value"]["level"] != "act" {
         assert!(Instant::now() < deadline, "the level never moved");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's level change reached the core; the tool's next status reads it
     }
     let inbox = tool.run(&["inbox"]);
     assert!(inbox.ok, "{}", inbox.out);
@@ -346,7 +346,7 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
             break;
         }
         assert!(Instant::now() < deadline, "still connected: {}", ran.out);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's disconnect reached the core; the tool's next command reads it
     }
 
     // B14: the tool leaves on its own; its key goes and so does its row.
