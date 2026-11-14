@@ -101,8 +101,7 @@ fn diagnostics(home: &Path) -> std::path::PathBuf {
 /// (with-hide/hide-private#852). This test is about the shell boundary, so
 /// it reads the fact that survives either timing.
 fn memory_asked(recorded: &Value) -> bool {
-    recorded["last"]["memory_unavailable"].is_u64()
-        || recorded["last"]["memory_deadline"].is_u64()
+    recorded["last"]["memory_unavailable"].is_u64() || recorded["last"]["memory_deadline"].is_u64()
 }
 
 #[test]

@@ -633,8 +633,7 @@ mod windows {
     /// crypto (with-hide/hide-private#329).
     #[test]
     fn a_windows_start_runs_npms_launcher_as_its_node_and_script_with_each_argument_whole() {
-        const SCRIPT: &str =
-            "process.stdout.write(JSON.stringify([process.env.PROFILE_VAR, ...process.argv.slice(2)]));\nprocess.exit(4);\n";
+        const SCRIPT: &str = "process.stdout.write(JSON.stringify([process.env.PROFILE_VAR, ...process.argv.slice(2)]));\nprocess.exit(4);\n";
         let root = tempfile::tempdir().unwrap();
         let modules = root.path().join("node_modules");
         let package = modules.join("@openai").join("codex");
