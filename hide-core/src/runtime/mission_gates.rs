@@ -201,13 +201,16 @@ impl Runtime {
         mission
             .nodes
             .iter()
-            .map(|node| {
-                self.gate_open(mission, node)
-                    && crate::mission_criteria::gate(&node.criteria).is_some_and(|line| {
-                        line.when == GateWhen::Start || self.node_unmet(mission, node) == [GATE_KEY]
-                    })
-            })
+            .map(|node| self.waits_on_operator(mission, node))
             .collect()
+    }
+
+    /// One node's answer of `operator_waits`.
+    pub(super) fn waits_on_operator(&self, mission: &Mission, node: &MissionNode) -> bool {
+        self.gate_open(mission, node)
+            && crate::mission_criteria::gate(&node.criteria).is_some_and(|line| {
+                line.when == GateWhen::Start || self.node_unmet(mission, node) == [GATE_KEY]
+            })
     }
 
     /// `node`'s gate as the map reads it; none for a node without one.

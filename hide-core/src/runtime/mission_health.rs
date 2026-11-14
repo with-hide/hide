@@ -939,6 +939,7 @@ impl Runtime {
                     own_prs,
                     unmet,
                     stopped,
+                    operator_waits: self.waits_on_operator(mission, node),
                 }
             })
             .collect();

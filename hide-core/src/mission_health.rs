@@ -72,6 +72,9 @@ pub(crate) struct NodeFacts {
     /// (`Runtime::worker_stopped`); none while it works, waits or cannot be
     /// read.
     pub stopped: Option<WorkerStopped>,
+    /// The node waits on the operator alone (`Runtime::operator_waits`):
+    /// settling a stall reads the same answer raising it did.
+    pub operator_waits: bool,
 }
 
 /// A worker whose row reads stopped with nothing of its own to wait on: no
@@ -491,7 +494,7 @@ fn still_holds(
                 &facts
                     .nodes
                     .iter()
-                    .map(|fact| fact.unmet == [crate::mission_criteria::GATE_KEY])
+                    .map(|fact| fact.operator_waits)
                     .collect::<Vec<_>>(),
             ) =>
         {
@@ -1989,6 +1992,43 @@ mod tests {
         let mut held = raised();
         held.delay = Some("disk".into());
         assert!(clears(&held));
+        // Review of with-hide/hide#2584 (N1): a start gate's question holds
+        // the mission as the raise judged it, so a sibling's stall goes.
+        let mut gated = raised();
+        gated.nodes[0].status = NodeStatus::Planned;
+        gated.nodes[0].finished_at_unix_ms = None;
+        gated.nodes[1].depends_on.clear();
+        let mut gate = crate::mission_criteria::Criterion::new(
+            "human",
+            crate::mission_criteria::CriterionKind::Human,
+        );
+        gate.when = crate::missions::GateWhen::Start;
+        gate.asked = Some(1);
+        gated.nodes[0].criteria.push(gate);
+        gated.decision = Some("Check the mockup and tell me".into());
+        gated.question = Some(crate::missions::Question {
+            key: 1,
+            why: None,
+            options: Vec::new(),
+            recommend: None,
+            node: Some("a".into()),
+            nodes: Vec::new(),
+            asked_at_unix_ms: 0,
+            views: Vec::new(),
+            material_asked: false,
+        });
+        assert!(!clears(&gated), "read as owing a start, it holds nothing");
+        let waits = vec![
+            NodeFacts {
+                operator_waits: true,
+                ..NodeFacts::default()
+            },
+            NodeFacts::default(),
+        ];
+        assert!(
+            evaluate(&gated, &facts(Some(&pulls), waits)).contains(&Act::Clear { node: 1 }),
+            "a start gate waits on the operator alone"
+        );
         // A pull request's wait goes with a new push after it was raised.
         let mut m = reviewed();
         m.nodes[0].prs = vec![7];
