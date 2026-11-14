@@ -467,6 +467,10 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     expect(items[2]).toMatchObject({ node: { key: "api" }, cause: "child_blocked", line: "Login expired" });
     const raisedOnly = { ...rows.p2!, request: undefined };
     expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => workerEscalation(raisedOnly as AgentRow))[0]).toMatchObject({ kind: "worker_blocked", line: null });
+    // A mission an external tool keeps has no turn of the operator's, so its chip draws no `!` (PRD hide-external-control B30).
+    const kept = mission("m", { decision: "Rail or slot?", nodes, unlisted: true });
+    expect(turnItems(kept, row)).toEqual([]);
+    expect(missionTurn(kept)).toBeNull();
   });
 
   it("lists a worker's person's turn in 내 차례 with what and where, and says it on its step too (operator decision 2026-11-13; PRD ask-human B25)", () => {

@@ -746,7 +746,8 @@ export function safetyNetLine(net: MissionSafetyNet, t: TFunction<"translation">
 
 /** `escalationOf` answers for a node's worker: the desktop reads its row, the phone the escalation its core sent with the node. */
 export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, escalationOf: (node: N) => WorkerEscalation | null): TurnItem<N>[] {
-  if (!missionOpen(mission)) return [];
+  // An external tool keeps the mission its agent conducts, so nothing in it is the operator's turn (PRD hide-external-control B30).
+  if (!missionOpen(mission) || mission.unlisted) return [];
   const items: TurnItem<N>[] = [];
   const net = mission.safety_net ?? null;
   if (mission.decision) items.push({ kind: "decision" });
