@@ -124,12 +124,14 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const finished = !band && !off && (header?.finished ?? false);
   // A Conductor's mission line already names the work its children do.
   const waitingOnChildren = band || off || missionLine ? null : header?.waiting_on_children ?? null;
+  const waitingOnSubagents = band || off ? null : header?.waiting_on_subagents ?? null;
+  const waiting = waitingOnChildren || waitingOnSubagents ? waitWord(t, waitingOnChildren ? { wait: "children", wait_count: waitingOnChildren, wait_subagents: waitingOnSubagents } : { wait: "subagents", wait_count: waitingOnSubagents }) : null;
   // Before any early return: a hook runs on every render.
   // A raised ask names the device its pane is on; any other band's pane is looked up in the rows.
   const unreachable = useUnreachable(band?.raised ? { device: band.raised.open_device_id ?? null } : band?.action ? { pane: band.action.pane_id } : null);
   const humanTurn = band ? bandHumanTurn(band, agentsByPane(agents).get(paneId)) : null;
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
-  if (off || (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren)) return workingLine;
+  if (off || (!band && !children && !ownProgress && !request && !finished && !waiting)) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
   const progress = relationState(tracked, outcome, t);
   const navigation = progress?.phase === "failed" ? progress.message : progress?.phase === "pending" ? t("panes.relation.opening", { name: tracked!.label }) : null;
@@ -137,14 +139,14 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const answer = <>
     {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
       {finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
-      {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{[waitWord(t, "children"), t("agents.line.children", { count: waitingOnChildren })].join(" · ")}</span> : null}
+      {waiting ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={waitingOnChildren ? paneId : undefined} data-pane-subagents-wait={waitingOnChildren ? undefined : paneId}>{waiting}</span> : null}
       {ownProgress ? <Hint label={ownProgress}><span className={cn("min-w-0 flex-1 truncate", missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={missionLine ? (missionLine.decision ? "decision" : "running") : undefined}>{ownProgress}</span></Hint> : null}
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
     </>}
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
     {humanTurn ? <HumanTurnDone turn={humanTurn} actions={actions} variant="outline" reason={unreachable === null} className="shrink-0" /> : null}
   </>;
-  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
+  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waiting ? "waiting" : request ? "request" : "children");
   // A working turn with no word beyond its request, or a parent with no turn
   // to show, draws no answer at all, so two lines never add an empty one.
   const answered = (kind !== "request" && kind !== "children") || childConnection !== null;
@@ -289,6 +291,26 @@ export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions:
       {t("openAsks.count", { count })}
     </Button>
   )} />;
+}
+
+/**
+ * The subagents the pane's agent runs inside its own session, as a light chip
+ * on its head, `서브 3`, whose hover says them (docs/UI_BEHAVIOR.md,
+ * Subagents). Nothing to press: a subagent has no pane to open. Smaller and
+ * lighter than the child button, and absent for none and for a count Hide
+ * cannot read.
+ */
+export function PaneSubagentChip({ paneId }: { paneId: string }) {
+  const { t } = useInterfaceTranslation();
+  const count = useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === paneId)?.subagents ?? 0);
+  if (count === 0) return null;
+  const words = t("agents.subagents.working", { count });
+  return <Hint label={words}>
+    <span role="img" aria-label={words} data-pane-subagents={count} className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs bg-secondary px-xs text-micro whitespace-nowrap text-agent-working tabular-nums">
+      <span aria-hidden="true" className="size-(--size-subagent-dot) shrink-0 rounded-full bg-agent-working opacity-(--opacity-secondary)" />
+      <span aria-hidden="true">{t("agents.subagents.chip", { count })}</span>
+    </span>
+  </Hint>;
 }
 
 /** The pane's own ask's verb, as the row's ask starts with it; a stop is work left, `일 남음`, as the row's line says. */

@@ -14,8 +14,8 @@ export type AgentStatusCode = "error" | "question" | "approval" | "working" | "d
 /** Whose move is next (`RowMark`): the operator's, the operator's to look at a View the agent opened (PRD unseen-agent-views D-05), in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
 export type RowMark = "turn" | "look" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
 
-/** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, or its pull request's checks. */
-export type AgentWait = "children" | "background" | "reply" | "checks";
+/** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, its pull request's checks, or the subagents its session still runs. */
+export type AgentWait = "children" | "background" | "reply" | "checks" | "subagents";
 
 /** Why a row's second line is on screen (`RowLine::mode`); see agentRow.ts. */
 export type LineMode = "request" | "news" | "waiting" | "kept" | "quiet" | "vanished" | "checks_passed" | "checks_failed";
@@ -196,6 +196,14 @@ export type AgentRow = {
   background_left?: number;
   /** The descendants still working under a root whose finished turn the operator has not read, which its line ends with; absent when none. */
   children_left?: number;
+  /** How many subagents its session runs inside itself now, drawn as dots beside its title; absent when none run and when Hide cannot read the count (docs/UI_BEHAVIOR.md, Subagents). */
+  subagents?: number;
+  /** The subagents still running under a finished turn the operator has not read, which its line ends with; absent when none. */
+  subagents_left?: number;
+  /** How many things its `wait` waits on, which its line counts (`자식 2개 기다림`); absent for running checks and when it waits for nothing. */
+  wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds (`자식 1개 · 서브에이전트 2개 기다림`); absent when none. */
+  wait_subagents?: number;
   /** How deep under its lineage root; a root is 0. */
   lineage_depth?: number;
   /** Whether the operator has this row's descendants folded away; folded is the default. */
@@ -1160,6 +1168,8 @@ export type PaneHeader = {
   finished?: boolean;
   /** The agent waits on its children: how many descendants work, said after the request. */
   waiting_on_children?: number;
+  /** The agent rests while subagents run inside its session: how many, said after the request. */
+  waiting_on_subagents?: number;
 };
 /** The shown request in one line and its images, which the row counts. */
 export type PaneTurnRequest = {text: string | null; images: number};
@@ -3172,6 +3182,44 @@ export type DeskJob = {
 export type DeskMentions = {
   sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null; parent: string | null; project: string; branch: string | null; last_prompt_at_unix_ms: number | null }[];
   projects: { id: string; name: string; sessions: string[] }[];
+};
+
+/** What an approved external tool may do (PRD hide-external-control D-06, D-34): see what Hide shows, or that and set agents to work. */
+export type AccessLevel = "view" | "act";
+
+/**
+ * The `access` section (PRD hide-external-control B2, B11, B15): the requests
+ * waiting for the operator and the approved tools on the core's machine. The
+ * core decides every value; Settings › External tools words them and sends
+ * the operator's approve, refuse, level and disconnect back.
+ */
+export type AccessSection = {
+  /** The core's machine, where every tool runs. */
+  machine: string;
+  /** How many tools may connect (`n / 16`). */
+  limit: number;
+  /** Oldest first. */
+  pending: AccessPending[];
+  /** In the order they were approved. */
+  connections: AccessConnection[];
+};
+
+export type AccessPending = { id: string; name: string; program: string | null; requested_ms: number };
+
+export type AccessConnection = {
+  id: string;
+  name: string;
+  level: AccessLevel;
+  program: string | null;
+  created_ms: number;
+  /** Moved at most once a minute (B34). */
+  last_used_ms: number;
+  /** The live agents the tool started, each by its pane, which the row opens (B15). */
+  agents: { agent_id: string; pane_id: string }[];
+  agent_count: number;
+  /** The open missions those agents conduct, by id. */
+  missions: string[];
+  mission_count: number;
 };
 
 /** The `desk` section: absent until hided starts Desk. */

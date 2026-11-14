@@ -295,7 +295,7 @@ Once every other tab is a mark, the selected tab gives up width from the title m
 The strip scrolls only when even that selected mark and the other marks overflow.
 The same width and tab count always draw the same strip whichever way the window was resized, a resize never paints an overflowing frame, and opening, closing or selecting a tab shares the bar again at once.
 A tab being renamed keeps the preferred width at every density, and each tab's tooltip and accessible name still give its agent, full title, state and agent pane count.
-Two or more agent panes in the same tab add a neutral pane icon and count beside the title; shell panes and an agent's internal subagents do not count.
+Two or more agent panes in the same tab add a neutral pane icon and count beside the title; shell panes and an agent's internal subagents ([Subagents](#subagents)) do not count.
 One agent pane shows no count beside the title.
 The count folds away while renaming, at compact and mark density, or when the title slot holds less than two small controls, leaving the title and close or shortcut control their room.
 The full count remains in the tooltip and accessible name at every density.
@@ -501,7 +501,8 @@ A sign-in popup a page opens is a small window of its own above hide, so the sig
 A link that would open another app (Slack, Zoom) asks first with the app's name, and opens in that app only on Open.
 On a connected SSH device, the native page uses that device's localhost or consented checkout resources; a route failure appears in the page's existing failure state.
 Opening an address the Workspace already shows moves to that view and loads it again instead of adding a second one.
-The view's own toolbar holds Back, Forward, Reload (Stop while the page loads), the address, which shows a web address without its scheme until it is focused, the device size button and Comment; focusing the address selects the whole address, Return loads what was typed, and Escape puts the page's address back.
+The view's own toolbar holds Back, Forward, Reload (Stop while the page loads), the address, which shows a web address without its scheme until it is focused, the device size button, Comment and Open in default browser; focusing the address selects the whole address, Return loads what was typed, and Escape puts the page's address back.
+Open in default browser (issue 2293) opens the address the page shows now in the operating system's default browser, the way out for a sign-in that cannot finish in Hide (SSO, a passkey), and leaves the page as it was; it shows only for a web address, never on a local file's page, and not on a connected device's `localhost` page, which the default browser would read as this machine's.
 A page zoomed off 100% shows its zoom as a small badge at the address field's right end, and nothing at 100% (PRD browser-width-zoom B6-B9); the badge opens − · zoom · + · `Reset` (`100%로`), which stays open while the operator steps through Chrome's steps from 25% to 500%, disables − at 25% and + at 500%, leaves the keyboard in the shell, and goes with the badge once the page is back at 100%, as it does on ⌘0.
 Pages of one host share their zoom, so every other page of that host shows the same badge, in any area or Workspace.
 The device size button lays the page out at a phone's (390), a tablet's (768) or a desktop's (1280) width instead of its area's (B10-B15): Fit, the default, is its icon alone, and a chosen size shows its width, with the scale the page is drawn at when the area is narrower (`1280 · 39%`).
@@ -875,18 +876,31 @@ The choice is a core preference, `ui_state.pane_turn_row_mode` (`one_line`, `two
 The mode never changes the terminal's viewport or its PTY grid, because the row overlays the terminal.
 Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `hide-core/src/runtime/events.rs`.
 
-### Subagent count
+### Subagents
 
-Hide draws no count of the subagents an agent runs inside its own session, on any surface: not on a sidebar row, in a pane header, in the 태스크 list, in an Overview line, in ⌘K and not in Settings (operator decision on issue #810).
-A subagent has no pane of its own, so it is not a delegated child: it has no row to open and the operator can neither enter it nor act on it, so the number is not a state they would act on (design principle 13).
-The child marks on screen mean only the agents Hide started, which have their own panes and tree rows: the descendant mark `! N` in the tree popover, the tree button with its `자식 에이전트 N` tooltip, and the child popover.
-A subagent count beside them would give "child" two meanings on one row.
-The count reaches the core and no surface reads it.
-Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads.
+An agent's own subagents, the ones it runs inside its session, are drawn on the work map and in the pane head, and every list says when an agent rests on them, so a pane running six of them never looks like one working alone and a resting agent whose subagents still run never looks idle (operator decision 2026-11-14, reversing issue #810).
+A subagent has no pane and no row of its own, so it is not a delegated child: nothing about it opens anything, and its marks stay smaller and lighter than the child chip (`1/5`) and a child's circle.
+
+- A row, wherever the sidebar row is drawn (the project tree, the 태스크 list and its children, the child popover) and on the phone, draws no mark for them: a working row with subagents looks exactly like one without (operator decision 2026-11-14, after a title mark read as an ellipsis, a "more" menu or the unread dot).
+  They reach a row only through its line, when it rests on them or a finished turn left them running, below.
+- The Overview work map: one small blue dot per running subagent, eight at most, slowly circling just outside the session's circle, which itself stays as it is (`SubagentOrbit`, `web/src/overviewGraphNodes.tsx`); a reduced-motion setting holds them still.
+- The pane head: a light chip, `서브 N`, after the title's marks, whose hover says `서브에이전트 N개 작업 중`; it has nothing to press (`PaneSubagentChip`, `web/src/PaneHeaderBand.tsx`).
+- The phone: the same lines as the desktop rows.
+- Nothing is drawn for none, nor for a count Hide cannot read: an agent that declares none, a hook that is not in or switched off, a session older than the hook (the reasons the core keeps in `PaneChildren.instrumented`), each exactly as none.
+  The done count is drawn nowhere.
+
+A resting agent whose subagents still run waits on them, as one waits on its children ([status-model.md](status-model.md#a-quiet-row-that-waits)): the still dashed ring, in Working, its line `서브에이전트 N개 기다림 · …`, and with children working too, `자식 1개 · 서브에이전트 2개 기다림`.
+Every wait line counts what it waits on, `자식 N개 기다림`, `서브에이전트 N개 기다림`, `백그라운드 N개 기다림`, `답장 N개 기다림`, and running checks keep `CI 기다림 · PR #N`.
+A turn the label read as finished is not hidden by the subagents it left, while the operator has not read it: the unread dot, the line ending `· 서브 N개 남음`, its hover `서브에이전트 N개 남음`; once read, the row waits on them again, and when the last one ends the row ends as background work does, with one Done notice.
+
+The count comes from each agent's hook.
+Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, and reads the running count once for both the pane head (`PaneChildren.subagents`) and the row (`SidebarAgentSnapshot.subagents`, laid before the lineage by `Runtime::lay_subagents`, and for a device's rows from that device's tokens and kit), through `sidebar::running_subagents`.
 docs/agent-hooks.md owns the hook.
 `working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
-Each count is separately knowable, and a count the core cannot read is `None`, never zero, because a zero would claim the agent works alone; an agent whose adapter declares no count has none to read.
-Claude Code, Codex, Grok, OpenCode and omp report a count, and Pi (it runs no subagents) declares none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
+Each count is separately knowable, and a count the core cannot read is `None`, never zero, in the core's facts; the screens above draw it exactly as none.
+Claude Code, Codex, Grok, OpenCode, omp and Antigravity report a count, and Pi (it runs no subagents) and Cursor declare none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
+Codex's count follows its subagents past the main turn's end, as Claude Code's does: a subagent still running when the main agent's turn ends stays working until its own end, one the main agent stops itself leaves without being counted done, and a quit and resume of the session counts none of the subagents the quit cut off (docs/agent-hooks.md, Which subagents run).
+Which kind each subagent is and how long it has run are not drawn yet: the hook keeps only their ids, so the pane head's hover gives the count alone for every agent.
 Settings > Agents lists no subagent count either: the kit's feature table has no `subagents` entry.
 
 ### Closing an agent that spawned others
@@ -2723,7 +2737,7 @@ All pages use the four interface languages, existing settings rows, system contr
 
 Settings opens as one modal, from ⌘,, the sidebar's gear and the desktop menu's Settings…, about 880 wide (`--size-settings-sheet-w`) and as wide and tall as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side (PRD settings-left-nav B1, B13).
 Its left is a list of pages and its right the chosen page; the list keeps its width (`--size-settings-nav-w`) and its place while only the page scrolls, down to the smallest window, 720×480 (B12, B13).
-The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mission, Mobile, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
+The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mission, Mobile, External tools, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
 Its top inset uses `spacing-sm` and group labels use `spacing-xs` above and below, so the additional Usage page fits at 720×480 with the default Interface text without shrinking row targets.
 When Interface text makes the list overflow, its grouped pages scroll independently while About and Privacy stay pinned at the foot; every page remains reachable by pointer or keyboard, and scrolling either the list or the page does not move the other.
 Each page has its mark and its name, the names are the same in every language, and a group name is a label, never a page.
@@ -3117,6 +3131,25 @@ A foreign HTTPS entry or Funnel is refused; a failed removal remains visible unt
 The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 연결 해제, which closes that phone at once.
 The phone pause switch is on Settings > Notifications, and its choice survives a restart.
 A phone is told only when an agent waits on the operator’s answer, a question, an approval or a block, never when it finishes (status-model.md, Phone notices).
+
+### Settings > External tools
+
+External tools (외부 도구) is a page of Settings' machine group, after Mobile, drawn from the core's `access` section (`web/src/settings/ExternalToolsTab.tsx`, `web/src/externalTools.ts`).
+It is where a program outside Hide's panes that ran `hide access request --name <name>` is approved, and the only place: a request never reaches 내 차례, a badge, a notice or the phone, and no `hide` command approves, refuses, changes or disconnects a tool.
+Every tool runs on the core's machine, so each line names that machine the way Settings names it.
+
+승인 대기 (with its count) leads the page while a request waits, one row per request: the name the tool asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
+Under them two choices with one line each, 보기만 · Hide에 보이는 것(상태, 에이전트 화면, 미션)을 볼 수만 있어요 and 시키기 · 보기에 더해 에이전트를 띄우고 끝내고 말을 넣고, 미션을 맡길 수 있어요, with 보기만 chosen.
+The approve button names the choice, 보기만으로 승인 or 시키기로 승인, beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
+
+연결된 도구 · n / 16 lists the approved tools in the order they were approved, under one line naming the two levels (보기만 볼 수만 · 시키기 일까지 시킴).
+Each row shows the tool's name and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; the 보기만 and 시키기 segments, where pressing the other one changes the level from the tool's next command; and 끊기, which disconnects at once with no confirmation.
+A 시키기 tool that started agents or missions also says 끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요 under its line; a 보기만 tool's work is already the operator's, so it does not.
+With no tool connected the list holds 연결된 도구가 없어요 and the command that asks, `hide access request --name <이름>`.
+
+Pressing a row anywhere outside its controls opens the agents and then the missions that tool started: an agent as its status mark, agent mark and title, a mission as its mark and title.
+Pressing an agent closes Settings and opens its pane, and pressing a mission opens its map as a mission chip does; an agent the window has not drawn yet keeps its line under its id, and a row whose tool started nothing says so.
+The gallery draws the page from invented tools at `?scene=external-tools&state=pending|connected|empty`.
 
 ### The phone app
 

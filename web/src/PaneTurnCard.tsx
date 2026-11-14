@@ -170,7 +170,7 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
   const end = agent.request?.end;
   if (!end) return null;
   // A turn that ended waiting says what it waits for when the row knows, as the sidebar's line does.
-  const verb = end === "waiting" ? waitWord(t, agent.wait) : t(`requests.end.${end}`);
+  const verb = end === "waiting" ? waitWord(t, agent) : t(`requests.end.${end}`);
   return { verb, asks: end === "question" || end === "blocked", text: agent.request?.line ?? null };
 }
 

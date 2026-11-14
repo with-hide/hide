@@ -113,6 +113,7 @@ export type Frame = {
     desk_live?: import("./snapshot").DeskLive;
     desk_jobs?: import("./snapshot").DeskJobsSection;
     desk_mentions?: import("./snapshot").DeskMentions;
+    access?: import("./snapshot").AccessSection;
     link_panel?: import("./snapshot").LinkPanel;
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
@@ -202,6 +203,8 @@ type Store = {
   /** Desk's cards (`desk_jobs`) and `@` menu (`desk_mentions`), each its own section. */
   deskJobs: import("./snapshot").DeskJobsSection | null;
   deskMentions: import("./snapshot").DeskMentions | null;
+  /** Settings › External tools (`access`): its own section, absent until the core sends it. */
+  access: import("./snapshot").AccessSection | null;
   /** The link record of the open PR or issue panel (`link_panel`); null until one opens. */
   linkPanel: import("./snapshot").LinkPanel | null;
   /** Each Project's link counts and chips (`link_summaries`). */
@@ -382,6 +385,7 @@ export const useShellStore = create<Store>((set, get) => ({
   deskLive: null,
   deskJobs: null,
   deskMentions: null,
+  access: null,
   linkPanel: null,
   linkSummaries: null,
   sessionRecord: null,
@@ -488,6 +492,7 @@ export const useShellStore = create<Store>((set, get) => ({
         deskLive: payload.desk_live ?? null,
         deskJobs: payload.desk_jobs ?? null,
         deskMentions: payload.desk_mentions ?? null,
+        access: payload.access ?? null,
         linkPanel: payload.link_panel ?? null,
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
@@ -502,7 +507,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.memory !== undefined ||
       payload.suggestions !== undefined ||
       payload.desk !== undefined || payload.desk_live !== undefined ||
-      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined ||
+      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined || payload.access !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined ||
       payload.session_thread !== undefined || payload.session_thread_history !== undefined
@@ -517,6 +522,7 @@ export const useShellStore = create<Store>((set, get) => ({
         deskLive: payload.desk_live ?? get().deskLive,
         deskJobs: payload.desk_jobs ? share(get().deskJobs, payload.desk_jobs) : get().deskJobs,
         deskMentions: payload.desk_mentions ? share(get().deskMentions, payload.desk_mentions) : get().deskMentions,
+        access: payload.access ? share(get().access, payload.access) : get().access,
         linkPanel: payload.link_panel ? share(get().linkPanel, payload.link_panel) : get().linkPanel,
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,

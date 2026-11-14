@@ -450,7 +450,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
           <ToolMark tool={agent.tool} className="max-w-2/5" />
           <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
-          <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
+          <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
         <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
       </div>
@@ -622,15 +622,25 @@ const revealed = (open: boolean) => (open ? "flex" : "hidden group-hover/task:fl
 const resting = (open: boolean) => (open ? "hidden" : "group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden");
 
 /**
+ * The time a row shows: in 내 차례 how long its ask has waited, the time the
+ * core orders the asks by, so the times read in order down the list
+ * (operator decision 2026-11-14); elsewhere its latest actual prompt.
+ */
+function waitedSince({ agent, card }: TaskEntry): number | null | undefined {
+  if (card.state !== "needs_you") return agent.last_prompt_at_unix_ms;
+  return (card.read ? agent.revisit?.since_unix_ms : agent.state.request_since) ?? agent.last_prompt_at_unix_ms;
+}
+
+/**
  * The time, and in its place under the pointer or focus the record button
  * and `⋯` (B15, B18).
  */
-function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
+function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, revisit }: { agent: AgentRow; since?: number | null | undefined; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   return (
     <span className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
-      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("text-micro text-muted-foreground tabular-nums", resting(open))} />
+      <Elapsed since={since} data-agent-elapsed="true" className={cn("text-micro text-muted-foreground tabular-nums", resting(open))} />
       <span data-row-actions="" className={cn("items-center gap-xxs", revealed(open))}>
         {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (

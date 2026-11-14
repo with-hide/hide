@@ -23,10 +23,15 @@ pub struct Header {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
     /// The agent waits on its children: how many descendants work. The row
-    /// then says `대기 · 자식 N명 작업 중` after the request, the words its
-    /// sidebar row says, and never a child's own line.
+    /// then says `자식 N개 기다림` after the request, the words its sidebar
+    /// row says, and never a child's own line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on_children: Option<u32>,
+    /// The agent rests while subagents run inside its session: how many.
+    /// The row says `서브에이전트 N개 기다림`, or with children too, `자식 1개 ·
+    /// 서브에이전트 2개 기다림`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on_subagents: Option<u32>,
 }
 
 /// The shown request in one line, the label's summary or its own first line,
@@ -247,6 +252,9 @@ pub(crate) fn of(
             && agent.wait == Some(crate::model::AgentWait::Children))
         .then_some(agent.descendant_counts.working)
         .filter(|working| *working > 0);
+        let waiting_on_subagents = (agent.state.verb == super::RequestVerb::Waiting)
+            .then(|| super::axes::subagents_waited_on(agent))
+            .filter(|subagents| *subagents > 0);
         let sentence = |line: Option<&str>| {
             line.map(str::trim)
                 .filter(|line| !line.is_empty())
@@ -266,11 +274,15 @@ pub(crate) fn of(
                 None
             },
             working,
-            request: (working || finished || waiting_on_children.is_some())
-                .then(|| turn_request(agent))
-                .flatten(),
+            request: (working
+                || finished
+                || waiting_on_children.is_some()
+                || waiting_on_subagents.is_some())
+            .then(|| turn_request(agent))
+            .flatten(),
             finished,
             waiting_on_children,
+            waiting_on_subagents,
             ..Header::default()
         };
     };

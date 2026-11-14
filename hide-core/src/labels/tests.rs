@@ -547,6 +547,19 @@ fn shown(worker: &LabelWorker, agent: &ObservedAgent) -> Option<AgentLabel> {
     payload.agents.remove(0).label
 }
 
+/// When the overlay says the agent last changed state.
+fn changed_at(worker: &LabelWorker, agent: &ObservedAgent) -> Option<u64> {
+    let (kind, value) = agent.reference.clone().unwrap();
+    let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
+        "pane_id": agent.pane_id, "agent": agent.agent, "agent_status": agent.status,
+        "state_change_seq": agent.state_change_seq,
+        "agent_session": {"kind": kind, "value": value},
+    }]}))
+    .unwrap();
+    worker.overlay().apply(&mut payload);
+    payload.agents.remove(0).changed_at_unix_ms
+}
+
 fn shown_facts(
     worker: &LabelWorker,
     agent: &ObservedAgent,
@@ -1569,6 +1582,79 @@ fn a_restart_restores_the_label_with_one_read_from_where_it_stopped_and_no_reque
     assert_eq!(
         task(shown(&worker, &idle)).as_deref(),
         Some("재시작 전에 붙은 작업")
+    );
+}
+
+/// A restarted daemon's engine counts each pane's state changes from its
+/// own start, so the count differs from the stored one although the agent
+/// did nothing; when the agent last changed, which dates its question's
+/// wait, stays, and a state that did move across the restart is dated anew.
+#[test]
+fn a_restart_keeps_when_the_agent_last_changed_unless_its_state_moved() {
+    let harness = Harness::new();
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "재시작 전 요청"),
+            ("assistant", "어느 쪽으로 할까요?"),
+        ],
+    );
+    harness.backend.answer("묻고 기다리는 작업", "question", "");
+    let asking = agent(&path, "idle", 40);
+    let live = HashSet::from([asking.pane_id.clone()]);
+    {
+        let store = harness.store();
+        let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+        worker.observe(
+            std::slice::from_ref(&asking),
+            Some(&live),
+            Instant::now(),
+            1_000,
+        );
+        settle(&mut worker, &woken);
+        assert_eq!(changed_at(&worker, &asking), Some(1_000));
+        store.flush();
+    }
+    // A restored pane reports in steps: sequence 0, `unknown`, then settled.
+    let restored = |worker: &mut LabelWorker, settled: &str, at: u64| {
+        for (step, status) in [(0, "idle"), (1, "unknown"), (3, settled)] {
+            let observed = agent(&path, status, step);
+            worker.observe(
+                std::slice::from_ref(&observed),
+                Some(&live),
+                Instant::now(),
+                at + step,
+            );
+        }
+        agent(&path, settled, 3)
+    };
+    let store = harness.store();
+    let (mut worker, _, _) = harness.worker(Arc::clone(&store));
+    let settled = restored(&mut worker, "idle", 9_000);
+    assert_eq!(
+        changed_at(&worker, &settled),
+        Some(1_000),
+        "the restart dated the wait anew"
+    );
+    let working = agent(&path, "working", 4);
+    worker.observe(
+        std::slice::from_ref(&working),
+        Some(&live),
+        Instant::now(),
+        9_500,
+    );
+    worker.tick(Instant::now());
+    assert_eq!(changed_at(&worker, &working), Some(9_500));
+    store.flush();
+    drop(worker);
+
+    let (mut worker, _, _) = harness.worker(harness.store());
+    let stopped = restored(&mut worker, "idle", 12_000);
+    assert_eq!(
+        changed_at(&worker, &stopped),
+        Some(12_003),
+        "a turn that ended across the restart kept the old time"
     );
 }
 

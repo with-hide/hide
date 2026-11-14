@@ -56,6 +56,7 @@ import { ExternalFiles, agentOpen, clickedRoute } from "./externalFiles";
 import { WAKE_TIMEOUT_MS, wakeRequest, type WakeCause } from "./hideAiWake";
 import { inBackground } from "./inBackground";
 import { revealTarget } from "./reveal";
+import { externalLink } from "./externalLink";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
 import { frameOptions, hidesTitleBar, windowChrome } from "./windowChrome";
@@ -83,7 +84,6 @@ const LOST_AFTER_MISSES = 2;
 const LOST_POLL_MS = 3_000;
 const STATUS_PAGE = statusPageFile(__dirname);
 const CLIPBOARD_PERMISSIONS = new Set(["clipboard-read", "clipboard-sanitized-write"]);
-const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 export type HostState =
   | { kind: "connecting" }
@@ -1638,19 +1638,13 @@ export class DesktopHost {
   }
 
   private openExternal(url: string): void {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      this.log.event("link.refused", { reason: "unparsable" });
+    const link = externalLink(url);
+    if ("refused" in link) {
+      this.log.event("link.refused", link.refused === "unparsable" ? { reason: "unparsable" } : { protocol: link.protocol });
       return;
     }
-    if (!EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
-      this.log.event("link.refused", { protocol: parsed.protocol });
-      return;
-    }
-    this.log.event("link.external", { protocol: parsed.protocol, host: parsed.host });
-    shell.openExternal(url).catch((error: unknown) => this.log.event("link.open_failed", { detail: String(error) }));
+    this.log.event("link.external", { protocol: link.protocol, host: link.host });
+    shell.openExternal(link.url).catch((error: unknown) => this.log.event("link.open_failed", { detail: String(error) }));
   }
 
   private guardNavigation(window: BrowserWindow): void {

@@ -231,6 +231,15 @@ impl Runtime {
                 &updates,
             );
         }
+        // The subagents each of its sessions runs, from the same tokens and
+        // kit, before the lineage that waits on them.
+        for agent in &mut session.agents {
+            agent.subagents = crate::sidebar::running_subagents(
+                &agent.agent_kind,
+                tokens.get(&agent.pane_id).copied().unwrap_or_default(),
+                &status_of,
+            );
+        }
     }
 
     /// Recomputes a device's published session and catalog state from what

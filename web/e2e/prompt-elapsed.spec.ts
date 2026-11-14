@@ -1,4 +1,5 @@
-// The row measures the latest actual prompt, independently of state and daemon lifetime.
+// The row measures the latest actual prompt, independently of state and daemon lifetime;
+// in 내 차례 an ask's row measures how long the ask has waited instead.
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
@@ -37,7 +38,11 @@ test("prompt elapsed survives state changes and restart, advances only on a prom
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(taskTime).toHaveText("3h", { timeout: 30_000 });
     continueFixtureTranscript(engine, session, { task: "마지막 요청 시간 확인", at: Date.now() - 7 * 60_000 - 5_000 });
+    // At a permission prompt the row is an ask in 내 차례, timed by how long it
+    // has waited, the time the asks stand by (operator decision 2026-11-14).
     await setAgentState(daemon, pane, "blocked");
+    await expect(taskTime).toHaveText(/^\d+s$/);
+    await setAgentState(daemon, pane, "idle");
     await expect(taskTime).toHaveText("7m", { timeout: 30_000 });
     // Metadata alone cannot manufacture a prompt time or inherit the old session's.
     fs.writeFileSync(path.join(claudeProjects(engine), "e2e", "no-prompt.jsonl"), `${JSON.stringify({ type: "system", sessionId: "no-prompt", timestamp: new Date().toISOString(), subtype: "init" })}\n`);

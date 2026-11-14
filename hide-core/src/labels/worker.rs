@@ -622,16 +622,31 @@ impl LabelWorker {
             let seq_moved = !recount && record.state_change_seq != observed.state_change_seq;
             let was_stopped = matches!(record.agent_status.as_deref(), Some("idle" | "done"));
             let was_working = record.agent_status.as_deref() == Some("working");
-            if record.state_change_seq != observed.state_change_seq {
-                record.state_change_seq = observed.state_change_seq;
-                record.changed_unix_ms = now_unix_ms;
-                self.dirty = true;
-                changed = true;
-            }
             let status = observed
                 .status
                 .clone()
                 .unwrap_or_else(|| "unknown".to_owned());
+            let restoring = record.status_before_engine.is_some();
+            if record.state_change_seq != observed.state_change_seq {
+                record.state_change_seq = observed.state_change_seq;
+                if !restoring {
+                    record.changed_unix_ms = now_unix_ms;
+                }
+                self.dirty = true;
+                changed = true;
+            }
+            // A restored pane reports sequence 0, then `unknown`, then the
+            // state it settles in (docs/status-model.md); a restart changes
+            // nothing the agent did, so only a settled state other than the
+            // one before it moves the time a question's wait is dated by
+            // (operator report 2026-11-14: every restart dated every wait anew).
+            if restoring && observed.state_change_seq != 0 && status != "unknown" {
+                if record.status_before_engine.as_deref() != Some(status.as_str()) {
+                    record.changed_unix_ms = now_unix_ms;
+                    self.dirty = true;
+                }
+                record.status_before_engine = None;
+            }
             let status_moved = record.agent_status.as_deref() != Some(status.as_str());
             if status_moved {
                 record.agent_status = Some(status.clone());

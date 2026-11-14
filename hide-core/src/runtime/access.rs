@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 use super::Runtime;
 use crate::access::{Access, Call, Ended, Level, Standing, Stored};
 use crate::latest_file::{LatestFile, read_capped};
-use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
+use crate::model::{
+    AccessAgentSnapshot, AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot,
+};
 
 #[derive(Default)]
 pub(crate) struct AccessRuntime {
@@ -468,7 +470,13 @@ impl Runtime {
                     created_ms: connection.created_ms,
                     last_used_ms: connection.last_used_ms,
                     agent_count: agents.len(),
-                    agents: agents.iter().map(|agent| agent.agent_id.clone()).collect(),
+                    agents: agents
+                        .iter()
+                        .map(|agent| AccessAgentSnapshot {
+                            agent_id: agent.agent_id.clone(),
+                            pane_id: agent.pane_id.clone(),
+                        })
+                        .collect(),
                     mission_count: conducted.len(),
                     missions: conducted,
                 }

@@ -1,4 +1,5 @@
 import { MobileScene } from "./MobileScene";
+import { ExternalToolsScene } from "./ExternalToolsScene";
 import { clientI18n } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { StrictMode } from "react";
@@ -57,6 +58,11 @@ export function mountGallery(root: Root) {
   if (scene !== null) {
     if (scene === "mobile") {
       root.render(<StrictMode><MobileScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "external-tools") {
+      document.title = "hide · External tools scene";
+      root.render(<StrictMode><ExternalToolsScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "group-tabs") {
