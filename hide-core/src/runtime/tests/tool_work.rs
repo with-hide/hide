@@ -453,3 +453,37 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
         "a new connection of the same name takes nothing"
     );
 }
+
+/// B28, B29: a tool's agent that asks its tool something, such as the
+/// decision of a mission it conducts, and also opened a View or waits on a
+/// person shows the operator only the View or the person's turn: its mark,
+/// its line and `외 N건` leave the tool's question out. The operator's own
+/// row keeps counting its question behind its person's turn.
+#[test]
+fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
+    let asking = |owner: Owner, doing: Doing| {
+        let mut agent = row(owner, doing);
+        agent.demand = "question".into();
+        agent.unread = true;
+        agent.detail = Some("Which order?".into());
+        crate::agent_state::rederive(&mut agent);
+        agent
+    };
+    let looking = asking(Owner::Tool(true), Doing::Look);
+    assert_eq!(looking.group, "needs_you");
+    assert_eq!(looking.mark, crate::agent_state::RowMark::Look);
+    assert_eq!(
+        looking.state.ask, None,
+        "the row says the View, not the question"
+    );
+    let person = asking(Owner::Tool(true), Doing::HumanTurn);
+    assert_eq!(person.mark, crate::agent_state::RowMark::Turn);
+    let ask = person.state.ask.unwrap();
+    assert_eq!(
+        (ask.what.as_deref(), ask.more),
+        (Some("github.com/login"), 0),
+        "no 외 N건 for the tool's question"
+    );
+    let own = asking(Owner::Operator, Doing::HumanTurn);
+    assert_eq!(own.state.ask.unwrap().more, 1);
+}

@@ -1290,6 +1290,10 @@ mod tests {
         let owned = |group: &str, turn: Value| {
             let mut row = row("w1:p1", group, "none", None);
             row["hide_ai"] = json!({"home": "memory", "turn": turn});
+            // The core's `listed_for_operator`, as the row publishes it.
+            if group != "needs_you" {
+                row["unlisted"] = json!(true);
+            }
             row
         };
         let observe = |transitions: &mut Transitions, row: Value| {

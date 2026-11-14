@@ -71,22 +71,32 @@ impl RowMark {
     pub(crate) fn awake(agent: &SidebarAgentSnapshot) -> Self {
         let ownership = ownership_of(agent);
         let (demand, activity, _) = axes_of(agent);
+        // A tool's agent calls the operator only for a person's turn, its
+        // own or raised to it, and a View it opened for them; its question,
+        // its block and every other raise are the tool's to answer, so they
+        // neither outrank the View nor take the mark (PRD
+        // hide-external-control B28, B29).
+        let tool = ownership == Ownership::Tool;
+        if tool && agent.human_turn.is_some() {
+            return Self::Turn;
+        }
         // A View to look at is the turn only when nothing else is asked:
         // a block, a question, an approval or a raise outranks it and takes
         // the mark (D-18).
         if agent.look.is_some()
-            && demand == AgentDemand::None
-            && !agent.blocked
-            && agent.raised.is_empty()
-            && agent.escalation.is_none()
-            && agent.declared_human_turn.is_none()
+            && (tool
+                || (demand == AgentDemand::None
+                    && !agent.blocked
+                    && agent.raised.is_empty()
+                    && agent.escalation.is_none()
+                    && agent.declared_human_turn.is_none()))
         {
             return Self::Look;
         }
         // The group already holds every call on the operator: an own unread
         // demand, a blocked prompt, a raise from below, an escalated child
         // and a home's turn.
-        if agent.group == "needs_you" || agent.escalation.is_some() {
+        if !tool && (agent.group == "needs_you" || agent.escalation.is_some()) {
             return Self::Turn;
         }
         // A demand the operator has read stays theirs until it is answered;

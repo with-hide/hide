@@ -231,6 +231,9 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     }
     let own = demand_verb(agent);
     let declared = agent.declared_human_turn.as_ref();
+    if ownership_of(agent) == Ownership::Tool {
+        return tool_ask(agent);
+    }
     // Everything else that waits on the operator under this root is counted
     // behind the lead, `외 N건` (D-13), the row's own question included
     // while its person's turn leads (PRD ask-human D-21).
@@ -270,6 +273,36 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
         verb: lead.verb,
         what: lead.what.clone(),
         more: total - 1,
+        subject: lead.subject.clone(),
+    })
+}
+
+/// What a tool's agent asks the operator: only a person's turn, its own or
+/// the lead one raised to it, and `외 N건` counts only the other persons'
+/// turns under it; the agent's question and every other raise are the
+/// tool's (PRD hide-external-control B28, B29). In Needs You for a View
+/// alone, it asks nothing, and the row says the View.
+fn tool_ask(agent: &SidebarAgentSnapshot) -> Option<Ask> {
+    let lead = agent.human_turn.as_ref()?;
+    let raised = agent
+        .raised
+        .iter()
+        .filter(|raised| raised.human_turn())
+        .collect::<Vec<_>>();
+    let more = raised.len() + usize::from(agent.declared_human_turn.is_some()) - 1;
+    if lead.own {
+        let declared = agent.declared_human_turn.as_ref()?;
+        return Some(Ask {
+            verb: super::escalation::Verb::Answer,
+            what: first_line_cut(&declared.place),
+            more,
+            subject: Some(declared.subject()),
+        });
+    }
+    raised.first().map(|lead| Ask {
+        verb: lead.verb,
+        what: lead.what.clone(),
+        more,
         subject: lead.subject.clone(),
     })
 }
