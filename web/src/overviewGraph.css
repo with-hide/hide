@@ -199,10 +199,12 @@
 .og-no-match { margin: var(--spacing-sm) 0 0; color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-found h3 span { font-variant-numeric: tabular-nums; }
 
-/* Issue 2514. The operator's `+` sits on its circle's rim; the circle itself stays a picture the pointer passes through. */
-.og-operator-start { position: absolute; right: calc(var(--spacing-xxs) * -1); bottom: calc(var(--spacing-xxs) * -1); width: var(--size-icon); height: var(--size-icon); padding: 0; border-radius: 50%; color: var(--subtle-foreground); pointer-events: auto; }
-.og-operator-start svg { width: 75%; height: 75%; }
-.og-operator-start:hover { color: var(--foreground); }
+/* Issue 2514. The operator's `+` sits on its circle's rim; the circle itself stays a picture the pointer passes through.
+   It is ringed in the circle's own rim color on a raised fill, so it reads as a button on the circle rather than a dot of it. */
+.og-operator-start { position: absolute; right: calc(var(--spacing-xs) * -1); bottom: calc(var(--spacing-xs) * -1); width: var(--size-icon-lg); height: var(--size-icon-lg); padding: 0; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--raised); color: var(--foreground); box-shadow: var(--shadow-raised); pointer-events: auto; }
+.og-operator-start svg { width: 65%; height: 65%; }
+.og-operator-start:hover, .og-operator-start:focus-visible { background: var(--accent); color: var(--foreground); }
+.og-operator-start:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--size-hairline); }
 /* Where a project's next session would stand: a root circle's size, dashed and faint, with no words and no line, so it never reads as a session. */
 .og-start-slot { display: flex; width: 100%; height: 100%; }
 /* React Flow lets the pointer pass through a node that neither drags nor selects, so each of these buttons takes it back. */
@@ -210,6 +212,6 @@
 .og-start-slot-orb svg { width: 40%; height: 40%; }
 .og-start-slot-orb:hover, .og-start-slot-orb:focus-visible { opacity: 1; border-style: solid; background: color-mix(in srgb, var(--og-accent) 12%, transparent); color: var(--og-accent); }
 .og-start-slot[data-muted="true"] { opacity: var(--opacity-dimmed); }
-/* The map's Add project place: a dashed, rounded box in free space, quieter than any project. */
-.og-add-project { width: 100%; height: 100%; gap: var(--spacing-xs); pointer-events: auto; border: var(--size-hairline) dashed var(--border); border-radius: var(--radius-xl); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
-.og-add-project:hover, .og-add-project:focus-visible { border-style: solid; color: var(--foreground); }
+/* The map's Add project place: a dashed, rounded box in free space, quieter than any project but plainly pressable. */
+.og-add-project { width: 100%; height: 100%; gap: var(--spacing-xs); pointer-events: auto; border: var(--size-hairline) dashed var(--muted-foreground); border-radius: var(--radius-xl); color: var(--subtle-foreground); font-size: var(--text-caption); font-weight: 500; }
+.og-add-project:hover, .og-add-project:focus-visible { border-style: solid; border-color: var(--foreground); background: var(--accent); color: var(--foreground); }
