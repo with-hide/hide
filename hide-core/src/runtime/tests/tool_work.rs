@@ -343,3 +343,97 @@ fn a_tools_delegated_child_rises_to_the_operator_only_for_a_person() {
     }
     assert_eq!(child_reach(Doing::HumanTurn), called_out(false));
 }
+
+/// The tool `nightly` asks to connect under `id` with a key of `digit`s,
+/// and the operator approves it at `level`; its connection's id. A revoked
+/// key is refused, so a new connection comes with a new key.
+fn connect(runtime: &mut Runtime, id: &str, digit: &str, level: crate::access::Level) -> String {
+    let (asked, _) = runtime.access_call(crate::access::Call::Request {
+        name: "nightly".into(),
+        key_sha256: crate::access::key_hash(&digit.repeat(64)),
+        program: None,
+        id: id.into(),
+    });
+    let connection = asked.unwrap()["id"].as_str().unwrap().to_owned();
+    assert!(
+        runtime.access_event(crate::runtime::access::AccessEvent::Approve {
+            id: connection.clone(),
+            level,
+        })
+    );
+    connection
+}
+
+/// B16, D-14, D-40: whose the work is follows the tool's connection on the
+/// event that moved it. View only or a disconnect hands the tool's agent
+/// to the operator at once, Act again takes it back, and a new connection
+/// under the same name is another connection, which takes nothing.
+#[test]
+fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
+    use crate::access::Level;
+    use crate::runtime::access::AccessEvent;
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![workspace(
+        "project",
+        "Project",
+        "/fixture",
+        vec![checkout(
+            "project",
+            "work",
+            "/fixture/work",
+            Some(pane("subject", "/fixture/work")),
+        )],
+    )];
+    let mut agent = row(Owner::Operator, Doing::Working);
+    agent.lineage_session = Some("tool-session".into());
+    runtime.snapshot.navigator.agents = vec![agent];
+    let connection = connect(&mut runtime, "00000000000000a7", "7", Level::Act);
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: "agent-1".into(),
+        pane_id: "subject".into(),
+        session: Some("tool-session".into()),
+        ended: false,
+    }];
+    runtime.refresh_agent_lineage();
+    runtime.sync_session_state();
+    runtime.refresh_agent_scopes();
+    let listed = |runtime: &Runtime| {
+        let subject = &runtime.snapshot.navigator.agents[0];
+        let sessions = runtime.snapshot.navigator.workspaces[0]
+            .agent_scope
+            .rows
+            .iter()
+            .any(|row| row.pane_id == "subject");
+        assert_eq!(sessions, !subject.unlisted, "one decision for every list");
+        (subject.tool.as_ref().map(|tool| tool.owns), sessions)
+    };
+    assert_eq!(listed(&runtime), (Some(true), false), "kept at Act");
+
+    assert!(runtime.access_event(AccessEvent::Level {
+        id: connection.clone(),
+        level: Level::View,
+    }));
+    assert_eq!(listed(&runtime), (Some(false), true), "View only lets it go");
+    assert!(runtime.access_event(AccessEvent::Level {
+        id: connection.clone(),
+        level: Level::Act,
+    }));
+    assert_eq!(listed(&runtime), (Some(true), false), "Act takes it back");
+
+    assert!(runtime.access_event(AccessEvent::Revoke {
+        id: connection.clone(),
+    }));
+    assert_eq!(listed(&runtime), (Some(false), true), "a disconnect lets it go");
+    let again = connect(&mut runtime, "00000000000000a8", "8", Level::Act);
+    assert_ne!(again, connection);
+    runtime.refresh_agent_lineage();
+    runtime.sync_session_state();
+    runtime.refresh_agent_scopes();
+    assert_eq!(
+        listed(&runtime),
+        (Some(false), true),
+        "a new connection of the same name takes nothing"
+    );
+}

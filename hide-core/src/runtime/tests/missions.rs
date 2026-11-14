@@ -7435,6 +7435,104 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     );
 }
 
+/// PRD hide-external-control B30, D-14, D-36: a mission whose Conductor an
+/// external tool keeps is the tool's. The mission screen and its number,
+/// the device's Needs You, the notices and the phone's list leave it out
+/// while the tool's connection stands at Act; the moment the operator
+/// disconnects the tool it is the operator's, and a raise held back is told
+/// then, once.
+#[test]
+fn a_mission_a_tool_conducts_reaches_the_operator_only_once_the_tool_lets_go() {
+    use crate::access::{Call, Level, key_hash};
+    use crate::delivery::worker::HumanNoticeKind;
+    use crate::missions::AttentionReason;
+    use crate::runtime::access::AccessEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let (asked, _) = runtime.access_call(Call::Request {
+        name: "nightly".into(),
+        key_sha256: key_hash(&"7".repeat(64)),
+        program: None,
+        id: "00000000000000a7".into(),
+    });
+    let connection = asked.unwrap()["id"].as_str().unwrap().to_owned();
+    assert!(runtime.access_event(AccessEvent::Approve {
+        id: connection.clone(),
+        level: Level::Act,
+    }));
+    let conductor = runtime.missions.book.get("mission-1").unwrap().conductor.clone();
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: conductor.agent_id.clone().unwrap_or_default(),
+        pane_id: conductor.actor.pane_id.clone(),
+        session: conductor.actor.session.clone(),
+        ended: false,
+    }];
+    // A raise only the operator settles, with no row to lay it on.
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::ConductorFailed,
+            None,
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let reach = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let unlisted = runtime.snapshot.missions.items[0].unlisted;
+        let asks = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .flat_map(|device| device.agent_scope.mission_asks.clone())
+            .collect::<Vec<_>>();
+        let rest = serde_json::json!({ "missions": &runtime.snapshot.missions });
+        let phone = crate::agent_state::phone::PhoneMissions::project(
+            &rest,
+            crate::node::TEST_NODE,
+            &crate::agent_state::phone::project(&rest, crate::node::TEST_NODE),
+        )
+        .items
+        .len();
+        let notices = runtime
+            .claim_mission_notices()
+            .iter()
+            .map(|notice| notice.kind)
+            .collect::<Vec<_>>();
+        (unlisted, asks, phone, notices)
+    };
+    assert_eq!(
+        reach(&mut runtime),
+        (true, Vec::new(), 0, Vec::new()),
+        "the tool keeps its mission"
+    );
+
+    assert!(runtime.access_event(AccessEvent::Revoke {
+        id: connection.clone(),
+    }));
+    assert_eq!(
+        reach(&mut runtime),
+        (
+            false,
+            vec!["mission-1".to_owned()],
+            1,
+            vec![HumanNoticeKind::MissionAttention]
+        ),
+        "a disconnect hands it to the operator at once"
+    );
+    assert!(runtime.claim_mission_notices().is_empty(), "told once");
+}
+
 /// PRD mission-node-simple B14, letter 19419: a mission whose node waits on
 /// the operator with no row to carry it is counted in its device's Needs You
 /// number, the one the Overview, the device rail and the sidebar read, and

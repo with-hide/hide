@@ -822,7 +822,7 @@ Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line,
 ### Work an external tool keeps
 
 An external tool the operator approved at Act in Settings › External tools starts agents for its own purposes, and while it stays connected at Act that work is the tool's, not the operator's (PRD hide-external-control D-09): the agent it started, the agents that one started under itself with `--parent here` (a Conductor's workers among them), and a mission such an agent conducts.
-`docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws.
+`docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws, with-hide/hide-private `docs/tasks-and-pr-list.md`, The sidebar's 태스크 list, how the 태스크 list draws it, and with-hide/hide-private `docs/missions.md`, A mission an external tool conducts, what such a mission gives the operator.
 
 The work is in no list of the operator's: not the sidebar's tree, Needs You, Done or Working, not the 태스크 list, Sessions, Overview's requests, graph or counts, not a Project tool's session count, a checkout's count or the device rail, not the mission screen or the sidebar's `미션` number, not the phone's agent or mission list, and it moves no app badge, desktop notification or push (B26, B27, B30).
 The tool reads it and answers it itself, so an agent's own question, approval, block or finished turn, and a mission's decision, gate, safety net or merge, never reach the operator while the tool keeps it.
