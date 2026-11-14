@@ -86,21 +86,28 @@ describe("the table (B2-B5)", () => {
     expect(q('[data-mission-row-project="w2"]')?.textContent).toBe("atorni-ax");
   });
 
-  it("leaves out a mission an external tool keeps, which its own cell lists with the tool named in the head (PRD hide-external-control B30, B40)", async () => {
+  it("leaves out a mission an external tool keeps, which its own cell lists with the tool named in the head and on no row (PRD hide-external-control B30, B40)", async () => {
     const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
     const missions = { items: [mission("mission-1"), mission("mission-4", { decision: "Which order?", tool }), mission("mission-5", { tool: { ...tool, owns: false } })] };
     const operator = await mount({ missions });
     expect(operator.all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-1", "mission-5"]);
+    // Outside the tool's cell a mission it started still names it on its row.
+    expect(operator.q('[data-mission-row="mission-5"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
     await operator.unmount();
     const cell = { connection: tool.connection, name: "nightly", turn: 1, devices: [], mission_asks: [] };
-    const { q, all } = await mount({ missions, tools: [cell], toolCell: tool.connection });
+    const { q, all, unmount } = await mount({ missions, tools: [cell], toolCell: tool.connection });
     expect(q("[data-mission-screen-tool]")?.dataset.missionScreenTool).toBe(tool.connection);
     expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
     expect(q("[data-mission-screen-device-name]")?.textContent).toBe("· nightly");
     // Its turn waits on the tool, so the group is named for the tool and nothing takes the decision colour.
     expect(q('[data-mission-group="turn"]')?.getAttribute("aria-label")).toBe("Tool's turn 1");
     expect(q('[data-mission-group="turn"] h2')?.className).not.toContain("text-mission-hold");
-    expect(q('[data-mission-row="mission-4"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
+    // Inside the tool's cell every mission is the tool's, so neither the row nor the opened mission names it again.
+    expect(q("[data-mission-row] [data-tool-mark]")).toBeNull();
+    await unmount();
+    const cellDetail = await mount({ missions, tools: [cell], toolCell: tool.connection, place: { selected: "mission-4" } });
+    expect(cellDetail.q('[data-mission-list-row="mission-4"]')).not.toBeNull();
+    expect(cellDetail.q("[data-tool-mark]")).toBeNull();
   });
 
   it("narrows the rows and the count to a project's chip, and back with 모든 프로젝트 (B3)", async () => {

@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
 import { HeldMark, useDelayPill } from "./components/mission-hold";
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { KindHelpButton } from "./components/kind-help-dialog";
@@ -46,7 +46,7 @@ import { catalogOf, type Mission, type MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
 import { useFrontTool } from "./toolCells";
 import { useUiStore } from "./ui";
-import { ToolMark } from "./components/tool-mark";
+import { InToolCell, ToolMark } from "./components/tool-mark";
 
 // The mission screen (PRD mission-screen D-01-D-11, B1-B23): one device's
 // missions, every project of it, as a table in the Mission tool's four
@@ -82,17 +82,10 @@ export function useMissionTurnCount(): number {
   return missions.state === "ready" ? turnCount(missions.entries) : 0;
 }
 
-/**
- * Whether the screen lists a tool's cell (PRD hide-external-control B40): a
- * mission's turn there waits on the tool's answer, not the operator's, so its
- * group is named for the tool and nothing takes the decision colour.
- */
-const ToolMissions = createContext(false);
-
 /** A group's name, the turn named for the tool in a tool's cell. */
 function useGroupName(): (group: MissionGroup) => string {
   const { t } = useInterfaceTranslation();
-  const tool = useContext(ToolMissions);
+  const tool = useContext(InToolCell);
   return (group) => (tool && group === "turn" ? t("missionScreen.group.toolTurn") : t(`missionScreen.group.${group}`));
 }
 
@@ -142,7 +135,7 @@ export function MissionScreen({ actions }: { actions: Actions }) {
 
   const projectLabel = (id: string) => projects.find((project) => project.id === id)?.label ?? null;
   return (
-    <ToolMissions.Provider value={tool !== null}>
+    <InToolCell.Provider value={tool !== null}>
     <section
       className="@container/missions flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
       aria-label={t("missionScreen.list", { device })}
@@ -173,7 +166,7 @@ export function MissionScreen({ actions }: { actions: Actions }) {
         <Table groups={groups} empty={entries?.length === 0} filtered={projectId !== null} connected={connected} projectLabel={projectLabel} actions={actions} />
       )}
     </section>
-    </ToolMissions.Provider>
+    </InToolCell.Provider>
   );
 }
 
@@ -304,7 +297,7 @@ function Table({ groups, empty, filtered, connected, projectLabel, actions }: {
 function GroupHead({ group, count, className }: { group: MissionGroup; count: number; className?: string }) {
   const { t } = useInterfaceTranslation();
   const name = useGroupName();
-  const tool = useContext(ToolMissions);
+  const tool = useContext(InToolCell);
   const all = useUiStore((s) => s.missions.closedAll);
   return (
     <h2 className={cn("flex items-center gap-xs text-caption font-semibold", group === "turn" && !tool ? "text-mission-hold" : "text-muted-foreground", className)}>
@@ -438,7 +431,7 @@ function ClosedMark({ mission }: { mission: Mission }) {
 /** The state pill: what the operator does on their turn, in the decision colour, else the map head's own pill; a takeover row draws none, since its 이어받기 button is the action. */
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
-  const tool = useContext(ToolMissions);
+  const tool = useContext(InToolCell);
   const held = useDelayPill(mission);
   if (turn?.kind === "takeover") return null;
   if (turn) {

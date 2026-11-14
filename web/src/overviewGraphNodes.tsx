@@ -28,7 +28,8 @@ function useRevealNode(id: string) {
   };
 }
 
-export type OperatorNode = Node<{ label: string }, "operator">;
+/** The map's centre: the operator (`나`), or in an external tool's cell the tool, drawn with its rail tile's monogram (PRD hide-external-control B40). */
+export type OperatorNode = Node<{ label: string; glyph: string; tool: string | null }, "operator">;
 /** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
 /** `muted`: the side column's search found nothing of this project. */
 export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
@@ -74,7 +75,7 @@ export function GraphLine({ agent, className }: { agent: AgentRow; className?: s
 }
 
 export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
-  return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
+  return <div className="og-operator" role="img" aria-label={data.label} data-graph-center={data.tool ?? "operator"}><Ports /><span aria-hidden="true">{data.glyph}</span></div>;
 }
 
 export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {

@@ -1,8 +1,16 @@
+import { createContext, useContext } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { ToolWork } from "../snapshot";
 import { Badge } from "./ui/badge";
 import { Hint } from "./ui/tooltip";
+
+/**
+ * Whether the view draws an external tool's cell (PRD hide-external-control B40, D-45): every row in it is that
+ * tool's work, so neither the badge nor the label names the tool there, and the tool's turn is not the operator's,
+ * so nothing in it takes the decision colour.
+ */
+export const InToolCell = createContext(false);
 
 /**
  * The external tool whose work this is (PRD hide-external-control B31, D-15): its name, cut short, after the
@@ -11,7 +19,8 @@ import { Hint } from "./ui/tooltip";
  */
 export function ToolMark({ tool, className }: { tool: ToolWork | undefined; className?: string }) {
   const { t } = useInterfaceTranslation();
-  if (!tool) return null;
+  const inCell = useContext(InToolCell);
+  if (!tool || inCell) return null;
   const label = t(tool.owns ? "common.tool.kept" : "common.tool.started", { name: tool.name });
   return (
     <Hint label={label}>
@@ -28,7 +37,8 @@ export function ToolMark({ tool, className }: { tool: ToolWork | undefined; clas
  */
 export function ToolLabel({ tool, className }: { tool: ToolWork | undefined; className?: string }) {
   const { t } = useInterfaceTranslation();
-  if (!tool) return null;
+  const inCell = useContext(InToolCell);
+  if (!tool || inCell) return null;
   const label = t(tool.owns ? "common.tool.kept" : "common.tool.started", { name: tool.name });
   return (
     <span className={cn("flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs text-muted-foreground", className)} title={label}>

@@ -123,7 +123,7 @@ export function MainScreen({ actions, deviceId, tool = null }: { actions: Action
             ) : noToolWork ? (
               <p className="px-lg py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
             ) : view === "work" ? (
-              <OverviewGraph projects={projects} deviceId={deviceId} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
+              <OverviewGraph projects={projects} deviceId={deviceId} tool={tool} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
             ) : view === "backlog" ? (
               <OverviewBacklog projects={projects} deviceId={deviceId} actions={actions} />
             ) : selectedProject ? (

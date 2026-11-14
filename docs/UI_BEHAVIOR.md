@@ -839,14 +839,15 @@ Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen
   Nothing in the cell takes the warning colour, since nothing in it is the operator's turn, and no row names the tool, since every row is its work.
 - A task on another device, such as an agent the tool started with `--machine`, names its device on its row (B45).
 - A cell with no work says `아직 맡은 일이 없어요`, in the sidebar and in the Overview's work tab (B42).
-- The mission screen lists the missions the tool keeps, on every device, its head naming the tool.
+- The mission screen lists the missions the tool keeps, on every device, its head naming the tool; its turn group reads `도구가 답할 차례`, nothing takes the decision colour, and neither a row nor an opened mission's map head names the tool, since every mission there is its own.
 - The Overview draws only the tool's agents, on the projects it works in, and names the tool in place of its device switch; the device's Overview never draws them (D-48).
+  The map's centre is the tool, drawn with its tile's letters, where a device's map draws `나`.
 - The Overview and `미션` rows of the sidebar draw no number in a tool's cell, since their numbers are the operator's (B41).
 
 The operator can answer in a row's pane from the cell; the answer takes the row out of the tool's turn, and the work stays the tool's (B43).
 ⌥n numbers the cell's rows as it numbers the 태스크 list's.
 
-The tool's name is drawn wherever the tool's work reaches the operator's own cells (B31, D-15): as a quiet badge cut short in a narrow space after the title of the agent's pane head, its ⌘K result, and the mission screen's row and the map head of a mission its agent conducts, and, in the sidebar's rows (the projects list and the 태스크 list, an agent's or a mission's), as muted words leading the second line, `nightly · 어느 순서로 할까요`, since a sidebar row's first line keeps only the title, its chips and the time (operator decision 2026-11-14).
+The tool's name is drawn wherever the tool's work reaches the operator's own cells, and never inside the tool's own cell (B31, D-15): as a quiet badge cut short in a narrow space after the title of the agent's pane head, its ⌘K result, and the mission screen's row and the map head of a mission its agent conducts, and, in the sidebar's rows (the projects list and the 태스크 list, an agent's or a mission's), as muted words leading the second line, `nightly · 어느 순서로 할까요`, since a sidebar row's first line keeps only the title, its chips and the time (operator decision 2026-11-14).
 Its hint says the work is the tool's (`외부 도구 nightly의 일`); once the tool lets go the name stays as where the work came from, and the hint says so (`외부 도구 nightly에서 시작됨`).
 
 Two things of the agents reach the operator anyway, as one row in the sidebar's Needs You and the 태스크 list's Needs You of the device's cell, never in a tree, the row staying in the tool's cell too (B29, D-37): a step only a person can take (`hide agent ask-human auth|permission`), the agent's own or a child's, which also notifies on the desktop and the phone, and a View the agent opened for the operator with `hide file open`, `hide diff open` or `hide browser open`, which is its `볼 것` as on any agent's row.

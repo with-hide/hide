@@ -21,7 +21,8 @@ import { between, cloud, communicationLines, exchangeLines, lineageLines, projec
 import { Hint } from "./components/ui/tooltip";
 import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
-import { frontDeviceId } from "./devices";
+import type { ToolCell } from "./agentScope";
+import { frontDeviceId, tileMonogram } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, graphSessionMatches, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
@@ -36,7 +37,8 @@ import "@xyflow/react/dist/base.css";
 import "./overviewGraph.css";
 import { composingKey } from "./keys";
 
-type Props = { projects: BoardProject[]; deviceId: string; actions: Actions; onOpenRecord?: (session: WorkSession) => void };
+/** `tool`: the external tool whose cell the map draws; its centre is then the tool, not the operator. */
+type Props = { projects: BoardProject[]; deviceId: string; tool?: ToolCell | null; actions: Actions; onOpenRecord?: (session: WorkSession) => void };
 const NODE_TYPES: NodeTypes = { operator: OperatorGraphNode, project: ProjectGraphNode, glow: GlowGraphNode, cluster: ClusterGraphNode, team: TeamGraphNode, session: SessionGraphNode };
 const EDGE_TYPES: EdgeTypes = { line: LineGraphEdge };
 const PAGE_SIZE = 50;
@@ -56,14 +58,14 @@ export function OverviewGraph(props: Props) {
   }, [props.deviceId]);
   const initial = scopedSelection?.deviceId === props.deviceId && scopedSelection.projectId === projectId ? scopedSelection : null;
   useEffect(() => { if (initial) setScopedSelection(null); }, [initial]);
-  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} initialSelection={initial?.sessionId ?? null} initialShown={initial?.shown ?? false} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
+  return <ReactFlowProvider key={`${props.tool?.connection ?? props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} initialSelection={initial?.sessionId ?? null} initialShown={initial?.shown ?? false} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
 }
 
 /** `initialShown`: the initial selection is a pane's `개요에서 보기`, unfolded and framed like one taken on this map. */
 type GraphProps = Props & { projectId: string | null; initialSelection: string | null; initialShown: boolean; revealProjectSession: (row: GraphAgent, shown?: boolean) => void };
 
 /** The filter, the hidden and folded projects, the hand team folds and the dropped places are the core's (PRD overview-graph-remembered D-05): every change is one event and the view draws what the snapshot says. */
-function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initialSelection, initialShown, revealProjectSession }: GraphProps) {
+function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, projectId, initialSelection, initialShown, revealProjectSession }: GraphProps) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const choices: OverviewGraphChoices = rest?.ui_state?.overview_graph ?? GRAPH_CHOICES_DEFAULTS;
@@ -266,7 +268,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const visibleByProject = new Map<string, GraphAgent[]>();
   for (const row of model.visible) visibleByProject.set(row.projectId, [...(visibleByProject.get(row.projectId) ?? []), row]);
   if (size && layout.phase === "ready") {
-    nodes.push({ id: OPERATOR, type: "operator", position: { x: -size.operator / 2, y: -size.operator / 2 }, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator") }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 3 } satisfies OperatorNode);
+    nodes.push({ id: OPERATOR, type: "operator", position: { x: -size.operator / 2, y: -size.operator / 2 }, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: tool ? { label: `${tool.name} · ${t("devices.rail.tool")}`, glyph: tileMonogram(tool.name), tool: tool.connection } : { label: t("overviewGraph.operator"), glyph: t("overviewGraph.operator"), tool: null }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 3 } satisfies OperatorNode);
     orbs.set(OPERATOR, { x: 0, y: 0, r: size.operator / 2 });
     // A project stands out while its name or row is pointed at, or one of its sessions is chosen and its
     // details are open (PRD D-17); the current pane's highlight at entry is not a choice and lights nothing.

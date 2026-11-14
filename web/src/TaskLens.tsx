@@ -1,6 +1,6 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
-import { createContext, Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
@@ -47,7 +47,7 @@ import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type T
 import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
-import { ToolLabel } from "./components/tool-mark";
+import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
 import { toolTaskList } from "./toolCells";
 
@@ -57,13 +57,6 @@ const NO_PANES: ReadonlySet<string> = new Set();
 const MISSION_INSET = "calc(var(--size-lineage-chevron) + var(--spacing-xs))";
 /** A row's second line by the task's state: a question and a block are the operator's turn, both in the warning colour (B8; status-marks B32). */
 const LINE_TONE: Partial<Record<TaskState, string>> = { needs_you: "text-warning", blocked: "text-warning" };
-
-/**
- * Whether the list draws a tool's cell (PRD hide-external-control B40): its
- * first group is the tool's turn, not the operator's, so nothing in it takes
- * the warning colour, and no row names the tool, since every row is its work.
- */
-const ToolList = createContext(false);
 
 /** A group's name: in a tool's cell 내 차례 is the tool's turn to answer and 읽을 것 is what it finished. */
 function groupLabel(state: TaskGroupState, tool: boolean, t: TFunction<"translation">): string {
@@ -175,9 +168,9 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
       {count === 0 ? (
         <p className="px-md py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
       ) : (
-        <ToolList.Provider value={true}>
+        <InToolCell.Provider value={true}>
           <TaskGroups list={list} view="status" showProject={true} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
-        </ToolList.Provider>
+        </InToolCell.Provider>
       )}
     </div>
   );
@@ -244,7 +237,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
   // The resting and cleanup folds open in place for this page only (B5); the
   // page keeps them, so the ⌥n numbers read the same drawn order.
-  const tool = useContext(ToolList);
+  const tool = useContext(InToolCell);
   const foldsOpen = useUiStore((s) => s.taskFoldsOpen);
   const toggleFold = useUiStore((s) => s.toggleTaskFold);
   const focusedRestFold = useMemo(() => {
@@ -337,7 +330,7 @@ function groupName(group: TaskGroup, tool: boolean, t: TFunction<"translation">)
  */
 function BandHead({ state }: { state: TaskGroupState }) {
   const { t } = useInterfaceTranslation();
-  const tool = useContext(ToolList);
+  const tool = useContext(InToolCell);
   return (
     <div aria-hidden="true" data-task-band={state} className={cn("px-xs pt-xs pb-xxs text-micro text-muted-foreground", state === "needs_you" && !tool && "text-warning")}>
       {groupLabel(state, tool, t)}
@@ -376,7 +369,7 @@ function goToHead(head: HTMLElement, stack: number) {
  */
 function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const { t } = useInterfaceTranslation();
-  const tool = useContext(ToolList);
+  const tool = useContext(InToolCell);
   if (group.state) {
     const name = groupLabel(group.state, tool, t);
     return (
@@ -717,7 +710,7 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
 function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
-  const toolList = useContext(ToolList);
+  const toolList = useContext(InToolCell);
   const { agent, card, project } = entry;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
