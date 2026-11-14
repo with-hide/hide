@@ -129,40 +129,23 @@ impl Runtime {
         self.access.state = Access::restored(stored);
         self.access.edit += 1;
         self.refresh_access();
-        // What a tool disconnected before a stop kept is ended now.
-        self.end_ended_tools();
     }
 
-    /// Ends, in the ledger, what tools no longer connected keep there: their
-    /// origin records and the watches they keep (D-23, engineering 14).
-    /// Asked of the delivery worker with the list as it is, so it converges
-    /// however often it runs. A level set to View ends nothing: the
-    /// connection still stands, and its watches warn it as before.
-    fn end_ended_tools(&self) {
-        let connections = self
-            .access
-            .state
-            .connections()
-            .iter()
-            .map(|connection| connection.id.clone())
-            .collect();
-        let posted = self
-            .hide_delivery(crate::delivery::HIDE_ACCESS_ROLE)
-            .and_then(|(client, authority, actor)| {
-                client.post(crate::delivery::worker::Effect::Agents {
-                    authority,
-                    actor,
-                    mutation: Box::new(crate::coordination::Mutation::EndTools { connections }),
-                })
-            });
-        if let Err(code) = posted {
-            crate::diagnostic!(json!({
-                "component": "access",
-                "kind": "access.end_tools_failed",
-                "machine": self.node.as_str(),
-                "code": code,
-            }));
-        }
+    /// The ids the access list holds, which the delivery store's upkeep
+    /// ends every other tool's records, watches and answer waits by
+    /// (`coordination::end_gone_tools`, D-23); `None` until the list is
+    /// restored at start, so a start ends nothing before it knows the list.
+    /// A level set to View ends nothing: the connection still stands.
+    pub(crate) fn delivery_tool_connections(&self) -> Option<Vec<String>> {
+        self.access.store.as_ref()?;
+        Some(
+            self.access
+                .state
+                .connections()
+                .iter()
+                .map(|connection| connection.id.clone())
+                .collect(),
+        )
     }
 
     fn note_access(
@@ -284,7 +267,6 @@ impl Runtime {
                         .map_err(str::to_owned)?;
                     self.note_access("access.left", Some(&connection.id), None, None);
                     self.access_changed(true);
-                    self.end_ended_tools();
                     Ok(json!({"state": "left", "id": connection.id}))
                 }
                 Standing::Pending { id, .. } => {
@@ -331,9 +313,6 @@ impl Runtime {
             Ok((kind, id, level, save)) => {
                 self.note_access(kind, Some(id), level, None);
                 self.access_changed(save);
-                if matches!(event, AccessEvent::Revoke { .. }) {
-                    self.end_ended_tools();
-                }
                 true
             }
             Err(reason) => {

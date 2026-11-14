@@ -921,7 +921,8 @@ No agent writes to a tool first: a send to `hide:access:…` is refused `target_
 A tool has no exception to a letter's deadlines or the ledger's limits.
 At Act a tool may also end or put to sleep any registration, which the diagnostic log records with its connection (`agent.ended_by_tool`, `agent.sleep_by_tool`), and type into a pane with `hide pane send`; it opens no pane and names no purpose.
 A tool does what the operator could do through `hide` (D-12, D-27); it is no parent of what it starts, so the agents it starts are the operator's, and a tool that should own none of them stays View only.
-When the connection ends (the operator's disconnect, the tool's leave, or a list restored at start without it), the core asks the store to end what that tool kept (`Mutation::EndTools`): its origin records, the watches it keeps and the answer waits of its letters, so none holds a watch slot or warns a mailbox nobody reads; the agents it started run on and keep its name as their origin.
+When the connection ends (the operator's disconnect, the tool's leave, or a list restored at start without it), the store's upkeep ends what that tool kept (`coordination::end_gone_tools`): its origin records, the watches it keeps and the answer waits of its letters, so none holds a watch slot or warns a mailbox nobody reads; the agents it started run on and keep its name as their origin.
+The upkeep reads the connection ids the core holds with the rest of its batch read (`Runtime::delivery_tool_connections`, none until the list is restored at start) and runs before every batch and in the store's idle pass, so the end needs no request of its own and a full queue or a stop cannot lose it; a connection set to View only is still held and keeps what it has.
 
 ## The operator's View feedback
 

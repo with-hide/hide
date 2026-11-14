@@ -2163,7 +2163,6 @@ impl Runtime {
                         super::transition_letters::TRANSITION_ROLE,
                         self.node.as_str(),
                     )
-                || *actor == Actor::hide(crate::delivery::HIDE_ACCESS_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
                     && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))

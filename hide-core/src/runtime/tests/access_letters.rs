@@ -47,6 +47,9 @@ impl Fixture {
         {
             let mut guard = runtime.lock().unwrap();
             guard.install_delivery_client(client);
+            // The list the store's upkeep ends a gone tool's records by.
+            let (store, stored) = crate::runtime::access::restore(root.path().join("access.json"));
+            guard.install_access_store(store, stored);
             set_live(&mut guard, Some(&fake));
             let agents: Vec<Value> = PANES
                 .iter()
@@ -570,12 +573,62 @@ fn tool_watches(fixture: &Fixture) -> usize {
         .count()
 }
 
-/// D-23: a disconnect, the tool's own leave and a list restored without
-/// the connection (a stop that lost the first cleanup) each end the watch
-/// the tool kept, through the store, while the agent it watched runs on.
+/// The tool's origin record, as its first spawn registers it
+/// (`coordination::register_code_owned`); its id.
+fn register_origin(fixture: &Fixture, connection: &str) -> String {
+    let (client, actor) = {
+        let guard = fixture.runtime.lock().unwrap();
+        (
+            guard.delivery_client.clone().unwrap(),
+            guard.access_actor(connection).unwrap().1,
+        )
+    };
+    let record = crate::coordination::AgentRecord {
+        id: String::new(),
+        name: Some(actor.name.clone()),
+        machine: actor.device_id.clone(),
+        host_scope: actor.kind.clone(),
+        native_machine: actor.kind.clone(),
+        session: actor.name.clone(),
+        instance: actor.pane_id.clone(),
+        pane: actor.pane_id.clone(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor: actor.clone(),
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    };
+    let registered = client
+        .submit(
+            crate::delivery::worker::Effect::Agents {
+                authority: crate::delivery::worker::Authority {
+                    caller: access_caller_id(connection, None),
+                    context: crate::access::access_context(crate::node::TEST_NODE, connection),
+                    also_reads: Vec::new(),
+                },
+                actor,
+                mutation: Box::new(crate::coordination::Mutation::Register {
+                    record,
+                    check: false,
+                }),
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    registered["id"].as_str().unwrap().to_owned()
+}
+
+/// D-23: what a gone tool kept ends at the store's next upkeep, with no
+/// request of its own: after a disconnect made while the store's queue is
+/// full (the store held at its read of the runtime, so nothing posted then
+/// could land), after the tool's leave, and after a list restored at start
+/// without it. Its watch and its origin record end; the agent it watched
+/// runs on.
 #[test]
 #[allow(clippy::disallowed_methods)] // polls the store's worker, bounded by a deadline
-fn a_disconnect_a_leave_or_a_restore_without_the_tool_ends_the_watch_it_kept() {
+fn a_disconnect_with_the_store_full_a_leave_or_a_restore_ends_what_the_tool_kept() {
     for end in ["revoke", "leave", "restore"] {
         let fixture = Fixture::start();
         let connection = fixture.connect(Level::Act);
@@ -590,34 +643,57 @@ fn a_disconnect_a_leave_or_a_restore_without_the_tool_ends_the_watch_it_kept() {
                 },
             )
             .unwrap();
+        let origin = register_origin(&fixture, &connection);
         assert_eq!(tool_watches(&fixture), 1, "{end}");
-        match end {
-            "revoke" => fixture.operator(AccessEvent::Revoke {
-                id: connection.clone(),
-            }),
-            "leave" => {
-                let (left, _) = fixture.runtime.lock().unwrap().access_call(Call::Leave {
-                    key_sha256: key_hash(KEY),
-                });
-                left.unwrap();
-            }
-            _ => {
-                let (store, _) =
-                    crate::runtime::access::restore(fixture._root.path().join("access.json"));
-                fixture
-                    .runtime
-                    .lock()
-                    .unwrap()
-                    .install_access_store(store, crate::access::Stored::default());
+        {
+            // The store waits at its read of the runtime while this guard
+            // holds it, so its queue fills and stays full.
+            let mut guard = fixture.runtime.lock().unwrap();
+            let client = guard.delivery_client.clone().unwrap();
+            while client
+                .post(crate::delivery::worker::Effect::Tick(Vec::new()))
+                .is_ok()
+            {}
+            assert_eq!(
+                client
+                    .post(crate::delivery::worker::Effect::Tick(Vec::new()))
+                    .unwrap_err(),
+                "capacity"
+            );
+            match end {
+                "revoke" => assert!(guard.access_event(AccessEvent::Revoke {
+                    id: connection.clone(),
+                })),
+                "leave" => {
+                    guard
+                        .access_call(Call::Leave {
+                            key_sha256: key_hash(KEY),
+                        })
+                        .0
+                        .unwrap();
+                }
+                _ => {
+                    let (store, _) = crate::runtime::access::restore(
+                        fixture._root.path().join("restored-access.json"),
+                    );
+                    guard.install_access_store(store, crate::access::Stored::default());
+                }
             }
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while tool_watches(&fixture) > 0 {
+        let ended = |fixture: &Fixture| {
+            let ledger = fixture.runtime.lock().unwrap().delivery_state().unwrap();
+            ledger
+                .agents
+                .iter()
+                .any(|record| record.id == origin && record.ended)
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while tool_watches(&fixture) > 0 || !ended(&fixture) {
             assert!(
                 std::time::Instant::now() < deadline,
-                "{end}: the watch stayed"
+                "{end}: the tool's watch or origin record stayed"
             );
-            std::thread::sleep(Duration::from_millis(5)); // wait-ok: the store's worker applied the posted cleanup
+            std::thread::sleep(Duration::from_millis(5)); // wait-ok: the store's upkeep after its queue drained
         }
         let ledger = fixture.runtime.lock().unwrap().delivery_state().unwrap();
         assert!(
