@@ -787,8 +787,11 @@ Until a session read proves a line, the change stamp stands in, so a restart onl
 A pane's stamp, and the last look in it, is dropped only when the engine's topology no longer holds the pane, never because the agent list holds no agent for it: a restarted engine lists an agent only once its program shows again, and a stamp lost in that gap sleeps an agent the operator just read the moment the session read proves its old conversation (`AgentSleepStore::stamp`; the read records follow the same rule, `prune_read_records`).
 A wake stamps a last look, as a visit does, because the conversation it resumes is as old as the sleep and would make the agent due again at the next minute.
 A relaunch forgets an end that was in flight, because it cannot know whether it landed, and reads a wake that was in flight as still asleep until an agent appears in the pane.
-An in-pane sleep keeps the read axis's engine mark beside the ended agent's state sequence: the sequence identifies the ended agent only on that engine, because an engine restart starts its counter again.
-A listed provider whose program has shown wakes the record when either the sequence or that mark differs; a pane with no mark uses its read connection's, and an older record with no mark cannot claim that a newly listed agent is still the ended one.
+An in-pane sleep keeps two sequences apart (`SleepRecord`): the one of the turn the row showed when the agent was put to sleep, which the sleeping row carries so that what the operator read of it stays read, and the one the end read from the engine just before ending the agent (`ended_seq`), which names the ended agent while the engine still lists it.
+The end reads the engine itself, so its sequence can be ahead of the turn the operator read; a sleeping row that carried it read as a new turn, and an ask the operator had read rose to the top of 내 차례 with a desktop notice the moment its agent slept (2026-11-14).
+A record an earlier build saved kept only the end's sequence, which still names the ended agent after a launch.
+The record keeps the read axis's engine mark beside the end's sequence: the sequence identifies the ended agent only on that engine, because an engine restart starts its counter again.
+A listed provider whose program has shown wakes the record when either the end's sequence or that mark differs; a pane with no mark uses its read connection's, and an older record with no mark cannot claim that a newly listed agent is still the ended one.
 
 ### Sleep under memory pressure
 

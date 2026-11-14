@@ -142,7 +142,8 @@ fn an_agent_a_restore_left_resting_is_kept_asleep_in_its_conversation() {
         "a wake resumes its conversation"
     );
     assert_eq!(
-        record.state_change_seq, None,
+        (record.state_change_seq, record.ended_seq),
+        (None, None),
         "any agent listed there is new"
     );
 
@@ -2698,4 +2699,36 @@ fn a_woken_pane_of_another_conversation_inherits_nothing_and_the_registration_en
     assert!(record.ended);
     assert_eq!(record.pane, SLEEPER);
     assert!(ledger.watches.is_empty());
+}
+
+// 2026-11-14: an ask the operator had read rose to the top of 내 차례 when
+// its agent slept, with a desktop notice, as if it had just asked. The end
+// reads the engine itself, and its sequence was ahead of the turn the
+// operator had read; the sleeping row carried that sequence, so the read axis
+// took the sleep for a new turn. The row keeps the turn it slept with, and
+// the end's sequence only names the ended agent still listed (B18).
+#[test]
+fn a_read_agent_stays_read_when_its_end_reads_a_later_sequence() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    runtime.dispatch_json(&event(
+        "overview_open_result",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    assert_eq!(row(&runtime)["unread"], false);
+    runtime.dispatch_json(&event(
+        "agent_sleep",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    runtime.ingest_session(Ok(session(None)));
+    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(5)));
+    runtime.ingest_session(Ok(session(None)));
+    assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
+    assert_eq!(row(&runtime)["unread"], false, "a sleep is not news");
+
+    // The engine still listing the ended agent at the end's sequence is that
+    // agent, not a new one.
+    runtime.ingest_session(Ok(session(Some(5))));
+    assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
+    assert_eq!(row(&runtime)["unread"], false);
 }
