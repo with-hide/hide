@@ -23,7 +23,7 @@ use crate::mission_criteria::{CriterionKind, CriterionState, GATE_KEY, GateVia};
 use crate::mission_events::{AnswerSource, EventKind, MissionEvent};
 use crate::missions::{
     AttentionReason, GateWhen, Mission, MissionNode, MissionStatus, NodePatch, NodeStatus,
-    PendingWake, Question, WakeEvent, answer_text, asks_gate as asks, gate_asked,
+    PendingWake, Question, WakeEvent, answer_text, asks_gate as asks, gate_asked, push_view_link,
 };
 use crate::model::InterfaceLanguage;
 
@@ -60,7 +60,7 @@ impl GateAnswer {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateState {
-    /// Its node's other lines are not all met yet.
+    /// Its node's own lines are not all met yet and nothing was shown.
     Ahead,
     /// Reached: the node waits on the operator's answer.
     Open,
@@ -74,7 +74,7 @@ pub struct GateView {
     pub state: GateState,
     /// What the operator looks at, as the plan names it.
     pub look: String,
-    /// Whether it asks before the node starts or once its other lines are
+    /// Whether it asks before the node starts or once its own lines are
     /// met (PRD node-presets D-06).
     pub when: GateWhen,
     /// The key of the mission's decision that asks it now; none while it
@@ -126,11 +126,12 @@ fn gate_question(look: &str, language: InterfaceLanguage) -> String {
 
 impl Runtime {
     /// Whether `node`'s gate is reached now (D-10): an end gate once the
-    /// node works and every other line is met, the CI GitHub has not
-    /// reported included, as the done refusal judges them; a start gate
-    /// (PRD node-presets D-06) once the node could start, not started and
-    /// every node it depends on done, with no fix the operator asked for
-    /// still open, as an end gate waits for its other lines.
+    /// node works and the Conductor showed what to look at, or once the
+    /// lines of its own work are met (`own_lines_met`), before its CI and
+    /// checkers (operator decision 2026-11-14); a start gate (PRD
+    /// node-presets D-06) once the node could start, not started and every
+    /// node it depends on done, with no fix the operator asked for still
+    /// open, as an end gate waits for that fix.
     pub(super) fn gate_reached(&self, mission: &Mission, node: &MissionNode) -> bool {
         let Some(line) = crate::mission_criteria::gate(&node.criteria)
             .filter(|line| line.state != CriterionState::Pass)
@@ -139,12 +140,41 @@ impl Runtime {
         };
         match line.when {
             GateWhen::End => {
-                node.status == NodeStatus::Working && self.node_unmet(mission, node) == [GATE_KEY]
+                node.status == NodeStatus::Working
+                    && (line.shown_at_unix_ms.is_some() || self.own_lines_met(mission, node))
             }
             GateWhen::Start => {
                 crate::mission_health::could_start(mission, node) && open_fix(node).is_none()
             }
         }
+    }
+
+    /// Whether the lines `node`'s worker answers for are met, as the done
+    /// refusal judges them: its own, the check command and the defects; an
+    /// operator who looks at the work then does not wait for its CI, review
+    /// or verification, which run beside the look (operator decision
+    /// 2026-11-14: a look after a review sent the review round again). A
+    /// node with none of those, a waiting node's or one a mission Hide
+    /// exempts, waits for every line as before.
+    fn own_lines_met(&self, mission: &Mission, node: &MissionNode) -> bool {
+        let own = |kind: CriterionKind| {
+            matches!(
+                kind,
+                CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect
+            )
+        };
+        let unmet = self.node_unmet(mission, node);
+        if !node.criteria.iter().any(|line| own(line.kind)) {
+            return unmet == [GATE_KEY];
+        }
+        // A key no line has is the CI of a pull request GitHub has not
+        // reported yet (`node_unmet`), which is not the worker's either.
+        unmet.iter().all(|key| {
+            node.criteria
+                .iter()
+                .find(|line| line.key == *key)
+                .is_none_or(|line| !own(line.kind))
+        })
     }
 
     /// Whether `node`'s gate waits on the operator now: reached, or asked by
@@ -308,12 +338,15 @@ impl Runtime {
                 if let Some(line) = next.criteria.iter_mut().find(|line| line.key == defect) {
                     line.via = Some(via);
                 }
+                // The look the operator answered is spent: the gate asks
+                // again on the next showing or once the fix is recorded.
                 if let Some(line) = next
                     .criteria
                     .iter_mut()
                     .find(|line| line.kind == CriterionKind::Human)
                 {
                     line.asked = None;
+                    line.shown_at_unix_ms = None;
                 }
                 // Before its start the node has no work to send back: the
                 // words wait as a line, and the gate asks again once the
@@ -428,12 +461,78 @@ impl Runtime {
         (pass, said): (bool, String),
         now: u64,
     ) -> Result<(Value, bool), String> {
-        let ledger = self.delivery_state().ok();
-        let caller = super::mission_criteria::Caller::of(
-            actor,
-            ledger.as_deref(),
-            &self.missions.book.missions,
-        );
+        let id = self.gate_mission(actor, named)?;
+        let answer = if pass {
+            GateAnswer::Pass
+        } else {
+            GateAnswer::Fix
+        };
+        let changed = self.settle_gate(&id, node, answer, GateVia::Pane, &said, now)?;
+        Ok((self.gate_answer(actor, &id), changed))
+    }
+
+    /// `hide mission gate <node> --show` (operator decision 2026-11-14): the
+    /// Conductor shows the operator what the node's end gate looks at while
+    /// the node still works, so the gate asks on the map now rather than
+    /// only in the Conductor's pane. The Views it names join the gate's
+    /// question: the open question's links when it asks already, else the
+    /// Views the Conductor opened, which the question takes when it asks.
+    /// Only the Conductor shows, and only an end gate not passed on a node
+    /// at work in a mission that runs; a start gate asks by itself once its
+    /// node could start, and a gate that passed changes nothing.
+    pub(super) fn show_gate(
+        &mut self,
+        actor: &Actor,
+        named: Option<&str>,
+        key: &str,
+        show: &[String],
+        now: u64,
+    ) -> Result<(Value, bool), String> {
+        let id = self.gate_mission(actor, named)?;
+        let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+        let node = mission.node(key).ok_or("mission_node_unknown")?;
+        let line = crate::mission_criteria::gate(&node.criteria)
+            .ok_or_else(|| crate::coordination::refusal("mission_gate_none", key))?;
+        if line.state == CriterionState::Pass {
+            return Ok((self.gate_answer(actor, &id), false));
+        }
+        if !end_gate_unpassed(mission, node) {
+            return Err(crate::coordination::refusal("mission_gate_not_open", key));
+        }
+        let asking = asks(mission.question.as_ref(), node);
+        let links = self.question_view_links(&id, actor, show, None, false)?;
+        let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+        for link in links {
+            match target.question.as_mut().filter(|_| asking) {
+                Some(question) => push_view_link(&mut question.views, link),
+                None => push_view_link(&mut target.conductor_views, link),
+            };
+        }
+        if let Some(line) = target
+            .nodes
+            .iter_mut()
+            .find(|node| node.key == key)
+            .and_then(|node| {
+                node.criteria
+                    .iter_mut()
+                    .find(|line| line.kind == CriterionKind::Human)
+            })
+        {
+            line.shown_at_unix_ms = Some(now);
+        }
+        target.updated_at_unix_ms = now;
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.gate_shown",
+            "mission": id, "node": key, "views": show.len(), "asking": asking,
+        }));
+        self.save_missions();
+        self.raise_gates(&id, now);
+        Ok((self.gate_answer(actor, &id), true))
+    }
+
+    /// The mission a gate command of `actor`'s means: the one it names, else
+    /// the open one it conducts; only its Conductor gives one.
+    fn gate_mission(&self, actor: &Actor, named: Option<&str>) -> Result<String, String> {
         let id = match named {
             Some(id) => self
                 .missions
@@ -454,16 +553,18 @@ impl Runtime {
         if !mission.conductor.actor.same_identity(actor) {
             return Err("mission_not_conductor".into());
         }
-        let answer = if pass {
-            GateAnswer::Pass
-        } else {
-            GateAnswer::Fix
-        };
-        let changed = self.settle_gate(&id, node, answer, GateVia::Pane, &said, now)?;
-        Ok((
-            json!({"mission": self.mission_view_for(&id, &caller)}),
-            changed,
-        ))
+        Ok(id)
+    }
+
+    /// The mission as a gate command answers it, read as `actor` reads it.
+    fn gate_answer(&self, actor: &Actor, id: &str) -> Value {
+        let ledger = self.delivery_state().ok();
+        let caller = super::mission_criteria::Caller::of(
+            actor,
+            ledger.as_deref(),
+            &self.missions.book.missions,
+        );
+        json!({"mission": self.mission_view_for(id, &caller)})
     }
 
     /// Brings `id`'s gates to where its nodes stand (D-10, D-17, D-23),

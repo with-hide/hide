@@ -440,7 +440,17 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             {
                 return Some(WaitingOn::Worker);
             }
-            // A gate waits after every other line, on the operator.
+            // A gate reached waits on the operator while the CI and the
+            // checkers may still run beside it, whether or not its question
+            // holds the decision yet.
+            if view
+                .gate
+                .as_ref()
+                .is_some_and(|gate| gate.state == super::mission_gates::GateState::Open)
+            {
+                return Some(WaitingOn::Decision);
+            }
+            // An unreached gate waits after every other line, on the operator.
             let open = view
                 .criteria
                 .iter()
@@ -2439,6 +2449,11 @@ impl Runtime {
                 pass,
                 said,
             } => self.relay_gate(&actor, mission.as_deref(), &node, (pass, said), now),
+            MissionCommand::GateShow {
+                mission,
+                node,
+                show,
+            } => self.show_gate(&actor, mission.as_deref(), &node, &show, now),
             MissionCommand::Take { mission, handover } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
                 if target.status == MissionStatus::Cancelled {

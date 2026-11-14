@@ -111,7 +111,7 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
       "the cause written downStep a",
       "two screen draftsStep b",
     ]);
-    expect(container.querySelector("[data-mission-gate-when]")?.textContent).toBe("once each step passes its other finish lines");
+    expect(container.querySelector("[data-mission-gate-when]")?.textContent).toBe("before each step's review and CI");
     await click('[data-phone-back="missions"]');
 
     await click('[data-phone-mission="m-run"]');

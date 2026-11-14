@@ -6362,6 +6362,11 @@
                 }
             ],
             "command": "mission gate",
+            "needs_one_of": [
+                "--pass",
+                "--fix",
+                "--show"
+            ],
             "options": [
                 {
                     "name": "--mission",
@@ -6373,25 +6378,48 @@
                 },
                 {
                     "conflicts": [
-                        "--fix"
+                        "--fix",
+                        "--show"
                     ],
                     "name": "--pass",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--said"
+                    ],
                     "value": null
                 },
                 {
                     "conflicts": [
-                        "--pass"
+                        "--pass",
+                        "--show"
                     ],
                     "name": "--fix",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--said"
+                    ],
                     "value": null
                 },
                 {
+                    "conflicts": [
+                        "--show"
+                    ],
                     "name": "--said",
-                    "required": true,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pass",
+                        "--fix",
+                        "--said"
+                    ],
+                    "name": "--show",
+                    "repeats_at_most": 16,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
@@ -6906,7 +6934,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:8b2d38dcf0db9f6e909d5209f587d670b01c4431d267735de198e442e5dd6c54",
+    "digest": "sha256:dec585bfa7c66438ac599e7ae613dd8be2d04d4d572eb12878a2753be81b9f82",
     "envelopes": {
         "access": {
             "answer": "value",

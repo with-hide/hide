@@ -289,8 +289,16 @@ pub struct Criterion {
     /// and the open decision together (PRD mission-human-gate D-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked: Option<u64>,
-    /// On a human line: whether it asks before the node starts or after its
-    /// other lines are met (PRD node-presets D-06); a line written before
+    /// On a human line: when the Conductor showed the operator what to look
+    /// at while the node still works, before its own lines are met
+    /// (`hide mission gate <node> --show`, operator decision 2026-11-14):
+    /// the gate asks from then until the operator answers, and their fix
+    /// takes it back, so the gate waits for the next showing or for the
+    /// node's own lines. An older build ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown_at_unix_ms: Option<u64>,
+    /// On a human line: whether it asks before the node starts or before
+    /// its CI and checkers (PRD node-presets D-06); a line written before
     /// start gates asks at the end. A build before them ignores the field
     /// and asks a start gate at the end (docs/missions.md in hide-private,
     /// the downgrade limits).
@@ -347,6 +355,7 @@ impl Criterion {
             fails_in_a_row: 0,
             via: None,
             asked: None,
+            shown_at_unix_ms: None,
             when: GateWhen::End,
         }
     }
@@ -386,6 +395,7 @@ impl Criterion {
         self.evidence = Some(words);
         self.via = Some(via);
         self.asked = None;
+        self.shown_at_unix_ms = None;
         self.by = Some(operator(now));
         true
     }

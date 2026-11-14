@@ -1499,7 +1499,7 @@ export type MissionCriterion = {
   via?: MissionGateVia;
   /** On a gate: the key of the decision that asks it now. */
   asked?: number;
-  /** On a gate: when it asks, before its node starts or once its other lines are met (PRD node-presets D-06); absent for `end` and from a core before start gates. */
+  /** On a gate: when it asks, before its node starts, or once the Conductor shows it or its node's own lines are met, before review and CI (PRD node-presets D-06); absent for `end` and from a core before start gates. */
   when?: MissionGateWhen;
 };
 
@@ -1507,7 +1507,7 @@ export type MissionCriterion = {
 export type MissionGateVia = "card" | "phone" | "pane";
 /** Where a node's gate stands, derived by the core (`mission_gate_state`, PRD mission-human-gate D-09). */
 export type MissionGateState = "ahead" | "open" | "passed";
-/** When a gate asks (`mission_gate_when`, PRD node-presets D-06): before its node starts, or once its other lines are met. */
+/** When a gate asks (`mission_gate_when`, PRD node-presets D-06): before its node starts, or before its review and CI once shown or once its own lines are met. */
 export type MissionGateWhen = "start" | "end";
 /** The place the operator looks before a node is done (`GateView`): what to look at, the decision that asks it (`ask`, its question's key), since when it waits, when it has waited long (`오래 기다림`, compared with the clock), and once passed where the answer came from and the words. */
 export type MissionGate = {

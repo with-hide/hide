@@ -158,10 +158,11 @@ pub enum Preset {
     Deploy,
 }
 
-/// When a node's gate asks the operator (PRD node-presets D-06): after the
-/// node's other lines are met (`end`, the gate of PRD mission-human-gate),
-/// or before its work starts, once every node it depends on is done
-/// (`start`).
+/// When a node's gate asks the operator (PRD node-presets D-06): once the
+/// Conductor shows its screens or the node's own lines are met, before its
+/// CI and checkers (`end`, the gate of PRD mission-human-gate, as the
+/// operator decided 2026-11-14), or before its work starts, once every node
+/// it depends on is done (`start`).
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateWhen {
@@ -2451,6 +2452,16 @@ pub enum MissionCommand {
         pass: bool,
         said: String,
     },
+    /// The Conductor shows the operator what `node`'s gate looks at while
+    /// the node still works, with the Views it names (`hide mission gate
+    /// <node> --show`, operator decision 2026-11-14): the gate asks on the
+    /// map from then, as it does once the node's own lines are met.
+    GateShow {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        show: Vec<String>,
+    },
     /// A later node found a defect in `node`: it works again with the
     /// defect as a line of its own (D-21, B21).
     Defect {
@@ -2538,6 +2549,19 @@ impl MissionCommand {
                 said,
                 ..
             } => id_ok(mission) && valid_key(node) && said.len() <= LINE_LIMIT,
+            Self::GateShow {
+                mission,
+                node,
+                show,
+            } => {
+                id_ok(mission)
+                    && valid_key(node)
+                    && !show.is_empty()
+                    && show.len() <= VIEW_LINK_LIMIT
+                    && show
+                        .iter()
+                        .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
+            }
             Self::Decide {
                 mission,
                 line,
@@ -3946,7 +3970,7 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_gate_none" => "The node has no gate; hide mission show <node> lists its lines",
         "mission_gate_not_open" => {
-            "The node's gate does not take this answer now: a fix waits until the gate asks, once the node's other lines are met; an early pass needs an end gate on a node working in a running mission; or it already passed (hide mission show <node>)"
+            "The node's gate does not take this answer now: a fix waits until the gate asks, once you show its screens with --show or the node's own lines are met; an early pass or a --show needs an end gate on a node working in a running mission; or it already passed (hide mission show <node>)"
         }
         "mission_defects_too_many" => {
             "The node holds 16 defects; ask the operator how to go on with it"

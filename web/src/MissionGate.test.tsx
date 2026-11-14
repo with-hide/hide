@@ -71,7 +71,7 @@ it("lists where the operator will look over a plan that waits for approval, each
     const list = map.q("[data-mission-gates]")!;
     expect(list.getAttribute("aria-label")).toBe("Where you look 2");
     // When is the same for every place, so the head says it once.
-    expect([...list.querySelectorAll("[data-mission-gate-when]")].map((when) => when.textContent)).toEqual(["once each step passes its other finish lines"]);
+    expect([...list.querySelectorAll("[data-mission-gate-when]")].map((when) => when.textContent)).toEqual(["before each step's review and CI"]);
     expect(list.querySelector("[data-mission-gate-row] [data-mission-gate-when]")).toBeNull();
     // A dropped node's place is left out; each place reads what to look at first, then its node whole.
     expect([...list.querySelectorAll("[data-mission-gate-row]")].map((row) => [row.getAttribute("data-mission-gate-row"), row.textContent])).toEqual([
