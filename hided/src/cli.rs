@@ -1465,6 +1465,10 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
     if let Some(next_action) = hide_agent_hooks::hook_request::install::next_action(reason) {
         return next_action;
     }
+    // An external tool's credential is refused before any command runs.
+    if let Some(next_action) = crate::access::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" => crate::pane_auth::CHECKOUT_NEXT_ACTION,
         "caller_unavailable" => "Retry from a live shell inside a registered project checkout",
@@ -1476,13 +1480,14 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// named was gone and the bare bootstrap that replaces it was refused;
 /// nothing was sent, and the bootstrap's next step still applies.
 pub(crate) fn bootstrap_refused(reason: &str) -> bool {
-    matches!(
-        reason,
-        "checkout_not_registered"
-            | "caller_unavailable"
-            | hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED
-            | hide_agent_hooks::hook_request::install::OTHER_INSTALL
-    )
+    crate::access::next_action(reason).is_some()
+        || matches!(
+            reason,
+            "checkout_not_registered"
+                | "caller_unavailable"
+                | hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED
+                | hide_agent_hooks::hook_request::install::OTHER_INSTALL
+        )
 }
 
 /// One refused command's line, `{"ok":false,"error":{"code","message"}}`,

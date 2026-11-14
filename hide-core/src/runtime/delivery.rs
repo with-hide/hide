@@ -1450,7 +1450,11 @@ impl Runtime {
             if hint.is_some() {
                 return Err("caller_identity_conflict".into());
             }
-            (expected.clone(), self.access_authority(device, connection)?)
+            let reads = crate::runtime::access::tool_reads(&command);
+            (
+                expected.clone(),
+                self.access_authority(device, connection, reads)?,
+            )
         } else {
             let context = self
                 .workspace_control_query(device, caller, Query::Info)

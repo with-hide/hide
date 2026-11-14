@@ -435,6 +435,20 @@ pub(crate) fn admit_tool_command(
     }
 }
 
+/// A delivery command that only reads what Hide shows, which a View only
+/// tool runs (B20): `hide agent list` and `hide agent show` of an agent.
+pub(crate) fn tool_reads(command: &crate::delivery::Command) -> bool {
+    use crate::coordination::Command as Agents;
+    match command {
+        crate::delivery::Command::Agents { command } => match command {
+            Agents::List { .. } => true,
+            Agents::Show { id } => id != crate::coordination::HERE,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// A command only an agent in a Hide pane can mean (B22).
 pub(crate) const NEEDS_AGENT: &str = "access_needs_agent";
 /// A tool's spawn named a parent (B23).
@@ -443,16 +457,19 @@ pub(crate) const SPAWN_PARENT: &str = "access_spawn_parent";
 impl Runtime {
     /// The identity a tool's delivery command acts as: its connection's,
     /// on this machine, while the connection stands at Act (B20, B21).
+    /// `reads` is a command that only reads what Hide shows (`tool_reads`),
+    /// which View only runs too.
     pub(super) fn access_authority(
         &self,
         device: &str,
         connection: &str,
+        reads: bool,
     ) -> Result<crate::delivery::Actor, String> {
         let (level, actor) = self
             .access_actor(connection)
             .filter(|_| device == self.node.as_str())
             .ok_or(Ended::Revoked.reason())?;
-        if level != Level::Act {
+        if level != Level::Act && !reads {
             return Err(VIEW_ONLY.into());
         }
         Ok(actor)

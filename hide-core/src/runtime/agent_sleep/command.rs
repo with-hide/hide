@@ -34,9 +34,10 @@ impl Runtime {
         // does (PRD hide-external-control D-27), act as their own identity
         // on any live registration; a tool at View only is refused.
         let desk_authority = match Caller::parse(caller) {
-            Caller::Access { connection, .. } => {
-                Some((expected.clone(), self.access_authority(device, connection)?))
-            }
+            Caller::Access { connection, .. } => Some((
+                expected.clone(),
+                self.access_authority(device, connection, false)?,
+            )),
             Caller::Desk if desk_may_act => Some(self.desk_authority(device)?),
             _ => None,
         };
