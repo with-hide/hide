@@ -1714,7 +1714,7 @@ export type MissionNodeWork =
 export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
-export type MissionLettersHeldFor = "unreachable" | "undelivered" | "approval" | "draft" | "unanswered";
+export type MissionLettersHeldFor = "unreachable" | "approval" | "draft" | "unanswered";
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 

@@ -22,9 +22,6 @@ use super::ledger::{Ledger, State};
 pub enum HeldFor {
     /// The pane or its device is not there, or holds another session.
     Unreachable,
-    /// The letter ended undelivered and its sender has not got one through
-    /// to the recipient since.
-    Undelivered,
     /// The agent waits for the operator's approval on a menu or a plan.
     Approval,
     /// Text that may be the operator's stands unsent in its input.
@@ -75,10 +72,13 @@ pub struct HeldLetters {
 /// through: each pending one whose last published hold is the operator's to
 /// lift and that arrived `WAITING_MARK_REST_MS` or more before `now`, the
 /// two minutes a pane's waiting mark rests, so a hold a pass or two clears
-/// never shows; and each that ended undelivered while its sender has had
-/// no later letter to `recipient` taken in, which is when the sender got it
-/// through again. Also when the next pending one comes of that age, so a
-/// view made before then is made again. Memory only, bounded by the ledger.
+/// never shows. Also when the next pending one comes of that age, so a
+/// view made before then is made again. A letter that ended undelivered is
+/// none of them: one to a recipient still in its pane is not ended by its
+/// deadline (`Ledger::renew_present`), and the rest went to a recipient that
+/// is gone, which a mission shows as having no Conductor, or whose bells
+/// were all spent, which its sender is told and the recipient's inbox still
+/// lists. Memory only, bounded by the ledger.
 pub(crate) fn letters_held(
     ledger: &Ledger,
     holds: &BTreeMap<String, Hold>,
@@ -88,26 +88,19 @@ pub(crate) fn letters_held(
     let mut held: Option<HeldLetters> = None;
     let mut next = None::<u64>;
     for letter in &ledger.letters {
-        if !letter.recipient.same_identity(recipient) {
+        if letter.state != State::Pending || !letter.recipient.same_identity(recipient) {
             continue;
         }
-        let reason = match letter.state {
-            State::Pending => {
-                let Some(reason) = holds.get(&letter.id).copied().and_then(held_for) else {
-                    continue;
-                };
-                let due = letter
-                    .created_at_unix_ms
-                    .saturating_add(WAITING_MARK_REST_MS);
-                if now < due {
-                    next = Some(next.map_or(due, |next: u64| next.min(due)));
-                    continue;
-                }
-                reason
-            }
-            State::Undelivered if !got_through_since(ledger, letter) => HeldFor::Undelivered,
-            _ => continue,
+        let Some(reason) = holds.get(&letter.id).copied().and_then(held_for) else {
+            continue;
         };
+        let due = letter
+            .created_at_unix_ms
+            .saturating_add(WAITING_MARK_REST_MS);
+        if now < due {
+            next = Some(next.map_or(due, |next: u64| next.min(due)));
+            continue;
+        }
         let since = letter.created_at_unix_ms;
         held = Some(match held {
             None => HeldLetters {
@@ -123,17 +116,4 @@ pub(crate) fn letters_held(
         });
     }
     (held, next)
-}
-
-/// Whether a letter from `undelivered`'s sender to its recipient, written
-/// after it, reached the recipient: its bell was answered (`Delivered`) or
-/// the letter taken in, so the recipient can be reached again.
-fn got_through_since(ledger: &Ledger, undelivered: &super::ledger::Letter) -> bool {
-    ledger.letters.iter().any(|later| {
-        matches!(later.state, State::Delivered | State::Acknowledged)
-            && later.created_at_unix_ms >= undelivered.created_at_unix_ms
-            && later.id != undelivered.id
-            && later.sender.same_identity(&undelivered.sender)
-            && later.recipient.same_identity(&undelivered.recipient)
-    })
 }

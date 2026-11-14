@@ -124,6 +124,35 @@ impl Hold {
         }
     }
 
+    /// Whether the hold is a state of the recipient the doorbell still sees
+    /// in its pane, one that ends once it works, rests or the operator acts,
+    /// so its letter keeps its place past the delivery deadline rather than
+    /// ending undelivered (`Ledger::renew_present`). A pane or device not
+    /// seen, another session or agent there, or bells spent with none taken
+    /// is no such state: those letters end at their deadline as before.
+    pub(crate) fn recipient_present(self) -> bool {
+        match self {
+            Self::Absent | Self::Session | Self::Identity | Self::Exhausted => false,
+            Self::Kind
+            | Self::Working
+            | Self::Blocked
+            | Self::AwaitingOperator
+            | Self::SessionUnread
+            | Self::Status
+            | Self::Draft
+            | Self::Quiet
+            | Self::NotReady
+            | Self::Unprojected
+            | Self::Announced
+            | Self::Launching
+            | Self::Moved
+            | Self::Input
+            | Self::Letter
+            | Self::CorePending
+            | Self::ComposerUnread => true,
+        }
+    }
+
     fn code(self) -> &'static str {
         match self {
             Self::Kind => "kind_not_belled",
@@ -672,7 +701,21 @@ impl Doorbell {
             .collect();
         end_interrupted(client, &pending);
         let ids: HashSet<_> = pending.iter().map(|letter| letter.id.as_str()).collect();
-        self.forget(&ledger, &ids, now);
+        // A letter past its deadline is rung no more, but its last reason
+        // stays published until the store's upkeep has judged it: a
+        // recipient still in its pane renews it (`Ledger::renew_present`),
+        // whichever of the two passes runs first after the deadline.
+        let overdue: HashSet<_> = ledger
+            .letters
+            .iter()
+            .filter(|letter| {
+                letter.state == State::Pending
+                    && !letter.handed
+                    && letter.intake_overdue(&ledger.node_clocks, now)
+            })
+            .map(|letter| letter.id.as_str())
+            .collect();
+        self.forget(&ledger, &ids, &overdue, now);
         self.rung.retain(|pane, _| {
             pending
                 .iter()
@@ -1078,12 +1121,20 @@ impl Doorbell {
         }
     }
 
-    /// Drops what the doorbell kept for letters that left the pass. A letter
-    /// that reached its deadline while held is logged with the reason it last
-    /// waited for, so an undelivered letter names its cause.
-    fn forget(&mut self, ledger: &super::ledger::Ledger, ids: &HashSet<&str>, now: u64) {
+    /// Drops what the doorbell kept for letters that left the pass, except
+    /// the last reason of a letter past its deadline that the store has not
+    /// judged yet (`overdue`). A letter that reached its deadline while held
+    /// is logged with the reason it last waited for once it leaves, so an
+    /// undelivered letter names its cause.
+    fn forget(
+        &mut self,
+        ledger: &super::ledger::Ledger,
+        ids: &HashSet<&str>,
+        overdue: &HashSet<&str>,
+        now: u64,
+    ) {
         for (id, reason) in &self.held {
-            if ids.contains(id.as_str()) {
+            if ids.contains(id.as_str()) || overdue.contains(id.as_str()) {
                 continue;
             }
             if let Some(letter) = ledger.letters.iter().find(|letter| &letter.id == id)
@@ -1094,7 +1145,8 @@ impl Doorbell {
                     "letter_id":id,"pane_id":letter.recipient.pane_id,"reason":reason.code()}));
             }
         }
-        self.held.retain(|id, _| ids.contains(id.as_str()));
+        self.held
+            .retain(|id, _| ids.contains(id.as_str()) || overdue.contains(id.as_str()));
         self.tried.retain(|id, _| ids.contains(id.as_str()));
     }
 
@@ -2605,6 +2657,39 @@ mod tests {
                 held: false,
             }
         );
+    }
+
+    /// A recipient still in its pane keeps its letter past the hour, even
+    /// when the doorbell passes first after the deadline: the letter's last
+    /// reason stays published for the store's upkeep, which renews it.
+    #[test]
+    fn a_letter_past_its_hour_stays_present_until_the_store_renews_it() {
+        let bell = Bell::start(json!({"agent_status": "working", "state_change_seq": null}));
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        let present = || bell.runtime.lock().unwrap().delivery_present_holds();
+        assert!(
+            present().contains(&bell.letter),
+            "a working recipient is present"
+        );
+        let late = start + crate::delivery::DELIVERY_EXPIRY_MS + 1_000;
+        bell.pass(&mut doorbell, late);
+        assert!(
+            present().contains(&bell.letter),
+            "the pass after the deadline leaves the letter to the store"
+        );
+        // The store's upkeep, in its order.
+        let mut ledger = (*bell.runtime.lock().unwrap().delivery_state().unwrap()).clone();
+        ledger.renew_present(&present(), late);
+        ledger.expire_awake(late, &Default::default(), &Default::default());
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == bell.letter)
+            .unwrap();
+        assert_eq!(letter.state, State::Pending);
+        assert!(letter.within_deadline(&ledger.node_clocks, late));
     }
 
     /// What Hide's own `hide:input` told senders about bells not taken.
@@ -4157,8 +4242,23 @@ mod tests {
             assert_eq!(held(&records), [reason], "{flags}");
             assert!(bell.typed().is_empty(), "{flags}");
             assert_eq!(bell.attempts(), 0, "{flags}");
-            // Held until its deadline, it is logged with that reason.
-            let records = bell.pass(&mut doorbell, now() + super::super::DELIVERY_EXPIRY_MS);
+            // Past its deadline it is rung no more and keeps its reason
+            // until the store ends it, which logs it with that reason.
+            let late = now() + super::super::DELIVERY_EXPIRY_MS;
+            let records = bell.pass(&mut doorbell, late);
+            assert!(
+                records
+                    .iter()
+                    .all(|record| record["kind"] != "doorbell.expired"),
+                "{flags}"
+            );
+            {
+                let mut guard = bell.runtime.lock().unwrap();
+                let mut ledger = (*guard.delivery_state().unwrap()).clone();
+                ledger.expire_awake(late, &Default::default(), &Default::default());
+                guard.publish_delivery(std::sync::Arc::new(ledger), false);
+            }
+            let records = bell.pass(&mut doorbell, late + 1);
             let expired: Vec<_> = records
                 .iter()
                 .filter(|record| record["kind"] == "doorbell.expired")

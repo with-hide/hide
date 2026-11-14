@@ -316,6 +316,7 @@ fn reading_a_node_letter_does_not_let_another_agent_of_the_node_act_on_it() {
                 id: id.clone(),
                 intent: format!("{pane}-answer"),
                 body: "answered by the wrong agent".into(),
+                now: false,
             },
         ] {
             assert_eq!(

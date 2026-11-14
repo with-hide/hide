@@ -1040,6 +1040,7 @@ mod tests {
                 id: request.id,
                 intent: "reply".into(),
                 body: "done".into(),
+                now: false,
             },
             2,
         )

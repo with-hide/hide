@@ -10270,8 +10270,8 @@ fn conductor_letter(runtime: &mut Runtime, ago: u64) -> String {
 /// that the doorbell holds for something only the operator can lift, for
 /// two minutes or more, are counted on the mission with what to do (a pane
 /// it cannot reach named first); a hold that ends on its own and a letter
-/// held for less than two minutes are not, and a delivered letter leaves
-/// the count, the line going with the last.
+/// held for less than two minutes are not, a delivered letter leaves the
+/// count, the line going with the last, and an undelivered one never joins.
 #[test]
 fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     use crate::delivery::doorbell::Hold;
@@ -10326,8 +10326,11 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     assert_eq!(held(&runtime), None, "delivered letters leave");
     assert!(runtime.delivery_holds.contains_key(&fresh));
 
-    // A letter that ended undelivered counts at once, until its sender gets
-    // a later one through to the Conductor.
+    // A letter that ended undelivered asks nothing of the operator: one to
+    // a Conductor still in its pane is not ended by its deadline, and the
+    // rest went to a Conductor that is gone or were told to their sender
+    // (operator decision 2026-11-14; a settings worker's report stood here
+    // for good once that worker had ended).
     let lost = conductor_letter(&mut runtime, 0);
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger
@@ -10337,26 +10340,60 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .unwrap()
         .state = crate::delivery::ledger::State::Undelivered;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(held(&runtime), Some((1, HeldFor::Undelivered)));
-    let again = conductor_letter(&mut runtime, 0);
-    assert_eq!(
-        held(&runtime),
-        Some((1, HeldFor::Undelivered)),
-        "sent, not taken in"
-    );
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    ledger
-        .letters
-        .iter_mut()
-        .find(|letter| letter.id == again)
-        .unwrap()
-        .state = crate::delivery::ledger::State::Delivered;
-    runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(
-        held(&runtime),
-        None,
-        "the later letter's bell was answered: the Conductor is reached again, before any ack"
-    );
+    assert_eq!(held(&runtime), None);
+}
+
+/// Operator decision 2026-11-14: an agent's letter to an open mission's
+/// Conductor goes as `--now` with no flag from its sender, so the Conductor
+/// takes it at its next tool call while it works; the same letter to an
+/// agent that conducts nothing waits its five minutes of work.
+#[test]
+fn letters_and_replies_to_an_open_missions_conductor_go_now() {
+    let fixture = conducting();
+    let run = |pane: &str, command: crate::delivery::Command| {
+        let mut guard = fixture.runtime.lock().unwrap();
+        let context = authority(&guard.delivery_observations[pane].actor).context;
+        let prepared = guard
+            .prepare_delivery(crate::node::TEST_NODE, pane, &context, None, command)
+            .unwrap();
+        drop(guard);
+        prepared.run(std::time::Duration::from_secs(10)).unwrap()
+    };
+    let send = |target: &str, intent: &str, kind: &str| crate::delivery::Command::Send {
+        target: target.into(),
+        intent: intent.into(),
+        body: "Done with the fix".into(),
+        kind: kind.into(),
+        now: false,
+        force: false,
+    };
+    // The worker's report, and its reply to the Conductor's question.
+    let report = |intent: &str| run("recipient", send("sender", intent, "report"));
+    let reply = |intent: &str| {
+        let asked = run(
+            "sender",
+            send("recipient", &format!("{intent}-ask"), "request"),
+        );
+        run(
+            "recipient",
+            crate::delivery::Command::Reply {
+                id: asked["id"].as_str().unwrap().into(),
+                intent: intent.into(),
+                body: "Yes".into(),
+                now: false,
+            },
+        )
+    };
+    assert_eq!(report("before")["immediate"], false, "no mission yet");
+    assert_eq!(reply("before-reply")["immediate"], false, "no mission yet");
+    command(
+        &mut fixture.runtime.lock().unwrap(),
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    assert_eq!(report("during")["immediate"], true);
+    assert_eq!(reply("during-reply")["immediate"], true);
 }
 
 /// A mission of one direct change (no pull request) whose worker recorded

@@ -10533,7 +10533,6 @@ mod wire_enum_tests {
             use crate::delivery::held::HeldFor;
             let held = [
                 HeldFor::Unreachable,
-                HeldFor::Undelivered,
                 HeldFor::Approval,
                 HeldFor::Draft,
                 HeldFor::Unanswered,
@@ -10541,7 +10540,6 @@ mod wire_enum_tests {
             for variant in held {
                 match variant {
                     HeldFor::Unreachable
-                    | HeldFor::Undelivered
                     | HeldFor::Approval
                     | HeldFor::Draft
                     | HeldFor::Unanswered => {}

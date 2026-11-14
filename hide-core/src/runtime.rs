@@ -1264,6 +1264,10 @@ pub struct Runtime {
     /// 다시 볼 것 changes waiting on their save; `None` removes the mark.
     pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
+    /// The pending letters whose recipient the doorbell's last pass saw in
+    /// its pane (`Hold::recipient_present`), whose deadline the delivery
+    /// upkeep renews. Memory only, as the holds are.
+    delivery_present: std::collections::HashSet<String>,
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
     letters_waiting: BTreeMap<String, u32>,
@@ -2605,6 +2609,7 @@ impl Runtime {
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),
             delivery_holds: BTreeMap::new(),
+            delivery_present: std::collections::HashSet::new(),
             letters_waiting: BTreeMap::new(),
             session_window_deadline_unix_ms: 0,
             #[cfg(test)]
