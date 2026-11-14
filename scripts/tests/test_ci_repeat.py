@@ -424,8 +424,10 @@ class Command(unittest.TestCase):
         self.assertEqual(outputs["web"], "web/e2e/s3.spec.ts")
         self.assertEqual(json.loads(outputs["units"]), ["web/src/searchDetail.test.ts"])
         self.assertEqual(json.loads(outputs["rust"]), [{"package": "hided", "test": "it", "module": "handshake"}])
+        # A hand run counts no tests, but its unit files are still listed:
+        # the units job runs what the count found in each package.
         self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"], outputs["units-count-needed"],
-                          outputs["rust-count-needed"]), ("10", "false", "false", "false", "false"))
+                          outputs["rust-count-needed"]), ("10", "false", "false", "true", "false"))
 
     def test_a_pull_request_resolves_with_its_rust_count_and_no_repeat_yet(self):
         rust = json.dumps([{"package": "hided", "test": "lib", "module": "handshake"}], separators=(",", ":"))
@@ -435,6 +437,13 @@ class Command(unittest.TestCase):
         self.assertEqual((outputs["repeat"], outputs["counted"]), ("", "true"))
         self.assertEqual((outputs["web-count-needed"], outputs["units-count-needed"], outputs["rust-count-needed"]),
                          ("true", "true", "true"))
+
+    def test_a_hand_run_lists_its_unit_files_and_a_run_without_them_counts_nothing(self):
+        _, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--units", "web/src/searchDetail.test.ts",
+                                    "--repeat", "3")
+        self.assertEqual((outputs["units"], outputs["units-count-needed"]), ('["web/src/searchDetail.test.ts"]', "true"))
+        _, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--web", "s3.spec.ts", "--repeat", "3")
+        self.assertEqual((outputs["units"], outputs["units-count-needed"]), ("[]", "false"))
 
     def test_a_refusal_is_one_line_and_a_failed_exit(self):
         result, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--web", "nothing.spec.ts", "--repeat", "5")

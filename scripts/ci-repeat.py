@@ -510,8 +510,11 @@ def resolve(event, web, rust, repeat, runner, units=""):
         # a module that lists no test there fails in the Rust job, where it runs.
         plan = [{"package": package, "test": test, "filter": expression}
                 for package, test, expression in nextest_filters(modules)]
+        # The unit files are listed even for a hand run: the units job runs the
+        # files the count found in each package, and only Vitest can say which
+        # ones its config collects.
         return {"web": specs, "units": unit_files, "rust": modules, "runner": runner,
-                "repeat": int(repeat), "counted": False, "plan": plan}
+                "repeat": int(repeat), "counted": False, "units_counted": bool(unit_files), "plan": plan}
     specs = json.loads(web or "[]")
     unit_files = json.loads(units or "[]")
     modules = json.loads(rust or "[]")
@@ -527,7 +530,7 @@ def resolve(event, web, rust, repeat, runner, units=""):
             raise ValueError(f"not a Rust test module: {module!r}")
     # A pull request runs on Linux only; the hand run is the way to another system.
     return {"web": specs, "units": unit_files, "rust": modules, "runner": "linux", "repeat": 0,
-            "counted": bool(specs or modules or unit_files), "plan": []}
+            "counted": bool(specs or modules or unit_files), "units_counted": bool(unit_files), "plan": []}
 
 
 def write_outputs(values):
@@ -615,7 +618,7 @@ def main():
                 "repeat": work["repeat"] or "",
                 "counted": str(work["counted"]).lower(),
                 "web-count-needed": str(work["counted"] and bool(work["web"])).lower(),
-                "units-count-needed": str(work["counted"] and bool(work["units"])).lower(),
+                "units-count-needed": str(work["units_counted"]).lower(),
                 "rust-count-needed": str(work["counted"] and bool(work["rust"])).lower(),
                 "rust-plan": json.dumps(work["plan"], separators=(",", ":")),
             })
