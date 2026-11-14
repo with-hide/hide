@@ -122,8 +122,8 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
     expect(ok(tool(["agent", "end", helperId]), "agent end")).toMatchObject({ id: helperId, runtime: "ended", pane: "closed" });
     const after = ok(tool(["agent", "list"]), "agent list after end").items as Listed[];
     expect(after.find((agent) => agent.id === helperId)?.runtime, JSON.stringify(after)).toBe("ended");
-    const live = ok(tool(["agent", "list", "--live"]), "agent list --live after end").items as Listed[];
-    expect(live.some((agent) => agent.id === helperId), JSON.stringify(live)).toBe(false);
+    const liveAfter = ok(tool(["agent", "list", "--live"]), "agent list --live after end").items as Listed[];
+    expect(liveAfter.some((agent) => agent.id === helperId), JSON.stringify(liveAfter)).toBe(false);
   } finally {
     daemon?.stop();
     fixture.stop();
