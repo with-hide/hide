@@ -140,6 +140,81 @@ pub fn answered_in_claude_file(transcript: &Path, waited: &str) -> bool {
     waited_call.is_some_and(|call| results.contains(&call))
 }
 
+/// The subagents the main agent stopped during its turn `turn`, as its
+/// Codex session file records them: the ids, as Codex's hooks send them as
+/// `agent_id`, whose latest word in the turn is a stop, in the order written.
+///
+/// A subagent the main agent stops itself (`interrupt_agent`, or the older
+/// tools' `close_agent`) sends no `SubagentStop`, and the main agent's session
+/// file is the one place that says so (Codex 0.167.2, measured): the current
+/// tools write a `SubAgentActivity` item of kind `interrupted`, the older ones
+/// a `CollabAgentToolCall` of `close_agent`. Any later word on the same
+/// subagent (a follow-up task, a message) takes the stop back. A start or a
+/// completion here says nothing the hooks have not: the file records a
+/// completion only after the subagent's `SubagentStop`, so a turn end read
+/// between the two would see a finished subagent as started.
+///
+/// The records read are those after the turn's `task_started` within the
+/// file's last [`TRANSCRIPT_TAIL_BYTES`], whichever start is nearer; a stop
+/// before that is not read. A file that cannot be read is an error.
+pub fn codex_subagents_stopped_in_turn(
+    transcript: &Path,
+    turn: &str,
+) -> crate::Result<Vec<String>> {
+    let tail = crate::read_tail(transcript, TRANSCRIPT_TAIL_BYTES)?;
+    let records: Vec<Value> = tail
+        .records()
+        .filter_map(|(_, line)| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    let from = records
+        .iter()
+        .rposition(|record| {
+            record["type"] == "event_msg"
+                && record["payload"]["type"] == "task_started"
+                && record["payload"]["turn_id"] == turn
+        })
+        .unwrap_or(0);
+    let mut latest: Vec<(&str, bool)> = Vec::new();
+    for record in &records[from..] {
+        for (id, stopped) in subagent_words(record) {
+            latest.retain(|(known, _)| *known != id);
+            latest.push((id, stopped));
+        }
+    }
+    Ok(latest
+        .into_iter()
+        .filter(|(_, stopped)| *stopped)
+        .map(|(id, _)| id.to_owned())
+        .collect())
+}
+
+/// What one Codex session record says of subagents: each id it names, and
+/// whether it says the main agent stopped it.
+fn subagent_words(record: &Value) -> Vec<(&str, bool)> {
+    let payload = &record["payload"];
+    if record["type"] != "event_msg" || payload["type"] != "item_completed" {
+        return Vec::new();
+    }
+    let item = &payload["item"];
+    match item["type"].as_str() {
+        Some("SubAgentActivity") => item["agent_thread_id"]
+            .as_str()
+            .map(|id| vec![(id, item["kind"] == "interrupted")])
+            .unwrap_or_default(),
+        Some("CollabAgentToolCall") => {
+            let closed = item["tool"] == "close_agent" && item["status"] == "completed";
+            item["receiver_thread_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|id| (id, closed))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +278,88 @@ mod tests {
         // not answered by the main session's earlier call of the same tool.
         let subagents = key("Bash", &json!({"command": "cargo test"})).unwrap();
         assert!(!answered_in_claude_file(&transcript, &subagents));
+    }
+
+    fn activity(id: &str, kind: &str) -> Value {
+        json!({"type": "event_msg", "payload": {"type": "item_completed",
+            "thread_id": "main", "turn_id": "t",
+            "item": {"type": "SubAgentActivity", "kind": kind, "agent_thread_id": id,
+                     "agent_path": "/root/x"}}})
+    }
+
+    fn collab(tool: &str, id: &str) -> Value {
+        json!({"type": "event_msg", "payload": {"type": "item_completed",
+            "thread_id": "main", "turn_id": "t",
+            "item": {"type": "CollabAgentToolCall", "tool": tool, "status": "completed",
+                     "receiver_thread_ids": [id], "agents_states": {id: "running"}}}})
+    }
+
+    fn task_started(turn: &str) -> Value {
+        json!({"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}})
+    }
+
+    fn codex_file(records: &[Value]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("rollout.jsonl");
+        let text: String = records.iter().map(|record| format!("{record}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        (folder, path)
+    }
+
+    /// The records Codex 0.167.2 wrote with its current subagent tools: a
+    /// subagent whose latest word in the turn is an interrupt was stopped, and
+    /// an earlier turn's words are not read.
+    #[test]
+    fn a_codex_subagent_stopped_in_the_turn_is_one_whose_latest_word_is_a_stop() {
+        let (_folder, path) = codex_file(&[
+            task_started("t0"),
+            activity("old", "interrupted"),
+            task_started("t1"),
+            activity("a", "started"),
+            activity("b", "started"),
+            activity("a", "completed"),
+            activity("c", "started"),
+            activity("c", "interrupted"),
+            activity("a", "interacted"),
+            activity("d", "started"),
+            activity("d", "interrupted"),
+            activity("d", "interacted"),
+            // A record that only mentions a subagent kind in its text.
+            json!({"type": "response_item", "payload": {"type": "message",
+                "content": [{"type": "input_text", "text": "SubAgentActivity interrupted b"}]}}),
+        ]);
+        assert_eq!(codex_subagents_stopped_in_turn(&path, "t1").unwrap(), ["c"]);
+    }
+
+    /// The older tools record only the main agent's calls: a close is a
+    /// stop, and a later message to the same subagent takes it back.
+    #[test]
+    fn of_the_older_codex_tools_only_a_close_is_a_stop() {
+        let (_folder, path) = codex_file(&[
+            task_started("t1"),
+            collab("spawn_agent", "a"),
+            collab("spawn_agent", "b"),
+            collab("close_agent", "b"),
+            collab("close_agent", "a"),
+            collab("send_input", "a"),
+        ]);
+        assert_eq!(codex_subagents_stopped_in_turn(&path, "t1").unwrap(), ["b"]);
+    }
+
+    /// A turn that wrote more than the tail after a word leaves it unread,
+    /// and a missing file is an error.
+    #[test]
+    fn a_codex_word_before_the_tail_is_not_read() {
+        let filler = json!({"type": "response_item", "payload": "x".repeat(4096)});
+        let mut records = vec![task_started("t1"), activity("far", "interrupted")];
+        let fill = TRANSCRIPT_TAIL_BYTES as usize / 4096 + 1;
+        records.extend(std::iter::repeat_n(filler, fill));
+        records.push(activity("near", "interrupted"));
+        let (folder, path) = codex_file(&records);
+        assert_eq!(
+            codex_subagents_stopped_in_turn(&path, "t1").unwrap(),
+            ["near"]
+        );
+        assert!(codex_subagents_stopped_in_turn(&folder.path().join("gone.jsonl"), "t1").is_err());
     }
 }
