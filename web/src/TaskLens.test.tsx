@@ -6,6 +6,7 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import type { AgentScope, TaskCardScope, TaskState } from "./agentScope";
+import { formatElapsed } from "./components/elapsed";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { withMissionAsk } from "./gallery/MissionScene";
 import { clientI18n } from "./i18n/translator";
@@ -311,6 +312,19 @@ it.each(["status", "project"] as const)("in %s stands a mission among the unread
   const { container } = await render(withMissionAsk(snapshot(agents, cards, view), "local", now), agents);
   const order = [...container.querySelectorAll("[data-task-row], li[data-mission-ask]")].map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
   expect(order).toEqual(["newer", "mission:mission-1", "older", "seen"]);
+});
+
+it("in 내 차례 times an ask by how long it waited, the time the asks stand by, and every other row by its latest prompt (operator decision 2026-11-14)", async () => {
+  const now = Date.now();
+  // Each asked long after its last prompt, which is the time the row used to show.
+  const prompted = now - 26 * 3_600_000;
+  const asking = row("asking", { last_prompt_at_unix_ms: prompted }, { group: "needs_you" });
+  const seen: AgentRow = { ...row("seen", { last_prompt_at_unix_ms: prompted }, { group: "needs_you" }), revisit: { starred: false, read_ask: true, since_unix_ms: now - 3 * 3_600_000 } };
+  const agents = [{ ...asking, state: { ...asking.state, request_since: now - 9 * 60_000 } }, seen, row("works", { last_prompt_at_unix_ms: now - 2 * 3_600_000 })];
+  const cards = [card("asking", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }, card("works", "working", "hide-main")];
+  const { container } = await render(snapshot(agents, cards), agents);
+  const time = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-agent-elapsed]`)?.textContent;
+  expect(["asking", "seen", "works"].map(time)).toEqual([formatElapsed("ko", 9 * 60_000), formatElapsed("ko", 3 * 3_600_000), formatElapsed("ko", 2 * 3_600_000)]);
 });
 
 it("in 프로젝트별 puts a project whose only turn is a block first, as a block is the operator's turn (status-marks B32)", async () => {
