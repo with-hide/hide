@@ -323,3 +323,53 @@ fn a_codex_subagents_prompt_takes_nothing_of_the_panes() {
     assert_eq!(machine.calls().len(), pulls, "{:?}", machine.calls());
     assert_eq!(pane.turns().last().map(String::as_str), Some("done"));
 }
+
+/// A turn end that cannot read the main session file, or whose input was
+/// cut off before it named it, keeps the counts as the hooks left them and
+/// says why in the pane's report failure; the next report clears it.
+#[test]
+fn a_codex_turn_end_that_cannot_read_the_session_file_keeps_the_count_and_records_why() {
+    let machine = Machine::new("registered");
+    let pane = Pane::new(&machine);
+    let last_failure =
+        || hide_agent_hooks::report::last_failure_at(&machine.records()).expect("records read");
+
+    pane.session_start("startup");
+    pane.prompt("t1");
+    pane.subagent("SubagentStart", B);
+    std::fs::remove_file(&pane.transcript).unwrap();
+    pane.stop("t1");
+    assert_eq!(pane.counts(), (1, 0));
+    let failure = last_failure().expect("the unread file is the pane's report failure");
+    assert_eq!(
+        failure.kind,
+        Some(hide_agent_hooks::report::FailureKind::Record)
+    );
+    assert!(
+        failure
+            .message()
+            .contains("main session file could not be read"),
+        "{failure:?}"
+    );
+
+    // The next report clears it.
+    pane.subagent("SubagentStop", B);
+    assert!(last_failure().is_none());
+    assert_eq!(pane.counts(), (0, 1));
+
+    // An input that names no turn or file says so too.
+    let run = machine.run_event(
+        "codex",
+        "Interrupt",
+        &json!({"session_id": SESSION, "hook_event_name": "Interrupt"}).to_string(),
+        Some(PANE),
+        &[],
+    );
+    assert!(run.status_ok, "{run:?}");
+    assert_eq!(pane.counts(), (0, 1));
+    let failure = last_failure().expect("the cut-off input is the pane's report failure");
+    assert!(
+        failure.message().contains("named no session file or turn"),
+        "{failure:?}"
+    );
+}

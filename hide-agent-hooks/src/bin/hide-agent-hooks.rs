@@ -1197,7 +1197,13 @@ fn run_hook(arguments: &[String], started: Instant) {
         }
         return;
     }
-    let stopped = counted.then(|| input.stopped(runtime, event)).flatten();
+    // A turn end whose stops could not be read keeps the counts, and says
+    // why in the pane's report failure.
+    let (stopped, unread) = match counted.then(|| input.stopped(runtime, event)).flatten() {
+        Some(Ok(ids)) => (Some(ids), None),
+        Some(Err(why)) => (None, Some(why)),
+        None => (None, None),
+    };
     let change = if counted {
         Change::of(runtime, event, &input, stopped.as_deref())
     } else {
@@ -1231,6 +1237,7 @@ fn run_hook(arguments: &[String], started: Instant) {
             said,
             transcript: transcript.as_deref(),
             refused: refused.as_ref(),
+            unread: unread.as_deref(),
         },
         counted,
         runtime.map_or(Instant::now() + report::REPORT_TIMEOUT, |runtime| {
@@ -1240,13 +1247,15 @@ fn run_hook(arguments: &[String], started: Instant) {
 }
 
 /// What one event said of its session ([`counters::Said`]), the session
-/// file its input names, which records a refusal no event reports, and why
-/// the provider refused the turn the event ended.
+/// file its input names, which records a refusal no event reports, why
+/// the provider refused the turn the event ended, and why a Codex turn end
+/// could not read the subagents its main agent stopped.
 #[derive(Clone, Copy)]
 struct Heard<'a> {
     said: Said<'a>,
     transcript: Option<&'a std::path::Path>,
     refused: Option<&'a HookRefusal>,
+    unread: Option<&'a str>,
 }
 
 impl<'a> Heard<'a> {
@@ -1255,6 +1264,7 @@ impl<'a> Heard<'a> {
             said,
             transcript: None,
             refused: None,
+            unread: None,
         }
     }
 }
@@ -1283,6 +1293,7 @@ fn report_pane(
         said,
         transcript,
         refused,
+        unread,
     }: Heard<'_>,
     counted: bool,
     deadline: Instant,
@@ -1364,10 +1375,16 @@ fn report_pane(
         },
         deadline,
     );
-    let record_error = kept
-        .err()
-        .map(|error| format!("the pane's count could not be changed: {error}"))
-        .map_or(Ok(()), Err);
+    let record_error = match (
+        kept.err()
+            .map(|error| format!("the pane's count could not be changed: {error}")),
+        unread,
+    ) {
+        (None, None) => Ok(()),
+        (Some(kept), None) => Err(kept),
+        (None, Some(unread)) => Err(unread.to_owned()),
+        (Some(kept), Some(unread)) => Err(format!("{kept}; {unread}")),
+    };
     // The outcome is written down rather than surfaced here: a hook's
     // stderr reaches nobody, and the record is what `doctor` and Settings
     // show (engineering rule 10). A record that cannot be written is said on
@@ -1443,6 +1460,7 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
             said,
             transcript: call.transcript.as_deref(),
             refused: None,
+            unread: None,
         },
         counted,
         report::deadline(started, runtime, event),

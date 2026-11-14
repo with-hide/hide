@@ -298,20 +298,39 @@ pub struct SubagentInput {
 impl SubagentInput {
     /// The subagents Codex's session file says the main agent stopped during
     /// the main turn this event ends: read for a Codex `Stop` or `Interrupt`
-    /// of the main agent only, and `None` for any other event, an input that
-    /// names no turn or file, or a file that could not be read.
-    pub fn stopped(&self, runtime: Option<AgentRuntime>, event: HookEvent) -> Option<Vec<String>> {
+    /// of the main agent only, and `None` for any other event. An input cut
+    /// off before it named the file and the turn, or a file that could not be
+    /// read, is the error, which the caller records as the pane's report
+    /// failure while the counts stay as the hooks left them.
+    pub fn stopped(
+        &self,
+        runtime: Option<AgentRuntime>,
+        event: HookEvent,
+    ) -> Option<Result<Vec<String>, String>> {
         let ends_main_turn = runtime == Some(AgentRuntime::Codex)
             && matches!(event, HookEvent::Stop | HookEvent::Interrupt)
             && self.subagent.is_none();
         if !ends_main_turn {
             return None;
         }
-        hide_session::calls::codex_subagents_stopped_in_turn(
-            self.transcript.as_deref()?,
-            self.turn.as_deref()?,
+        let (Some(transcript), Some(turn)) = (self.transcript.as_deref(), self.turn.as_deref())
+        else {
+            return Some(Err(
+                "the turn end's input named no session file or turn, so the subagents its \
+                 main agent stopped were not read"
+                    .to_owned(),
+            ));
+        };
+        Some(
+            hide_session::calls::codex_subagents_stopped_in_turn(transcript, turn).map_err(
+                |error| {
+                    format!(
+                        "the main session file could not be read at the turn's end, so the \
+                         subagents its main agent stopped were not read: {error}"
+                    )
+                },
+            ),
         )
-        .ok()
     }
 }
 
