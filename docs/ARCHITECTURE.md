@@ -183,6 +183,7 @@ Everything the shell renders comes from that one snapshot pull.
 The shell decodes it strictly: one string value it does not know fails the whole decode, the bridge keeps its last good frame, and every later notification repeats the failure until the two sides agree, so an unknown value is a stalled shell, not a blank field.
 The string enums the core serializes into the snapshot are therefore pinned in `contracts/snapshot-wire-enums.json`; `model.rs` tests that each variant emits the listed value and `SnapshotWireEnumTests` that each listed value decodes, so a variant added on one side fails a suite before it can reach a running shell (a `PullRequestTitle` origin once shipped as `pull_request_title` against a shell that read `pr_title`).
 The bridge publishes `bridgeError` only on change and names the coding path in it, because a repeated failure republished every notification rebuilt every view observing the bridge at the notification rate.
+A tab move of Hide's that the engine has not answered holds every checkout's visible tab, not only the one it names: the engine's focused tab is one value over all of them, so a move it makes while any request waits is read as that request's answer rather than as the operator choosing a tab (`Runtime::tab_asks`, `any_outstanding`), and `tab.focus.followed` is recorded only when nothing is outstanding (with-hide/hide#2575).
 
 ## Stored primary checkout
 
