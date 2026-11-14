@@ -108,12 +108,49 @@ class Splitting(unittest.TestCase):
         _, smaller = shard.split(sorted(table), table, count - 1)
         self.assertGreater(max(smaller), 720)
 
+    # The Windows lane is sized by when a shard finishes, not by its test work
+    # alone: the daemon and shell builds precede the shards (`needs:`) and each
+    # shard then pays its own setup before a test runs, so the fixed cost is
+    # about 402 seconds whatever the count, and only another shard shortens the
+    # wait. The lane's own numbers, medians of 115 successful `web e2e windows`
+    # jobs measured on 2026-11-14: `build hided` 288 s, the shard's setup 114 s.
+    # The target is the 720 s the shard's own step is sized to, which the test
+    # work alone already met at two shards, so this holds what that does not:
+    # that the lane, fixed cost and tests together, clears it at the fewest
+    # shards the recording allows.
+    WINDOWS_BUILD_SECONDS = 288
+    WINDOWS_SHARD_SETUP_SECONDS = 114
+    WINDOWS_LANE_TARGET_SECONDS = 720
+
+    def test_the_windows_lane_uses_the_fewest_shards_that_finish_within_its_target(self):
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        lane = re.split(r"\n(?=  [a-z0-9-]+:\n)",
+                        workflow.split("\n  windows-e2e:\n", 1)[1], maxsplit=1)[0]
+        count = int(re.search(r"\n      shards: (\d+)", lane).group(1))
+        table_name = re.search(r"\n      table: (\S+)", lane).group(1)
+        self.assertEqual(table_name, "web/e2e/shard-durations-windows.json")
+        table = json.loads((ROOT / table_name).read_text(encoding="utf-8"))
+
+        def finish(seconds):
+            return self.WINDOWS_BUILD_SECONDS + self.WINDOWS_SHARD_SETUP_SECONDS + seconds
+
+        _, load = shard.split(sorted(table), table, count)
+        # The shard's own step cap still bounds its test work.
+        self.assertLessEqual(max(load), 720)
+        self.assertGreater(count, 1)
+        self.assertLessEqual(finish(max(load)), self.WINDOWS_LANE_TARGET_SECONDS)
+        # One fewer would miss the target, so the count is the fewest that does.
+        _, smaller = shard.split(sorted(table), table, count - 1)
+        self.assertGreater(finish(max(smaller)), self.WINDOWS_LANE_TARGET_SECONDS)
+
     def test_the_committed_tables_name_only_whole_tests_of_existing_specs(self):
-        for suite in ("web/e2e", "desktop/e2e"):
-            table = json.loads((ROOT / suite / "shard-durations.json").read_text(encoding="utf-8"))
-            self.assertGreater(len(table), 100)
+        for suite, name in (("web/e2e", "shard-durations.json"),
+                            ("web/e2e", "shard-durations-windows.json"),
+                            ("desktop/e2e", "shard-durations.json")):
+            table = json.loads((ROOT / suite / name).read_text(encoding="utf-8"))
+            self.assertGreater(len(table), 100 if name == "shard-durations.json" else 50)
             for key, seconds in table.items():
-                with self.subTest(suite=suite, key=key):
+                with self.subTest(suite=f"{suite}/{name}", key=key):
                     match = re.fullmatch(r"([\w.-]+\.spec\.ts) › (.+)", key)
                     self.assertTrue(match, "not `file › title`")
                     self.assertTrue((ROOT / suite / match[1]).is_file(), "no such spec")
@@ -248,6 +285,15 @@ class Durations(unittest.TestCase):
     def test_a_windows_runners_ok_mark_counts_as_a_pass(self):
         log = "  ok   1 e2e/a.spec.ts:10:1 › one (2.0s)\n  ok   2 e2e/a.spec.ts:40:1 › look ok (3.0s)\n"
         self.assertEqual(shard.durations([log], ["a.spec.ts › one", "a.spec.ts › look ok"]), {"a.spec.ts › one": 2.0, "a.spec.ts › look ok": 3.0})
+
+    def test_a_windows_runners_backslash_path_names_the_listed_test(self):
+        # A Windows runner prints the directory and separator as Windows spells
+        # them: `ok 1 e2e\a.spec.ts:10:1 › one (2.0s)`. A table built from those
+        # logs must key the test as the list does, or every entry is unknown and
+        # the lane plans against the median instead of the recording.
+        log = "  ok   1 e2e\\a.spec.ts:10:1 › one (2.0s)\n  ok   2 e2e\\a.spec.ts:40:1 › look ok (3.0s)\n"
+        self.assertEqual(shard.durations([log], ["a.spec.ts › one", "a.spec.ts › look ok"]),
+                         {"a.spec.ts › one": 2.0, "a.spec.ts › look ok": 3.0})
 
     def test_keeps_only_the_tests_the_list_names(self):
         log = "  ✓   1 e2e/a.spec.ts:10:1 › one (4.0s)\n  ✓   2 e2e/a.spec.ts:40:1 › renamed away (9.0s)\n"

@@ -1110,7 +1110,12 @@ class Workflows(unittest.TestCase):
         # The user docs lane adds one, planned for `site/`, the web shell's
         # sources, `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
         # The Android app host's lane adds one, planned for `mobile/android/`.
-        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
+        # The Windows `@platform` lane's third shard, its daemon and shell
+        # builds now outside the shard, and its second shard raise it from 57
+        # to 61: one job held the suite at 22.4 minutes, the longest of a run,
+        # and three shards plan 4.2 minutes of tests each (docs/TESTING.md,
+        # "Balancing the e2e shards").
+        self.assertLessEqual(most, 61, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

@@ -648,7 +648,7 @@ The reason is the queue, measured by the merge lead over the last 40 green `pr.y
 - A macOS job was the last to end in 24 of the 40 runs, a Windows job in 6 and a Linux job in 10.
 - The macOS jobs' own run time is short (desktop e2e 15 to 17 minutes, os contract 2, package 3 to 4, vt 5, omp 2); the rest was waiting for a runner, up to 48 minutes for a desktop e2e shard, 53 for the os contract and 36 to 42 for `package (macos)`.
 - Main's push runs took a median 55 minutes, which would be 26 without macOS.
-- When CI is quiet, the floor is Windows `package` and `windows e2e` at about 25 minutes.
+- When CI is quiet, the floor is Windows `package` and `windows e2e` at about 25 minutes; the Windows web lane's three shards (below) now finish near 11 rather than the 22.4 a single job took, so the floor it once set is shorter.
 - Moving the screenless macOS jobs to the Mac mini ([BUILD.md](BUILD.md#the-mac-mini-ci-runner)) helped little, because the jobs that waited need a screen or a login session and stayed hosted.
 
 The accepted risk is a pull request that breaks only macOS merging green, with main's push run, or the next nightly for its macOS-only jobs, the first to show it.
@@ -839,14 +839,14 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 57 jobs.
+A run that plans every lane a pull request can plan starts at most 61 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
-| `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
+| `windows e2e` | 5 | the `@platform` suite in three shards dealt by the Windows table, with the daemon and web shell builds in their own parallel jobs as on Linux: one job held all 88 tests and took 22.4 minutes at the median of 65 successful jobs, the longest of a run, while three shards plan 4.2 minutes of tests each; the reusable workflow starts no `plan` job, since a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
 | `web e2e` (Linux) | 8 | parallel daemon and web shell builds and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
@@ -862,8 +862,8 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `hide-core` or `hided` change starts 27 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
-A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 33 with two.
+The common runs are smaller: a `hide-core` or `hided` change starts 31 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 35, a `hide-kit` or `hide-agent-hooks` change 39, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 37 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 
@@ -900,7 +900,11 @@ The table totals 3851.3 seconds; the unchanged splitter plans at most 962.9 seco
 Six is the smallest count within the unchanged 720-second test-work budget; the e2e step still caps a stalled run at 1200 seconds.
 These weights include fixture setup and teardown charged to a test, but exclude report overhead, runner setup and queues; medians are neither a wall-time forecast nor p95 or causal speedup evidence.
 This refresh replaces the approved single-run recording from 2026-10-25, whose five-shard plan had drifted below actual test time, without changing assertions, retries, timeouts or test selection.
-Only the Linux web lane deals by this table: the nightly's macOS and Windows web lanes run one shard each.
+The Linux web lane deals by this table, and the Windows pull request lane by its own, `web/e2e/shard-durations-windows.json`: the median per listed test from the logs of 22 successful `web e2e windows` jobs, all on 2026-11-14.
+All 88 listed tests have a passing observation, seven at least.
+That table totals 763.8 seconds, and the Windows lane is sized by when it finishes rather than by its test work: the daemon build precedes the shards and each shard adds its own setup, about 288 and 114 seconds at the median of 115 jobs, so two shards plan 383 seconds each and finish near 785, over the 720 the lane targets, while three plan 255 and finish near 657.
+The nightly's macOS and Windows web lanes still run one shard each, since a hand run is about one system's suite, not its queue time.
+A change to the lane itself is measured on its branch by `gh workflow run web-e2e.yml --ref <branch> -f lane=windows -f runner=windows-latest -f shards=3 -f grep=@platform -f table=web/e2e/shard-durations-windows.json`, which is why the reusable workflow carries a `workflow_dispatch` entry beside its `workflow_call` one.
 
 The desktop table, `desktop/e2e/shard-durations.json`, is the median over 20 runs of each test on the macOS runner (2026-10-17), and 0 for a test those runs only skipped (the packaged-app, device and SSH tests, which that lane skips); it deals the whole macOS suite in two shards, in a pull request (`pr.yml`) and in the nightly, while the Linux and Windows `@platform` legs run one shard each.
 One job ran the suite in 1048 to 1166 seconds of its 1200-second step on main's last seven runs before it was split, and pull request #1306's run was ended at the cap with every test it reached passing; the table puts the suite at 1008 seconds and plans the two shards at 503 and 504.

@@ -10,8 +10,11 @@
 #
 # Each spec starts its own hided, pane holders and Chromium, so one worker per runner
 # keeps timing assertions honest; the shards are the parallelism. A shard runs
-# the tests `scripts/e2e-shard.py` deals it from the durations in
-# web/e2e/shard-durations.json, so the shards take about the same time.
+# the tests `scripts/e2e-shard.py` deals it from the durations in this system's
+# table (`table`), so the shards take about the same time. A system records its
+# own table because per-test costs differ by it (symlinks, process and terminal
+# tests), so the Linux lane reads `web/e2e/shard-durations.json` and the Windows
+# lane `web/e2e/shard-durations-windows.json`.
 #
 # With more than one shard the daemon and web shell each build once, in
 # parallel jobs, and every shard waits for both and downloads their output
@@ -59,11 +62,50 @@ on:
         type: string
         required: false
         default: ""
+      table:
+        description: The suite's duration table for this system's runner; a system records its own.
+        type: string
+        required: false
+        default: web/e2e/shard-durations.json
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
+  # A hand run on a branch checks a change to this lane before it merges:
+  # `gh workflow run web-e2e.yml --ref <branch> -f lane=windows -f runner=windows-latest -f shards=3 -f grep=@platform -f table=web/e2e/shard-durations-windows.json`.
+  # `pr.yml` and the nightly call it through `workflow_call`, so a lane that
+  # only exists to be called has no way to be measured on a branch.
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Names the lane in job names and artifact names.
+        type: string
+        default: windows
+      runner:
+        description: The GitHub-hosted runner label.
+        type: string
+        default: windows-latest
+      shards:
+        description: How many shards deal the tests out.
+        type: number
+        default: 3
+      grep:
+        description: Playwright `--grep` filter; empty runs every test.
+        type: string
+        default: "@platform"
+      specs:
+        description: Space-separated spec paths to repeat; empty is the lane as the suites run it.
+        type: string
+        default: ""
+      repeat:
+        description: With `specs`, how many times each test runs (`--repeat-each`), with no retry.
+        type: string
+        default: ""
+      table:
+        description: The suite's duration table for this system's runner.
+        type: string
+        default: web/e2e/shard-durations-windows.json
 
 permissions:
   contents: read
@@ -279,8 +321,12 @@ jobs:
           SPECS: ${{ inputs.specs }}
           REPEAT: ${{ inputs.repeat }}
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
+          TABLE: ${{ inputs.table }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
+          # The caller names this system's table; the default is the Linux
+          # suite's, which is also what a step run without the input reads.
+          table="${TABLE:-web/e2e/shard-durations.json}"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
           if [ -n "$SPECS" ]; then
@@ -307,13 +353,13 @@ jobs:
             # `--budget`: a shard that plans more than 720 s (60 % of this
             # step's cap) warns on the first shard, and the answer is another
             # shard (docs/TESTING.md, "Balancing the e2e shards").
-            python3 scripts/e2e-shard.py split --table web/e2e/shard-durations.json --budget 720 --shard "$SHARD" "$list" > "$shard_file"
+            python3 scripts/e2e-shard.py split --table "$table" --budget 720 --shard "$SHARD" "$list" > "$shard_file"
             if [ ! -s "$shard_file" ]; then
               echo "shard $SHARD is dealt no test: fewer tests than shards"
               exit 0
             fi
             bash scripts/verify-web.sh web e2e-list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/web-e2e-shard-list.txt"
-            python3 scripts/e2e-shard.py check --table web/e2e/shard-durations.json --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
+            python3 scripts/e2e-shard.py check --table "$table" --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
             args+=(--test-list "$shard_file")
             bash scripts/verify-web.sh web e2e "${args[@]}"
           else
