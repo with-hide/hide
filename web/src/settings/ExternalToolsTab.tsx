@@ -7,10 +7,11 @@
 // reaches the operator here only, never as a turn, a badge or a notice (D-24).
 
 import { ChevronRightIcon, EyeIcon, PlayIcon, WaypointsIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { markTone } from "../agentRow";
+import { useMinuteClock } from "../components/elapsed";
 import { Group, Note } from "../components/settings-rows";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
@@ -30,22 +31,12 @@ import { useUiStore } from "../ui";
 const LEVELS: readonly AccessLevel[] = ["view", "act"];
 const LEVEL_ICON = { view: EyeIcon, act: PlayIcon } as const;
 
-/** The window's clock, moved every half minute so "3 minutes ago" keeps up while the page is open. */
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  return now;
-}
-
 export function ExternalToolsTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const access = useShellStore((s) => s.access);
   // Every tool runs on the core's machine (D-07), which a window on another machine names.
   const machine = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
-  const now = useNow();
+  const now = useMinuteClock();
   if (!access) return <Note tone="pending">{t("externalTools.connecting")}</Note>;
   return (
     <div data-external-tools="true">

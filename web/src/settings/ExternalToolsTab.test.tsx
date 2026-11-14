@@ -16,7 +16,8 @@ vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
 });
 
-const NOW = Date.now();
+// A whole minute, so the shared clock read to the minute is this moment.
+const NOW = Date.UTC(2026, 10, 14, 8, 0, 0);
 const savedShell = useShellStore.getState();
 const savedUi = useUiStore.getState();
 const savedLanguage = clientI18n.language;
@@ -26,6 +27,7 @@ afterEach(async () => {
   useUiStore.setState(savedUi, true);
   await clientI18n.changeLanguage(savedLanguage);
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   document.body.innerHTML = "";
 });
 
@@ -41,6 +43,8 @@ function section(over: Partial<AccessSection>): AccessSection {
 }
 
 async function mount(access: AccessSection | null, language: "en" | "ko" = "en", extra: Record<string, unknown> = {}) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   await clientI18n.changeLanguage(language);
