@@ -11,6 +11,12 @@ reliable about which test it reaches (a helper, a hook, a loop that declares
 tests, a fixture at the top of the file):
 
 * Playwright: a `web/e2e/*.spec.ts` added or modified; every test in the file.
+* A unit test file added or modified: a `*.test.ts`, `*.test.tsx`,
+  `*.test.mjs` or `*.unit.ts` of the `web`, `desktop` or `mobile` package,
+  whose tests the `checks` lane runs under Vitest; every test in the file,
+  run with `vitest run --retry=0 --repeat-each`. The package is the file's
+  top folder, and a file the package's Vitest config does not collect is not
+  selected.
 * Rust: a module of a crate's `tests/it` binary added or modified (`foo.rs`,
   `foo/mod.rs` or `foo/bar.rs`); every test of that module and its children,
   picked with nextest's `test(/^module::/)`. A deleted file has none left.
@@ -18,10 +24,19 @@ tests, a fixture at the top of the file):
   select the crate's whole `it` binary, and so does a module that lists no
   test (a helper file such as `stand_ins.rs`): what a helper reaches is not
   knowable from the diff, and the list decides, once, in `rust_plan`.
+* Rust under `src`: a file the crate's `lib`, `main` or `bin` target builds
+  that declares tests. Its tests are selected by the module names it declares
+  them in: a file only a test build compiles (`#[cfg(test)] mod clear_tests;`)
+  by its own module (`mobile::clear_tests`), and a product file by the
+  test-gated module blocks it holds (`#[cfg(test)] mod tests { ... }` gives
+  `runtime::deepest_holder_tests`). `scripts/rust_scan.py`, "module_tree",
+  reads the declarations the way rustc does; a file whose tests sit nowhere
+  it can name is not selected, because the diff cannot say what they are.
 
 The budget is one number for the whole pull request: `BUDGET` test runs. Each
 test runs `repeats(N)` times, N being the tests that will run, counted by the
-tools that run them (`playwright test --list`, `cargo nextest list`), of both kinds:
+tools that run them (`playwright test --list`, `vitest list`,
+`cargo nextest list`), of every kind:
 `clamp(floor(BUDGET / N), MIN_REPEAT, MAX_REPEAT)`. A pull request that
 changes more than `BUDGET / MIN_REPEAT` tests runs over the budget, because a
 repeat below three shows too little.
@@ -30,15 +45,20 @@ repeat below three shows too little.
 `repeat.yml` calls.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
+_RUST_SCAN = importlib.util.spec_from_file_location("rust_scan", Path(__file__).resolve().parent / "rust_scan.py")
+rust_scan = importlib.util.module_from_spec(_RUST_SCAN)
+_RUST_SCAN.loader.exec_module(rust_scan)
 
 BUDGET = 200
 MIN_REPEAT = 3
@@ -50,10 +70,19 @@ DISPATCH_MAX_REPEAT = 100
 WEB_SPEC = re.compile(r"^web/e2e/[^/]+\.spec\.ts$")
 # A crate's `tests/it` binary: the crate directory, then the module's file.
 RUST_MODULE = re.compile(r"^(?P<crate>.+)/tests/it/(?P<module>.+)\.rs$")
+# A file a crate's `src` builds, and the target whose tests its test
+# declarations belong to.
+RUST_SOURCE = re.compile(r"^(?P<crate>[^/]+)/src/(?P<file>.+)\.rs$")
 # Helpers every module of the binary shares, and the file that declares the modules.
 RUST_SHARED = ("support", "main")
-# A module name for "every test of the crate's `it` binary".
+# A module name for "every test of a Rust target".
 WHOLE = "*"
+
+# The packages whose unit tests a lane runs, and the Vitest config that says
+# which files each package collects (`web/vite.config.ts`,
+# `desktop/vitest.config.ts`, `mobile`'s default).
+UNIT_PACKAGES = ("web", "desktop", "mobile")
+UNIT_TEST = re.compile(r"^(?P<package>web|desktop|mobile)/(?P<file>.+\.(?:test\.tsx?|test\.mjs|unit\.ts))$")
 
 PACKAGE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MODULE = re.compile(r"^(?:\*|[a-z0-9_]+(?:::[a-z0-9_]+)*)$")
@@ -71,21 +100,33 @@ def count_value(value):
     return int(value)
 
 
-def choose(event, web, rust, named, web_count, rust_count):
-    """One explicit run decision for both hand runs and counted PR tests."""
-    selected = {"web": bool(web), "rust": bool(rust)}
+def choose(event, web, rust, named, web_count, rust_count, units=None, units_count=""):
+    """One explicit run decision for every leg of the lane.
+
+    The legs are the Playwright specs (`web`), the Rust tests (`rust`) and the
+    packages' Vitest unit test files (`units`). A hand run names its own
+    repeat and counts nothing; a pull request runs `count` first and this
+    decides from what the runners listed.
+    """
+    units = [] if units is None else units
+    selected = {"web": bool(web), "rust": bool(rust), "units": bool(units)}
     if event == "workflow_dispatch":
         times = count_value(named)
         if not 1 <= times <= DISPATCH_MAX_REPEAT or not any(selected.values()):
             raise ValueError("a hand run needs named tests and a repeat from 1 to 100")
     else:
         counts = {}
-        for kind, raw in (("web", web_count), ("rust", rust_count)):
+        for kind, raw in (("web", web_count), ("rust", rust_count), ("units", units_count)):
             counts[kind] = count_value(raw) if selected[kind] else 0
             if selected[kind] and counts[kind] == 0:
                 raise ValueError(f"selected {kind} files listed no tests")
         times = repeats(sum(counts.values()))
-    return {"run-web": str(selected["web"]).lower(), "run-rust": str(selected["rust"]).lower(), "repeat": times}
+    return {
+        "run-web": str(selected["web"]).lower(),
+        "run-rust": str(selected["rust"]).lower(),
+        "run-units": str(selected["units"]).lower(),
+        "repeat": times,
+    }
 
 
 def verdict(needs):
@@ -94,7 +135,7 @@ def verdict(needs):
         raise ValueError("choosing the repeat did not succeed")
     outputs = needs["count"]["outputs"]
     times = count_value(outputs["repeat"])
-    for kind in ("web", "rust"):
+    for kind in ("web", "rust", "units"):
         selected = outputs[f"run-{kind}"]
         if selected not in ("true", "false"):
             raise ValueError(f"missing or invalid run-{kind} decision: {selected!r}")
@@ -106,7 +147,7 @@ def verdict(needs):
             completed = count_value(job["outputs"].get("completed", ""))
             if times == 0 or completed == 0 or completed % times:
                 raise ValueError(f"{kind}: {completed} completed test runs do not prove {times} repeats")
-    if (times > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("web", "rust")):
+    if (times > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("web", "rust", "units")):
         raise ValueError("the repeat and run decisions disagree")
 
 
@@ -172,16 +213,63 @@ def rust_module(path, crate_dirs):
     return {"package": package, "module": "::".join(parts)}
 
 
-def select(entries, crate_dirs):
-    """The changed tests of `git diff --name-status` entries: Playwright spec files and Rust test modules."""
+def changed_source(path, package, targets):
+    """The `{package, test, module}` list one changed crate `src` file selects.
+
+    A file the crate's `lib`, `main` or `bin` target builds is selected by the
+    modules it declares its tests in: its own module when only a test build
+    compiles it, and each test-gated module block when a product file holds
+    them. Empty for a file that is not in a crate's `src`, and for one whose
+    tests the walk cannot name. `targets` is the crate's source targets as
+    `(test, path)` pairs, the way `cargo metadata` names them.
+    """
+    if not package or not RUST_SOURCE.match(path):
+        return []
+    entry = module_tree(targets).get((ROOT / path).resolve())
+    if entry is None:
+        return []
+    modules = [entry["module"]] if entry["test_only"] else entry["inline_tests"]
+    return [
+        {"package": package, "test": entry["target"], "module": module}
+        for module in modules if module
+    ]
+
+
+_TREES = {}
+
+
+def module_tree(targets):
+    """One crate's module tree, walked once: `select` asks per changed path,
+    and a walk reads every file of the crate's targets."""
+    key = tuple(targets)
+    if key not in _TREES:
+        _TREES[key] = rust_scan.module_tree(ROOT, targets)
+    return _TREES[key]
+
+
+def select(entries, crate_dirs, targets=None):
+    """The changed tests of `git diff --name-status` entries.
+
+    Playwright specs (`web`), Vitest unit test files (`units`), the modules of
+    a crate's `tests/it` binary (`rust`), and the test modules a crate's `src`
+    file declares (`rust_sources`). `targets` maps each crate directory to the
+    source targets `cargo metadata` reports; without it, a caller that has no
+    crate graph gets the `tests/it` modules and the unit test files only.
+    """
     web = sorted({name for status, name in entries if status in ("A", "M") and WEB_SPEC.match(name)})
+    units = sorted({name for status, name in entries if status in ("A", "M") and UNIT_TEST.match(name)})
     modules = set()
+    sources = set()
     for status, name in entries:
         if status not in ("A", "M"):
             continue
         found = rust_module(name, crate_dirs)
         if found:
             modules.add((found["package"], found["module"]))
+        crate = name.partition("/")[0]
+        if targets and crate in targets:
+            for source in changed_source(name, crate_dirs.get(crate), targets[crate]):
+                sources.add((source["package"], source["test"], source["module"]))
     # The whole binary runs every module, and `foo` runs `foo::bar`, so neither is run twice.
     wholes = {package for package, module in modules if module == WHOLE}
     rust = [
@@ -189,7 +277,15 @@ def select(entries, crate_dirs):
         if package not in wholes or module == WHOLE
         if not any(module.startswith(other + "::") for other_package, other in modules if other_package == package)
     ]
-    return {"web": web, "rust": rust}
+    # A target's whole binary covers silence, and a module covers its children.
+    source_wholes = {(package, test) for package, test, module in sources if module == WHOLE}
+    rust_sources = [
+        {"package": package, "test": test, "module": module} for package, test, module in sorted(sources)
+        if (package, test) not in source_wholes or module == WHOLE
+        if not any(module.startswith(other + "::") for other_package, other_test, other in sources
+                   if (other_package, other_test) == (package, test))
+    ]
+    return {"web": web, "units": units, "rust": rust, "rust_sources": rust_sources}
 
 
 def nextest_listed(text):
@@ -233,72 +329,153 @@ def spec_pattern(path):
     return re.escape(path) + "$"
 
 
-def rust_entry(item):
-    """A hand-run `package:module` as the `{package, module}` it names, refused unless that module exists.
+def unit_path(name):
+    """A hand-run unit test name (`searchDetail.test.ts` or its full path) as
+    the path of a unit test file the package's Vitest config collects."""
+    name = name.strip()
+    path = name if UNIT_TEST.match(name) else ""
+    if not path:
+        path = next((f"{package}/{name}" for package in UNIT_PACKAGES if (ROOT / package / name).is_file()), "")
+    if not UNIT_TEST.match(path):
+        raise ValueError(f"not a unit test file: {name!r} (expected a path like web/src/searchDetail.test.ts)")
+    if not (ROOT / path).is_file():
+        raise ValueError(f"no such unit test: {path}")
+    return path
 
-    `package:*` names the crate's whole `it` binary.
+
+def units_plan(units, lister):
+    """What the units job runs, from the tests the package lists for each file.
+
+    `lister(package, files)` answers how many tests Vitest would run. A file
+    that lists no test fails here, so N is what runs and never an estimate.
     """
-    package, separator, module = item.partition(":")
-    if not separator or not PACKAGE.match(package) or not MODULE.match(module):
-        raise ValueError(f"not a Rust test module: {item!r} (expected package:module, like hided:seat)")
-    binary = ROOT / package / "tests/it"
-    if not binary.is_dir():
-        raise ValueError(f"no such test binary: {package}/tests/it")
-    parts = module.split("::")
-    if module != WHOLE and not ((binary.joinpath(*parts).with_suffix(".rs")).is_file() or (binary.joinpath(*parts) / "mod.rs").is_file()):
-        raise ValueError(f"no such module: {package}/tests/it/{'/'.join(parts)}.rs")
-    return {"package": package, "module": module}
+    plan = []
+    for package in sorted({UNIT_TEST.match(path)["package"] for path in units}):
+        files = sorted(path for path in units if UNIT_TEST.match(path)["package"] == package)
+        tests = lister(package, files)
+        if tests == 0:
+            raise ValueError(f"{package} files listed no tests: {', '.join(files)}")
+        plan.append({"package": package, "files": files, "tests": tests})
+    return plan
+
+
+def units_lister(package, files):
+    """The tests `vitest list` says the package would run for these files."""
+    with tempfile.TemporaryDirectory() as directory:
+        listed = Path(directory) / "listed.json"
+        command = ["pnpm", "--dir", package, "exec", "vitest", "list", *files, f"--json={listed}"]
+        subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+        return len(json.loads(listed.read_text(encoding="utf-8")))
+
+
+def rust_entry(item):
+    """A hand-run `package:test:module` as the `{package, test, module}` it names.
+
+    `test` is the target the tests are built into: `it` for the crate's
+    `tests/it` binary, `lib` for its library, and `bin` for the programs it
+    ships. `package:*` and `package:lib:*` name a whole target. The module is
+    refused unless the crate's source declares a file or a test-gated module
+    block of that name, the way `scripts/rust_scan.py` reads them.
+    """
+    package, separator, rest = item.partition(":")
+    test, separator2, module = rest.partition(":")
+    if not separator2 or not PACKAGE.match(package) or not MODULE.match(module) or test not in ("it", "lib", "bin"):
+        raise ValueError(f"not a Rust test module: {item!r} (expected package:test:module, like hided:lib:mobile::clear_tests)")
+    if test == "it":
+        binary = ROOT / package / "tests/it"
+        if not binary.is_dir():
+            raise ValueError(f"no such test binary: {package}/tests/it")
+        parts = module.split("::")
+        if module != WHOLE and not ((binary.joinpath(*parts).with_suffix(".rs")).is_file() or (binary.joinpath(*parts) / "mod.rs").is_file()):
+            raise ValueError(f"no such module: {package}/tests/it/{'/'.join(parts)}.rs")
+        return {"package": package, "test": test, "module": module}
+    declarations = declared_modules(package)
+    if module != WHOLE and module not in declarations:
+        raise ValueError(f"no such module: {package} {test} {module} (one of {', '.join(sorted(declarations)[:5])})")
+    return {"package": package, "test": test, "module": module}
+
+
+def declared_modules(package):
+    """Every module name one crate's `src` files and test-gated blocks declare."""
+    tree = module_tree(crate_targets(package))
+    return {entry["module"] for entry in tree.values() if entry["module"]} | {
+        inline for entry in tree.values() for inline in entry["inline_tests"]
+    }
+
+
+def crate_targets(package):
+    """The `(target, path)` pairs `cargo metadata` reports for one crate's `src`."""
+    metadata = subprocess.run(
+        ["bash", "scripts/verify-cargo.sh", "metadata", "--format-version", "1", "--no-deps"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    )
+    for entry in json.loads(metadata.stdout)["packages"]:
+        if entry["name"] == package:
+            return [
+                ("lib" if "lib" in target["kind"] else "bin", target["src_path"])
+                for target in entry["targets"]
+                if "lib" in target["kind"] or "bin" in target["kind"]
+            ]
+    return []
 
 
 def nextest_filters(modules):
-    """One `(package, filterset)` per package: its binary `it`, the selected modules' tests.
+    """One `(package, test, filterset)` per target: its modules' tests.
 
-    The filterset is empty for the whole binary.
+    The filterset is empty for a whole target.
     """
-    by_package = {}
+    grouped = {}
     for module in modules:
-        if not PACKAGE.match(module["package"]) or not MODULE.match(module["module"]):
+        if (not PACKAGE.match(module["package"]) or not MODULE.match(module["module"])
+                or module.get("test", "it") not in ("it", "lib", "bin")):
             raise ValueError(f"not a Rust test module: {module!r}")
-        by_package.setdefault(module["package"], []).append(module["module"])
+        grouped.setdefault((module["package"], module.get("test", "it")), []).append(module["module"])
     return [
-        (package, "" if WHOLE in names else "test(/^(" + "|".join(sorted(names)) + ")::/)")
-        for package, names in sorted(by_package.items())
+        (package, test, "" if WHOLE in names else "test(/^(" + "|".join(sorted(names)) + ")::/)")
+        for (package, test), names in sorted(grouped.items())
     ]
 
 
 def rust_plan(modules, lister):
-    """What the Rust job runs, from the tests the built binary lists for each package.
+    """What the Rust job runs, from the tests the built target lists.
 
-    `lister(package, filterset)` answers how many tests nextest would run. A
-    package with a selected module that lists none (a helper file lists no
-    test of its own, and what it reaches is unknown) runs its whole `it`
-    binary instead, whatever else was selected beside it, so N is always what
-    runs and never an estimate.
+    `lister(package, test, filterset)` answers how many tests nextest would
+    run. A target with a selected module that lists none (a helper file lists
+    no test of its own, and what it reaches is unknown) runs whole instead,
+    whatever else was selected beside it, so N is always what runs and never
+    an estimate.
     """
     plan = []
-    for package, expression in nextest_filters(modules):
-        names = sorted(module["module"] for module in modules if module["package"] == package)
-        if expression and any(lister(package, nextest_filters([{"package": package, "module": name}])[0][1]) == 0 for name in names):
+    for package, test, expression in nextest_filters(modules):
+        names = sorted(module["module"] for module in modules
+                       if module["package"] == package and module.get("test", "it") == test)
+        if expression and any(lister(package, test, "test(/^(" + name + ")::/)") == 0 for name in names):
             expression = ""
-        plan.append({"package": package, "filter": expression, "tests": lister(package, expression)})
+        plan.append({"package": package, "test": test, "filter": expression, "tests": lister(package, test, expression)})
     return plan
 
 
-def nextest_lister(package, expression):
-    """The tests `cargo nextest list` says the package's `it` binary would run under the filterset."""
-    command = ["bash", "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package, "--test", "it"]
+def nextest_lister(package, test, expression):
+    """The tests `cargo nextest list` says one target of the package would run.
+
+    `test` is `it` for the crate's `tests/it` binary, and `lib` or `bin` for
+    the library and programs, which nextest selects by its own target names.
+    """
+    command = ["bash", "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package]
+    command += ["--test", "it"] if test == "it" else [f"--{test}s"] if test == "bin" else ["--lib"]
     if expression:
         command += ["-E", expression]
     command += ["--message-format", "json"]
     return nextest_listed(subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout)
 
 
-def resolve(event, web, rust, repeat, runner):
+def resolve(event, web, rust, repeat, runner, units=""):
     """The lane's work from what called it.
 
     A pull request's call hands over the lists `ci-plan.py` selected (JSON);
-    a hand run names specs and `package:module` tests in plain words and the
-    repeat it wants, which is validated here and never counted.
+    a hand run names specs, unit test files and `package:test:module` tests in
+    plain words and the repeat it wants, which is validated here and never
+    counted.
     """
     if event == "workflow_dispatch":
         if runner not in RUNNERS:
@@ -306,23 +483,33 @@ def resolve(event, web, rust, repeat, runner):
         if not re.fullmatch(r"[0-9]+", repeat) or not 1 <= int(repeat) <= DISPATCH_MAX_REPEAT:
             raise ValueError(f"repeat must be a number from 1 to {DISPATCH_MAX_REPEAT}, not {repeat!r}")
         specs = sorted({spec_path(name) for name in web.split()})
-        modules = sorted((rust_entry(item) for item in rust.split()), key=lambda found: (found["package"], found["module"]))
-        if not specs and not modules:
-            raise ValueError("name at least one spec (web) or one Rust test module (rust)")
+        unit_files = sorted({unit_path(name) for name in units.split()})
+        modules = sorted((rust_entry(item) for item in rust.split()),
+                         key=lambda found: (found["package"], found["test"], found["module"]))
+        if not specs and not modules and not unit_files:
+            raise ValueError("name at least one spec (web), one unit test file (units) or one Rust test module (rust)")
         # Not listed: the system asked for may not be the one this job runs on, so
         # a module that lists no test there fails in the Rust job, where it runs.
-        plan = [{"package": package, "filter": expression} for package, expression in nextest_filters(modules)]
-        return {"web": specs, "rust": modules, "runner": runner, "repeat": int(repeat), "counted": False, "plan": plan}
+        plan = [{"package": package, "test": test, "filter": expression}
+                for package, test, expression in nextest_filters(modules)]
+        return {"web": specs, "units": unit_files, "rust": modules, "runner": runner,
+                "repeat": int(repeat), "counted": False, "plan": plan}
     specs = json.loads(web or "[]")
+    unit_files = json.loads(units or "[]")
     modules = json.loads(rust or "[]")
     for path in specs:
         if not WEB_SPEC.match(path):
             raise ValueError(f"not a web e2e spec: {path!r}")
+    for path in unit_files:
+        if not UNIT_TEST.match(path):
+            raise ValueError(f"not a unit test file: {path!r}")
     for module in modules:
-        if not PACKAGE.match(module["package"]) or not MODULE.match(module["module"]):
+        if (not PACKAGE.match(module["package"]) or not MODULE.match(module["module"])
+                or module.get("test", "it") not in ("it", "lib", "bin")):
             raise ValueError(f"not a Rust test module: {module!r}")
     # A pull request runs on Linux only; the hand run is the way to another system.
-    return {"web": specs, "rust": modules, "runner": "linux", "repeat": 0, "counted": bool(specs or modules), "plan": []}
+    return {"web": specs, "units": unit_files, "rust": modules, "runner": "linux", "repeat": 0,
+            "counted": bool(specs or modules or unit_files), "plan": []}
 
 
 def write_outputs(values):
@@ -333,12 +520,26 @@ def write_outputs(values):
     sys.stdout.write(line)
 
 
+def write_lines(lines):
+    """Lines of tab-separated fields for a shell to read, with LF endings.
+
+    `sys.stdout` translates `\\n` to the system's own ending, so on a Windows
+    runner each line ended with `\\r\\n`; a trailing `\\r` entered nextest's
+    filterset as unparsed input and the Windows Rust repeat never ran. The
+    bytes are written as they are read here, so the reader needs no fix of
+    its own.
+    """
+    sys.stdout.buffer.write("".join(f"{line}\n" for line in lines).encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     resolve_parser = sub.add_parser("resolve", help="validate what called the lane and write its outputs")
     resolve_parser.add_argument("--event", required=True)
     resolve_parser.add_argument("--web", default="")
+    resolve_parser.add_argument("--units", default="")
     resolve_parser.add_argument("--rust", default="")
     resolve_parser.add_argument("--repeat", default="")
     resolve_parser.add_argument("--runner", default="linux")
@@ -348,17 +549,23 @@ def main():
     sub.add_parser("count-nextest", help="count the tests of `cargo nextest list --message-format json` output on stdin")
     plan_parser = sub.add_parser("rust-plan", help="list the selected modules' tests and write the Rust job's plan")
     plan_parser.add_argument("--rust", required=True, help="the JSON list of modules")
-    lines_parser = sub.add_parser("plan-lines", help="one `package<TAB>filterset` line per package of a Rust plan")
+    lines_parser = sub.add_parser("plan-lines", help="one `package<TAB>test<TAB>filterset` line per target of a Rust plan")
     lines_parser.add_argument("--plan", required=True, help="the JSON plan")
+    units_parser = sub.add_parser("units-plan", help="list the selected unit test files' tests and write the units job's plan")
+    units_parser.add_argument("--units", required=True, help="the JSON list of unit test paths")
+    units_lines = sub.add_parser("units-lines", help="one `package<TAB>file` line per file of a units plan")
+    units_lines.add_argument("--plan", required=True, help="the JSON plan")
     choose_parser = sub.add_parser("choose", help="write an explicit run decision for every repeat leg")
     choose_parser.add_argument("--event", required=True)
     choose_parser.add_argument("--web", required=True)
+    choose_parser.add_argument("--units", default="[]")
     choose_parser.add_argument("--rust", required=True)
     choose_parser.add_argument("--repeat", default="")
     choose_parser.add_argument("--web-count", default="")
+    choose_parser.add_argument("--units-count", default="")
     choose_parser.add_argument("--rust-count", default="")
     sub.add_parser("verdict", help="fail unless every chosen repeat leg completed tests (NEEDS JSON)")
-    report_parser = sub.add_parser("report", help="report completed runs from Playwright JSON or nextest JUnit")
+    report_parser = sub.add_parser("report", help="report completed runs from Playwright JSON or a JUnit report")
     reports = report_parser.add_mutually_exclusive_group(required=True)
     reports.add_argument("--playwright")
     reports.add_argument("--junit", nargs="+")
@@ -366,11 +573,13 @@ def main():
 
     try:
         if args.command == "choose":
-            decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, args.web_count, args.rust_count)
+            decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, args.web_count, args.rust_count,
+                              json.loads(args.units), args.units_count)
             write_outputs(decision)
             if os.environ.get("GITHUB_STEP_SUMMARY"):
                 with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-                    summary.write(f"Tests counted: web={args.web_count or 'not counted'}, Rust={args.rust_count or 'not counted'}.\n")
+                    summary.write(f"Tests counted: web={args.web_count or 'not counted'}, "
+                                  f"units={args.units_count or 'not counted'}, Rust={args.rust_count or 'not counted'}.\n")
                     summary.write(f"Repeat decision: {json.dumps(decision)}\n")
         elif args.command == "verdict":
             verdict(json.loads(os.environ["NEEDS"]))
@@ -378,26 +587,44 @@ def main():
         elif args.command == "report":
             write_outputs({"completed": completed_runs(args.playwright, args.junit)})
         elif args.command == "resolve":
-            work = resolve(args.event, args.web, args.rust, args.repeat, args.runner)
+            work = resolve(args.event, args.web, args.rust, args.repeat, args.runner, args.units)
             write_outputs({
                 "web": " ".join(work["web"]),
+                "units": json.dumps(work["units"], separators=(",", ":")),
                 "rust": json.dumps(work["rust"], separators=(",", ":")),
                 "runner": RUNNERS[work["runner"]],
                 "os": work["runner"],
                 "repeat": work["repeat"] or "",
                 "counted": str(work["counted"]).lower(),
                 "web-count-needed": str(work["counted"] and bool(work["web"])).lower(),
+                "units-count-needed": str(work["counted"] and bool(work["units"])).lower(),
                 "rust-count-needed": str(work["counted"] and bool(work["rust"])).lower(),
                 "rust-plan": json.dumps(work["plan"], separators=(",", ":")),
             })
         elif args.command == "rust-plan":
             plan = rust_plan(json.loads(args.rust), nextest_lister)
             write_outputs({"rust-plan": json.dumps(plan, separators=(",", ":")), "rust-count": sum(entry["tests"] for entry in plan)})
-        elif args.command == "plan-lines":
+        elif args.command == "units-plan":
+            plan = units_plan(json.loads(args.units), units_lister)
+            write_outputs({"units-plan": json.dumps(plan, separators=(",", ":")), "units-count": sum(entry["tests"] for entry in plan)})
+        elif args.command == "units-lines":
+            lines = []
             for entry in json.loads(args.plan):
-                if not PACKAGE.match(entry["package"]) or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"]):
+                if entry["package"] not in UNIT_PACKAGES:
+                    raise ValueError(f"not a units plan entry: {entry!r}")
+                for path in entry["files"]:
+                    if not UNIT_TEST.match(path) or UNIT_TEST.match(path)["package"] != entry["package"]:
+                        raise ValueError(f"not a units plan entry: {entry!r}")
+                    lines.append(f"{entry['package']}\t{path}")
+            write_lines(lines)
+        elif args.command == "plan-lines":
+            lines = []
+            for entry in json.loads(args.plan):
+                if (not PACKAGE.match(entry["package"]) or entry.get("test") not in ("it", "lib", "bin")
+                        or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])):
                     raise ValueError(f"not a Rust plan entry: {entry!r}")
-                print(f"{entry['package']}\t{entry['filter']}")
+                lines.append(f"{entry['package']}\t{entry['test']}\t{entry['filter']}")
+            write_lines(lines)
         elif args.command == "count-nextest":
             print(nextest_listed(sys.stdin.read()))
         elif args.command == "count-listed":

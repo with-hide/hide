@@ -61,7 +61,10 @@ class Selection(unittest.TestCase):
                          "desktop/e2e/fixture-cleanup.unit.ts"):
                 with self.subTest(status=status, path=path):
                     result = plan(path, status=status)
-                    self.assertEqual(result["lanes"], ["policy", "checks", "windows-check"])
+                    # An added or modified unit test also plans the lane that
+                    # repeats it; a deleted one has no test left to repeat.
+                    expected = ["policy", "checks", "windows-check"] + (["repeat"] if status in ("A", "M") else [])
+                    self.assertEqual(result["lanes"], expected)
                     self.assertEqual(result["rust_packages"], [])
                     self.assertFalse(ci.reads_no_lane(status, path, CRATES, ROOT))
 
@@ -80,10 +83,11 @@ class Selection(unittest.TestCase):
         for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx"):
             with self.subTest(path=path):
                 result = plan(path)
-                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e"})
+                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e", "repeat"})
                 self.assertEqual(result["rust_packages"], ["hide-core"])
+                self.assertEqual(result["repeat"]["units"], [path])
         self.assertEqual(set(plan("web/e2e/platform-program.unit.ts")["lanes"]),
-                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"})
+                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check", "repeat"})
 
     def test_unit_tests_do_not_remove_a_products_lanes_or_a_conservative_fallback(self):
         for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
@@ -238,8 +242,10 @@ class Selection(unittest.TestCase):
         node = plan("hide-node/src/ssh/kit/contract.rs")
         self.assertEqual(contract["rust_packages"], node["rust_packages"])
         # The desktop unit suite runs the packaging scripts' tests, and the
-        # package lane carries the kits.
-        self.assertEqual(set(contract["lanes"]), set(node["lanes"]) | {"checks", "package"})
+        # package lane carries the kits. The contract file holds no test, so
+        # it plans no repeat of one; the Rust file that reads it does.
+        self.assertEqual(set(contract["lanes"]), set(node["lanes"]) | {"checks", "package"} - {"repeat"})
+        self.assertIn("repeat", node["lanes"])
 
     def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
         pin = plan("contracts/conpty.json")
@@ -955,8 +961,9 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
-        # The count, the web specs' run, the Rust modules' run and the verdict.
-        return 4
+        # The count, the web specs' run, the unit tests' run, the Rust modules'
+        # run and the verdict.
+        return 5
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -1104,13 +1111,13 @@ class Workflows(unittest.TestCase):
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
         # for the device link's crates, its device test and the device kit
         # contract (with-hide/hide-private#501).
-        # The repeat lane's count, web specs, Rust modules and final verdict
-        # raise it from 51 to 55. The verdict requires actual completed runs
-        # from every leg the count chose.
-        # The user docs lane adds one, planned for `site/`, the web shell's
-        # sources, `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
+        # The repeat lane's count, web specs, unit tests, Rust modules and
+        # final verdict raise it from 51 to 56. The verdict requires actual
+        # completed runs from every leg the count chose. The user docs lane
+        # adds one, planned for `site/`, the web shell's sources,
+        # `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
         # The Android app host's lane adds one, planned for `mobile/android/`.
-        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
+        self.assertLessEqual(most, 58, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

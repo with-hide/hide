@@ -839,7 +839,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 57 jobs.
+A run that plans every lane a pull request can plan starts at most 58 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -856,7 +856,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, and a Windows core dialing the runner's OpenSSH Server and an sshd in that distribution over Windows' own `ssh.exe`, planned only for the crates those links cross (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), the node command and the two tests ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
-| `repeat changed tests` | 4 | the count of the changed tests, their web specs through `web-e2e.yml`, their Rust modules under nextest and a final verdict requiring actual completed runs; each repeat leg starts only when selected ([The repeat lane](#the-repeat-lane)) |
+| `repeat changed tests` | 5 | the count of the changed tests, their web specs through `web-e2e.yml`, their unit test files under Vitest, their Rust modules under nextest and a final verdict requiring actual completed runs; each repeat leg starts only when selected ([The repeat lane](#the-repeat-lane)) |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `Android app` | 1 | the Android app host's JVM unit tests and debug build on Linux, planned for `mobile/android/`; its instrumented tests need an emulator and run on the build machine ([BUILD.md](BUILD.md#the-android-app)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
@@ -979,7 +979,8 @@ A lane whose run has no key, such as a fork's, files nothing and still passes.
   Artifact downloads use the existing `gh` credentials, need gh 2.97 or newer, stop at the byte cap and a 45-second deadline, and reap the child process on every exit.
   Unsupported provenance, ambiguity, API refusal or a resource cap stops history filing with a warning and summary rather than guessing from partial evidence; a history notice cannot turn a failed lane green or block a passing lane.
   Local reporter regressions use fixture reports and mocked APIs, never live test issues or comments.
-- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run repeat.yml` repeats a named web spec or Rust test module on Linux, macOS or Windows ([The repeat lane](#the-repeat-lane)), and `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0` so one failure fails the job), and a green job is the evidence.
+- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run repeat.yml` repeats a named web spec, unit test file or Rust test module on Linux, macOS or Windows ([The repeat lane](#the-repeat-lane)), and `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0`), and a green job is the evidence.
+  A repeated job reads its own report with `scripts/check-stress-report.py`, because `--stress-count` exits 0 when its last iteration passes however many earlier ones failed.
 - At the deadline a flaky test is fixed or deleted.
   Whoever knows the cause opens the fix or the deletion; if nobody does, the issue goes to the operator.
   The deadline is not a timer that moves the test somewhere quieter, and a later flake on an issue past its deadline says so in its comment.
@@ -1017,24 +1018,32 @@ Nothing is handed to the nightly.
   A web `e2e/*.spec.ts` added or modified runs whole, and so does a module of a crate's `tests/it` binary added or modified (`foo.rs`, `foo/mod.rs` or `foo/bar.rs`, picked by nextest's `test(/^foo::/)`, children included).
   A changed line says nothing reliable about which test it reaches (a helper, a hook, a fixture at the top of the file, a loop that declares tests), and reading the TypeScript to tell is more machinery than the lane earns.
   A change to `tests/it/support` or `tests/it/main.rs`, or a module that lists no test (a helper file such as `stand_ins.rs`, even beside modules that do list tests), selects the crate's whole `it` binary, since what a helper reaches is not knowable from the diff; a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
+  A unit test file of the `web`, `desktop` or `mobile` package added or modified (`src/a.test.ts`, `src/a.test.tsx`, `e2e/a.unit.ts`, `scripts/a.test.mjs`) runs whole under that package's Vitest, which is what `checks` runs.
+  A file under a crate's `src` that the crate's `lib`, `main` or `bin` target builds is selected by the test modules it declares: its own module when only a test build compiles it (`#[cfg(test)] mod clear_tests;` in `hided/src/mobile/` gives `mobile::clear_tests`), and each test-gated module block when a product file holds them (`#[cfg(test)] mod tests { ... }` in `hide-kit/src/process.rs` gives `process::tests`).
+  The product module itself is never selected: its name holds the product's code, not its tests. A `src` file whose tests sit nowhere a declaration names is not selected, because the diff cannot say what they are; `scripts/rust_scan.py`, "module_tree", reads the declarations the way rustc does, `#[path]` and inline blocks included.
   `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
 - **The budget is 200 test runs for the whole pull request.**
-  N is the number of tests that will run, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs) and `cargo nextest list` counts the Rust tests the final plan matches, excluding ignored tests.
-  A helper or an all-ignored module lists none under its own filter, so the PR plan counts and repeats its crate's whole `it` binary instead.
+  N is the number of tests that will run, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs), each package's `vitest list` counts its unit tests, and `cargo nextest list` counts the Rust tests the final plan matches, excluding ignored tests.
+  A helper or an all-ignored module lists none under its own filter, so the PR plan counts and repeats its crate's whole `it` binary instead, and a `src` file that lists no test under its own module repeats its whole target.
   The count job builds the changed crates' tests once to list them, and the Rust job builds them again on its own runner.
   Each test runs `clamp(floor(200 / N), 3, 10)` times: 5 tests run 10 times (50 runs), 20 run 10 (200), 50 run 4 (200), 100 run 3 (300, the floor of 3 wins), and one spec of 12 tests runs 12 x 10 = 120 times.
   Fewer than three repeats shows too little, so a pull request that changes more than 66 tests runs over 200.
   The job summary says how many tests were counted and the repeat chosen.
 - **Web specs** run through `web-e2e.yml` with `specs` and `repeat` (one shard that builds in place, the same fixtures and runner setup as the suite) as `playwright test --retries=0 --repeat-each=<repeat> <spec>$...`; it files no flaky issue, because a retry is what classifies a test as flaky and this run has none.
-  **Rust modules** run under nextest on the `rust` lane's caches with `--profile ci --retries 0 --stress-count <repeat>`.
+  **Unit test files** run as `<package> test --retry=0 --repeat-each=<repeat> <file>`, the package's own `test` script, which builds what the tests import.
+  **Rust modules** run under nextest on the `rust` lane's caches with `--profile ci --retries 0 --stress-count <repeat>`, selected by target: `--test it` for a `tests/it` module, `--lib` or `--bins` for a `src` module.
   A PR's all-ignored module selects its crate's whole `it` binary, without running ignored tests; the remote mailbox lane has its own `repeat` input for its opt-in tests.
   A hand run keeps the named module's filter, so a module with no runnable test fails.
+- **A failed iteration fails the lane, whatever nextest's exit status.**
+  `--stress-count N` exits 0 when the last iteration passes, so iterations 1 to N-1 can each fail and the command still ends successful: on 2026-11-14 a job ended green with `20/20 stress run iterations: 19 passed, 1 failed` in its log (run 43626029599).
+  `scripts/check-stress-report.py` reads the run's own JUnit report and its nextest log, and fails on any failed testcase or any failed iteration the summary counts; `repeat.yml` runs it after every repeated leg, and the remote mailbox and WSL device lanes take it for their own `--stress-count` runs.
+  It also fails a run whose summary counts fewer iterations than were asked for, so a truncated run proves nothing.
 - **A chosen repeat leg must complete tests.**
-  `scripts/ci-repeat.py choose` writes explicit `run-web` and `run-rust` decisions on every branch.
-  The final `verdict` job always checks those decisions, both job results and the actual completed runs from Playwright JSON and nextest JUnit reports.
+  `scripts/ci-repeat.py choose` writes explicit `run-web`, `run-units` and `run-rust` decisions on every branch.
+  The final `verdict` job always checks those decisions, every job result and the actual completed runs from Playwright JSON, Vitest JUnit and nextest JUnit reports.
   A missing decision or report, a chosen job skipped, cancelled or failed, or zero completed tests fails the lane and `pr.yml`'s required `verify` check.
-  A PR with no changed tests may skip both repeat legs; selected files that list no tests fail during counting.
-- **Both run on Linux in a pull request.**
+  A PR with no changed tests may skip every repeat leg; selected files that list no tests fail during counting.
+- **All three run on Linux in a pull request.**
   A fix is shown on the system that failed with a hand run, with no temporary commit:
 
   ```sh
@@ -1042,12 +1051,14 @@ Nothing is handed to the nightly.
   gh workflow run repeat.yml --ref <branch> -f runner=windows -f web='s3.spec.ts' -f repeat=10
   # some tests of a spec, by Playwright's --grep
   gh workflow run repeat.yml --ref <branch> -f web='s3.spec.ts' -f grep='explorer' -f repeat=20
-  # Rust modules of a crate's tests/it binary, as package:module
-  gh workflow run repeat.yml --ref <branch> -f runner=macos -f rust='hided:handshake hided:seat' -f repeat=10
+  # unit test files of a package
+  gh workflow run repeat.yml --ref <branch> -f units='web/src/searchDetail.test.ts' -f repeat=10
+  # Rust test modules, as package:test:module, where test is it, lib or bin
+  gh workflow run repeat.yml --ref <branch> -f runner=macos -f rust='hided:it:handshake hided:lib:mobile::clear_tests' -f repeat=10
   ```
 
-  `repeat` is 1 to 100, and a name that is no spec or module fails before anything runs.
-  A named spec or module with no runnable test, a `grep` that keeps none, and a spec whose tests all skip fail rather than ending green with no work.
+  `repeat` is 1 to 100, and a name that is no spec, unit test file or module fails before anything runs.
+  A named spec, file or module with no runnable test, a `grep` that keeps none, and a spec whose tests all skip fail rather than ending green with no work.
   A green run with completed tests is the evidence.
   The macOS runner is the scarce one (operator decision 2026-11-01), so ask for it only when macOS is what failed.
   The step cap for a web repeat is 120 minutes: 200 runs of a 30-second test take 100, and a longer spec takes the budget's worth of its own time.
