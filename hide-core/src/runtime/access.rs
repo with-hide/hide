@@ -384,9 +384,11 @@ impl Runtime {
 
     /// The external tool whose work `mission`'s Conductor is, by its
     /// registration (or, for a record that names none, by its pane and
-    /// session) (PRD hide-external-control B30, D-36). The mission is the
-    /// operator's to see and answer as any other; this only names the tool
-    /// on it. Hide AI's and the operator's missions name none (B37).
+    /// session) (PRD hide-external-control B30, D-36). While the tool keeps
+    /// it (`owns`) the mission is in the tool's cell and off the operator's
+    /// mission screen, counts, asks and notices; once the tool lets go it is
+    /// the operator's and still names the tool. Hide AI's and the
+    /// operator's missions name none (B37).
     pub(crate) fn mission_tool(
         &self,
         mission: &crate::missions::Mission,

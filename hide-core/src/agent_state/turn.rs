@@ -697,6 +697,30 @@ pub fn agent_group_for(
     }
 }
 
+/// Where an external tool's row stands in the tool's own cell (PRD
+/// hide-external-control D-45, D-46, B40): its agent's question, approval or
+/// block is the tool's turn to answer, read or not, since the tool reads it
+/// and not the operator; otherwise it stands as the operator's own row
+/// would, with nothing of the operator's laid over it (a View to look at and
+/// a person's turn are the operator's, in their own Needs You). An answer
+/// typed into its pane clears the demand, and with it the tool's turn (B43).
+pub(crate) fn tool_cell_group(agent: &SidebarAgentSnapshot) -> AgentGroup {
+    let (demand, activity, unread) = axes_of(agent);
+    if agent.blocked || demand != AgentDemand::None {
+        return AgentGroup::NeedsYou;
+    }
+    agent_group_for(
+        demand,
+        activity,
+        agent.completed,
+        unread,
+        false,
+        Ownership::Operator,
+        agent.wait.is_some(),
+        false,
+    )
+}
+
 /// An intentionally closed execution has no live parent or unread demand.
 /// Only an explicit sleep-id wake action can create its next execution.
 pub(crate) fn dormant_group() -> AgentGroup {

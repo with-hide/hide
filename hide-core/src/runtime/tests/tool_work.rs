@@ -356,8 +356,19 @@ fn a_tools_delegated_child_rises_to_the_operator_only_for_a_person() {
 /// and the operator approves it at `level`; its connection's id. A revoked
 /// key is refused, so a new connection comes with a new key.
 fn connect(runtime: &mut Runtime, id: &str, digit: &str, level: crate::access::Level) -> String {
+    connect_as(runtime, "nightly", id, digit, level)
+}
+
+/// `connect` under another tool's name.
+fn connect_as(
+    runtime: &mut Runtime,
+    name: &str,
+    id: &str,
+    digit: &str,
+    level: crate::access::Level,
+) -> String {
     let (asked, _) = runtime.access_call(crate::access::Call::Request {
-        name: "nightly".into(),
+        name: name.into(),
         key_sha256: crate::access::key_hash(&digit.repeat(64)),
         program: None,
         id: id.into(),
@@ -498,4 +509,129 @@ fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
     };
     assert_eq!(reach(read(Owner::Tool(true))), pool_only());
     assert!(reach(read(Owner::Operator)).task);
+}
+
+/// D-45, D-46, D-47, B40, B41, B43, B44: each tool connected at Act has its
+/// own cell beside the devices, empty or not, holding only its work; its
+/// agent's question is the tool's turn, the cell's grey number, and never
+/// the operator's Needs You; an answer typed into the pane takes it out of
+/// the tool's turn, and View only or a disconnect takes the cell away.
+#[test]
+fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
+    use crate::access::Level;
+    use crate::runtime::access::AccessEvent;
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![workspace(
+        "project",
+        "Project",
+        "/fixture",
+        vec![checkout(
+            "project",
+            "work",
+            "/fixture/work",
+            Some(pane("subject", "/fixture/work")),
+        )],
+    )];
+    let mut agent = row(Owner::Operator, Doing::Working);
+    agent.lineage_session = Some("tool-session".into());
+    runtime.snapshot.navigator.agents = vec![agent];
+    let connection = connect(&mut runtime, "00000000000000a7", "7", Level::Act);
+    let idle = connect_as(&mut runtime, "weekly", "00000000000000a8", "8", Level::Act);
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: "agent-1".into(),
+        pane_id: "subject".into(),
+        session: Some("tool-session".into()),
+        ended: false,
+    }];
+    let project = |runtime: &mut Runtime| {
+        runtime.refresh_agent_lineage();
+        runtime.sync_session_state();
+        runtime.publish_mission_asks();
+        runtime.refresh_agent_scopes();
+        let cells = runtime
+            .snapshot
+            .navigator
+            .tools
+            .iter()
+            .map(|cell| {
+                let cards = cell
+                    .devices
+                    .iter()
+                    .flat_map(|device| &device.tasks.cards)
+                    .map(|card| (card.root.clone(), card.state))
+                    .collect::<Vec<_>>();
+                (cell.connection.clone(), cell.turn, cards)
+            })
+            .collect::<Vec<_>>();
+        let operator = &runtime.snapshot.navigator.devices[0].agent_scope;
+        // The operator's cell: its 태스크 cards and its Needs You number.
+        (
+            cells,
+            (operator.tasks.cards.len(), operator.groups.needs_you),
+        )
+    };
+    use crate::agent_state::tally::tasks::TaskState;
+    assert_eq!(
+        project(&mut runtime),
+        (
+            vec![
+                (
+                    connection.clone(),
+                    0,
+                    vec![("subject".to_owned(), TaskState::Working)]
+                ),
+                (idle.clone(), 0, Vec::new()),
+            ],
+            (0, 0)
+        ),
+        "every Act tool has a cell, the one with no work too, and the operator's lists none of it"
+    );
+
+    let subject = &mut runtime.snapshot.navigator.agents[0];
+    subject.activity = "stopped".into();
+    subject.demand = "question".into();
+    subject.unread = true;
+    assert_eq!(
+        project(&mut runtime),
+        (
+            vec![
+                (
+                    connection.clone(),
+                    1,
+                    vec![("subject".to_owned(), TaskState::NeedsYou)]
+                ),
+                (idle.clone(), 0, Vec::new()),
+            ],
+            (0, 0)
+        ),
+        "its question is the tool's turn, never the operator's"
+    );
+
+    // The operator answers in the agent's pane from the tool's cell.
+    let subject = &mut runtime.snapshot.navigator.agents[0];
+    subject.activity = "working".into();
+    subject.demand = String::new();
+    subject.unread = false;
+    assert_eq!(
+        project(&mut runtime).0[0],
+        (
+            connection.clone(),
+            0,
+            vec![("subject".to_owned(), TaskState::Working)]
+        ),
+        "the answer takes it out of the tool's turn and leaves it the tool's"
+    );
+
+    assert!(runtime.access_event(AccessEvent::Level {
+        id: connection.clone(),
+        level: Level::View,
+    }));
+    assert!(runtime.access_event(AccessEvent::Revoke { id: idle.clone() }));
+    assert_eq!(
+        project(&mut runtime),
+        (Vec::new(), (1, 0)),
+        "View only and a disconnect end the cells, and the work let go is the operator's"
+    );
 }

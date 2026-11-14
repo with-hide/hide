@@ -532,6 +532,10 @@ impl PhoneMissions {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            // A mission an external tool keeps is the tool's, in its cell,
+            // which the phone has none of (PRD hide-external-control B30,
+            // B46).
+            .filter(|item| item.pointer("/tool/owns").and_then(Value::as_bool) != Some(true))
         {
             let mission = match MissionIn::deserialize(item) {
                 Ok(mission) => mission,

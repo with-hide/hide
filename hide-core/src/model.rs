@@ -894,6 +894,11 @@ pub struct NavigatorSnapshot {
     /// D-09); a row whose root is live again only feeds that root's record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
+    /// One cell per external tool connected at Act, beside the devices
+    /// (PRD hide-external-control D-45, D-47): the work it keeps, which the
+    /// operator's own scopes leave out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<crate::agent_state::ToolCell>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -8244,6 +8249,7 @@ impl Snapshot {
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
                 archived_sessions: Vec::new(),
+                tools: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,

@@ -7435,13 +7435,13 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     );
 }
 
-/// PRD hide-external-control B30, D-15, D-36: a mission whose Conductor is
-/// an external tool's work reaches the operator as any other does, while
-/// the tool keeps it: listed with the tool named on it, in the device's
-/// Needs You, on the phone's list and told once. A disconnect keeps the
-/// name, as where the work came from, and tells nothing again.
+/// PRD hide-external-control B30, D-36, D-46, B41: while an external tool
+/// keeps the mission its agent conducts, the mission asks the tool, in the
+/// tool's cell and its grey number, and not the operator: not in a device's
+/// Needs You, on the phone's list or in a notice. A disconnect hands it to
+/// the operator, who is told then, and the mission still names the tool.
 #[test]
-fn a_mission_a_tool_conducts_reaches_the_operator_and_names_the_tool() {
+fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
     use crate::access::{Call, Level, key_hash};
     use crate::delivery::worker::HumanNoticeKind;
     use crate::missions::AttentionReason;
@@ -7517,17 +7517,25 @@ fn a_mission_a_tool_conducts_reaches_the_operator_and_names_the_tool() {
             .iter()
             .map(|notice| notice.kind)
             .collect::<Vec<_>>();
-        (tool, asks, phone, notices)
+        let cells = runtime
+            .snapshot
+            .navigator
+            .tools
+            .iter()
+            .map(|cell| (cell.name.clone(), cell.turn, cell.mission_asks.clone()))
+            .collect::<Vec<_>>();
+        (tool, asks, phone, notices, cells)
     };
     assert_eq!(
         reach(&mut runtime),
         (
             Some(("nightly".to_owned(), true)),
-            vec!["mission-1".to_owned()],
-            1,
-            vec![HumanNoticeKind::MissionAttention]
+            Vec::new(),
+            0,
+            Vec::new(),
+            vec![("nightly".to_owned(), 1, vec!["mission-1".to_owned()])]
         ),
-        "the tool keeps its mission, which the operator sees and is told of"
+        "the tool keeps its mission, which asks the tool's cell alone"
     );
 
     assert!(runtime.access_event(AccessEvent::Revoke {
@@ -7539,9 +7547,10 @@ fn a_mission_a_tool_conducts_reaches_the_operator_and_names_the_tool() {
             Some(("nightly".to_owned(), false)),
             vec!["mission-1".to_owned()],
             1,
+            vec![HumanNoticeKind::MissionAttention],
             Vec::new()
         ),
-        "a disconnect keeps the tool's name and tells nothing again"
+        "a disconnect hands the mission to the operator, who is told, and keeps the tool's name"
     );
 }
 
