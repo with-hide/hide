@@ -31,6 +31,14 @@ A testcase's failures are counted once per iteration, so a report of one
 failing iteration among ten fails the run and names the test. A report that
 is missing, unreadable, or holds no testcase at all fails too: a lane that
 cannot show what it ran proves nothing.
+
+With `--repeat`, the run must also show that it was whole: the log handed in
+must hold a stress summary, and the iterations it counts must reach the
+repeat. A report alone cannot show that, since its suites are what nextest
+wrote, not what it was asked to run, so a hand run that passes `--summary`
+and a repeat fails when the log is missing, empty, or holds no summary. The
+gate itself is shown on a runner by failing one iteration on purpose
+(`hided/tests/it/stress_gate_canary.rs`, docs/TESTING.md, The repeat lane).
 """
 import argparse
 from pathlib import Path
@@ -41,18 +49,33 @@ import xml.etree.ElementTree as ET
 # `Summary [ 778.209s] 20/20 stress run iterations: 19 passed, 1 failed`, the
 # line nextest prints after a `--stress-count` run. A run with no failure has
 # no `, N failed`, and nextest prints `20/20 stress run iterations: 20 passed`.
+# nextest's own parser (`integration-tests/tests/integration/fixtures.rs`)
+# leaves the `/M` total optional and anchors the line at its end, so a
+# cancelled run, which nextest suffixes, is not read as a summary. The
+# trailing `[ \t\r]*` is what a Windows runner's `tee` leaves (CRLF), which
+# stays whitespace so it keeps that anchor meaningful.
 _SUMMARY = re.compile(
-    r"Summary\s*\[[^\]]*\]\s*(?P<iterations>\d+)/(?P<total>\d+) stress run iterations: "
-    r"(?P<passed>\d+) passed(?:, (?P<failed>\d+) failed)?"
+    r"Summary\s*\[[^\]]*\]\s*(?P<iterations>\d+)(?:/\d+)? stress run iterations?: "
+    r"(?P<passed>\d+) passed(?:, (?P<failed>\d+) failed)?[ \t\r]*$",
+    re.MULTILINE,
 )
+# The colors nextest writes into its summary when its output is not a
+# terminal but a caller asked for them (a lane's `--color always`): a summary
+# that kept them would match nothing, so a passing run would read as unproven.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 REPORT_FILES = 128
 REPORT_BYTES = 16 * 1024 * 1024
+
+
+def summary_matches(text):
+    """The stress summaries in `text`, one per run the log holds."""
+    return list(_SUMMARY.finditer(_ANSI.sub("", text)))
 
 
 def summary_failures(text):
     """The failed iterations and tests a nextest stress summary names, as
     `(iterations, failed)`; `(0, 0)` when the text holds no failure."""
-    found = [(int(match["iterations"]), int(match["failed"] or 0)) for match in _SUMMARY.finditer(text)]
+    found = [(int(match["iterations"]), int(match["failed"] or 0)) for match in summary_matches(text)]
     if not found:
         return (0, 0)
     # Several runs in one log (a lane that ran more than one target) add up.
@@ -98,7 +121,8 @@ def checked(paths, text, repeat=0):
     iterations, reported = summary_failures(text or "")
     if not paths and not text:
         raise ValueError("no report or summary was given")
-    return {"iterations": iterations, "cases": failed_cases, "summary_failed": reported}
+    return {"iterations": iterations, "cases": failed_cases, "summary_failed": reported,
+            "summaries": len(summary_matches(text or ""))}
 
 
 def main():
@@ -113,6 +137,8 @@ def main():
         for path in paths:
             if not path.is_file():
                 raise ValueError(f"no such report: {path}")
+        if args.summary and not Path(args.summary).is_file():
+            raise ValueError(f"no such log: {args.summary}")
         text = Path(args.summary).read_text(encoding="utf-8", errors="replace") if args.summary else ""
         found = checked(paths, text, args.repeat)
         if found["cases"]:
@@ -120,6 +146,14 @@ def main():
             raise ValueError(f"{len(found['cases'])} failed test runs, so the repeat failed: {named}")
         if found["summary_failed"]:
             raise ValueError(f"the stress summary counts {found['summary_failed']} failed iterations of {found['iterations']}")
+        # A log handed in with a repeat asked for must say how many iterations
+        # ran: without that line nothing proves the run was whole, and a
+        # report alone cannot (its suites are what nextest wrote, not what it
+        # was asked to run). A `--stress-count` run prints it; a lane that
+        # passed no `--stress-count` at all has no line, and this is how the
+        # check tells that apart from a run whose earlier iterations failed.
+        if args.summary and args.repeat and not found["summaries"]:
+            raise ValueError(f"the log holds no stress summary, so nothing shows the {args.repeat} iterations ran")
         if args.repeat and found["iterations"] and found["iterations"] < args.repeat:
             raise ValueError(f"the summary counts {found['iterations']} iterations, fewer than the {args.repeat} asked for")
         print(f"No failed iteration in {found['iterations'] or 'the'} reported runs.")

@@ -632,6 +632,46 @@ class StressReport(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("fewer than the 10 asked for", result.stderr)
 
+    def test_a_log_with_no_stress_summary_proves_no_iteration_when_a_repeat_was_asked(self):
+        # A lane can pass the reports of a run that never repeated anything,
+        # or whose log the step did not keep: with no summary line, nothing
+        # shows how many iterations ran, so the repeat is unproven. This is
+        # also what a lane that forgot its `--stress-count` looks like, and
+        # the check has to tell that apart from a run whose iterations passed.
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "nextest.log"
+            log.write_text("    Starting 3 tests across 1 binary\n     Summary [ 1.2s] 3 tests run: 3 passed\n",
+                           encoding="utf-8")
+            report = self.report(directory)
+            result = self.run_script("--junit", str(report), "--summary", str(log), "--repeat", "10")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("no stress summary", result.stderr)
+            # The same report without a summary handed in stays readable: the
+            # JUnit report alone is what a lane without a log can pass.
+            result = self.run_script("--junit", str(report), "--repeat", "10")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_summary_nextest_prints_for_one_suite_is_read_without_a_total(self):
+        # nextest's own parser leaves the `/M` total optional and anchors the
+        # line at its end, so a cancelled run's suffixed line is no summary.
+        self.assertEqual(stress.summary_failures("Summary [ 2.4s] 5 stress run iterations: 5 passed\n"), (5, 0))
+        self.assertEqual(stress.summary_failures("Summary [ 2.4s] 5/5 stress run iterations: 4 passed, 1 failed\n"), (5, 1))
+        self.assertEqual(stress.summary_failures(
+            "Summary [ 2.4s] 5/5 stress run iterations: 4 passed, 1 failed; cancelled due to INT signal\n"), (0, 0))
+        # A Windows runner's tee leaves CRLF, which must not read as "no summary".
+        self.assertEqual(stress.summary_failures(
+            "Summary [ 2.4s] 5/5 stress run iterations: 4 passed, 1 failed\r\n"), (5, 1))
+        # A colorized summary is the same summary, not an unproven run.
+        self.assertEqual(stress.summary_failures(
+            "\x1b[1m     Summary\x1b[0m [ 2.4s] 5/5 stress run iterations: 4 passed, "
+            "\x1b[31m1 failed\x1b[0m\n"), (5, 1))
+        # The per-iteration line is not the summary, so it proves no whole run.
+        self.assertEqual(stress.summary_failures("Stress test [ 0.1s] iteration 1/5: 3 tests run: 3 passed\n"), (0, 0))
+        # Several runs in one log (a lane that ran more than one target) add up.
+        self.assertEqual(stress.summary_failures(
+            "Summary [ 1.0s] 3/3 stress run iterations: 2 passed, 1 failed\n"
+            "Summary [ 2.0s] 4/4 stress run iterations: 4 passed\n"), (7, 1))
+
     def test_a_missing_report_or_no_input_at_all_fails_rather_than_passing_silently(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
