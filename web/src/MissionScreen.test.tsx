@@ -97,6 +97,9 @@ describe("the table (B2-B5)", () => {
     expect(q("[data-mission-screen-tool]")?.dataset.missionScreenTool).toBe(tool.connection);
     expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
     expect(q("[data-mission-screen-device-name]")?.textContent).toBe("· nightly");
+    // Its turn waits on the tool, so the group is named for the tool and nothing takes the decision colour.
+    expect(q('[data-mission-group="turn"]')?.getAttribute("aria-label")).toBe("Tool's turn 1");
+    expect(q('[data-mission-group="turn"] h2')?.className).not.toContain("text-mission-hold");
     expect(q('[data-mission-row="mission-4"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
   });
 
