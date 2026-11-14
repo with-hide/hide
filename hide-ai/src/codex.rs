@@ -1009,7 +1009,11 @@ impl Session {
             .ok_or_else(|| {
                 AiError::ProviderUnavailable("codex_config_without_mcp_servers".to_owned())
             })?;
-        Ok(servers.keys().cloned().collect())
+        // Sorted, so two reads compare by their names alone: Codex answers
+        // the table in no fixed order (measured).
+        let mut names: Vec<String> = servers.keys().cloned().collect();
+        names.sort();
+        Ok(names)
     }
 
     /// The reasoning effort `model` takes by default, as this server's
@@ -1224,11 +1228,19 @@ mod account_home_tests {
             self.lines("started")
         }
 
-        /// The `config` of every `thread/start`, in order.
-        fn thread_configs(&self) -> Vec<Value> {
+        /// The parameters of every `thread/start`, in order.
+        fn threads(&self) -> Vec<Value> {
             self.lines("threads")
                 .iter()
                 .map(|line| serde_json::from_str(line).expect("a thread is recorded as JSON"))
+                .collect()
+        }
+
+        /// The `config` of every `thread/start`, in order.
+        fn thread_configs(&self) -> Vec<Value> {
+            self.threads()
+                .into_iter()
+                .map(|thread| thread["config"].clone())
                 .collect()
         }
 
@@ -1390,7 +1402,9 @@ mod account_home_tests {
 
     #[test]
     fn a_refused_thread_whose_servers_read_again_the_same_is_not_tried_again() {
-        let account = Account::declaring(&["docs"]);
+        // Two names, which the stand-in answers in another order the second
+        // time, as Codex may.
+        let account = Account::declaring(&["docs", "notes"]);
         let run = account.run(&[("FAKE_THREAD_START_REFUSED", "1")]);
         let mut session = account.spawn(&run);
         assert!(ask(&backend(&run), &mut session).is_err());
@@ -1408,6 +1422,37 @@ mod account_home_tests {
             "no server could be switched off"
         );
         assert_eq!(account.started_servers(), Vec::<String>::new());
+    }
+
+    /// What this code sends for the live request, as the stand-in receives
+    /// it in an account folder, written to `HIDE_AI_LIVE_EVIDENCE` as
+    /// `requests.json` for the Windows check to replay; not a check itself.
+    #[test]
+    #[ignore = "writes the live request for the Windows check"]
+    fn the_live_request_as_codex_receives_it() {
+        let account = Account::declaring(&["docs"]);
+        let run = account.run(&[("FAKE_DEFAULT_EFFORT", "medium")]);
+        let mut session = account.spawn(&run);
+        backend(&run)
+            .run_turn(
+                &mut session,
+                &super::live_tests::live_request(),
+                &CancelToken::new(),
+            )
+            .expect("the turn completes");
+        let evidence = PathBuf::from(
+            std::env::var("HIDE_AI_LIVE_EVIDENCE").expect("HIDE_AI_LIVE_EVIDENCE names the folder"),
+        );
+        std::fs::create_dir_all(&evidence).expect("the evidence folder is creatable");
+        let sent = json!({
+            "thread_start": account.threads()[0],
+            "turn_start": account.recorded("turn.json"),
+        });
+        std::fs::write(
+            evidence.join("requests.json"),
+            serde_json::to_string_pretty(&sent).expect("the requests serialize"),
+        )
+        .expect("the requests write");
     }
 
     /// The account's `model_reasoning_effort` would apply to a turn that
@@ -1428,5 +1473,248 @@ mod account_home_tests {
             .run_turn(&mut session, &turn_request(chosen), &CancelToken::new())
             .expect("the turn completes");
         assert_eq!(account.recorded("turn.json")["effort"], "high");
+    }
+}
+
+/// The real, logged-in `codex` found on this machine's search, on both of a
+/// request's paths, writing what each run showed to `HIDE_AI_LIVE_EVIDENCE`:
+/// model ids, outcome classes, counts and marker names, never an account
+/// field or a prompt.
+///
+/// ```sh
+/// HIDE_AI_LIVE_EVIDENCE=<folder> HIDE_TEST_CODEX_ACCOUNTS=<case>,<case> \
+///   scripts/verify-cargo.sh nextest -p hide-ai --lib --run-ignored only -E 'test(/live_tests::/)'
+/// ```
+///
+/// An account-folder case is a folder holding `home/.codex` (a
+/// `config.toml` that declares MCP servers, hooks and `notify`, the hooks
+/// trusted, and `auth.json` linked to a signed-in account), `markers/`,
+/// where each of those stand-ins writes a file when it runs, and
+/// `stand-in.json`, the command and leading arguments of an MCP stand-in.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::{AiRouter, NoopLogSink, RouterConfig};
+
+    /// The request both live paths send, and the one the Windows check
+    /// replays (`account_home_tests::the_live_request_as_codex_receives_it`).
+    /// Schema mode hands `outputSchema` to the API's strict mode, which
+    /// refuses an object that does not close its properties (HTTP 400
+    /// `invalid_json_schema`), so it closes them as a feature's schema does.
+    pub(super) fn live_request() -> AiRequest {
+        AiRequest {
+            feature_id: "live".into(),
+            request_id: crate::RequestId("live-1".to_owned()),
+            subject_id: "pane-1".to_owned(),
+            system: "Name the developer's task in a few words. Answer as JSON.".to_owned(),
+            input: "user: please rename the build script".to_owned(),
+            output_schema: json!({
+                "type": "object",
+                "required": ["summary"],
+                "additionalProperties": false,
+                "properties": {"summary": {"type": "string"}},
+            }),
+            deadline: Duration::from_secs(120),
+            schema_version: "live.v1".into(),
+            pick: None,
+            output_language: None,
+            answer: AnswerMode::Schema,
+            provider_efforts: Vec::new(),
+        }
+    }
+
+    fn evidence() -> PathBuf {
+        let evidence = PathBuf::from(
+            std::env::var("HIDE_AI_LIVE_EVIDENCE").expect("HIDE_AI_LIVE_EVIDENCE names the folder"),
+        );
+        std::fs::create_dir_all(&evidence).expect("the evidence folder is creatable");
+        evidence
+    }
+
+    fn class<T>(outcome: &Result<T, AiError>) -> &'static str {
+        match outcome {
+            Ok(_) => "ok",
+            Err(error) => error.class(),
+        }
+    }
+
+    /// The name of every log event, in order.
+    #[derive(Default)]
+    struct EventNames(Mutex<Vec<String>>);
+
+    impl AiLogSink for EventNames {
+        fn log(&self, event: AiLogEvent) {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event.event.to_string());
+        }
+    }
+
+    /// The model list, then one request through the router, on whichever
+    /// home this account gets (`account` where the link needs a privilege).
+    #[test]
+    #[ignore = "needs a logged-in codex on the search"]
+    fn real_codex_lists_its_models_and_answers_one_request() {
+        let events = Arc::new(EventNames::default());
+        let backend = Arc::new(CodexAppServerBackend::new(
+            CodexConfig::default(),
+            events.clone(),
+        ));
+        let ModelCatalog::Offered(models) = backend.models() else {
+            panic!("the live model list was not offered");
+        };
+        assert!(!models.is_empty());
+        let router = AiRouter::new(
+            vec![backend.clone()],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX.into()],
+                ..RouterConfig::default()
+            },
+            Arc::new(NoopLogSink),
+        );
+        let outcome = router.execute(&live_request(), &CancelToken::new());
+        let names = events.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let home = if names.iter().any(|name| name == "ai.codex_home.account") {
+            "account"
+        } else {
+            "private"
+        };
+        std::fs::write(
+            evidence().join("codex-live.json"),
+            serde_json::to_string_pretty(&json!({
+                "models": models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+                "codex_home": home,
+                "request_outcome": class(&outcome),
+                "events": names,
+            }))
+            .expect("the record serializes"),
+        )
+        .expect("the record writes");
+        assert!(outcome.is_ok(), "{outcome:?}");
+    }
+
+    /// The account's own folder, taken by hand since this machine may make
+    /// the link: the model list and two requests, a server declared after
+    /// the app-server started and another between the requests, on each
+    /// case of `HIDE_TEST_CODEX_ACCOUNTS`. No MCP server, hook or `notify`
+    /// may run, and nothing may reach the history or the conversation list.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "needs a logged-in codex on the search and prepared account folders"]
+    fn real_codex_in_an_account_folder_runs_none_of_its_servers_hooks_or_notify() {
+        let cases = std::env::var("HIDE_TEST_CODEX_ACCOUNTS")
+            .expect("HIDE_TEST_CODEX_ACCOUNTS names the cases");
+        let mut records = Vec::new();
+        for case in cases.split(',').map(PathBuf::from) {
+            records.push(account_case(&case));
+        }
+        std::fs::write(
+            evidence().join("codex-live-account.json"),
+            serde_json::to_string_pretty(&records).expect("the record serializes"),
+        )
+        .expect("the record writes");
+        for record in &records {
+            assert_eq!(record["requests"], json!(["ok", "ok"]), "{record}");
+            assert_eq!(record["markers"], json!([]), "{record}");
+            assert_eq!(record["threads_listed"], 0, "{record}");
+            assert_eq!(record["sessions_files"], 0, "{record}");
+            assert_eq!(record["history"], false, "{record}");
+            assert_eq!(record["session_index"], false, "{record}");
+        }
+    }
+
+    fn account_case(case: &Path) -> Value {
+        let folder = case.join("home/.codex");
+        let backend = CodexAppServerBackend::new(CodexConfig::default(), Arc::new(NoopLogSink));
+        let program = backend.resolved_binary().expect("codex is installed");
+        let mut session = Session::spawn(
+            &program,
+            &backend.config.cwd,
+            &backend.config.run,
+            CodexHome::Account(folder.clone()),
+        )
+        .expect("the app-server starts in the account folder");
+        let declared_at_start = session
+            .mcp_servers(&backend.config.cwd)
+            .expect("config/read");
+        declare(case, "after.start");
+        let listed = session
+            .request("model/list", json!({}), CONTROL_TIMEOUT)
+            .expect("model/list");
+        let models = listed["data"].as_array().map_or(0, Vec::len);
+        let first = backend.run_turn(&mut session, &live_request(), &CancelToken::new());
+        declare(case, "between \"requests\"");
+        let second = backend.run_turn(&mut session, &live_request(), &CancelToken::new());
+        let declared_at_end = session
+            .mcp_servers(&backend.config.cwd)
+            .expect("config/read");
+        let threads = session
+            .request("thread/list", json!({}), CONTROL_TIMEOUT)
+            .expect("thread/list");
+        // A stand-in writes its marker the moment it starts, and a server a
+        // thread starts is up before that thread's turn ends.
+        drop(session);
+        let mut markers: Vec<String> = std::fs::read_dir(case.join("markers"))
+            .expect("the markers folder is readable")
+            .map(|entry| {
+                entry
+                    .expect("a marker entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        markers.sort();
+        let sessions = folder.join("sessions");
+        let sessions_files = if sessions.is_dir() {
+            walk_files(&sessions)
+        } else {
+            0
+        };
+        json!({
+            "case": case.file_name().map(|name| name.to_string_lossy().into_owned()),
+            "declared_at_start": declared_at_start,
+            "declared_at_end": declared_at_end,
+            "models": models,
+            "requests": [class(&first), class(&second)],
+            "markers": markers,
+            "threads_listed": threads["data"].as_array().map_or(usize::MAX, Vec::len),
+            "sessions_files": sessions_files,
+            "history": folder.join("history.jsonl").exists(),
+            "session_index": folder.join("session_index.jsonl").exists(),
+        })
+    }
+
+    /// Declares one more MCP stand-in in the case's `config.toml`, as the
+    /// user editing it would.
+    fn declare(case: &Path, name: &str) {
+        let stand_in: Value = serde_json::from_str(
+            &std::fs::read_to_string(case.join("stand-in.json")).expect("stand-in.json"),
+        )
+        .expect("stand-in.json is JSON");
+        let mut args: Vec<Value> = stand_in["args"].as_array().expect("args").clone();
+        args.push(json!(name));
+        args.push(json!(case.join("markers").display().to_string()));
+        let table = format!(
+            "\n[mcp_servers.{}]\ncommand = {}\nargs = {}\n",
+            Value::from(name),
+            stand_in["command"],
+            Value::from(args),
+        );
+        let config = case.join("home/.codex/config.toml");
+        let mut text = std::fs::read_to_string(&config).expect("config.toml");
+        text.push_str(&table);
+        std::fs::write(&config, text).expect("config.toml writes");
+    }
+
+    fn walk_files(folder: &Path) -> usize {
+        std::fs::read_dir(folder)
+            .expect("readable")
+            .map(|entry| {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() { walk_files(&path) } else { 1 }
+            })
+            .sum()
     }
 }

@@ -30,7 +30,8 @@ The account's own folder (with-hide/hide#2531) is modelled the way codex-cli
 0.155.1 and 0.167.2 were measured to behave. FAKE_MCP_FILE (a JSON list) is
 the MCP servers the user's configuration declares, read afresh at every
 request as Codex rereads `config.toml`: `config/read` answers them as its
-`mcp_servers` table, or fails with FAKE_CONFIG_READ_FAIL, and
+`mcp_servers` table, in reverse order on every second read since Codex keeps
+no fixed order, or fails with FAKE_CONFIG_READ_FAIL, and
 FAKE_MCP_AFTER_CONFIG_READ, when set, replaces that file's list once the
 first `config/read` is answered, as an edit landing right after it would.
 `thread/start` merges its `config.mcp_servers` into the file's servers name by
@@ -38,7 +39,7 @@ name: a name the file does not hold refuses the thread (`invalid transport`),
 and every server the merge leaves enabled is started, one line per server in
 FAKE_MCP_STARTED_FILE. FAKE_THREAD_START_REFUSED refuses every thread for
 another reason. FAKE_THREADS_FILE gets one line per `thread/start`: its
-`config`, and FAKE_STARTS_FILE one per app-server start: its argument vector.
+parameters, and FAKE_STARTS_FILE one per app-server start: its argument vector.
 `model/list` gives each model FAKE_DEFAULT_EFFORT as its
 `defaultReasoningEffort` when set.
 """
@@ -140,6 +141,7 @@ def strict_refusal(schema):
 
 
 active_turn = None
+config_reads = 0
 for raw in sys.stdin:
     raw = raw.strip()
     if not raw:
@@ -170,7 +172,9 @@ for raw in sys.stdin:
         if os.environ.get("FAKE_CONFIG_READ_FAIL"):
             send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32600, "message": "failed to load configuration"}})
             continue
-        servers = {name: {"enabled": True, "command": "server"} for name in declared()}
+        config_reads += 1
+        names = declared() if config_reads % 2 else list(reversed(declared()))
+        servers = {name: {"enabled": True, "command": "server"} for name in names}
         result(rid, {"config": {"mcp_servers": servers}, "origins": {}})
         edited = os.environ.get("FAKE_MCP_FILE", "") + ".edited"
         if (after := os.environ.get("FAKE_MCP_AFTER_CONFIG_READ")) and not os.path.exists(edited):
@@ -185,7 +189,7 @@ for raw in sys.stdin:
         overrides = (params.get("config") or {}).get("mcp_servers") or {}
         if path := os.environ.get("FAKE_THREADS_FILE"):
             with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(params.get("config")) + "\n")
+                f.write(json.dumps(params) + "\n")
         held = declared()
         missing = [name for name in overrides if name not in held]
         if missing or os.environ.get("FAKE_THREAD_START_REFUSED"):
