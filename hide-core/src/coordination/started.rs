@@ -28,6 +28,18 @@ pub(crate) struct StartedCheckout {
     pub(crate) machine: String,
     pub(crate) path: String,
     pub(crate) task: Option<SpawnTask>,
+    /// The external tool whose spawn made it, absent for Hide AI's: the
+    /// connection's id and the name it connected with. Whether the tool
+    /// keeps the checkout is read from its connection when it is published,
+    /// as a row's is (PRD hide-external-control D-14).
+    pub(crate) tool: Option<CheckoutTool>,
+}
+
+/// The external tool a checkout was made for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CheckoutTool {
+    pub(crate) connection: String,
+    pub(crate) name: String,
 }
 
 /// One live agent an external tool started (PRD hide-external-control
@@ -115,13 +127,15 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
             tool_roots.insert(child, tool);
         }
         let machine = super::spawn_machine(ledger, spawn);
-        if connection.is_none()
-            && let (Some(path), Some(machine)) = (&spawn.path, machine)
-        {
+        if let (Some(path), Some(machine)) = (&spawn.path, machine) {
             started.checkouts.push(StartedCheckout {
                 machine: machine.to_owned(),
                 path: path.clone(),
                 task: spawn.task.clone(),
+                tool: tool.map(|(connection, name)| CheckoutTool {
+                    connection: connection.to_owned(),
+                    name: name.to_owned(),
+                }),
             });
         }
         let Some(child) = spawn
@@ -395,7 +409,19 @@ pub(crate) mod tests {
         .unwrap();
         let started = hide_started(&ledger);
         assert!(started.agents.is_empty());
-        assert!(started.checkouts.is_empty());
+        // Its checkout is the tool's, which the sidebar tree draws by the
+        // rule of a checkout Hide AI made (together check, issue 2).
+        assert_eq!(
+            started
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.tool.clone())
+                .collect::<Vec<_>>(),
+            vec![Some(CheckoutTool {
+                connection: "c0ffee00c0ffee00".into(),
+                name: "hermes".into(),
+            })]
+        );
         assert_eq!(started.access.len(), 1);
         assert_eq!(started.access[0].connection, "c0ffee00c0ffee00");
         assert_eq!(started.access[0].agent.pane_id, "w1:p1");
@@ -519,6 +545,7 @@ pub(crate) mod tests {
                 machine: NODE.into(),
                 path: "/repo.worktrees/hide-memory-m72".into(),
                 task: memory_task("m72"),
+                tool: None,
             }]
         );
     }

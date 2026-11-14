@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { ToolWork } from "../snapshot";
@@ -44,6 +44,23 @@ export function ToolLabel({ tool, className }: { tool: ToolWork | undefined; cla
     <span className={cn("flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs text-muted-foreground", className)} title={label}>
       <span className="min-w-0 truncate" data-tool-mark={tool.connection} data-tool-mark-owns={tool.owns ? "" : undefined}>{tool.name}</span>
       <span aria-hidden="true">·</span>
+    </span>
+  );
+}
+
+/**
+ * A line that leads with the tool's name where the work is the tool's (`ToolLabel`): the sidebar's row, and
+ * the Overview's `나를 기다리는 것` card and graph node of a tool's agent that reached the operator (together
+ * check, operator decision 2026-11-14). With no tool to name, or inside the tool's own cell, the line stands
+ * alone and unwrapped.
+ */
+export function ToolLed({ tool, className, children }: { tool: ToolWork | undefined; className?: string; children: ReactNode }) {
+  const inCell = useContext(InToolCell);
+  if (!tool || inCell) return <>{children}</>;
+  return (
+    <span className={cn("flex min-w-0 items-baseline gap-xs", className)} data-tool-line={tool.connection}>
+      <ToolLabel tool={tool} />
+      <span className="flex min-w-0 flex-1 flex-col">{children}</span>
     </span>
   );
 }

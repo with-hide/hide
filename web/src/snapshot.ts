@@ -106,7 +106,8 @@ export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: stri
 export type ToolWork = { connection: string; name: string; owns: boolean };
 
 /** A checkout Hide AI made for an agent it started, joined to a checkout by device and path. */
-export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask };
+/** A checkout Hide made for Hide AI's agent, or for an external tool's while the tool keeps its work (`tool`, its name). */
+export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask; tool?: string };
 
 export type AgentRow = {
   /** Set by the core from the coordination record of the spawn, never from a branch name. */

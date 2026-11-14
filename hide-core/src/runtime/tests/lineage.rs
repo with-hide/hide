@@ -3047,6 +3047,7 @@ fn rows_and_checkouts_hide_started_are_marked_from_the_ledger_alone() {
             device_id: node.clone(),
             path: "/repo.worktrees/hide-memory-m72".into(),
             task: memory_task("m72"),
+            tool: None,
         }]
     );
 

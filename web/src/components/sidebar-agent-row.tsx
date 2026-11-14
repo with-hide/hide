@@ -24,7 +24,7 @@ import { Elapsed } from "./elapsed";
 import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
-import { ToolLabel } from "./tool-mark";
+import { ToolLed } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
 import { SessionRowBody } from "./session-row";
@@ -298,12 +298,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         </>}
       >
         {/* An external tool's row leads its line with the tool's name, muted, since its first line has no room for it (operator decision 2026-11-14). */}
-        {agent.tool && !offline ? (
-          <span className="pointer-events-none flex min-w-0 items-baseline gap-xs text-caption leading-(--size-sidebar-line-detail)" data-agent-tool-line={agent.tool.connection}>
-            <ToolLabel tool={agent.tool} />
-            <span className="flex min-w-0 flex-1 flex-col">{detail}</span>
-          </span>
-        ) : detail}
+        <ToolLed tool={offline ? undefined : agent.tool} className="pointer-events-none text-caption leading-(--size-sidebar-line-detail)">{detail}</ToolLed>
         {tree && agent.hide_ai ? (
           <span aria-hidden="true" data-agent-task={originLine(t, agent.hide_ai)} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {originLine(t, agent.hide_ai)}

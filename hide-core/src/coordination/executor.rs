@@ -729,9 +729,14 @@ pub(crate) fn run(
         Command::List { live } => {
             let (ledger, sleeping) = registrations(&client)?;
             Ok(json!(crate::delivery::answer::AgentList {
+                // A code-owned identity (Hide's own, such as Desk's, an
+                // external tool's, the operator's) is the origin of the work
+                // it starts, not an agent: it runs in no pane, so the list
+                // of agents leaves it out, and `origin_tool` names a tool.
                 items: ledger
                     .agents
                     .iter()
+                    .filter(|record| !record.actor.code_owned())
                     .filter(|record| !live || !record.ended)
                     .map(|record| super::agent_view(record, &ledger, &sleeping))
                     .collect(),
