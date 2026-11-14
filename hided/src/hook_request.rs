@@ -318,8 +318,11 @@ pub(crate) fn memory(
             .spawn(move || {
                 let _ = send.send(give.context());
             })
-            .ok()
             .map(|_| receive)
+            .map_err(|error| {
+                hide_core::diagnostic!(json!({"component":"session","kind":"asks.give_unstarted","pane":cap.pane_id,"error":error.to_string()}));
+            })
+            .ok()
     });
     let pane = cap.pane_id.clone();
     let asks = move || {
