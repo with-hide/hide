@@ -453,6 +453,7 @@ You conduct one open mission at a time: while another is open, a done one stays 
 
 If a mission has no Conductor, the map and the mission list offer Take over (이어받기 in Korean), which first brings the gone Conductor's own conversation back, else starts a new pane and asks it to take the mission.
 A conversation brought back gets a `resumed` letter from Hide saying it conducts the mission again: read it as the start of this section.
+Its pane is registered and made the parent of the last Conductor's workers and checkers as the mission moves to it, even in a new pane, so `hide agent list` names you as their parent and `hide agent end` from you is accepted, as after a take.
 Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read the handover note if the last Conductor left one and each worker's state (`hide agent list`, its record), and go on from there.
 When you hand the mission over, leave a handover note in a file beside your plan file: each node's state and what it waits on, the open decisions, and your next step.
 The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.

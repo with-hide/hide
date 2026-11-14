@@ -2898,9 +2898,11 @@ impl Runtime {
     /// made, and the children's reports and watches reach the Conductor
     /// there now. It is queued before the takeover answers, so it lands
     /// before any command the heir sends next. `hide mission take` registers
-    /// the heir before it asks (`Command::RegisterSelf`); a heir with no
-    /// registration still is handed the mission's workers when it registers
-    /// to start one (`coordination`, the reserve).
+    /// the heir before it asks (`Command::RegisterSelf`), and a conversation
+    /// brought back in a pane with no registration is registered as it moves
+    /// (`adopt_mission_workers_as_heir`); a heir with no registration still
+    /// is handed the mission's workers when it registers to start one
+    /// (`coordination`, the reserve).
     fn adopt_mission_workers(
         &self,
         mission: &str,
@@ -2910,6 +2912,41 @@ impl Runtime {
         let Some(conductor) = conductor else {
             return Ok(());
         };
+        self.post_adoption(
+            mission,
+            crate::coordination::Mutation::AdoptMissionWorkers {
+                mission: mission.to_owned(),
+                conductor: conductor.to_owned(),
+                former: former.map(str::to_owned),
+            },
+        )
+    }
+
+    /// Registers `heir`, the pane a Conductor's conversation came back in
+    /// with no registration of its own, and hands it the children of the
+    /// registration `former` that conducted `mission`, in one change of the
+    /// store queued before any command the pane sends next.
+    fn adopt_mission_workers_as_heir(
+        &self,
+        mission: &str,
+        heir: crate::coordination::AgentRecord,
+        former: &str,
+    ) -> Result<(), String> {
+        self.post_adoption(
+            mission,
+            crate::coordination::Mutation::AdoptMissionWorkersAsHeir {
+                mission: mission.to_owned(),
+                heir: Box::new(heir),
+                former: former.to_owned(),
+            },
+        )
+    }
+
+    fn post_adoption(
+        &self,
+        mission: &str,
+        mutation: crate::coordination::Mutation,
+    ) -> Result<(), String> {
         if self.delivery_client.is_none() {
             // A runtime without a store (a test) has no workers to hand.
             return Ok(());
@@ -2919,11 +2956,7 @@ impl Runtime {
             .post(crate::delivery::worker::Effect::Agents {
                 authority,
                 actor,
-                mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
-                    mission: mission.to_owned(),
-                    conductor: conductor.to_owned(),
-                    former: former.map(str::to_owned),
-                }),
+                mutation: Box::new(mutation),
             })
             .inspect_err(|code| {
                 crate::diagnostic!(json!({
@@ -2931,6 +2964,53 @@ impl Runtime {
                     "mission": mission, "code": code,
                 }));
             })
+    }
+
+    /// The registration of the agent the core observes in `pane` of
+    /// `device`, as a spawn's parent or a take registers the caller
+    /// (`coordination::executor::record`), built from what the session the
+    /// engine published says of it, so no engine read runs under the lock:
+    /// none while the observation does not name its scope or its session.
+    fn heir_record(
+        &self,
+        device: &str,
+        pane: &str,
+        project: Option<String>,
+    ) -> Option<crate::coordination::AgentRecord> {
+        let observation = self.delivery_observations.get(pane)?;
+        observation.actor.require_native_identity().ok()?;
+        let on_node = device == self.node.as_str();
+        // A local observation names its engine's socket; a device's is
+        // scoped by the device (`continue_moved_registrations`).
+        let host_scope = observation
+            .host_scope
+            .clone()
+            .or_else(|| (!on_node).then(|| device.to_owned()))?;
+        let native_machine = if on_node {
+            self.node.to_string()
+        } else {
+            self.device_machine_ids.get(device)?.clone()
+        };
+        let session = observation.session.as_ref()?.reference_value.clone();
+        let raw = &observation.raw_pane_id;
+        Some(crate::coordination::AgentRecord {
+            id: String::new(),
+            // The engine's name for it, never its pane id (`record`).
+            name: Some(observation.actor.name.clone()).filter(|name| name != raw),
+            machine: device.to_owned(),
+            host_scope,
+            native_machine,
+            session,
+            instance: raw.clone(),
+            pane: raw.clone(),
+            parent: None,
+            origin: None,
+            project,
+            actor: observation.actor.clone(),
+            ended: false,
+            terminal_id: observation.terminal_id.clone(),
+            forked: false,
+        })
     }
 
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
@@ -3067,6 +3147,7 @@ impl Runtime {
     /// rather than the button that resumed it. A resumed conversation gets
     /// no prompt of its own, so a `resumed` wake tells it to go on.
     pub(super) fn follow_resumed_conductors(&mut self, device: &str) {
+        let noted = self.note_conductor_registrations(device);
         let moves: Vec<(String, String, Actor)> = self
             .missions
             .book
@@ -3096,6 +3177,9 @@ impl Runtime {
             })
             .collect();
         if moves.is_empty() {
+            if noted {
+                self.save_missions();
+            }
             return;
         }
         let now = crate::delivery::worker::now();
@@ -3113,11 +3197,27 @@ impl Runtime {
                 conductor.profile = mission.conductor.profile.clone();
                 conductor.profile_unknown = mission.conductor.profile_unknown;
             }
+            let project = Some(mission.checkout_path.clone());
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
-            if let Err(code) =
-                self.adopt_mission_workers(&id, agent_id.as_deref(), former.agent_id.as_deref())
-            {
+            // A pane the conversation came back in has no registration of
+            // its own yet: Hide registers it, as a take does, so the former
+            // registration's children, the workers of a mission that closes
+            // later included, are handed to it now (B43).
+            let handed = match (agent_id.as_deref(), former.agent_id.as_deref()) {
+                (None, Some(former_id)) => match self.heir_record(device, &pane, project) {
+                    Some(heir) => self.adopt_mission_workers_as_heir(&id, heir, former_id),
+                    None => {
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.heir_unregistered",
+                            "mission": id, "pane": pane,
+                        }));
+                        Ok(())
+                    }
+                },
+                (conductor, former_id) => self.adopt_mission_workers(&id, conductor, former_id),
+            };
+            if let Err(code) = handed {
                 // Not moved, so the next sight of the pane tries again.
                 if let Some(mission) = self.missions.book.get_mut(&id) {
                     mission.conductor = former;
@@ -3138,10 +3238,44 @@ impl Runtime {
             }));
             moved = true;
         }
-        if moved {
+        if moved || noted {
             self.save_missions();
+        }
+        if moved {
             self.flush_mission_wakes();
         }
+    }
+
+    /// An open mission's Conductor whose pane registered after the mission
+    /// came to it (the pane a conversation came back in, registered by the
+    /// move's own change of the store, or a heir's first start): the mission
+    /// names that registration from then on, so the next take or return
+    /// hands its children on in turn. Whether any mission changed; a pass
+    /// with every Conductor named reads nothing of the ledger.
+    fn note_conductor_registrations(&mut self, device: &str) -> bool {
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return false;
+        };
+        let mut noted = false;
+        for mission in &mut self.missions.book.missions {
+            if mission.conductor.agent_id.is_some()
+                || !mission.status.open()
+                || mission.device_id != device
+            {
+                continue;
+            }
+            let conductor = &mission.conductor.actor;
+            if let Some(record) = ledger
+                .agents
+                .iter()
+                .rev()
+                .find(|record| !record.ended && record.actor.same_identity(conductor))
+            {
+                mission.conductor.agent_id = Some(record.id.clone());
+                noted = true;
+            }
+        }
+        noted
     }
 
     /// The admission of a spawn `actor` asks for (B4, B8, B11, B12): none

@@ -490,6 +490,161 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     assert_eq!(events(&runtime), [crate::missions::WakeEvent::Resumed]);
 }
 
+/// A Conductor's conversation brought back in a pane that has no
+/// registration of its own (B43, with-hide/hide `hide agent end` refused
+/// `parent_authority_required` from it): the mission's move registers that
+/// pane and hands it the former registration's children, so before it
+/// starts any worker, ending one from there is the parent's own end, and
+/// the mission names the new registration from then on.
+#[test]
+fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_workers() {
+    use crate::coordination::{AgentRecord, Mutation};
+    let fixture = conducting();
+    let digest = crate::engine::tokens::session_digest;
+    // Each pane's lineage is its session's digest, as the store checks of a
+    // registration; the pane the conversation comes back in has the same.
+    let agent = |pane: &str, session: &str| {
+        json!({"id": pane, "pane_id": pane, "agent": "codex", "agent_status": "idle",
+               "state_change_seq": 1, "lineage_session": digest(session),
+               "agent_session": {"kind": "id", "value": session}})
+    };
+    let (client, conductor) = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            agent("sender", "sender-session"),
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+        (
+            runtime.delivery_client.clone().unwrap(),
+            runtime.delivery_observations["sender"].actor.clone(),
+        )
+    };
+    let submit = |actor: &Actor, mutation: Mutation| {
+        client.submit(
+            crate::delivery::worker::Effect::Agents {
+                authority: authority(actor),
+                actor: actor.clone(),
+                mutation: Box::new(mutation),
+            },
+            Duration::from_secs(10),
+        )
+    };
+    let registered = |actor: &Actor, session: &str, parent: Option<String>| -> String {
+        let record = AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: crate::node::TEST_NODE.into(),
+            session: session.into(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent,
+            origin: None,
+            project: Some(PROJECT.into()),
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+        };
+        let by = if record.parent.is_some() {
+            &conductor
+        } else {
+            actor
+        };
+        submit(
+            by,
+            Mutation::Register {
+                record,
+                check: false,
+            },
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // The Conductor registered when it started its worker, which is its child.
+    let former = registered(&conductor, "sender-session", None);
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: digest("worker-session"),
+    };
+    let worker_id = registered(&worker, "worker-session", Some(former.clone()));
+
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.missions.book.missions[0].conductor.agent_id,
+        Some(former.clone())
+    );
+    // The Conductor's pane closed, and its conversation came back in the
+    // pane `recipient`, which has no registration.
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    runtime.refresh_missions();
+    let seen = |runtime: &mut Runtime| {
+        let mut row = conductor_row();
+        row.pane_id = "recipient".into();
+        runtime.snapshot.navigator.agents = vec![row];
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            agent("recipient", "sender-session"),
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+        runtime.refresh_missions();
+    };
+    seen(&mut runtime);
+    assert_eq!(
+        runtime.snapshot.missions.items[0].conductor.pane_id,
+        "recipient"
+    );
+    let heir = runtime.delivery_observations["recipient"].actor.clone();
+    drop(runtime);
+
+    // Ending the worker from the pane it came back in is its parent's end.
+    let ended = submit(
+        &heir,
+        Mutation::End {
+            id: worker_id.clone(),
+            actor: None,
+        },
+    );
+    assert!(ended.is_ok(), "{ended:?}");
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    let heir_record = ledger
+        .agents
+        .iter()
+        .find(|record| !record.ended && record.actor.same_identity(&heir))
+        .expect("the pane the conversation came back in is registered");
+    assert_eq!(heir_record.parent, None);
+    let child = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == worker_id)
+        .unwrap();
+    assert_eq!(child.parent.as_deref(), Some(heir_record.id.as_str()));
+    assert!(child.ended);
+    // The next sight of the pane names its registration on the mission.
+    let heir_id = heir_record.id.clone();
+    seen(&mut runtime);
+    assert_eq!(
+        runtime.missions.book.missions[0].conductor.agent_id,
+        Some(heir_id)
+    );
+}
+
 /// 미션 종료 from the map (UI_BEHAVIOR, A mission's map): a Conductor that
 /// holds the mission is asked once, by a letter, and keeps it open to ask
 /// about its pull requests; once no Conductor holds it, the same press

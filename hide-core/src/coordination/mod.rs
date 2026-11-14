@@ -1101,6 +1101,18 @@ pub(crate) enum Mutation {
         conductor: String,
         former: Option<String>,
     },
+    /// A Conductor's conversation came back in a pane that has no
+    /// registration of its own: the pane is registered as `heir` says, an
+    /// operator's root as `hide mission take` registers it, converging on
+    /// one it already has, and is handed the workers and every other child
+    /// of the registration `former` as `AdoptMissionWorkers` hands them.
+    /// Only Hide's own identity asks it, from the mission's move to that
+    /// pane.
+    AdoptMissionWorkersAsHeir {
+        mission: String,
+        heir: Box<AgentRecord>,
+        former: String,
+    },
 }
 
 impl AgentRecord {
@@ -2406,6 +2418,37 @@ pub(crate) fn apply_with(
             }
             let moved = adopt_mission_workers(ledger, mission, conductor, former.as_deref())?;
             Ok(json!({"moved": moved}))
+        }
+        Mutation::AdoptMissionWorkersAsHeir {
+            mission,
+            heir,
+            former,
+        } => {
+            if !caller.hide_itself() {
+                return Err("parent_authority_required".into());
+            }
+            if heir.parent.is_some() || heir.origin.is_some() || heir.forked {
+                return Err("invalid_registration".into());
+            }
+            kept_session(&heir.session)?;
+            validate_registration_name(&heir.actor, heir)?;
+            let registered = insert_record(ledger, heir, false, holds).and_then(|view| {
+                view["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "agent_unavailable".into())
+            });
+            let adopted = registered.and_then(|conductor| {
+                adopt_mission_workers(ledger, mission, &conductor, Some(former))
+                    .map(|moved| json!({"id": conductor, "moved": moved}))
+            });
+            // Posted with no one waiting on its answer, so a refusal is said here.
+            adopted.inspect_err(|code| {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.adopt_failed",
+                    "mission": mission, "pane": heir.actor.pane_id, "code": code,
+                }));
+            })
         }
     }
 }
