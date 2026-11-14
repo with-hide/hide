@@ -844,6 +844,11 @@ def select(entries, crates, root=ROOT, full_reason=None):
         for lane in PATH_LANES if all_lanes else FULL_LANES:
             reasons[lane] = list(full)
         packages = {crate["name"] for crate in crates.values()}
+        if not all_lanes:
+            # A push to main and the nightly have no diff of a pull request's
+            # own to name the tests it changed, so `repeat` is not one of
+            # their lanes; a path that declares a test does not add it here.
+            reasons["repeat"] = []
     planned = [lane for lane in LANES if reasons[lane]]
     return {
         "full": bool(full),

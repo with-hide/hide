@@ -235,6 +235,12 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 10
         run: bash scripts/verify-web.sh install
+      - name: Build the relay WebAssembly the unit tests import
+        # `web`'s `test` script builds this too, through `prepare:relay`, but
+        # every iteration would then pay for it again. Built once here, the
+        # per-iteration runs find it up to date.
+        timeout-minutes: 10
+        run: bash scripts/build-relay-wasm.sh
       - name: Repeat the unit tests
         # `--retry=0` over the suites' one retry, so one failed run fails the
         # job. Each file runs `REPEAT` times, and the report below proves the
@@ -249,22 +255,37 @@ jobs:
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
           python3 scripts/ci-repeat.py units-lines --plan "$PLAN" > "$RUNNER_TEMP/units.txt"
           rm -f "$RUNNER_TEMP"/junit-*.xml
+          # Vitest has no `--repeat-each`: repetition is a `test()` option, not
+          # a flag, so the file runs once per iteration and each run writes its
+          # own report. `--retry=0` over any configured retry, so one failed
+          # run fails.
+          #
+          # A failed run does not end the loop: every iteration still runs, so
+          # the report below sees the whole repeat and names each failure.
+          # This step's own exit status is not the verdict; the next one is.
           while IFS=$'\t' read -r package file; do
             echo "::group::$file x $REPEAT"
-            # The package's own `test` script, which builds what the tests
-            # import (the relay WebAssembly), then the file `REPEAT` times.
-            bash scripts/verify-web.sh "$package" test --retry=0 "--repeat-each=$REPEAT" "$file" \
-              --reporter=junit "--outputFile=$RUNNER_TEMP/junit-$package-$(basename "$file").xml"
+            report="$RUNNER_TEMP/junit-$package-$(echo "$file" | tr '/.' '--')"
+            for iteration in $(seq 1 "$REPEAT"); do
+              echo "::group::$file, iteration $iteration of $REPEAT"
+              # The package's own `test` script, which builds what the tests
+              # import (the relay WebAssembly) before the file runs.
+              bash scripts/verify-web.sh "$package" test --retry=0 "$file" \
+                --reporter=junit "--outputFile=$report.$iteration.xml" \
+                || echo "::error title=Failed run::$file failed on iteration $iteration of $REPEAT"
+              echo "::endgroup::"
+            done
             echo "::endgroup::"
           done < "$RUNNER_TEMP/units.txt"
       - name: Report completed unit runs
         id: report
         timeout-minutes: 2
-        # A file that failed every one of its runs reports no completed run,
-        # and a report holding any failure fails here whichever run it was.
+        # A run that failed fails here even when the loop above went on: the
+        # reports name it, and a file that failed every iteration reports no
+        # completed run at all.
         run: |
-          python3 scripts/ci-repeat.py report --junit "$RUNNER_TEMP"/junit-*.xml
-          python3 scripts/check-stress-report.py --junit "$RUNNER_TEMP"/junit-*.xml --repeat "${{ needs.count.outputs.repeat }}"
+          python3 scripts/ci-repeat.py report --junit "$RUNNER_TEMP"/junit-*.*.xml
+          python3 scripts/check-stress-report.py --junit "$RUNNER_TEMP"/junit-*.*.xml --repeat "${{ needs.count.outputs.repeat }}"
 
   rust:
     name: repeat Rust tests (${{ needs.count.outputs.os }})

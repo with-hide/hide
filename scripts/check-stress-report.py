@@ -60,24 +60,29 @@ def summary_failures(text):
 
 
 def junit_failures(paths):
-    """The failed testcases a nextest JUnit report holds, as `[(test, iteration)]`.
+    """The failed testcases the reports hold, as `[(test, where)]`.
 
-    Each suite is one stress iteration, and its name ends with `@stress-<n>`.
     A testcase fails when it holds a `failure` or `error` child; a `skipped`
-    testcase ran nothing and is neither a pass nor a failure.
+    testcase ran nothing and is neither a pass nor a failure. `where` says
+    which run it was: nextest names each of a report's suites `...@stress-<n>`,
+    so that suffix is the iteration, and a lane that writes one report per
+    iteration (`repeat.yml`'s unit tests) is named by the report's file.
+    A single report of a run with one suite has no iteration to name.
     """
     failed = []
     for path in paths:
         report = ET.parse(path).getroot()
         if report.tag != "testsuites":
-            raise ValueError(f"not a nextest JUnit report: {path}")
+            raise ValueError(f"not a JUnit report: {path}")
         for suite in report.iter("testsuite"):
-            iteration = suite.get("name", "").rpartition("@stress-")[2]
+            stress = suite.get("name", "").rpartition("@stress-")[2]
+            if stress.isdigit():
+                where = f"iteration {stress}"
+            else:
+                where = Path(path).stem if len(paths) > 1 else ""
             for case in suite.iter("testcase"):
                 if any(child.tag in ("failure", "error") for child in case):
-                    failed.append((case.get("name", "a test"), iteration))
-        # A report whose suites are not named by iteration still counts a
-        # failed case, and one no suite holds is read where it sits.
+                    failed.append((case.get("name", "a test"), where))
     return failed
 
 
@@ -111,7 +116,7 @@ def main():
         text = Path(args.summary).read_text(encoding="utf-8", errors="replace") if args.summary else ""
         found = checked(paths, text, args.repeat)
         if found["cases"]:
-            named = ", ".join(f"{case} (iteration {iteration or 'unknown'})" for case, iteration in found["cases"][:5])
+            named = ", ".join(f"{case} ({where})" if where else case for case, where in found["cases"][:5])
             raise ValueError(f"{len(found['cases'])} failed test runs, so the repeat failed: {named}")
         if found["summary_failed"]:
             raise ValueError(f"the stress summary counts {found['summary_failed']} failed iterations of {found['iterations']}")

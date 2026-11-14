@@ -597,6 +597,29 @@ class StressReport(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("no such report", result.stderr)
 
+    def test_one_report_per_iteration_is_read_by_its_file_name(self):
+        # `repeat.yml`'s unit leg has no `--repeat-each` to use, so it writes
+        # one Vitest report per iteration: a failure in the second names that
+        # report, and a run whose iterations all passed still passes.
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for iteration in (1, 2, 3):
+                path = Path(directory) / f"junit-web-src-a-test-ts.{iteration}.xml"
+                failure = '<failure message="boom"/>' if iteration == 2 else ""
+                path.write_text(
+                    f'<testsuites><testsuite name="src/a.test.ts"><testcase name="a test">{failure}</testcase></testsuite></testsuites>',
+                    encoding="utf-8")
+                paths.append(path)
+            result = self.run_script("--junit", *map(str, paths), "--repeat", "3")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("a test", result.stderr)
+            self.assertIn("junit-web-src-a-test-ts.2", result.stderr)
+            paths[1].write_text(
+                '<testsuites><testsuite name="src/a.test.ts"><testcase name="a test"/></testsuite></testsuites>',
+                encoding="utf-8")
+            result = self.run_script("--junit", *map(str, paths), "--repeat", "3")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_a_skipped_iteration_is_neither_a_pass_that_proves_repeats_nor_a_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "junit.xml"

@@ -268,7 +268,7 @@ def select(entries, crate_dirs, targets=None):
             modules.add((found["package"], found["module"]))
         crate = name.partition("/")[0]
         if targets and crate in targets:
-            for source in changed_source(name, crate_dirs.get(crate), targets[crate]):
+            for source in changed_source(name, crate_dirs[crate], targets[crate]):
                 sources.add((source["package"], source["test"], source["module"]))
     # The whole binary runs every module, and `foo` runs `foo::bar`, so neither is run twice.
     wholes = {package for package, module in modules if module == WHOLE}

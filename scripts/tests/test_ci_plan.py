@@ -93,7 +93,11 @@ class Selection(unittest.TestCase):
         for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
                         "Cargo.lock", "scripts/ci-plan.py", "unclaimed/config.json"):
             with self.subTest(product=product):
-                expected = set(plan(product)["lanes"]) | {"checks"}
+                # The changed unit test adds the lane that repeats it. A
+                # product that plans every lane names no pull request diff for
+                # `repeat` to select tests from, and that lane stays unplanned.
+                base = plan(product)
+                expected = (set(base["lanes"]) | {"checks"}) | (set() if base["full"] else {"repeat"})
                 self.assertEqual(set(plan("desktop/src/main/new.test.ts", product)["lanes"]), expected | {"windows-check"})
         self.assertIn("package", plan("desktop/src/main/updater.ts")["lanes"])
         self.assertEqual(plan("web/src/new.test.ts", status="R100")["lanes"], FULL)
@@ -244,7 +248,7 @@ class Selection(unittest.TestCase):
         # The desktop unit suite runs the packaging scripts' tests, and the
         # package lane carries the kits. The contract file holds no test, so
         # it plans no repeat of one; the Rust file that reads it does.
-        self.assertEqual(set(contract["lanes"]), set(node["lanes"]) | {"checks", "package"} - {"repeat"})
+        self.assertEqual(set(contract["lanes"]), (set(node["lanes"]) | {"checks", "package"}) - {"repeat"})
         self.assertIn("repeat", node["lanes"])
 
     def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
@@ -773,8 +777,10 @@ class NamedPaths(unittest.TestCase):
 
     def test_the_shared_prompt_identity_examples_run_the_hooks_and_policy_readers(self):
         result = plan("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json")
-        # The journey runs the hook program, which the test fixture is not part of.
-        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey"})
+        # The journey runs the hook program, which the test fixture is not part
+        # of, and the fixture declares no test, so it repeats none: the Rust
+        # file beside it does.
+        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey", "repeat"})
         self.assertIn("hide-agent-hooks", result["rust_packages"])
         self.assertIn("policy", result["lanes"])
 
@@ -802,7 +808,9 @@ class NamedPaths(unittest.TestCase):
         self.assertEqual(selected, registered)
         for path in registered:
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check"})
+                # A registered desktop unit test is also a changed test, which
+                # the `repeat` lane repeats.
+                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check", "repeat"})
         # Both retained jobs run both Vitest suites; a configured matrix alone
         # would not establish that these tests are executed on Windows.
         for lane in ("checks", "windows-check"):
@@ -1453,8 +1461,10 @@ class ReuseGreenRun(unittest.TestCase):
         self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
 
     def test_only_registered_unit_checks_rerun_after_a_green_app_run(self):
-        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check"]),
-                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check"])):
+        # A changed unit test also plans the lane that repeats it; the run
+        # that reuses a green one rechecks it, so it plans that lane too.
+        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check", "repeat"]),
+                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check", "repeat"])):
             with self.subTest(path=path):
                 self.pr.git("checkout", "-q", "topic")
                 self.pr.git("reset", "--hard", self.green["head"])
@@ -1474,7 +1484,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "second\n"})
         self.pr.check_out_merge()
         first = self.pr.plan(lambda: self.green)
-        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check"])
+        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check", "repeat"])
         # This partial green must not claim that its app lanes checked a new
         # head: later runs still compare with the original app-tested commits.
         anchor = ci.plan_record(first, 7, 202)["verified"]
@@ -1482,6 +1492,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.git("rm", "desktop/src/main/x.test.ts")
         self.pr.git("commit", "-qm", "delete unit test")
         self.pr.check_out_merge()
+        # A deleted unit test has no test left to repeat.
         deleted = self.pr.plan(lambda: anchor)
         self.assertEqual(deleted["lanes"], ["policy", "checks", "windows-check"])
         self.assertEqual(deleted["verified"], self.green)
