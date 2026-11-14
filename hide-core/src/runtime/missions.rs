@@ -3305,7 +3305,6 @@ impl Runtime {
                 conductor.profile = mission.conductor.profile.clone();
                 conductor.profile_unknown = mission.conductor.profile_unknown;
             }
-            let project = Some(mission.checkout_path.clone());
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
             // A move made while the last one still waited for its carry
@@ -3321,7 +3320,6 @@ impl Runtime {
                 &pane,
                 payload,
                 former_registration.as_deref(),
-                project,
                 (now, true),
             );
             if let Some(wait) = waiting {
@@ -3383,7 +3381,6 @@ impl Runtime {
         pane: &str,
         payload: &crate::sidebar::SessionSnapshotPayload,
         former: Option<&str>,
-        project: Option<String>,
         (now, may_wait): (u64, bool),
     ) -> Result<Handover, String> {
         let registered = self
@@ -3420,6 +3417,13 @@ impl Runtime {
             );
             return Ok(Handover::Waits);
         }
+        // The checkout the mission was made in is the registration's project,
+        // as a take's caller registers its own.
+        let project = self
+            .missions
+            .book
+            .get(mission)
+            .map(|mission| mission.checkout_path.clone());
         match self.heir_record(device, pane, payload, project) {
             Some(heir) => self
                 .adopt_mission_workers_as_heir(mission, heir, former)
@@ -3470,22 +3474,16 @@ impl Runtime {
             let Some(wait) = self.missions.waiting_handovers.remove(&id) else {
                 continue;
             };
-            let Some(project) = self
-                .missions
-                .book
-                .get(&id)
-                .map(|mission| Some(mission.checkout_path.clone()))
-            else {
+            if self.missions.book.get(&id).is_none() {
                 log_dropped_handover(&id, &wait, why);
                 continue;
-            };
+            }
             let outcome = self.hand_over(
                 &id,
                 device,
                 &wait.pane,
                 payload,
                 Some(&wait.former),
-                project,
                 (now, false),
             );
             crate::diagnostic!(json!({
