@@ -109,6 +109,16 @@ fn the_child_is_started_with_tools_disabled_and_stdio_listen() {
         assert_eq!(args, CodexAppServerBackend::spawn_arguments());
         assert_eq!(args.first().map(String::as_str), Some("app-server"));
         assert!(args.windows(2).any(|w| w == ["--disable", "shell_tool"]));
+        assert!(args.windows(2).any(|w| w == ["--disable", "hooks"]));
+        // What keeps the request Hide's own in the account's folder too
+        // (with-hide/hide#2531): OpenAI, no notify command, no skills.
+        for setting in [
+            "model_provider=\"openai\"",
+            "notify=[]",
+            "skills.include_instructions=false",
+        ] {
+            assert!(args.windows(2).any(|w| w == ["-c", setting]), "{setting}");
+        }
         assert!(args.windows(2).any(|w| w == ["--listen", "stdio://"]));
         assert!(!args.iter().any(|a| a == "exec"));
     });
