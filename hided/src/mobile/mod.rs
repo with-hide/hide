@@ -1341,10 +1341,12 @@ impl Mobile {
         clear: &BTreeSet<AgentKey>,
     ) -> Result<Value, &'static str> {
         let mut payload = push::payload(notice, clear);
-        // One lock and no I/O: the pair is made when the relay is turned on (`prepare_relay_keys`),
-        // and this reads what that left. A delivery that still finds none makes it rather than
-        // dropping the notice over its room, because the notice carries the closes: a start whose
-        // key write failed, or a method change racing a delivery, would otherwise lose both.
+        // One lock and one clone on the path every notice takes: the pair is made when the relay
+        // is turned on (`prepare_relay_keys`), and this reads what that left. A delivery that still
+        // finds none makes it rather than dropping the notice over its room, because the notice
+        // carries the closes: a start whose key write failed, or a method change racing a delivery,
+        // would otherwise lose both. That one write is the price of not losing the notice, and
+        // only a daemon that never made its pair pays it.
         let prepared = {
             let inner = self.lock();
             (inner.settings.method() == Method::Relay).then(|| inner.relay_keys.clone())
