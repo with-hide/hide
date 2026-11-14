@@ -62,11 +62,11 @@ describe("the mission flow's question, from 내 차례 to the map's banner (UI_B
     expect(question.options![question.recommend! - 1]).toBeDefined();
   });
 
-  it("is looked at when the Conductor is opened while it asks, not when coming back from a worker", () => {
-    const opened = apply(asking(), { kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator" } });
-    expect(doneAt("needsyou", opened)).toBe(true);
-    const back = apply(asking(), { kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator", request_id: "r1" } });
-    expect(doneAt("needsyou", back)).toBe(false);
+  it("is looked at when the Conductor is opened while it asks, by its 내 차례 row's answered open as by a click, and not before it asks", () => {
+    const open = (request: Record<string, unknown>): CoreEvent => ({ kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator", ...request } });
+    expect(doneAt("needsyou", apply(asking(), open({ request_id: "r1" })))).toBe(true);
+    expect(doneAt("needsyou", apply(asking(), open({})))).toBe(true);
+    expect(doneAt("needsyou", beat(beat(apply(running(), open({ request_id: "r1" })))))).toBe(false);
   });
 
   it("changes the plan on a pressed choice or a written answer, and the Conductor reads which", () => {

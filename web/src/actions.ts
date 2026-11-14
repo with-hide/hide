@@ -2608,7 +2608,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     openAgent(paneId: string, look?: LookAt) {
       beginOpening({ paneId });
-      const { event, remote } = openPaneEvent(paneId, { revealUnseen: Boolean(look) });
+      // A request id makes the core answer this click, a pane that is gone
+      // or a device's refusal included, so the opening says why at once
+      // rather than waiting out its bound in silence (issue 2505).
+      const { event, remote } = openPaneEvent(paneId, { requestId: remoteRequestId(), report: true, revealUnseen: Boolean(look) });
       dispatch(event);
       if (remote) {
         if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });

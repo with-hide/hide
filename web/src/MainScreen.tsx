@@ -88,7 +88,6 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const widePanel = panel?.kind === "item" || (panel?.kind === "record" && panel.returnTo === "history");
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label={t("overview.title")} data-main-screen="true" data-main-view={view}>
-      <OpeningStatus actions={actions} />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
         <Tabs className="-mb-[calc(var(--spacing-xs)+var(--size-hairline))] min-w-0 self-end overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
           <TabsList variant="underline" aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
@@ -241,28 +240,3 @@ function NoProjectView({ actions }: { actions: Actions }) {
   );
 }
 
-/**
- * A Workspace or agent asked for from here that is not in front yet: a quiet
- * line while it is on its way, and the refusal with Dismiss when it was not
- * brought forward, so the operator stays where they were (B2, B21).
- */
-export function OpeningStatus({ actions }: { actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const opening = useUiStore((s) => s.opening);
-  if (!opening) return null;
-  if (!opening.failure) {
-    return (
-      <p role="status" className="shrink-0 px-md pt-sm text-caption text-muted-foreground" data-opening="pending">
-        {t("overview.opening")}
-      </p>
-    );
-  }
-  return (
-    <div role="alert" className="mx-md mt-sm flex shrink-0 items-center gap-sm rounded-sm bg-card px-sm py-xs text-caption text-warning" data-opening="failed">
-      <span className="min-w-0 flex-1 break-words">{t("overview.notOpened", { reason: opening.failure })}</span>
-      <Button variant="secondary" onClick={() => actions.dismissOpening()} data-opening-dismiss="true">
-        {t("workspace.dismiss")}
-      </Button>
-    </div>
-  );
-}
