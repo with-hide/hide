@@ -225,12 +225,23 @@ pub struct SleepRecord {
     /// thirteen digits are the core's state change time, which the row's
     /// elapsed time is counted from.
     pub last_activity: String,
-    /// The engine's state change sequence of the agent that was ended. A listed
-    /// agent on the pane with this sequence and server mark is that agent
-    /// still being reported; another engine can reuse the sequence (B18).
+    /// The state change sequence of the turn the row showed when the agent
+    /// was put to sleep, which the sleeping row carries: what the operator
+    /// read of that turn stays read, so a sleep alone is never news. None for
+    /// an agent kept asleep at a restore, which no engine of this run listed.
     #[serde(default)]
     pub state_change_seq: Option<u64>,
-    /// The existing read-axis engine mark that scopes `state_change_seq`.
+    /// The engine's state change sequence of the ended agent, as the end read
+    /// it just before ending it (`agent_sleep_engine::end_agent`). A listed
+    /// agent on the pane with this sequence and server mark is that agent
+    /// still being reported; another engine can reuse the sequence (B18).
+    /// The end reads the engine itself, so it can be ahead of the turn the
+    /// row showed (`state_change_seq`), which is why the two are kept apart.
+    /// None until the end lands, and for an agent kept asleep at a restore,
+    /// so any agent listed there is a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_seq: Option<u64>,
+    /// The existing read-axis engine mark that scopes `ended_seq`.
     /// Older records have none and cannot identify a newly listed agent as
     /// the ended one on this engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,6 +322,7 @@ impl SleepRecord {
             progress: agent.progress.clone(),
             last_activity: agent.last_activity.clone(),
             state_change_seq: agent.state_change_seq,
+            ended_seq: None,
             server_mark: agent.server_mark.clone(),
             completed: agent.completed,
             parent_pane_id: agent.spawned_from_pane_id.clone(),
@@ -462,6 +474,11 @@ impl AgentSleepStore {
                 record.phase = SleepPhase::Sleeping;
             }
             record.pending_wake = None;
+            // An earlier build kept the end's sequence in place of the
+            // turn's: it still names the ended agent.
+            if record.ended_seq.is_none() {
+                record.ended_seq = record.state_change_seq;
+            }
         }
     }
 
@@ -527,7 +544,7 @@ impl AgentSleepStore {
                         .as_deref()
                         .is_some_and(|kind| !kind.trim().is_empty())
                     && !agent.start_unshown
-                    && (agent.state_change_seq != record.state_change_seq
+                    && (agent.state_change_seq != record.ended_seq
                         || crate::engine::tokens::server_mark(&agent.tokens)
                             .as_deref()
                             .or(connection_mark)
@@ -954,6 +971,7 @@ mod tests {
     fn asleep(store: &mut AgentSleepStore, agent: &SidebarAgentSnapshot) {
         let mut record = SleepRecord::ending(agent, Some("/tmp".into()), 5).unwrap();
         record.phase = SleepPhase::Sleeping;
+        record.ended_seq = agent.state_change_seq;
         store.records.insert(agent.pane_id.clone(), record);
     }
 
@@ -1299,6 +1317,30 @@ mod tests {
         );
         assert!(store.records.is_empty());
         assert_eq!(session.agents.len(), 1, "the new agent alone");
+    }
+
+    /// A record an earlier build saved kept the end's sequence in place of
+    /// the turn's, and still names the ended agent after a launch.
+    #[test]
+    fn a_record_an_earlier_build_saved_still_names_its_ended_agent() {
+        let mut store: AgentSleepStore = serde_json::from_value(serde_json::json!({
+            "records": {"w1:p1": {
+                "phase": "sleeping", "kind": "claude", "session_id": "session-a",
+                "identity_label": "Refactor the parser", "last_activity": "0",
+                "state_change_seq": 7, "workspace_label": "herdr", "since_unix_ms": 5
+            }}
+        }))
+        .unwrap();
+        store.after_load();
+        let stale = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
+            "agent_status": "idle", "state_change_seq": 7}]);
+        let mut session = payload(stale, &["w1:p1"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty(),
+            "the ended agent still reported"
+        );
     }
 
     #[test]
