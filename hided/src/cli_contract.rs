@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
 //! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `workspace
-//! purpose`, `workspace remove`): each command's words, arguments and options, where its
+//! purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -459,7 +459,7 @@ pub const COMMANDS: &[Spec] = &[
     // saying what settled it, as Hide AI folds one; `already_closed` for a
     // question no longer open, which is no failure.
     Spec {
-        words: &["agent", "ask-fold"],
+        words: &["session", "fold-ask"],
         arguments: &[Arg {
             name: "id",
             value: Key,
@@ -470,7 +470,7 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[required("--reason", Text), switch("--json")],
         rest: None,
-        answers: &["ask_fold"],
+        answers: &["fold_ask"],
         refusals: &[
             "ask_unknown",
             "ask_reopened",
@@ -1829,7 +1829,7 @@ fn answers() -> Value {
     );
     map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
     map.insert(
-        "ask_fold".into(),
+        "fold_ask".into(),
         json!({
             "type": "object",
             "properties": {
@@ -2007,7 +2007,7 @@ mod tests {
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
-                | CommandKind::AskFold { .. }
+                | CommandKind::FoldAsk { .. }
                 | CommandKind::Device(_)
                 | CommandKind::Access(_)
                 | CommandKind::Pane(_)

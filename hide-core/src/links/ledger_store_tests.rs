@@ -3114,7 +3114,7 @@ fn a_settled_question_is_folded_with_its_reason_and_one_press_opens_it_for_good(
 }
 
 /// What an agent's fold of one of its session's questions answers.
-fn fold(store: &mut LinkStore, session: SessionIdentity, id: &str, reason: &str) -> AskFold {
+fn fold(store: &mut LinkStore, session: SessionIdentity, id: &str, reason: &str) -> FoldAsk {
     match store
         .ledger_call(LedgerCall::FoldAsk {
             session,
@@ -3123,7 +3123,7 @@ fn fold(store: &mut LinkStore, session: SessionIdentity, id: &str, reason: &str)
         })
         .unwrap()
     {
-        LedgerAnswer::AskFold(fold) => fold,
+        LedgerAnswer::FoldAsk(fold) => fold,
         other => panic!("a fold answered {other:?}"),
     }
 }
@@ -3156,7 +3156,7 @@ fn an_agent_folds_its_own_question_and_never_a_reopened_or_another_sessions_one(
     };
     assert_eq!(
         fold(&mut store, other, &operator_only, "다른 세션이 접음"),
-        AskFold::Unknown
+        FoldAsk::Unknown
     );
     assert_eq!(open_ask_texts(&store).len(), 3);
     assert_eq!(
@@ -3166,7 +3166,7 @@ fn an_agent_folds_its_own_question_and_never_a_reopened_or_another_sessions_one(
             &operator_only,
             "운영자가 번호를 넣었다고 알림"
         ),
-        AskFold::Folded
+        FoldAsk::Folded
     );
     let record = store.ledger_record(&session()).unwrap();
     assert_eq!(record.asks.len(), 2);
@@ -3178,7 +3178,7 @@ fn an_agent_folds_its_own_question_and_never_a_reopened_or_another_sessions_one(
     );
     assert_eq!(
         fold(&mut store, session(), &operator_only, "다시"),
-        AskFold::Closed
+        FoldAsk::Closed
     );
     store
         .apply_ledger_update(&LedgerUpdate::MissedStatus {
@@ -3189,12 +3189,12 @@ fn an_agent_folds_its_own_question_and_never_a_reopened_or_another_sessions_one(
         .unwrap();
     assert_eq!(
         fold(&mut store, session(), &operator_only, "또 접음"),
-        AskFold::Reopened
+        FoldAsk::Reopened
     );
     assert_eq!(open_ask_texts(&store).len(), 3);
     assert_eq!(
         fold(&mut store, session(), "missed-9-9", "없는 질문"),
-        AskFold::Unknown
+        FoldAsk::Unknown
     );
     assert!(
         store

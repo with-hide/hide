@@ -1586,24 +1586,6 @@
             "title": "AgentShow",
             "type": "object"
         },
-        "ask_fold": {
-            "properties": {
-                "id": {
-                    "type": "string"
-                },
-                "state": {
-                    "enum": [
-                        "folded",
-                        "already_closed"
-                    ]
-                }
-            },
-            "required": [
-                "id",
-                "state"
-            ],
-            "type": "object"
-        },
         "ask_human": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -1804,6 +1786,24 @@
                 "started"
             ],
             "title": "Retried",
+            "type": "object"
+        },
+        "fold_ask": {
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "state": {
+                    "enum": [
+                        "folded",
+                        "already_closed"
+                    ]
+                }
+            },
+            "required": [
+                "id",
+                "state"
+            ],
             "type": "object"
         },
         "inbox": {
@@ -4422,7 +4422,7 @@
         },
         {
             "answers": [
-                "ask_fold"
+                "fold_ask"
             ],
             "arguments": [
                 {
@@ -4432,7 +4432,7 @@
                     }
                 }
             ],
-            "command": "agent ask-fold",
+            "command": "session fold-ask",
             "options": [
                 {
                     "name": "--reason",
@@ -6965,7 +6965,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c54d9cf06281d3c6691fa01df943a7c92c8dbb74318943727603c99cfa51260c",
+    "digest": "sha256:da7b258dbae48b3a38ae37afac33d4181b4babc85c2c80f4023ca2561a43cfab",
     "envelopes": {
         "access": {
             "answer": "value",

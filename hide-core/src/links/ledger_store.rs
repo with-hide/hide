@@ -665,7 +665,7 @@ impl LinkStore {
         {
             return self
                 .fold_ask(session, id, reason)
-                .map(LedgerAnswer::AskFold);
+                .map(LedgerAnswer::FoldAsk);
         }
         // Only explicit external-effect calls use FULL. Its WAL sync completes
         // before the RPC acknowledgement permits GitHub to run.
@@ -1565,7 +1565,7 @@ impl LinkStore {
     }
 
     /// Folds `id`, one of `session`'s open questions, with the line its
-    /// agent gave (`hide agent ask-fold`), as Hide AI's fold does. A question
+    /// agent gave (`hide session fold-ask`), as Hide AI's fold does. A question
     /// no longer open answers `Closed` and changes nothing; one the operator
     /// opened again is theirs (docs/status-model.md, A question still
     /// waiting).
@@ -1574,7 +1574,7 @@ impl LinkStore {
         session: &SessionIdentity,
         id: &str,
         reason: &str,
-    ) -> Result<AskFold, String> {
+    ) -> Result<FoldAsk, String> {
         let reason = reason.trim();
         if reason.is_empty()
             || reason.chars().count() > MISSED_CHARS
@@ -1593,10 +1593,10 @@ impl LinkStore {
             .optional()
             .map_err(failed)?;
         let Some((kind, status, at, reopened)) = row else {
-            return Ok(AskFold::Unknown);
+            return Ok(FoldAsk::Unknown);
         };
         if decoded::<MissedKind>(kind)? != MissedKind::Ask {
-            return Ok(AskFold::Unknown);
+            return Ok(FoldAsk::Unknown);
         }
         // Moving to the next flow answered the questions before it.
         let flow: u64 = tx
@@ -1607,10 +1607,10 @@ impl LinkStore {
             )
             .map_err(failed)?;
         if decoded::<MissedStatus>(status)? != MissedStatus::Open || at < flow {
-            return Ok(AskFold::Closed);
+            return Ok(FoldAsk::Closed);
         }
         if reopened {
-            return Ok(AskFold::Reopened);
+            return Ok(FoldAsk::Reopened);
         }
         tx.execute(
             "UPDATE ledger_missed SET status=?5,reason=?6 WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4",
@@ -1625,7 +1625,7 @@ impl LinkStore {
         )
         .map_err(failed)?;
         tx.commit().map_err(failed)?;
-        Ok(AskFold::Folded)
+        Ok(FoldAsk::Folded)
     }
 
     /// Every saved plan, for the core to hold (PRD hide-plan D-30). A row

@@ -536,10 +536,10 @@ pub fn request_plan(
     })
 }
 
-/// `hide agent ask-fold`: folds one of the caller's session's open questions
+/// `hide session fold-ask`: folds one of the caller's session's open questions
 /// with its reason. Running it again converges: a folded question answers
 /// that it is already closed.
-pub fn request_ask_fold(
+pub fn request_fold_ask(
     credential: &mut Credential,
     id: &str,
     reason: &str,
@@ -550,7 +550,7 @@ pub fn request_ask_fold(
         run_exchange_within(
             path,
             &reference,
-            json!({"type":"ask_fold","request_id":request_id,"id":id,"reason":reason}),
+            json!({"type":"fold_ask","request_id":request_id,"id":id,"reason":reason}),
             &request_id,
             true,
             Duration::from_secs(30),

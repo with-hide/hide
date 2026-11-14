@@ -97,7 +97,7 @@ fn an_agent_folds_only_its_own_sessions_question_and_its_prompt_reads_only_its_o
 
     let given = give.context().unwrap();
     assert!(given.contains("- missed-1-0 "), "{given}");
-    assert!(given.contains("hide agent ask-fold missed-1-0 --reason"));
+    assert!(given.contains("hide session fold-ask missed-1-0 --reason"));
     assert!(!given.contains("missed-2-0"));
 
     // The receipt the session's record brings back marks it given; Memory's
@@ -131,7 +131,7 @@ fn an_agent_folds_only_its_own_sessions_question_and_its_prompt_reads_only_its_o
         let scope = runtime
             .lock()
             .unwrap()
-            .ask_fold_scope(node, &pane, &context)
+            .fold_ask_scope(node, &pane, &context)
             .unwrap();
         assert_eq!(scope.session, codex("sender-session"));
         scope.run(id, reason)
@@ -182,5 +182,5 @@ fn an_agent_folds_only_its_own_sessions_question_and_its_prompt_reads_only_its_o
     assert!(given.contains(
         "missed-1-0 \"App Store Connect에 로그인해 주세요\" (the operator opened this again"
     ));
-    assert!(!given.contains("ask-fold missed-1-0"));
+    assert!(!given.contains("fold-ask missed-1-0"));
 }

@@ -1648,9 +1648,9 @@ enum ScopedRequest {
     Mission(Box<hide_core::missions::MissionCommand>),
     /// `hide task`: the caller's session's own plan, the core's record.
     Plan(hide_core::plans::PlanCommand),
-    /// `hide agent ask-fold`: one of the caller's session's open questions,
+    /// `hide session fold-ask`: one of the caller's session's open questions,
     /// folded with its reason in the link record.
-    AskFold {
+    FoldAsk {
         id: String,
         reason: String,
     },
@@ -1705,7 +1705,7 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::Plan(..)
-                | Self::AskFold { .. }
+                | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
                 | Self::Ps { .. }
@@ -1732,7 +1732,7 @@ impl ScopedRequest {
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
-            Self::Plan(..) | Self::AskFold { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
+            Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
                 Need::Agent
             }
             Self::AgentSleep { .. }
@@ -1857,12 +1857,12 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
-                        Some("ask_fold") => {
+                        Some("fold_ask") => {
                             match (value["id"].as_str(), value["reason"].as_str()) {
                                 (Some(id), Some(reason))
                                     if id.len() <= 64 && reason.len() <= 1024 =>
                                 {
-                                    Some(ScopedRequest::AskFold {
+                                    Some(ScopedRequest::FoldAsk {
                                         id: id.to_owned(),
                                         reason: reason.to_owned(),
                                     })
@@ -2121,8 +2121,8 @@ async fn scoped_client_loop(
                                             (code, next)
                                         })?
                                 }
-                                ScopedRequest::AskFold { id, reason } => {
-                                    core.ask_fold_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
+                                ScopedRequest::FoldAsk { id, reason } => {
+                                    core.fold_ask_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
                                         .and_then(|scope| scope.run(&id, &reason))
                                         .map_err(|code| {
                                             let next = hide_core::links::agent_asks::next_action(&code);

@@ -10,7 +10,7 @@
 //! a batch a minute.
 
 use super::ledger::{
-    AskFold, LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall, LedgerContext,
+    FoldAsk, LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall, LedgerContext,
     LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchOptions, SessionSearchPage,
     SessionSearchPresence,
 };
@@ -815,7 +815,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 &result,
                 Ok(LedgerAnswer::Saved
                     | LedgerAnswer::Attempt(_)
-                    | LedgerAnswer::AskFold(AskFold::Folded))
+                    | LedgerAnswer::FoldAsk(FoldAsk::Folded))
             ) {
                 state.changed_all();
             }

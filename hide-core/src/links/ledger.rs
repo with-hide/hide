@@ -234,7 +234,7 @@ pub enum LedgerCall {
         number: u32,
     },
     /// An agent folds one of its own session's open questions with the
-    /// line it gave (`hide agent ask-fold`): the same fold Hide AI writes,
+    /// line it gave (`hide session fold-ask`): the same fold Hide AI writes,
     /// answered only once committed (docs/status-model.md, A question still
     /// waiting).
     FoldAsk {
@@ -247,7 +247,7 @@ pub enum LedgerCall {
 /// What an agent's fold of a question found.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AskFold {
+pub enum FoldAsk {
     /// Folded with its reason, under `정리됨`.
     Folded,
     /// No longer open: answered, folded, put away, made a backlog item, or
@@ -284,7 +284,7 @@ pub enum LedgerAnswer {
     },
     Made(bool),
     Plans(Vec<crate::plans::Plan>),
-    AskFold(AskFold),
+    FoldAsk(FoldAsk),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -497,7 +497,7 @@ pub enum MissedStatus {
     /// `백로그로` made an item of it: `backlog_key` names the item.
     Backlog,
     /// A question Hide AI read as settled or moot in a turn no answer came
-    /// in, or its agent folded (`hide agent ask-fold`): folded under `정리됨`
+    /// in, or its agent folded (`hide session fold-ask`): folded under `정리됨`
     /// with its reason, never removed, and one press opens it again
     /// (docs/status-model.md, A question still waiting). Never one the
     /// operator opened again.

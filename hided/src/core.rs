@@ -286,7 +286,7 @@ enum Command {
         asks: Option<(String, String)>,
         reply: Sender<HookScope>,
     },
-    AskFold {
+    FoldAsk {
         device_id: String,
         pane_id: String,
         expected: Context,
@@ -1242,9 +1242,9 @@ impl CoreHandle {
         }
     }
 
-    /// `hide agent ask-fold`: the caller's own session and the link worker,
+    /// `hide session fold-ask`: the caller's own session and the link worker,
     /// named on the owner thread; the fold runs on the caller's task.
-    pub fn ask_fold_scope(
+    pub fn fold_ask_scope(
         &self,
         device: &str,
         pane: &str,
@@ -1252,7 +1252,7 @@ impl CoreHandle {
     ) -> Result<hide_core::links::agent_asks::FoldScope, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
-            .send(Command::AskFold {
+            .send(Command::FoldAsk {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
@@ -1904,13 +1904,13 @@ fn owner_loop(
                 });
                 let _ = reply.send((core.memory_scope(&context), give));
             }
-            Command::AskFold {
+            Command::FoldAsk {
                 device_id,
                 pane_id,
                 expected,
                 reply,
             } => {
-                let _ = reply.send(core.ask_fold_scope(&device_id, &pane_id, &expected));
+                let _ = reply.send(core.fold_ask_scope(&device_id, &pane_id, &expected));
             }
             Command::WorkspaceAction {
                 device_id,

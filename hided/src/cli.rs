@@ -48,9 +48,9 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
-    /// `hide agent ask-fold <id> --reason <text>`: one of the caller's
+    /// `hide session fold-ask <id> --reason <text>`: one of the caller's
     /// session's open questions, folded with its reason.
-    AskFold {
+    FoldAsk {
         id: String,
         reason: String,
     },
@@ -410,18 +410,6 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 })
                 .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
         }
-        Some("agent") if args.get(2).map(String::as_str) == Some("ask-fold") => {
-            crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
-            let args = args[3..]
-                .iter()
-                .filter(|arg| *arg != "--json")
-                .cloned()
-                .collect::<Vec<_>>();
-            crate::agent_cli::parse_ask_fold(&args)
-                .map(|(id, reason)| CommandKind::AskFold { id, reason })
-                .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
-        }
         Some("agent") if args.get(2).map(String::as_str) == Some("read") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
@@ -549,6 +537,18 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("diff") => parse_open(iter, false),
         Some("view") => parse_view(iter),
         Some("links") => parse_links(iter),
+        Some("session") if args.get(2).map(String::as_str) == Some("fold-ask") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::session_cli::USAGE)))?;
+            let args = args[3..]
+                .iter()
+                .filter(|arg| *arg != "--json")
+                .cloned()
+                .collect::<Vec<_>>();
+            crate::session_cli::parse_fold_ask(&args)
+                .map(|(id, reason)| CommandKind::FoldAsk { id, reason })
+                .map_err(|reason| wrong(reason, crate::session_cli::USAGE))
+        }
         Some("session") => crate::session_cli::parse(iter)
             .map(CommandKind::Session)
             .map_err(|reason| wrong(reason, crate::session_cli::USAGE)),
@@ -920,7 +920,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
-                    | CommandKind::AskFold { .. }
+                    | CommandKind::FoldAsk { .. }
                     | CommandKind::Device(_)
                     | CommandKind::Access(_)
                     | CommandKind::Pane(_)
@@ -960,7 +960,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
-        CommandKind::AskFold { id, reason } => crate::agent_cli::run_ask_fold(&env, &id, &reason),
+        CommandKind::FoldAsk { id, reason } => crate::session_cli::run_fold_ask(&env, &id, &reason),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Access(cli) => crate::access_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),

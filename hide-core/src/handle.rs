@@ -1479,7 +1479,7 @@ impl Core {
 
     /// What `hide session fold` from `caller`'s pane writes through, run off
     /// the owner thread by the caller (`FoldScope::run`).
-    pub fn ask_fold_scope(
+    pub fn fold_ask_scope(
         &self,
         device: &str,
         caller: &str,
@@ -1488,7 +1488,7 @@ impl Core {
         if !check_owner_thread(self, "asks.fold") {
             return Err("ask_unavailable".into());
         }
-        lock_recover(&self.runtime).ask_fold_scope(device, caller, expected)
+        lock_recover(&self.runtime).fold_ask_scope(device, caller, expected)
     }
 
     pub fn workspace_control_query(

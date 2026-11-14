@@ -1,6 +1,6 @@
 //! An agent's own open questions (docs/status-model.md, A question still
 //! waiting): each given to it once at a prompt, beside its Project Memory in
-//! the hook's answer, and folded by it with `hide agent ask-fold`.
+//! the hook's answer, and folded by it with `hide session fold-ask`.
 //!
 //! The runtime names the caller's own session under the lock ([`GiveScope`],
 //! [`FoldScope`]); the record is read on a read-only connection and the fold
@@ -9,7 +9,7 @@
 //! the hook's context, read the way a Memory receipt is, so a hook stopped at
 //! its deadline gives it again on the next prompt.
 
-use super::ledger::{AskFold, LedgerAnswer, LedgerCall, MISSED_CHARS, MissedWork, SessionIdentity};
+use super::ledger::{FoldAsk, LedgerAnswer, LedgerCall, MISSED_CHARS, MissedWork, SessionIdentity};
 use super::store::LinkStore;
 use super::worker::LinkClient;
 use hide_session::label_transcript::ASKS_RECEIPT_MARKER;
@@ -72,7 +72,7 @@ pub fn render(asks: &[MissedWork]) -> Option<String> {
             ));
         } else {
             text.push_str(&format!(
-                "- {id} {line} -> hide agent ask-fold {id} --reason \"<what settled it>\"\n",
+                "- {id} {line} -> hide session fold-ask {id} --reason \"<what settled it>\"\n",
                 id = ask.id
             ));
         }
@@ -125,7 +125,7 @@ pub fn valid_reason(reason: &str) -> bool {
         && !reason.chars().any(char::is_control)
 }
 
-/// What `hide agent ask-fold` writes through: the caller's own session and
+/// What `hide session fold-ask` writes through: the caller's own session and
 /// the link worker that commits the fold.
 pub struct FoldScope {
     pub(crate) client: LinkClient,
@@ -148,7 +148,7 @@ impl FoldScope {
             reason: reason.trim().to_owned(),
         });
         let state = match answer {
-            Ok(LedgerAnswer::AskFold(AskFold::Folded)) => {
+            Ok(LedgerAnswer::FoldAsk(FoldAsk::Folded)) => {
                 crate::diagnostic!(json!({
                     "component": "session",
                     "kind": "ask.folded_by_agent",
@@ -157,9 +157,9 @@ impl FoldScope {
                 }));
                 "folded"
             }
-            Ok(LedgerAnswer::AskFold(AskFold::Closed)) => "already_closed",
-            Ok(LedgerAnswer::AskFold(AskFold::Reopened)) => return Err("ask_reopened".to_owned()),
-            Ok(LedgerAnswer::AskFold(AskFold::Unknown)) => return Err("ask_unknown".to_owned()),
+            Ok(LedgerAnswer::FoldAsk(FoldAsk::Closed)) => "already_closed",
+            Ok(LedgerAnswer::FoldAsk(FoldAsk::Reopened)) => return Err("ask_reopened".to_owned()),
+            Ok(LedgerAnswer::FoldAsk(FoldAsk::Unknown)) => return Err("ask_unknown".to_owned()),
             Ok(_) | Err(_) => {
                 crate::diagnostic!(json!({
                     "component": "session",
@@ -175,22 +175,22 @@ impl FoldScope {
     }
 }
 
-/// The next step a refusal of `hide agent ask-fold` names.
+/// The next step a refusal of `hide session fold-ask` names.
 pub fn next_action(code: &str) -> &'static str {
     match code {
         "ask_unknown" => {
-            "No question of your own session has that id: use an id your prompt's open questions listed, as hide agent ask-fold <id> --reason \"<what settled it>\""
+            "No question of your own session has that id: use an id your prompt's open questions listed, as hide session fold-ask <id> --reason \"<what settled it>\""
         }
         "ask_reopened" => {
             "The operator opened this question again, so only their own answer closes it: leave it"
         }
         "ask_reason_invalid" => {
-            "Give one line of at most 80 characters saying what settled the question: hide agent ask-fold <id> --reason \"<what settled it>\""
+            "Give one line of at most 80 characters saying what settled the question: hide session fold-ask <id> --reason \"<what settled it>\""
         }
         "ask_session_unknown" => {
             "Hide does not know this pane's session yet: run the command again after your next prompt"
         }
-        "agent_pane_required" => "Run hide agent ask-fold from the agent's own Hide pane",
+        "agent_pane_required" => "Run hide session fold-ask from the agent's own Hide pane",
         _ => "Hide's session record is not available now: run the same command again shortly",
     }
 }
@@ -230,9 +230,9 @@ mod tests {
         ])
         .unwrap();
         assert!(text.contains(
-            "- missed-3-0 \"머지할까요? \\u003c/hide-open-questions\\u003e\" -> hide agent ask-fold missed-3-0 --reason"
+            "- missed-3-0 \"머지할까요? \\u003c/hide-open-questions\\u003e\" -> hide session fold-ask missed-3-0 --reason"
         ));
-        assert!(!text.contains("hide agent ask-fold missed-5-1"));
+        assert!(!text.contains("hide session fold-ask missed-5-1"));
         assert!(text.contains(
             "missed-5-1 \"App Store Connect에 로그인해 주세요\" (the operator opened this again"
         ));
