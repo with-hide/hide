@@ -57,9 +57,11 @@ export function DeviceTag({ label }: { label: string }) {
 }
 
 export function Place({ agent, inset }: { agent: PhoneAgent; inset: string }) {
-  if (!agent.place && !agent.device_label) return null;
+  if (!agent.place && !agent.device_label && !agent.tool) return null;
   return (
     <span className={`flex min-w-0 items-center gap-sm ${inset} text-body text-muted-foreground`}>
+      {/* The tool whose work this is leads the line, as on the desktop's sidebar row (PRD hide-external-control B46). */}
+      {agent.tool ? <span className="flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs" data-phone-tool={agent.tool}><span className="min-w-0 truncate">{agent.tool}</span>{agent.place ? <span aria-hidden="true">·</span> : null}</span> : null}
       {agent.place ? <span className="min-w-0 truncate">{agent.place}</span> : null}
       {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
     </span>

@@ -133,38 +133,13 @@ fn reach(agent: SidebarAgentSnapshot) -> Reach {
 }
 
 /// Where the row `subject` shows among `agents`.
-fn reach_among(mut agents: Vec<SidebarAgentSnapshot>) -> Reach {
-    let mut runtime = runtime();
-    let workspaces = vec![workspace(
-        "project",
-        "Project",
-        "/fixture",
-        vec![checkout(
-            "project",
-            "work",
-            "/fixture/work",
-            Some(pane("subject", "/fixture/work")),
-        )],
-    )];
-    crate::agent_state::apply_lineage(&mut agents, &workspaces, &[]);
-    runtime.snapshot.navigator.agents = agents;
-    runtime.snapshot.navigator.workspaces = workspaces;
-    // A child's escalation rises to its root here, as on every projection.
-    runtime.sync_session_state();
-    crate::agent_state::sync_checkout_agent_summaries(
-        &mut runtime.snapshot.navigator.workspaces,
-        &runtime.snapshot.navigator.agents,
-    );
-    runtime.refresh_agent_scopes();
+fn reach_among(agents: Vec<SidebarAgentSnapshot>) -> Reach {
+    let runtime = settled(agents);
     let project = &runtime.snapshot.navigator.workspaces[0];
     let scope = &project.agent_scope;
     let device = &runtime.snapshot.navigator.devices[0].agent_scope;
     let summary = &project.checkouts[0].agent_summary;
-    let rest = serde_json::json!({"navigator": {
-        "agents": &runtime.snapshot.navigator.agents,
-        "workspaces": &runtime.snapshot.navigator.workspaces,
-    }});
-    let phone = crate::agent_state::phone::project(&rest, crate::node::TEST_NODE);
+    let phone = phone_of(&runtime);
     Reach {
         tree: !project.checkouts[0]
             .agent_scope
@@ -195,6 +170,42 @@ fn reach_among(mut agents: Vec<SidebarAgentSnapshot>) -> Reach {
         pool: device.listed.iter().any(|entry| entry.pane_id == "subject"),
         active: crate::agent_state::any_agent_active(&runtime.snapshot.navigator.agents, true),
     }
+}
+
+/// The phone's projection of a settled runtime, as `hided` sends it.
+fn phone_of(runtime: &Runtime) -> crate::agent_state::phone::Projection {
+    let rest = serde_json::json!({"navigator": {
+        "agents": &runtime.snapshot.navigator.agents,
+        "workspaces": &runtime.snapshot.navigator.workspaces,
+    }});
+    crate::agent_state::phone::project(&rest, crate::node::TEST_NODE)
+}
+
+/// A runtime holding `agents` in one project, settled as a projection settles it.
+fn settled(mut agents: Vec<SidebarAgentSnapshot>) -> Runtime {
+    let mut runtime = runtime();
+    let workspaces = vec![workspace(
+        "project",
+        "Project",
+        "/fixture",
+        vec![checkout(
+            "project",
+            "work",
+            "/fixture/work",
+            Some(pane("subject", "/fixture/work")),
+        )],
+    )];
+    crate::agent_state::apply_lineage(&mut agents, &workspaces, &[]);
+    runtime.snapshot.navigator.agents = agents;
+    runtime.snapshot.navigator.workspaces = workspaces;
+    // A child's escalation rises to its root here, as on every projection.
+    runtime.sync_session_state();
+    crate::agent_state::sync_checkout_agent_summaries(
+        &mut runtime.snapshot.navigator.workspaces,
+        &runtime.snapshot.navigator.agents,
+    );
+    runtime.refresh_agent_scopes();
+    runtime
 }
 
 /// Everywhere: an operator's row in `group`, standing in `raised`.
@@ -313,6 +324,34 @@ fn a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view() {
     assert!(asking.unlisted, "the phone reads the core's one decision");
 }
 
+/// B46, D-52: the phone has no tool's cell, so a tool's row that reaches its
+/// list, a person's turn or a View, names the tool, on the wire and so on its
+/// second line; the operator's own rows send no name, which an older phone
+/// therefore never meets.
+#[test]
+fn a_tools_row_on_the_phone_names_the_tool() {
+    let sent = |owner: Owner, doing: Doing| {
+        let phone = phone_of(&settled(vec![row(owner, doing)]));
+        let listed = phone
+            .agents()
+            .find(|listed| listed.pane_id == "subject")
+            .unwrap_or_else(|| panic!("{owner:?} {doing:?} is on the phone"));
+        serde_json::to_value(listed).unwrap().get("tool").cloned()
+    };
+    for doing in [Doing::HumanTurn, Doing::Look] {
+        assert_eq!(
+            sent(Owner::Tool(true), doing),
+            Some(serde_json::json!("nightly")),
+            "kept {doing:?}"
+        );
+        assert_eq!(
+            sent(Owner::Operator, doing),
+            None,
+            "the operator's {doing:?}"
+        );
+    }
+}
+
 /// B27, B29: a child a tool's agent started with `--parent here` stays off
 /// the operator's lists, whatever it asks; only its person's turn rises, to
 /// the tool's agent, which then stands in Needs You.
@@ -346,7 +385,9 @@ fn a_tools_delegated_child_rises_to_the_operator_only_for_a_person() {
         assert!(agents[1].unlisted, "{doing:?}: the child is never listed");
         reach_among(agents)
     };
-    for doing in [Doing::Working, Doing::Question, Doing::Done, Doing::Look] {
+    // A child's View goes through the runtime's own open in
+    // `unseen_views::a_tools_delegated_childs_view_follows_every_delegated_childs_rule`.
+    for doing in [Doing::Working, Doing::Question, Doing::Done] {
         assert_eq!(child_reach(doing), pool_only(), "{doing:?}");
     }
     assert_eq!(child_reach(Doing::HumanTurn), called_out(false));
@@ -355,7 +396,12 @@ fn a_tools_delegated_child_rises_to_the_operator_only_for_a_person() {
 /// The tool `nightly` asks to connect under `id` with a key of `digit`s,
 /// and the operator approves it at `level`; its connection's id. A revoked
 /// key is refused, so a new connection comes with a new key.
-fn connect(runtime: &mut Runtime, id: &str, digit: &str, level: crate::access::Level) -> String {
+pub(super) fn connect(
+    runtime: &mut Runtime,
+    id: &str,
+    digit: &str,
+    level: crate::access::Level,
+) -> String {
     connect_as(runtime, "nightly", id, digit, level)
 }
 

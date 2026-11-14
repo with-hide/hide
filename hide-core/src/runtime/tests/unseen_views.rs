@@ -480,6 +480,56 @@ fn a_childs_unseen_view_turns_its_ancestors_unread_until_one_reads_it_or_the_ope
     assert!(row(&guard, "sender").look.is_none());
 }
 
+/// PRD hide-external-control B29 and operator decision 2026-11-14: a
+/// delegated child of an external tool's agent opening a View follows the
+/// rule every delegated child does. The child stays where it was, its root
+/// turns unread and stands in no Needs You, so the tool's work does not call
+/// the operator; once the tool's agent opens it again itself, it is its View
+/// for the operator, as on any root.
+#[test]
+fn a_tools_delegated_childs_view_follows_every_delegated_childs_rule() {
+    let (_root, runtime) = fixture(true);
+    let mut guard = runtime.lock().unwrap();
+    let connection = super::tool_work::connect(
+        &mut guard,
+        "00000000000000b8",
+        "8",
+        crate::access::Level::Act,
+    );
+    // The tool started `sender`, and `recipient` under it, as the started
+    // record keeps every agent delegated under the tool's.
+    guard.hide_started.tool_work = [("agent-1", "sender"), ("agent-2", "recipient")]
+        .map(|(agent, pane)| crate::coordination::started::ToolWork {
+            connection: connection.clone(),
+            name: "nightly".into(),
+            agent_id: agent.into(),
+            pane_id: pane.into(),
+            session: Some(format!("{pane}-session")),
+            ended: false,
+        })
+        .into();
+    guard.refresh_agent_lineage();
+    keyboard(&mut guard, Some("sender"));
+    keyboard(&mut guard, None);
+    let view = open(&mut guard, "recipient", "src/report.md");
+    let child = row(&guard, "recipient");
+    assert!(child.delegated && child.unlisted);
+    assert!(
+        child.look.is_none(),
+        "the child's View is a descendant signal"
+    );
+    let root = row(&guard, "sender");
+    assert!(root.tool.as_ref().is_some_and(|tool| tool.owns));
+    assert!(root.unread, "its root turns unread, as every root does");
+    assert_ne!(root.group, "needs_you");
+    assert!(root.unlisted, "and the tool's root still calls no one");
+    open(&mut guard, "sender", "src/report.md");
+    let root = row(&guard, "sender");
+    assert_eq!(root.look.as_ref().unwrap().view_id, view);
+    assert_eq!(root.group, "needs_you");
+    assert!(!root.unlisted, "its own View is the operator's to look at");
+}
+
 #[test]
 fn reading_the_parent_takes_in_the_childs_view_signal_and_a_close_drops_it() {
     let (_root, runtime) = fixture(true);

@@ -400,6 +400,14 @@ pub mod phone {
         /// row carries none, so a phone that predates it reads nothing new.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         pub starred: bool,
+        /// The external tool whose work the row is, by its name, which the
+        /// phone leads the row's second line with as the desktop's sidebar
+        /// row does: the phone has no tool's cell, so a tool's person's turn
+        /// or View reaches its list named (PRD hide-external-control B46,
+        /// D-52). Absent on the operator's own rows, so a phone that predates
+        /// it reads nothing new.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tool: Option<String>,
         /// The row's mark (`RowMark`): `turn`, `going`, `waiting`, `done`, `unread`, `quiet` or `asleep`.
         pub mark: String,
         /// What an in-progress row waits on (`AgentWait`), which its line
@@ -1025,6 +1033,10 @@ pub mod phone {
                     .and_then(crate::agent_state::first_line_cut),
                 read: read_ask,
                 starred,
+                tool: agent
+                    .pointer("/tool/name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),
                 descendants_working: agent
