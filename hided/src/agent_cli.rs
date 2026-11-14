@@ -3,7 +3,7 @@
 use crate::env::Env;
 use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list [--live]\nhide agent show <id|name|pane|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent profile list|add|edit|default|remove|reinstall … (hide agent profile --help)\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list [--live]\nhide agent show <id|name|pane|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent ask-fold <id> --reason <text>\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent profile list|add|edit|default|remove|reinstall … (hide agent profile --help)\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
@@ -314,6 +314,38 @@ pub fn parse_id_and_actor(args: &[String]) -> Result<(String, Option<String>), S
         _ => None,
     }
     .ok_or_else(|| USAGE.to_owned())
+}
+
+/// `hide agent ask-fold <id> --reason <text>`: the question's id and the
+/// line saying what settled it, each one line.
+pub fn parse_ask_fold(args: &[String]) -> Result<(String, String), String> {
+    let text = |value: &String| {
+        (!value.trim().is_empty()
+            && !value.starts_with("--")
+            && !value.chars().any(char::is_control))
+        .then(|| value.clone())
+    };
+    let key = |value: &String| {
+        (value.len() <= 256 && !value.starts_with('-'))
+            .then(|| text(value))
+            .flatten()
+    };
+    match args {
+        [id, flag, reason] | [flag, reason, id] if flag == "--reason" => key(id).zip(text(reason)),
+        _ => None,
+    }
+    .ok_or_else(|| USAGE.to_owned())
+}
+
+/// Runs `hide agent ask-fold`: folds one of the caller's session's open
+/// questions with its reason, printed in the same envelope as every `hide
+/// agent` answer.
+pub fn run_ask_fold(env: &Env, id: &str, reason: &str) -> Result<(), String> {
+    let result = (|| {
+        let mut credential = crate::workspace_cli::Credential::acquire(env)?;
+        crate::workspace_cli::request_ask_fold(&mut credential, id, reason)
+    })();
+    print_answer(result)
 }
 
 /// Runs `hide agent sleep`, printed in the same envelope as every `hide

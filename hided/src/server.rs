@@ -1648,6 +1648,12 @@ enum ScopedRequest {
     Mission(Box<hide_core::missions::MissionCommand>),
     /// `hide task`: the caller's session's own plan, the core's record.
     Plan(hide_core::plans::PlanCommand),
+    /// `hide agent ask-fold`: one of the caller's session's open questions,
+    /// folded with its reason in the link record.
+    AskFold {
+        id: String,
+        reason: String,
+    },
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
@@ -1699,6 +1705,7 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::Plan(..)
+                | Self::AskFold { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
                 | Self::Ps { .. }
@@ -1725,7 +1732,9 @@ impl ScopedRequest {
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
-            Self::Plan(..) | Self::Memory(..) | Self::MemoryHook(..) => Need::Agent,
+            Self::Plan(..) | Self::AskFold { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
+                Need::Agent
+            }
             Self::AgentSleep { .. }
             | Self::AgentArchive { .. }
             | Self::Query(..)
@@ -1848,6 +1857,19 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("ask_fold") => {
+                            match (value["id"].as_str(), value["reason"].as_str()) {
+                                (Some(id), Some(reason))
+                                    if id.len() <= 64 && reason.len() <= 1024 =>
+                                {
+                                    Some(ScopedRequest::AskFold {
+                                        id: id.to_owned(),
+                                        reason: reason.to_owned(),
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }
                         Some("agent_profile") => serde_json::from_value::<
                             hide_core::agent_profiles::ProfileCommand,
                         >(value["command"].clone())
@@ -2096,6 +2118,14 @@ async fn scoped_client_loop(
                                             let next = hide_core::plans::next_action(
                                                 hide_core::coordination::split_refusal(&code).0,
                                             );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AskFold { id, reason } => {
+                                    core.ask_fold_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
+                                        .and_then(|scope| scope.run(&id, &reason))
+                                        .map_err(|code| {
+                                            let next = hide_core::links::agent_asks::next_action(&code);
                                             (code, next)
                                         })?
                                 }

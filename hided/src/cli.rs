@@ -48,6 +48,12 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
+    /// `hide agent ask-fold <id> --reason <text>`: one of the caller's
+    /// session's open questions, folded with its reason.
+    AskFold {
+        id: String,
+        reason: String,
+    },
     Device(crate::device_cli::DeviceCli),
     /// `hide access request|status|leave|list`: an external tool's own
     /// connection.
@@ -402,6 +408,18 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                         CommandKind::AgentSleep { id, actor }
                     }
                 })
+                .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
+        }
+        Some("agent") if args.get(2).map(String::as_str) == Some("ask-fold") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+            let args = args[3..]
+                .iter()
+                .filter(|arg| *arg != "--json")
+                .cloned()
+                .collect::<Vec<_>>();
+            crate::agent_cli::parse_ask_fold(&args)
+                .map(|(id, reason)| CommandKind::AskFold { id, reason })
                 .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("read") => {
@@ -902,6 +920,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
+                    | CommandKind::AskFold { .. }
                     | CommandKind::Device(_)
                     | CommandKind::Access(_)
                     | CommandKind::Pane(_)
@@ -941,6 +960,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
+        CommandKind::AskFold { id, reason } => crate::agent_cli::run_ask_fold(&env, &id, &reason),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Access(cli) => crate::access_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),

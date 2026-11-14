@@ -89,6 +89,18 @@ mod tests {
         }
     }
 
+    /// The guide names the fold of a settled question as the CLI parses it.
+    #[test]
+    fn the_guide_teaches_folding_a_settled_question() {
+        let example = "hide agent ask-fold <id> --reason \"<what settled it>\"";
+        assert!(TEXT.contains(example), "{example}");
+        let args: Vec<String> = ["agent", "ask-fold", "missed-3-0", "--reason", "settled"]
+            .map(str::to_owned)
+            .to_vec();
+        crate::cli_contract::admit(&args).unwrap();
+        crate::agent_cli::parse_ask_fold(&args[2..]).unwrap();
+    }
+
     #[test]
     fn the_guide_spells_hide_workspace_remove_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::worktree_cli::USAGE));

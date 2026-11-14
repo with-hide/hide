@@ -193,6 +193,18 @@ ALTER TABLE ledger_missed ADD COLUMN operator_only INTEGER;
 ALTER TABLE ledger_missed ADD COLUMN reason TEXT;
 ";
 
+/// Version 17: a question the operator opened again (`reopened`), which
+/// only their own answer closes, kept apart from `operator_only`, which an
+/// agent's or Hide AI's fold no longer heeds; and when the session's agent
+/// was given it at a prompt (`given_at`). Before it, opening a question
+/// again set `operator_only`, so a line opened then cannot be told from
+/// one the judgment marked: each stays operator-only and none reads as
+/// reopened, since a wrong fold is one press from open again for good.
+pub(super) const ASK_REOPEN_SCHEMA: &str = "
+ALTER TABLE ledger_missed ADD COLUMN reopened INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ledger_missed ADD COLUMN given_at INTEGER;
+";
+
 /// The inverse of [`FLOW_SCHEMA`], for tests that open a version 6 record.
 #[cfg(test)]
 pub(super) const UNDO_FLOW_SCHEMA: &str = "
@@ -324,7 +336,8 @@ fn ledger_missed_rows(
     let mut missed_items = Vec::new();
     let mut statement=connection.prepare("SELECT missed,kind,text,status,at,turn_offset,issue_repo,issue_number, \
         EXISTS(SELECT 1 FROM ledger_issue_attempts a WHERE a.device=m.device AND a.agent=m.agent AND a.id=m.id \
-        AND a.missed=m.missed AND a.state='creating'),turn_witness,backlog_key,reason FROM ledger_missed m WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC").map_err(failed)?;
+        AND a.missed=m.missed AND a.state='creating'),turn_witness,backlog_key,reason,reopened,given_at IS NOT NULL \
+        FROM ledger_missed m WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC").map_err(failed)?;
     let missed = statement
         .query_map(
             params![session.device_id, session.agent, session.session_id],
@@ -342,6 +355,8 @@ fn ledger_missed_rows(
                     r.get::<_, Option<String>>(9)?,
                     r.get::<_, Option<String>>(10)?,
                     r.get::<_, Option<String>>(11)?,
+                    r.get::<_, bool>(12)?,
+                    r.get::<_, bool>(13)?,
                 ))
             },
         )
@@ -360,6 +375,8 @@ fn ledger_missed_rows(
             witness,
             backlog_key,
             reason,
+            reopened,
+            given,
         ) = missed.map_err(failed)?;
         missed_items.push(MissedWork {
             id,
@@ -374,6 +391,8 @@ fn ledger_missed_rows(
             backlog_key,
             creating,
             reason,
+            reopened,
+            given,
         });
     }
     Ok(missed_items)
@@ -638,6 +657,16 @@ impl LinkStore {
         if let LedgerCall::Plans = &call {
             return self.ledger_plans().map(LedgerAnswer::Plans);
         }
+        if let LedgerCall::FoldAsk {
+            session,
+            id,
+            reason,
+        } = &call
+        {
+            return self
+                .fold_ask(session, id, reason)
+                .map(LedgerAnswer::AskFold);
+        }
         // Only explicit external-effect calls use FULL. Its WAL sync completes
         // before the RPC acknowledgement permits GitHub to run.
         self.connection
@@ -658,7 +687,8 @@ impl LinkStore {
             LedgerCall::Record(_)
             | LedgerCall::Metadata(_)
             | LedgerCall::SaveMetadata { .. }
-            | LedgerCall::Plans => {
+            | LedgerCall::Plans
+            | LedgerCall::FoldAsk { .. } => {
                 unreachable!()
             }
             LedgerCall::ReserveIssue {
@@ -1263,14 +1293,15 @@ impl LinkStore {
                 .map_err(failed)?;
                 // A reply answers what was asked before it (B12): an ask the
                 // agent still waits on is listed again by this turn. A
-                // parent's letter cannot take the operator's own step, so
-                // only the operator's answer settles one of those.
+                // parent's letter cannot take the operator's own step, nor
+                // answer a question the operator opened again, so only the
+                // operator's answer settles one of those.
                 let operator_answered = *asks_answered == Some(AsksAnswered::Operator);
                 if asks_answered.is_some() {
                     tx.execute(
                         "UPDATE ledger_missed SET status=?4,resolved_turn_offset=?5 \
                         WHERE device=?1 AND agent=?2 AND id=?3 AND kind=?6 AND status=?7 AND turn_offset<?5 \
-                        AND (?8 OR COALESCE(operator_only,0)=0)",
+                        AND (?8 OR (COALESCE(operator_only,0)=0 AND reopened=0))",
                         params![
                             session.device_id,
                             session.agent,
@@ -1393,12 +1424,12 @@ impl LinkStore {
                     };
                     // Only an answer closes a question the operator was asked
                     // (B12): the label cannot resolve one in a turn none came
-                    // in, and a parent's answer not one of the operator's
-                    // own steps.
+                    // in, and a parent's answer neither one of the operator's
+                    // own steps nor one they opened again.
                     let closed = tx.execute(
                         "UPDATE ledger_missed SET status=?5,issue_repo=?6,issue_number=?7,resolved_issue_number=?9,resolved_turn_offset=?10 \
                         WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8 \
-                        AND (kind!=?11 OR ?12 OR (?13 AND COALESCE(operator_only,0)=0))",
+                        AND (kind!=?11 OR ?12 OR (?13 AND COALESCE(operator_only,0)=0 AND reopened=0))",
                         params![
                             session.device_id,
                             session.agent,
@@ -1421,8 +1452,9 @@ impl LinkStore {
                     .map_err(failed)?;
                     // A question the label reads as settled with no answer
                     // in this turn is folded with the reason it gave, never
-                    // closed, and only one known not to be the operator's
-                    // own step.
+                    // closed: the operator's own step and a line asked
+                    // before the mark existed included, never one the
+                    // operator opened again.
                     let reason = resolved
                         .reason
                         .as_deref()
@@ -1438,7 +1470,7 @@ impl LinkStore {
                         tx.execute(
                             "UPDATE ledger_missed SET status=?5,reason=?6,resolved_turn_offset=?7 \
                             WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8 AND kind=?9 \
-                            AND operator_only=0",
+                            AND reopened=0",
                             params![
                                 session.device_id,
                                 session.agent,
@@ -1470,10 +1502,12 @@ impl LinkStore {
                     return Err("ledger_status_invalid".to_owned());
                 }
                 // A folded question the operator opens again is theirs to
-                // settle: Hide AI never folds it again, and only their own
-                // answer closes it.
+                // settle: neither Hide AI nor the agent folds it again, only
+                // their own answer closes it, and the agent's next prompt
+                // tells it so.
                 let changed=tx.execute("UPDATE ledger_missed SET status=?5,issue_repo=NULL,issue_number=NULL,resolved_issue_number=NULL,resolved_turn_offset=NULL, \
-                    operator_only=CASE WHEN status=?8 AND ?5=?9 THEN 1 ELSE operator_only END,reason=NULL \
+                    reopened=CASE WHEN status=?8 AND ?5=?9 THEN 1 ELSE reopened END, \
+                    given_at=CASE WHEN status=?8 AND ?5=?9 THEN NULL ELSE given_at END,reason=NULL \
                     WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status!=?6 AND status!=?7 \
                     AND NOT EXISTS(SELECT 1 FROM ledger_issue_attempts a WHERE a.device=?1 AND a.agent=?2 \
                     AND a.id=?3 AND a.missed=?4 AND a.state='creating')",
@@ -1482,8 +1516,116 @@ impl LinkStore {
                     return Err("ledger_missed_unavailable".to_owned());
                 }
             }
+            LedgerUpdate::AsksGiven {
+                session,
+                ids,
+                at_unix_ms,
+            } => {
+                let mut given = tx
+                    .prepare(
+                        "UPDATE ledger_missed SET given_at=?5 WHERE device=?1 AND agent=?2 AND id=?3 \
+                        AND missed=?4 AND given_at IS NULL",
+                    )
+                    .map_err(failed)?;
+                for id in ids {
+                    given
+                        .execute(params![
+                            session.device_id,
+                            session.agent,
+                            session.session_id,
+                            id,
+                            *at_unix_ms as i64
+                        ])
+                        .map_err(failed)?;
+                }
+            }
         }
         tx.commit().map_err(failed)
+    }
+
+    /// The session's open questions its agent was not given yet, as the
+    /// record lists them (`open_asks`: the current flow's, oldest first),
+    /// at most `limit`; a prompt gives each one once (docs/agent-hooks.md,
+    /// What the hook returns and reports back).
+    pub fn asks_to_give(
+        &self,
+        session: &SessionIdentity,
+        limit: usize,
+    ) -> Result<Vec<MissedWork>, String> {
+        let missed = self.ledger_missed(session)?;
+        let flow_start = self
+            .chapter_rows(session)?
+            .last()
+            .map(|chapter| chapter.at_unix_ms);
+        Ok(open_asks(&missed, flow_start)
+            .into_iter()
+            .filter(|ask| !ask.given)
+            .take(limit)
+            .collect())
+    }
+
+    /// Folds `id`, one of `session`'s open questions, with the line its
+    /// agent gave (`hide agent ask-fold`), as Hide AI's fold does. A question
+    /// no longer open answers `Closed` and changes nothing; one the operator
+    /// opened again is theirs (docs/status-model.md, A question still
+    /// waiting).
+    fn fold_ask(
+        &mut self,
+        session: &SessionIdentity,
+        id: &str,
+        reason: &str,
+    ) -> Result<AskFold, String> {
+        let reason = reason.trim();
+        if reason.is_empty()
+            || reason.chars().count() > MISSED_CHARS
+            || reason.contains(['\n', '\r'])
+        {
+            return Err("ledger_missed_invalid".to_owned());
+        }
+        let tx = self.connection.transaction().map_err(failed)?;
+        let row: Option<(String, String, u64, bool)> = tx
+            .query_row(
+                "SELECT kind,status,at,reopened FROM ledger_missed \
+                WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4",
+                params![session.device_id, session.agent, session.session_id, id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(failed)?;
+        let Some((kind, status, at, reopened)) = row else {
+            return Ok(AskFold::Unknown);
+        };
+        if decoded::<MissedKind>(kind)? != MissedKind::Ask {
+            return Ok(AskFold::Unknown);
+        }
+        // Moving to the next flow answered the questions before it.
+        let flow: u64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(at),0) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3",
+                params![session.device_id, session.agent, session.session_id],
+                |r| r.get(0),
+            )
+            .map_err(failed)?;
+        if decoded::<MissedStatus>(status)? != MissedStatus::Open || at < flow {
+            return Ok(AskFold::Closed);
+        }
+        if reopened {
+            return Ok(AskFold::Reopened);
+        }
+        tx.execute(
+            "UPDATE ledger_missed SET status=?5,reason=?6 WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4",
+            params![
+                session.device_id,
+                session.agent,
+                session.session_id,
+                id,
+                encoded(&MissedStatus::Folded)?,
+                reason
+            ],
+        )
+        .map_err(failed)?;
+        tx.commit().map_err(failed)?;
+        Ok(AskFold::Folded)
     }
 
     /// Every saved plan, for the core to hold (PRD hide-plan D-30). A row

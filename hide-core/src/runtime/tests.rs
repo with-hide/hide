@@ -14,6 +14,8 @@ mod account_reports;
 #[path = "tests/add_project.rs"]
 mod add_project;
 mod agent_areas;
+#[path = "tests/agent_asks.rs"]
+mod agent_asks;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
 #[path = "tests/agent_definitions.rs"]

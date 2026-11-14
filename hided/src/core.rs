@@ -39,6 +39,13 @@ type MoveSourceAnswer =
 type ReleaseSourceAnswer =
     Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
 
+/// What a hook's answer is read from: Memory's scope or why there is none,
+/// and the open questions' when the hook asks at a prompt.
+pub type HookScope = (
+    Result<hide_core::memory_hook::Scope, &'static str>,
+    Option<hide_core::links::agent_asks::GiveScope>,
+);
+
 enum Command {
     /// A usage event the daemon observed outside the core (a phone's
     /// pairing); the owner thread hands it to the statistics worker it owns.
@@ -275,7 +282,15 @@ enum Command {
     Session(SessionAsk),
     MemoryScope {
         context: Context,
-        reply: Sender<Result<hide_core::memory_hook::Scope, &'static str>>,
+        /// The pane and the prompt's session, when the hook asks at a prompt.
+        asks: Option<(String, String)>,
+        reply: Sender<HookScope>,
+    },
+    AskFold {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        reply: Sender<Result<hide_core::links::agent_asks::FoldScope, String>>,
     },
     WorkspaceAction {
         device_id: String,
@@ -1198,23 +1213,53 @@ impl CoreHandle {
     /// as the core knows it now; the node call and the store read run on the
     /// caller's blocking task. The owner's answer is waited for until the
     /// hook's `deadline` at most, the one its node call and store read share.
-    pub fn memory_scope(
+    /// What a hook's answer is read from, in one trip to the owner thread:
+    /// Memory's scope, and at a prompt the session's open questions' (`asks`
+    /// names the pane and the session the hook names).
+    pub fn hook_scope(
         &self,
         context: &Context,
+        asks: Option<(String, String)>,
         deadline: std::time::Instant,
-    ) -> Result<hide_core::memory_hook::Scope, &'static str> {
+    ) -> HookScope {
         let (reply, rx) = mpsc::channel();
-        self.commands
+        let failed = |reason| (Err(reason), None);
+        if self
+            .commands
             .send(Command::MemoryScope {
                 context: context.clone(),
+                asks,
                 reply,
             })
-            .map_err(|_| "core_unavailable")?;
+            .is_err()
+        {
+            return failed("core_unavailable");
+        }
         match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
             Ok(scope) => scope,
-            Err(mpsc::RecvTimeoutError::Timeout) => Err("core_deadline"),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err("core_unavailable"),
+            Err(mpsc::RecvTimeoutError::Timeout) => failed("core_deadline"),
+            Err(mpsc::RecvTimeoutError::Disconnected) => failed("core_unavailable"),
         }
+    }
+
+    /// `hide agent ask-fold`: the caller's own session and the link worker,
+    /// named on the owner thread; the fold runs on the caller's task.
+    pub fn ask_fold_scope(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+    ) -> Result<hide_core::links::agent_asks::FoldScope, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::AskFold {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                reply,
+            })
+            .map_err(|_| "ask_unavailable".to_owned())?;
+        rx.recv().map_err(|_| "ask_unavailable".to_owned())?
     }
 
     /// What a `hide session` command reads, as the core knows it now; the
@@ -1849,8 +1894,23 @@ fn owner_loop(
                     let _ = reply.send(Box::new(core.session_record_pulls(*record)));
                 }
             },
-            Command::MemoryScope { context, reply } => {
-                let _ = reply.send(core.memory_scope(&context));
+            Command::MemoryScope {
+                context,
+                asks,
+                reply,
+            } => {
+                let give = asks.and_then(|(pane, session)| {
+                    core.asks_give_scope(&context.device_id, &pane, &session)
+                });
+                let _ = reply.send((core.memory_scope(&context), give));
+            }
+            Command::AskFold {
+                device_id,
+                pane_id,
+                expected,
+                reply,
+            } => {
+                let _ = reply.send(core.ask_fold_scope(&device_id, &pane_id, &expected));
             }
             Command::WorkspaceAction {
                 device_id,

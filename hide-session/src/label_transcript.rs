@@ -239,12 +239,17 @@ pub fn read_work_turn(accounts: &Accounts, turn: &WorkTurnRequest) -> Result<Wor
     Err("work_turn_page_capacity".into())
 }
 
-/// The most Memory receipts one read reports; Hide writes at most one a prompt.
+/// The most receipts one read reports; Hide writes at most two a prompt.
 const RECEIPTS_PER_READ: usize = 64;
 /// A receipt line names item ids, revisions and a 64-character tag; a longer
 /// line is not one Hide wrote.
 const RECEIPT_LINE_LIMIT_BYTES: usize = 4 * 1024;
 const RECEIPT_MARKER: &str = "<hide-memory-receipt ";
+/// The line that says which of its open questions a prompt gave the agent
+/// (docs/agent-hooks.md, What the hook returns and reports back): read back
+/// the way a Memory receipt is, so only a question that reached the model
+/// counts as given.
+pub const ASKS_RECEIPT_MARKER: &str = "<hide-asks-receipt ";
 
 /// Adds each receipt line of `text`, the content of the message at `offset`,
 /// to `receipts`; false when a line was too long or the read's receipts were
@@ -256,7 +261,7 @@ pub(crate) fn note_receipts(
 ) -> bool {
     let mut kept = true;
     for line in text.lines().map(str::trim) {
-        if !line.starts_with(RECEIPT_MARKER) {
+        if !line.starts_with(RECEIPT_MARKER) && !line.starts_with(ASKS_RECEIPT_MARKER) {
             continue;
         }
         if line.len() > RECEIPT_LINE_LIMIT_BYTES || receipts.len() >= RECEIPTS_PER_READ {
@@ -355,7 +360,8 @@ pub struct LabelTranscript {
     /// runtime injects: a hook's context for Claude Code, Codex, Pi and omp,
     /// and the synthetic prompt part Hide's plugin writes for OpenCode. The
     /// core checks each one's tag before it records the delivery (PRD
-    /// project-memory-v2 D-16).
+    /// project-memory-v2 D-16). The open questions' receipts
+    /// ([`ASKS_RECEIPT_MARKER`]) ride the same list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub memory_receipts: Vec<MemoryReceiptPart>,
     /// Where each subagent file was read up to, for the next request.

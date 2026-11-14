@@ -3014,10 +3014,10 @@ fn a_parents_answer_leaves_the_operators_own_step_open_and_the_operators_answer_
 }
 
 /// A question Hide AI reads as settled in a turn no answer came in is
-/// folded with the reason it gave, never closed, and only one known not to
-/// be the operator's own step; one press opens it again, after which only
-/// the operator's answer settles it (docs/status-model.md, A question still
-/// waiting).
+/// folded with the reason it gave, never closed: the operator's own step and
+/// a line asked before the mark existed included. One press opens it again,
+/// after which neither Hide AI nor a parent's letter settles it, only the
+/// operator's answer (docs/status-model.md, A question still waiting).
 #[test]
 fn a_settled_question_is_folded_with_its_reason_and_one_press_opens_it_for_good() {
     use crate::links::ledger::{AsksAnswered, ResolvedMissedWork};
@@ -3055,34 +3055,37 @@ fn a_settled_question_is_folded_with_its_reason_and_one_press_opens_it_for_good(
         .apply_ledger_update(&turn_end(3, None, settle("리드가 별도 PR로 정함")))
         .unwrap();
     let record = store.ledger_record(&session()).unwrap();
+    assert!(record.asks.is_empty());
     assert_eq!(
         record
-            .asks
+            .folded_asks
             .iter()
-            .map(|ask| ask.text.as_str())
+            .map(|ask| (ask.text.as_str(), ask.reason.as_deref()))
             .collect::<Vec<_>>(),
         [
-            "App Store Connect에 전화번호를 넣어 주세요",
-            "체험 행을 설정 탭에 둘까요?"
+            (
+                "설정 변경을 이 PR에 넣을까요?",
+                Some("리드가 별도 PR로 정함")
+            ),
+            (
+                "App Store Connect에 전화번호를 넣어 주세요",
+                Some("리드가 별도 PR로 정함")
+            ),
+            ("체험 행을 설정 탭에 둘까요?", Some("리드가 별도 PR로 정함")),
         ]
     );
-    assert_eq!(record.folded_asks.len(), 1);
-    assert_eq!(record.folded_asks[0].text, "설정 변경을 이 PR에 넣을까요?");
-    assert_eq!(record.folded_asks[0].status, MissedStatus::Folded);
-    assert_eq!(
-        record.folded_asks[0].reason.as_deref(),
-        Some("리드가 별도 PR로 정함")
-    );
+    // The operator's own step, opened again.
+    let operator_only = record.folded_asks[1].id.clone();
     store
         .apply_ledger_update(&LedgerUpdate::MissedStatus {
             session: session(),
-            id: ids[0].clone(),
+            id: operator_only.clone(),
             status: MissedStatus::Open,
         })
         .unwrap();
     let record = store.ledger_record(&session()).unwrap();
-    assert_eq!(record.asks.len(), 3);
-    assert!(record.folded_asks.is_empty());
+    assert_eq!(record.asks.len(), 1);
+    assert!(record.asks[0].reopened);
     assert_eq!(record.asks[0].reason, None);
     // Opened by the operator, it is theirs: neither the label nor a
     // parent's letter settles it again.
@@ -3098,11 +3101,229 @@ fn a_settled_question_is_folded_with_its_reason_and_one_press_opens_it_for_good(
         .unwrap();
     assert_eq!(
         open_ask_texts(&store),
+        ["App Store Connect에 전화번호를 넣어 주세요"]
+    );
+    store
+        .apply_ledger_update(&turn_end(
+            6,
+            Some(AsksAnswered::Operator),
+            TurnJudgment::default(),
+        ))
+        .unwrap();
+    assert!(open_ask_texts(&store).is_empty());
+}
+
+/// What an agent's fold of one of its session's questions answers.
+fn fold(store: &mut LinkStore, session: SessionIdentity, id: &str, reason: &str) -> AskFold {
+    match store
+        .ledger_call(LedgerCall::FoldAsk {
+            session,
+            id: id.into(),
+            reason: reason.into(),
+        })
+        .unwrap()
+    {
+        LedgerAnswer::AskFold(fold) => fold,
+        other => panic!("a fold answered {other:?}"),
+    }
+}
+
+/// An agent folds its own question, the operator's own step included, with
+/// the line it gave, the way Hide AI folds one; folding it again changes
+/// nothing; a question the operator opened again stays theirs; and an id no
+/// question of the caller's session has, one of another session's
+/// included, folds nothing anywhere (docs/status-model.md, A question still
+/// waiting).
+#[test]
+fn an_agent_folds_its_own_question_and_never_a_reopened_or_another_sessions_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "모바일 출시 맡아줘");
+    chapter(&mut store);
+    store
+        .apply_ledger_update(&turn_end(1, None, three_asks()))
+        .unwrap();
+    let asks = store.ledger_record(&session()).unwrap().asks;
+    let operator_only = asks
+        .iter()
+        .find(|ask| ask.text.starts_with("App Store"))
+        .unwrap()
+        .id
+        .clone();
+    let other = SessionIdentity {
+        session_id: "session-b".into(),
+        ..session()
+    };
+    assert_eq!(
+        fold(&mut store, other, &operator_only, "다른 세션이 접음"),
+        AskFold::Unknown
+    );
+    assert_eq!(open_ask_texts(&store).len(), 3);
+    assert_eq!(
+        fold(
+            &mut store,
+            session(),
+            &operator_only,
+            "운영자가 번호를 넣었다고 알림"
+        ),
+        AskFold::Folded
+    );
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(record.asks.len(), 2);
+    assert_eq!(record.folded_asks.len(), 1);
+    assert_eq!(record.folded_asks[0].id, operator_only);
+    assert_eq!(
+        record.folded_asks[0].reason.as_deref(),
+        Some("운영자가 번호를 넣었다고 알림")
+    );
+    assert_eq!(
+        fold(&mut store, session(), &operator_only, "다시"),
+        AskFold::Closed
+    );
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id: operator_only.clone(),
+            status: MissedStatus::Open,
+        })
+        .unwrap();
+    assert_eq!(
+        fold(&mut store, session(), &operator_only, "또 접음"),
+        AskFold::Reopened
+    );
+    assert_eq!(open_ask_texts(&store).len(), 3);
+    assert_eq!(
+        fold(&mut store, session(), "missed-9-9", "없는 질문"),
+        AskFold::Unknown
+    );
+    assert!(
+        store
+            .ledger_call(LedgerCall::FoldAsk {
+                session: session(),
+                id: asks[0].id.clone(),
+                reason: "두 줄\n이유".into(),
+            })
+            .is_err()
+    );
+}
+
+/// A prompt gives each open question once: the ones its receipt names are
+/// not given again, a question the operator opens again is given again so
+/// the agent learns it is theirs, and a closed one is never given.
+#[test]
+fn a_question_given_to_its_agent_is_given_again_only_once_the_operator_opens_it() {
+    use crate::links::ledger::ResolvedMissedWork;
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "모바일 출시 맡아줘");
+    chapter(&mut store);
+    store
+        .apply_ledger_update(&turn_end(1, None, three_asks()))
+        .unwrap();
+    let to_give = |store: &LinkStore| -> Vec<String> {
+        store
+            .asks_to_give(&session(), 8)
+            .unwrap()
+            .into_iter()
+            .map(|ask| ask.id)
+            .collect()
+    };
+    let ids = to_give(&store);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(store.asks_to_give(&session(), 2).unwrap().len(), 2);
+    store
+        .apply_ledger_update(&LedgerUpdate::AsksGiven {
+            session: session(),
+            ids: ids[..2].to_vec(),
+            at_unix_ms: 9_000,
+        })
+        .unwrap();
+    assert_eq!(to_give(&store), [ids[2].clone()]);
+    store
+        .apply_ledger_update(&turn_end(
+            2,
+            None,
+            TurnJudgment {
+                resolved: vec![ResolvedMissedWork {
+                    id: ids[0].clone(),
+                    issue_number: None,
+                    reason: Some("에이전트가 정함".into()),
+                }],
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    assert_eq!(to_give(&store), [ids[2].clone()]);
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id: ids[0].clone(),
+            status: MissedStatus::Open,
+        })
+        .unwrap();
+    let given = store.asks_to_give(&session(), 8).unwrap();
+    assert_eq!(
+        given
+            .iter()
+            .map(|ask| (ask.id.as_str(), ask.reopened))
+            .collect::<Vec<_>>(),
+        [(ids[0].as_str(), true), (ids[2].as_str(), false)]
+    );
+}
+
+/// A version 16 store keeps what each question meant: a line opened again
+/// then cannot be told from one the judgment marked as the operator's own
+/// step, so each keeps its mark, none reads as opened again, and none was
+/// given to its agent yet.
+#[test]
+fn a_version_16_store_keeps_its_operators_steps_and_opens_none_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    {
+        let (mut store, _) = LinkStore::open(&path).unwrap();
+        request(&mut store, 1, "모바일 출시 맡아줘");
+        chapter(&mut store);
+        store
+            .apply_ledger_update(&turn_end(1, None, three_asks()))
+            .unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE ledger_missed DROP COLUMN reopened;
+                ALTER TABLE ledger_missed DROP COLUMN given_at;
+                PRAGMA user_version=16;",
+            )
+            .unwrap();
+    }
+    let (store, _) = LinkStore::open(&path).unwrap();
+    let mut rows: Vec<(String, Option<bool>, bool, Option<i64>)> = store
+        .connection
+        .prepare("SELECT text,operator_only,reopened,given_at FROM ledger_missed ORDER BY text")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    rows.sort();
+    assert_eq!(
+        rows,
         [
-            "설정 변경을 이 PR에 넣을까요?",
-            "App Store Connect에 전화번호를 넣어 주세요"
+            (
+                "App Store Connect에 전화번호를 넣어 주세요".to_owned(),
+                Some(true),
+                false,
+                None
+            ),
+            (
+                "설정 변경을 이 PR에 넣을까요?".to_owned(),
+                Some(false),
+                false,
+                None
+            ),
+            ("체험 행을 설정 탭에 둘까요?".to_owned(), None, false, None),
         ]
     );
+    assert_eq!(store.asks_to_give(&session(), 8).unwrap().len(), 3);
 }
 
 /// A question the judgment says the parent agent can answer is kept

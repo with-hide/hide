@@ -345,7 +345,12 @@ impl Runtime {
 
     /// The pane's own session, as the plan is keyed: the row's, or the
     /// caller's native identity while the row lags it.
-    fn caller_session(&self, device: &str, pane: &str, actor: &Actor) -> Option<SessionIdentity> {
+    pub(super) fn caller_session(
+        &self,
+        device: &str,
+        pane: &str,
+        actor: &Actor,
+    ) -> Option<SessionIdentity> {
         self.machine_agents(device)
             .iter()
             .find(|agent| {

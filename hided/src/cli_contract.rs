@@ -455,6 +455,32 @@ pub const COMMANDS: &[Spec] = &[
             "ambiguous_participant",
         ],
     },
+    // Folds one of the caller's own session's open questions with the line
+    // saying what settled it, as Hide AI folds one; `already_closed` for a
+    // question no longer open, which is no failure.
+    Spec {
+        words: &["agent", "ask-fold"],
+        arguments: &[Arg {
+            name: "id",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--reason", Text), switch("--json")],
+        rest: None,
+        answers: &["ask_fold"],
+        refusals: &[
+            "ask_unknown",
+            "ask_reopened",
+            "ask_reason_invalid",
+            "ask_session_unknown",
+            "ask_unavailable",
+            "agent_pane_required",
+            "caller_context_changed",
+        ],
+    },
     // The answer is the registration as it ended with what became of its
     // pane (`closed`, `kept`, `gone`, `other_agent`, `left`) and of its
     // conversation (`archived`, `archive_full`, `none`); `--keep-pane` ends
@@ -1802,6 +1828,17 @@ fn answers() -> Value {
         shape(&["machine", "installed_known", "items"]),
     );
     map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
+    map.insert(
+        "ask_fold".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "state": {"enum": ["folded", "already_closed"]},
+            },
+            "required": ["id", "state"],
+        }),
+    );
     map.insert("agent_profiles".into(), shape(&["machine", "profiles"]));
     map.insert("agent_profile".into(), shape(&["machine", "profile"]));
     map.insert(
@@ -1970,6 +2007,7 @@ mod tests {
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
+                | CommandKind::AskFold { .. }
                 | CommandKind::Device(_)
                 | CommandKind::Access(_)
                 | CommandKind::Pane(_)

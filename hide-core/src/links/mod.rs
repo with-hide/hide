@@ -11,6 +11,7 @@
 //! that writes it, and `runtime/links.rs` what the runtime hands the worker
 //! and publishes.
 
+pub mod agent_asks;
 pub mod ledger;
 mod pr_cache;
 pub mod query;
