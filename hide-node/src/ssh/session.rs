@@ -338,11 +338,11 @@ pub(super) fn sign_in(
     };
     // From here a cancel ends ssh at once, and the attempt has ended only
     // once ssh is reaped.
-    let linked = Instant::now();
     let link = ChildLink::start(dial.target, child, Some(cancel))
         .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
     let mut pipe = SigningIn::new(link, desk, sign_in, wake, cancel);
     stage("sign_in");
+    let asked = Instant::now();
     let facts = match bootstrap::probe(&mut pipe, dial.until) {
         Ok(facts) => facts,
         Err(ProbeError::Unsupported(reason)) => {
@@ -353,8 +353,9 @@ pub(super) fn sign_in(
             // Read before the kill below ends ssh's output itself, and before
             // the kill's own reap makes the tree unreadable.
             let closed = pipe.link.output_ended();
-            let ran = Instant::now().saturating_duration_since(linked);
-            let silent = pipe.link.silent_state(ran);
+            let silent = pipe
+                .link
+                .silent_state(Instant::now().saturating_duration_since(asked));
             pipe.link.kill();
             if cancel.is_cancelled() {
                 return Err(EstablishError::Helper(ENDED.to_owned()));
