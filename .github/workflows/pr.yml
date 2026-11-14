@@ -619,6 +619,14 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-ai::it) & test(/^claude_cli::usage::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(zoneinfo::) | test(usage::tests))'
+      - name: Hide AI's Codex folder where a file link needs a privilege
+        # A Windows account without Developer Mode may not make the private
+        # folder's `auth.json` link (ERROR_PRIVILEGE_NOT_HELD), and runs Codex
+        # in its own folder instead (with-hide/hide#2531); the test takes
+        # whichever this runner's account may make.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-ai) & kind(lib) & test(/^codex_home::create_tests::/)'
       - name: Native session original repository paths
         # Windows agents record native separators; the owning node must
         # answer catalog-compatible paths without certifying old history.

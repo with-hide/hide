@@ -25,13 +25,59 @@ api_error fails the turn as `other` with FAKE_API_MESSAGE as its message.
 In every mode an `outputSchema` that uses a keyword the Responses API's strict
 mode refuses fails the turn the way codex-cli 0.163.0 was measured to: an
 `other` error whose message is the API's own 400 body.
+
+The account's own folder (with-hide/hide#2531) is modelled the way codex-cli
+0.155.1 and 0.167.2 were measured to behave: `mcp list --json` prints the
+servers named in FAKE_MCP_FILE (a JSON list) and exits, or fails with
+FAKE_MCP_LIST_FAIL; FAKE_MCP_AFTER_LIST, when set, replaces that file's list
+once the first listing is printed, as an edit landing right after it would.
+An app-server started with `-c mcp_servers={...}` naming a server the file
+does not hold exits before answering, as Codex refuses an incomplete server
+(`invalid transport`), and so does one started with FAKE_EXIT_AT_START.
+FAKE_STARTS_FILE gets one line per app-server start: its argument vector.
+`model/list` gives each model FAKE_DEFAULT_EFFORT as its
+`defaultReasoningEffort` when set.
 """
 import atexit
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+
+
+def mcp_names():
+    with open(os.environ["FAKE_MCP_FILE"], encoding="utf-8") as f:
+        return json.load(f)
+
+
+if sys.argv[1:3] == ["mcp", "list"]:
+    if os.environ.get("FAKE_MCP_LIST_FAIL"):
+        sys.stderr.write("Error: failed to load configuration\n")
+        sys.exit(1)
+    names = mcp_names() if os.environ.get("FAKE_MCP_FILE") else []
+    print(json.dumps([{"name": name, "enabled": True, "transport": {"type": "stdio"}} for name in names]))
+    edited = os.environ.get("FAKE_MCP_FILE", "") + ".edited"
+    if (after := os.environ.get("FAKE_MCP_AFTER_LIST")) and not os.path.exists(edited):
+        with open(os.environ["FAKE_MCP_FILE"], "w", encoding="utf-8") as f:
+            f.write(after)
+        # Once only: later listings read the edited file.
+        open(edited, "w").close()
+    sys.exit(0)
+
+if path := os.environ.get("FAKE_STARTS_FILE"):
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(sys.argv[1:]) + "\n")
+if os.environ.get("FAKE_EXIT_AT_START"):
+    sys.exit(1)
+for arg in sys.argv[1:]:
+    if arg.startswith("mcp_servers={"):
+        held = mcp_names() if os.environ.get("FAKE_MCP_FILE") else []
+        named = re.findall(r'"((?:[^"\\]|\\.)*)"=\{enabled=false\}', arg)
+        if any(json.loads('"' + name + '"') not in held for name in named):
+            sys.stderr.write("Error: invalid transport\n")
+            sys.exit(1)
 
 MODE = os.environ.get("FAKE_MODE", "ok")
 REPLY = os.environ.get("FAKE_REPLY", '{"summary":"fixture","attention":"none"}')
@@ -132,6 +178,8 @@ for raw in sys.stdin:
         models = ([] if MODE == "no_model"
                   else [{"id": gateway, "model": gateway}] if gateway
                   else [{"id": "gpt-5.6-luna", "model": "gpt-5.6-luna"}])
+        if effort := os.environ.get("FAKE_DEFAULT_EFFORT"):
+            models = [{**model, "defaultReasoningEffort": effort} for model in models]
         result(rid, {"data": models, "nextCursor": None})
     elif method == "account/rateLimits/read":
         result(rid, {"rateLimits": {"primary": {"usedPercent": 100, "resetsAt": int(time.time()) + 120}}})

@@ -109,6 +109,16 @@ fn the_child_is_started_with_tools_disabled_and_stdio_listen() {
         assert_eq!(args, CodexAppServerBackend::spawn_arguments());
         assert_eq!(args.first().map(String::as_str), Some("app-server"));
         assert!(args.windows(2).any(|w| w == ["--disable", "shell_tool"]));
+        assert!(args.windows(2).any(|w| w == ["--disable", "hooks"]));
+        // What keeps the request Hide's own in the account's folder too
+        // (with-hide/hide#2531): OpenAI, no notify command, no skills.
+        for setting in [
+            "model_provider=\"openai\"",
+            "notify=[]",
+            "skills.include_instructions=false",
+        ] {
+            assert!(args.windows(2).any(|w| w == ["-c", setting]), "{setting}");
+        }
         assert!(args.windows(2).any(|w| w == ["--listen", "stdio://"]));
         assert!(!args.iter().any(|a| a == "exec"));
     });
@@ -411,6 +421,80 @@ fn an_other_failure_is_classified_by_the_api_bodys_status_alone() {
             unsafe { std::env::remove_var("FAKE_API_MESSAGE") };
             assert_eq!(error.to_string(), expected, "{message}");
         });
+    }
+}
+
+/// Drives the real, logged-in `codex` found on this machine's search: its
+/// model list, then one tiny request through the router. It writes the
+/// model ids, the outcome class and which Codex home ran (`account` when the
+/// link needed a privilege this account lacks, with-hide/hide#2531) to
+/// `HIDE_AI_LIVE_EVIDENCE` and nothing else, so no account field or prompt
+/// text reaches the record.
+///
+/// ```sh
+/// HIDE_AI_LIVE_EVIDENCE=<folder> cargo test -p hide-ai --test it -- --ignored codex_app_server::real_codex
+/// ```
+#[test]
+#[ignore = "needs a logged-in codex on PATH"]
+fn real_codex_lists_its_models_and_answers_one_request() {
+    let evidence = PathBuf::from(
+        std::env::var("HIDE_AI_LIVE_EVIDENCE").expect("HIDE_AI_LIVE_EVIDENCE names the folder"),
+    );
+    std::fs::create_dir_all(&evidence).unwrap();
+    let events = Arc::new(EventNames::default());
+    let backend = Arc::new(CodexAppServerBackend::new(
+        CodexConfig::default(),
+        events.clone(),
+    ));
+
+    let models = match backend.models() {
+        hide_ai::ModelCatalog::Offered(models) => models,
+        other => panic!("the live model list was not offered: {other:?}"),
+    };
+    assert!(!models.is_empty());
+
+    let router = AiRouter::new(
+        vec![backend.clone()],
+        RouterConfig {
+            priority: vec![ProviderId::CODEX.into()],
+            ..RouterConfig::default()
+        },
+        Arc::new(NoopLogSink),
+    );
+    let mut ask = request(Duration::from_secs(120));
+    ask.input = "user: please rename the build script".to_owned();
+    let outcome = router.execute(&ask, &CancelToken::new());
+    let class = match &outcome {
+        Ok(_) => "ok",
+        Err(error) => error.class(),
+    };
+    let names = events.0.lock().unwrap().clone();
+    let home = if names.iter().any(|name| name == "ai.codex_home.account") {
+        "account"
+    } else {
+        "private"
+    };
+    std::fs::write(
+        evidence.join("codex-live.json"),
+        serde_json::to_string_pretty(&json!({
+            "models": models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            "codex_home": home,
+            "request_outcome": class,
+            "events": names,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(class, "ok", "{outcome:?}");
+}
+
+/// The name of every log event, in order.
+#[derive(Default)]
+struct EventNames(Mutex<Vec<String>>);
+
+impl AiLogSink for EventNames {
+    fn log(&self, event: AiLogEvent) {
+        self.0.lock().unwrap().push(event.event.to_string());
     }
 }
 
