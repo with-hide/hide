@@ -6,27 +6,43 @@
 
 import type { TFunction } from "i18next";
 import type { InterfaceLanguage } from "./i18n/locale";
-import { lastSeen } from "./mobileSettings";
+import { formatRelativeTime } from "./i18n/format";
 import type { AccessConnection, AccessPending, AgentRow, Mission } from "./snapshot";
 
 type Translate = TFunction<"translation">;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How long ago, in this page's words: just now under a minute, then minutes, hours and days. */
+function ago(atMs: number, nowMs: number, t: Translate, language: InterfaceLanguage): string {
+  const since = Math.max(0, nowMs - atMs);
+  if (since < 60_000) return t("externalTools.justNow");
+  if (since < 3_600_000) return formatRelativeTime(language, -Math.floor(since / 60_000), "minute");
+  if (since < DAY_MS) return formatRelativeTime(language, -Math.floor(since / 3_600_000), "hour");
+  return formatRelativeTime(language, -Math.floor(since / DAY_MS), "day");
+}
 
 /** A request's line under its name (B2): the machine, the program that asked and when. */
 export function pendingLine(request: AccessPending, machine: string, nowMs: number, t: Translate, language: InterfaceLanguage): { machine: string; program: string; requested: string } {
   return {
     machine,
     program: request.program ?? t("externalTools.unknownProgram"),
-    requested: t("externalTools.requested", { when: lastSeen(request.requested_ms, nowMs, false, t, language) }),
+    requested: t("externalTools.requested", { when: ago(request.requested_ms, nowMs, t, language) }),
   };
 }
 
-/** A connected tool's line under its name (B11): the machine, its last use and the work it started. */
-export function connectionLine(connection: AccessConnection, machine: string, nowMs: number, t: Translate, language: InterfaceLanguage): string {
+/**
+ * A connected tool's line under its name (B11), as the pieces the row joins
+ * with ` · ` and keeps whole when it wraps: the machine, its last use, and the
+ * agents and missions it started.
+ */
+export function connectionLine(connection: AccessConnection, machine: string, nowMs: number, t: Translate, language: InterfaceLanguage): string[] {
   return [
     machine,
-    t("externalTools.lastUsed", { when: lastSeen(connection.last_used_ms, nowMs, false, t, language) }),
-    t("externalTools.work", { agents: connection.agent_count, missions: connection.mission_count }),
-  ].join(" · ");
+    t("externalTools.lastUsed", { when: ago(connection.last_used_ms, nowMs, t, language) }),
+    t("externalTools.agents", { agents: connection.agent_count }),
+    t("externalTools.missions", { missions: connection.mission_count }),
+  ];
 }
 
 /**

@@ -159,8 +159,11 @@ function ConnectionRow({ connection, machine, now, actions }: { connection: Acce
             <span className="flex min-w-0 flex-col gap-xxs">
               <span className="break-words text-subhead font-medium text-foreground">{connection.name}</span>
               <span className="break-words text-body text-muted-foreground" data-access-line={connection.id}>
-                {connectionLine(connection, machine, now, t, language)}
+                {connectionLine(connection, machine, now, t, language).map((piece, index) => (
+                  <span key={index}>{index > 0 ? " · " : ""}<span className="whitespace-nowrap">{piece}</span></span>
+                ))}
               </span>
+              {warnsOfWork(connection) ? <span className="mt-xxs" data-access-warning={connection.id}><Note tone="warn">{t("externalTools.workWarning")}</Note></span> : null}
             </span>
           </span>
           <span className="pointer-events-auto ml-auto flex flex-wrap items-center justify-end gap-sm">
@@ -180,11 +183,6 @@ function ConnectionRow({ connection, machine, now, actions }: { connection: Acce
             </Button>
           </span>
         </div>
-        {warnsOfWork(connection) ? (
-          <div className="pointer-events-none relative px-md pb-sm" data-access-warning={connection.id}>
-            <Note tone="warn">{t("externalTools.workWarning")}</Note>
-          </div>
-        ) : null}
       </div>
       {open ? <WorkList connection={connection} actions={actions} /> : null}
     </div>
