@@ -63,11 +63,11 @@ const sent = (events: Parameters<DispatchFn>[0][]) => events.map((event) => [eve
 
 it("puts a request up with its machine and program, View only chosen, and approves it at the level picked (B2, B3)", async () => {
   const { events, q, press, container, unmount } = await mount(section({
-    pending: [{ id: "req-1", name: "hermes-zutongg", program: "/Users/grab/.hermes/bin/hermes", requested_ms: NOW }],
+    pending: [{ id: "req-1", name: "hermes-zutongg", program: "/opt/hermes/bin/hermes", requested_ms: NOW }],
   }), "ko");
   const row = q('[data-access-pending="req-1"]')!;
   expect(row.textContent).toContain("hermes-zutongg");
-  expect(row.querySelector("[data-access-program]")?.textContent).toBe("/Users/grab/.hermes/bin/hermes");
+  expect(row.querySelector("[data-access-program]")?.textContent).toBe("/opt/hermes/bin/hermes");
   expect(row.textContent).toContain("보기만Hide에 보이는 것(상태, 에이전트 화면, 미션)을 볼 수만 있어요");
   expect(row.textContent).toContain("시키기보기에 더해 에이전트를 띄우고 끝내고 말을 넣고, 미션을 맡길 수 있어요");
   expect(q('[data-access-option="view"]')?.getAttribute("aria-checked")).toBe("true");
