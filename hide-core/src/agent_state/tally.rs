@@ -404,10 +404,6 @@ pub mod phone {
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub children_left: u64,
-        /// The subagents its session runs now, which the row draws as dots
-        /// beside its title; 0 when none run or the count cannot be read.
-        #[serde(skip_serializing_if = "is_zero")]
-        pub subagents: u64,
         /// The subagents still running under a finished turn the operator
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
@@ -1039,7 +1035,6 @@ pub mod phone {
                     .get("children_left")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
-                subagents: agent.get("subagents").and_then(Value::as_u64).unwrap_or(0),
                 subagents_left: agent
                     .get("subagents_left")
                     .and_then(Value::as_u64)

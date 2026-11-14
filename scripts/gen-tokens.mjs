@@ -142,8 +142,6 @@ export function generate(root = process.cwd()) {
     // Container query conditions need a compiled length, not a var() expression.
     // Reserve two existing small controls' worth of title room for the count.
     `@custom-variant agent-tab-count-room (@container tab-title (min-width: ${smallControl.value * 2}px));`,
-    // A row's title slot with room for a few letters of the title beside the subagent mark: narrower, the mark goes and the title keeps the room.
-    `@custom-variant subagent-mark-room (@container agent-title (min-width: ${smallControl.value * 3}px));`,
     // Below this window width the Overview's side panel opens over the tabs (PRD overview-device-tasks B65).
     `@custom-variant overview-narrow (@media (width < ${overviewPanel.value}px));`,
     // A pane wide enough for its header to carry words beside its marks.

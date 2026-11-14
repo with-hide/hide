@@ -190,22 +190,6 @@ export function waitWord(t: TFunction<"translation">, agent: WaitAgent): string 
   return t(`agents.wait.${wait}`);
 }
 
-/**
- * The words for the subagents a row's title mark counts, which the mark
- * itself leaves to the row's accessible name, when the row's line does not
- * already say them: neither left under a finished turn (`서브 N개 남음`) nor in
- * a wait word that names them. Null otherwise.
- */
-export function subagentsWorkingWords(t: TFunction<"translation">, agent: WaitAgent & { mark: AgentRow["mark"]; subagents?: number | null; subagents_left?: number | null }): string | null {
-  if (!agent.subagents || agent.subagents_left || (agent.mark === "waiting" && waitNamesSubagents(agent))) return null;
-  return t("agents.subagents.working", { count: agent.subagents });
-}
-
-/** Whether a row's wait word already names its subagents, so nothing else says them again. */
-function waitNamesSubagents(agent: WaitAgent): boolean {
-  return agent.wait === "subagents" || (agent.wait === "children" && !!agent.wait_count && !!agent.wait_subagents);
-}
-
 /** The cause's detail a waiting row with no sentence says after its word (B10): the pull request its checks run on; null when the word says it all. */
 function waitDetail(t: TFunction<"translation">, agent: LineAgent, line: RowLine): string | null {
   return agent.wait === "checks" && line.pull_request ? t("agents.line.pullRequest", { number: String(line.pull_request) }) : null;
@@ -247,7 +231,7 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  * children still working under it, `읽을 것 · 끝남 · 자식 2개 작업 중`. A person's turn names
  * the key and what it asks, `사람 차례 · 인증 · github.com/login`.
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & LeftAgent & WaitAgent & { subagents?: number | null; human_turn?: { kind: HumanKind; place: string } | null; sleep?: Pick<AgentSleep, "cause"> | null }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & LeftAgent & WaitAgent & { human_turn?: { kind: HumanKind; place: string } | null; sleep?: Pick<AgentSleep, "cause"> | null }): string {
   // The key's name and what it asks, on the declaring row and its root (PRD ask-human B9).
   if (agent.human_turn && agent.mark !== "unknown") return [t("agents.human.mark"), humanTurnText(t, agent.human_turn)].join(" · ");
   if (agent.mark === "asleep") return agent.status_code === "sleeping" && agent.sleep?.cause ? t(`agents.sleepCause.${agent.sleep.cause}`) : statusText(t, agent.status_code);
@@ -257,7 +241,7 @@ export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "ma
   const word = agent.mark === "going" ? null : agent.mark === "waiting" ? (!agent.wait && ASKING_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : waitWord(t, agent)) : agent.mark === "quiet" ? (agent.status_code === "unfinished" ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);
   const left = agent.background_left ? t("agents.backgroundLeftWords", { count: agent.background_left }) : null;
   const children = agent.children_left ? t("agents.line.children", { count: agent.children_left }) : null;
-  const subagents = agent.subagents_left ? t("agents.subagentsLeftWords", { count: agent.subagents_left }) : subagentsWorkingWords(t, agent);
+  const subagents = agent.subagents_left ? t("agents.subagentsLeftWords", { count: agent.subagents_left }) : null;
   return [name, word, left, children, subagents].filter(Boolean).join(" · ");
 }
 

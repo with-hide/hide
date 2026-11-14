@@ -305,11 +305,8 @@ mod tests {
             (root.wait.as_deref(), root.descendants_working),
             (Some("children"), 2)
         );
-        // Its own subagents and the counts its line says reach the phone (operator decision 2026-11-14).
-        assert_eq!(
-            (root.subagents, root.wait_count, root.wait_subagents),
-            (3, 2, 3)
-        );
+        // The counts its line says reach the phone (operator decision 2026-11-14).
+        assert_eq!((root.wait_count, root.wait_subagents), (2, 3));
     }
 
     /// The request view's words (the operator's request, its summary and

@@ -1,6 +1,5 @@
 /* Generated from design/tokens.json by scripts/gen-tokens.mjs. Do not edit. */
 @custom-variant agent-tab-count-room (@container tab-title (min-width: 48px));
-@custom-variant subagent-mark-room (@container agent-title (min-width: 72px));
 @custom-variant overview-narrow (@media (width < 1280px));
 @custom-variant pane-wide (@container pane (min-width: 640px));
 @custom-variant pane-head-narrow (@container pane (width < 440px));

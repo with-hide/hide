@@ -57,10 +57,10 @@ export function phoneGroups(): AgentGroup[] {
     row(agent("a3", "설치 가이드 다듬기", 11, { group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "herdr-ide · main", line: asking("INSTALL.md의 순서를 바꿔도 될까요?") })),
   ];
   const working: GroupRow[] = [
-    row(agent("w1", "Slack 스레드 시행착오 점검", 2, { ...mini, place: "modakbul · main", subagents: 3 })),
+    row(agent("w1", "Slack 스레드 시행착오 점검", 2, { ...mini, place: "modakbul · main" })),
     row(holder),
     // Resting while two subagents its session started still run (operator decision 2026-11-14).
-    row(agent("w3", "Day2 강의자료 준비", 18, { place: "creator · master", mark: "waiting", wait: "subagents", wait_count: 2, subagents: 2, line: { text: "", mode: "waiting", tone: "subtle" } })),
+    row(agent("w3", "Day2 강의자료 준비", 18, { place: "creator · master", mark: "waiting", wait: "subagents", wait_count: 2, line: { text: "", mode: "waiting", tone: "subtle" } })),
     row(agent("w4", "릴리스 노트 초안 검토", 22, { place: "herdr-ide · main" })),
     row(agent("w5", "사이트 배포 점검", 31, { place: "withhide · main" })),
   ];

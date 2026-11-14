@@ -253,7 +253,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         </>}
         head={<>
           {/* The row button's name already reads all of this out. */}
-          <AgentRecordTitle agent={agent} subagents="inRow" className={cn("pointer-events-none", titleTone)} />
+          <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
           <AgentForkMark agent={agent} />
           {starred(agent) ? <RevisitStar /> : null}
           {closing ? (
