@@ -11,6 +11,7 @@ import { useShellStore } from "../store";
 import { toolCells } from "../toolCells";
 import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
+import { Button } from "./ui/button";
 import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
 import { SidebarMenus } from "./sidebar-menus";
@@ -188,14 +189,15 @@ export function ToolTileView({ name, turn, connection, selected, onSelect }: { n
   const facts = [name, t("devices.rail.tool"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
   return (
     <Hint label={facts.join(" · ")} side="right">
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="icon"
         aria-label={facts.join(", ")}
         aria-pressed={selected}
         data-rail-tool={connection}
         className={cn(
           TILE,
-          "rounded-full border border-border text-caption font-semibold hover:text-foreground",
+          "rounded-full bg-transparent text-caption font-semibold hover:bg-transparent hover:text-foreground focus-visible:ring-0",
           selected ? "text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-sidebar" : "text-subtle-foreground",
         )}
         onClick={onSelect}
@@ -214,7 +216,7 @@ export function ToolTileView({ name, turn, connection, selected, onSelect }: { n
             {badgeText(turn)}
           </span>
         ) : null}
-      </button>
+      </Button>
     </Hint>
   );
 }
