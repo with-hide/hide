@@ -1327,7 +1327,7 @@ mod tests {
             "records": {"w1:p1": {
                 "phase": "sleeping", "kind": "claude", "session_id": "session-a",
                 "identity_label": "Refactor the parser", "last_activity": "0",
-                "state_change_seq": 7, "workspace_label": "herdr", "since_unix_ms": 5
+                "state_change_seq": 7, "workspace_label": "hide", "since_unix_ms": 5
             }}
         }))
         .unwrap();
