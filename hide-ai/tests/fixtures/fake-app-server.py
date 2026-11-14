@@ -28,7 +28,8 @@ mode refuses fails the turn the way codex-cli 0.163.0 was measured to: an
 
 The account's own folder (with-hide/hide#2531) is modelled the way codex-cli
 0.155.1 and 0.167.2 were measured to behave: `mcp list --json` prints the
-servers named in FAKE_MCP_FILE (a JSON list) and exits, or fails with
+servers named in FAKE_MCP_FILE (a JSON list), and unless `--disable plugins`
+is given those in FAKE_MCP_PLUGINS too, and exits, or fails with
 FAKE_MCP_LIST_FAIL; FAKE_MCP_AFTER_LIST, when set, replaces that file's list
 once the first listing is printed, as an edit landing right after it would.
 An app-server started with `-c mcp_servers={...}` naming a server the file
@@ -57,6 +58,11 @@ if sys.argv[1:3] == ["mcp", "list"]:
         sys.stderr.write("Error: failed to load configuration\n")
         sys.exit(1)
     names = mcp_names() if os.environ.get("FAKE_MCP_FILE") else []
+    # A plugin's servers are listed unless plugins are switched off, as
+    # codex-cli 0.166.0 lists them on Windows.
+    disabled = {sys.argv[i + 1] for i, arg in enumerate(sys.argv[:-1]) if arg == "--disable"}
+    if "plugins" not in disabled:
+        names += json.loads(os.environ.get("FAKE_MCP_PLUGINS", "[]"))
     print(json.dumps([{"name": name, "enabled": True, "transport": {"type": "stdio"}} for name in names]))
     edited = os.environ.get("FAKE_MCP_FILE", "") + ".edited"
     if (after := os.environ.get("FAKE_MCP_AFTER_LIST")) and not os.path.exists(edited):

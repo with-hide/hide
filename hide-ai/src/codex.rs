@@ -229,10 +229,7 @@ impl CodexAppServerBackend {
             args.push("-c".to_owned());
             args.push(setting.to_owned());
         }
-        for feature in DISABLED_FEATURES {
-            args.push("--disable".to_owned());
-            args.push((*feature).to_owned());
-        }
+        args.extend(disabled_features());
         args.extend(extra);
         args.push("--listen".to_owned());
         args.push("stdio://".to_owned());
@@ -749,10 +746,21 @@ impl RequestFailure {
     }
 }
 
-/// The names of the MCP servers the account's `config.toml` declares, as
-/// `codex mcp list --json` reports them, read in that folder with the item's
-/// variables: what the app-server would start there. A list that cannot be
-/// read refuses the start, since then no server could be switched off.
+/// `--disable <feature>` for each of [`DISABLED_FEATURES`].
+fn disabled_features() -> impl Iterator<Item = String> {
+    DISABLED_FEATURES
+        .iter()
+        .flat_map(|feature| ["--disable".to_owned(), (*feature).to_owned()])
+}
+
+/// The names of the MCP servers the app-server would start in the account's
+/// folder, as `codex mcp list --json` reports them read there with the
+/// item's variables and the app-server's own feature switches. The switches
+/// matter: without `--disable plugins` the list also names each plugin's
+/// servers, which the app-server does not start, and switching one of those
+/// off by name makes Codex refuse to start (`invalid transport`, measured on
+/// Windows with codex-cli 0.166.0). A list that cannot be read refuses the
+/// start, since then no server could be switched off.
 fn mcp_servers(
     program: &Program,
     cwd: &Path,
@@ -761,7 +769,11 @@ fn mcp_servers(
 ) -> Result<Vec<String>, AiError> {
     let mut set = run.set();
     set.push(("CODEX_HOME", home.display().to_string()));
-    let args = ["mcp", "list", "--json"].map(str::to_owned);
+    let args: Vec<String> = ["mcp", "list", "--json"]
+        .map(str::to_owned)
+        .into_iter()
+        .chain(disabled_features())
+        .collect();
     let listed = runner::run(
         &runner::Spec {
             binary: program,
@@ -1311,6 +1323,19 @@ mod account_home_tests {
             account.folder().is_dir(),
             "the account's folder outlives the session"
         );
+    }
+
+    /// A plugin's servers are listed only while plugins are on, and the
+    /// app-server runs with them off, so naming one would stop its start.
+    #[test]
+    fn a_plugins_server_is_not_named() {
+        let account = Account::declaring(&["docs"]);
+        let run = account.run(&[("FAKE_MCP_PLUGINS", r#"["codex_app"]"#)]);
+        account.spawn(&run).expect("the app-server starts");
+
+        let starts = account.starts();
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        assert!(settings(&starts[0]).contains(&r#"mcp_servers={"docs"={enabled=false}}"#));
     }
 
     #[test]
