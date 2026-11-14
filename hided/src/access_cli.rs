@@ -193,9 +193,19 @@ fn settle(env: &Env, folder: &Path, key: Key) -> Result<Value, Refusal> {
         Ok(value) => match (value["state"].as_str(), key.kept) {
             (Some("pending"), Kept::Requested) => Ok(waiting(value, &key.name)),
             (Some("connected"), Kept::Requested) => {
+                // Asked once more as the request it was, so the core
+                // records the key's issue (B33); a known key is answered
+                // where it stands and puts nothing up.
+                let issued = ask(
+                    env,
+                    AccessAsk::Request {
+                        name: key.name.clone(),
+                        key: key.key.clone(),
+                    },
+                )?;
                 write_key(folder, &key.name, &key.key, Kept::Connected)?;
                 remove_key(folder, &key.name, Kept::Requested);
-                Ok(value)
+                Ok(issued)
             }
             (Some("connected"), Kept::Connected) => Ok(value),
             // Pending requests live in the core's memory only (D-26): a
