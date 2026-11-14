@@ -21,16 +21,22 @@ export function SubagentDots({ count, inRow = false, className }: { count: numbe
   const { t } = useInterfaceTranslation();
   if (!count) return null;
   const words = t("agents.subagents.working", { count });
+  // The title keeps its room: short of width the dots give way first, and
+  // all at once, since fewer dots would say fewer subagents. The group wraps
+  // past an empty first item onto a line the fixed height clips.
   const dots = (
     <span
       {...(inRow ? { "aria-hidden": true } : { role: "img", "aria-label": words })}
-      className={cn("inline-flex shrink-0 items-center gap-xxs opacity-(--opacity-secondary)", className)}
+      className={cn("flex h-(--text-micro) min-w-0 shrink-[999] flex-wrap content-start overflow-hidden opacity-(--opacity-secondary)", className)}
       data-subagent-dots={count}
     >
-      {Array.from({ length: Math.min(count, SUBAGENT_DOTS_SHOWN) }, (_, index) => (
-        <span key={index} className="size-(--size-subagent-dot) rounded-full bg-agent-working" />
-      ))}
-      {count > SUBAGENT_DOTS_SHOWN ? <span className="font-mono text-micro leading-none text-agent-working">+{count - SUBAGENT_DOTS_SHOWN}</span> : null}
+      <span className="h-(--text-micro) w-0" />
+      <span className="flex h-(--text-micro) shrink-0 items-center gap-xxs">
+        {Array.from({ length: Math.min(count, SUBAGENT_DOTS_SHOWN) }, (_, index) => (
+          <span key={index} className="size-(--size-subagent-dot) rounded-full bg-agent-working" />
+        ))}
+        {count > SUBAGENT_DOTS_SHOWN ? <span className="font-mono text-micro leading-none text-agent-working">+{count - SUBAGENT_DOTS_SHOWN}</span> : null}
+      </span>
     </span>
   );
   return inRow ? dots : <Hint label={words}>{dots}</Hint>;
