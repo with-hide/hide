@@ -1450,10 +1450,11 @@ impl Runtime {
             if hint.is_some() {
                 return Err("caller_identity_conflict".into());
             }
-            let reads = crate::runtime::access::tool_reads(&command);
+            // What its level does not allow, a pane agent's own asks among
+            // them, is refused before any of it is read (B20-B23).
             (
                 expected.clone(),
-                self.access_authority(device, connection, reads)?,
+                self.access_authority(device, connection, crate::access::delivery_need(&command))?,
             )
         } else {
             let context = self
@@ -1477,10 +1478,6 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
-        // What a pane agent alone may ask is refused to a tool before any
-        // of it is read: the tool starts an agent for it (PRD
-        // hide-external-control B22, B23).
-        crate::runtime::access::admit_tool_command(&actor, &command)?;
         // A machine named by a dialed device's SSH alias is that device's id
         // from here on (`machine_named`).
         if let Command::Agents {
@@ -2166,6 +2163,7 @@ impl Runtime {
                         super::transition_letters::TRANSITION_ROLE,
                         self.node.as_str(),
                     )
+                || *actor == Actor::hide(crate::delivery::HIDE_ACCESS_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
                     && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))

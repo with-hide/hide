@@ -9,9 +9,9 @@
             "access_ambiguous": "This home keeps several tools' keys; set HIDE_ACCESS=<name> to choose one",
             "access_core_only": "Run the tool on the machine where Hide's core runs",
             "access_from_pane": "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes",
-            "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name> to make a new one",
+            "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
             "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > External tools, then run hide access request again",
-            "access_name_taken": "A connected tool has this name; choose another --name, or ask the operator to disconnect that tool",
+            "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again",
             "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
             "access_not_connected": "Run hide access request --name <name> first",
             "access_pending": "Wait until the operator approves the request in Settings > External tools, then run hide access request again",
@@ -6906,7 +6906,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:7fe4511b9a8444f1a1ba2cfecfeac3e902b98366ee64c7a8aa86de7162e79878",
+    "digest": "sha256:8b2d38dcf0db9f6e909d5209f587d670b01c4431d267735de198e442e5dd6c54",
     "envelopes": {
         "access": {
             "answer": "value",

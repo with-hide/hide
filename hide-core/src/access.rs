@@ -81,11 +81,15 @@ pub fn key_hash(key: &str) -> String {
     format!("{:x}", Sha256::digest(key.as_bytes()))
 }
 
-/// A connection's id: the first sixteen hex digits of its key's hash. A
-/// request keeps its id when it is approved, and a new key (a request after
-/// a disconnect) is a new connection (D-40).
-fn id_of(key_sha256: &str) -> String {
-    key_sha256.chars().take(16).collect()
+/// A request's id, which its connection keeps once approved: sixteen
+/// random lowercase hex digits hided draws when it asks (`Call::Request`),
+/// so nothing of the key leaves the store; a new key (a request after a
+/// disconnect) is a new connection (D-40).
+pub fn valid_id(id: &str) -> bool {
+    id.len() == 16
+        && id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// `a == b` in time that depends only on their lengths.
@@ -209,6 +213,8 @@ pub enum Call {
         name: String,
         key_sha256: String,
         program: Option<String>,
+        /// The id a request this call puts up takes ([`valid_id`]).
+        id: String,
     },
     /// `hide access status`: where the key stands, putting nothing up.
     Status { key_sha256: String },
@@ -329,6 +335,7 @@ impl Access {
         key_sha256: &str,
         program: Option<String>,
         now_ms: u64,
+        id: String,
     ) -> Result<Requested, RequestRefusal> {
         let standing = self.standing(key_sha256);
         if standing != Standing::Unknown {
@@ -348,7 +355,6 @@ impl Access {
         if self.connections.len() >= MAX_CONNECTIONS {
             return Err(RequestRefusal::Limit);
         }
-        let id = id_of(key_sha256);
         let request = Pending {
             id: id.clone(),
             name: name.to_owned(),
@@ -478,6 +484,114 @@ impl Access {
     }
 }
 
+/// What a tool's level must allow for a command (B20-B23). The one table:
+/// hided judges a tool's command by it at the command boundary, and the
+/// core again when the command runs (`runtime::access`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Need {
+    /// Reads what Hide shows: View only runs it.
+    View,
+    /// Changes something, as the operator would: Act runs it.
+    Act,
+    /// Means an agent in a Hide pane: no tool runs it; the tool starts an
+    /// agent and asks it instead (B22).
+    Agent,
+    /// A spawn under a parent: a tool is never one (B23).
+    Parent,
+}
+
+/// A View only tool asked for what only Act may (B20).
+pub const VIEW_ONLY: &str = "access_view_only";
+/// A command only an agent in a Hide pane can mean (B22).
+pub const NEEDS_AGENT: &str = "access_needs_agent";
+/// A tool's spawn named a parent (B23).
+pub const SPAWN_PARENT: &str = "access_spawn_parent";
+
+/// Whether a tool at `level` runs a command that needs `need`, or the
+/// reason it is refused.
+pub fn admit(level: Level, need: Need) -> Result<(), &'static str> {
+    match (level, need) {
+        (_, Need::View) | (Level::Act, Need::Act) => Ok(()),
+        (Level::View, _) => Err(VIEW_ONLY),
+        (Level::Act, Need::Agent) => Err(NEEDS_AGENT),
+        (Level::Act, Need::Parent) => Err(SPAWN_PARENT),
+    }
+}
+
+/// What a delivery command needs: listing and showing agents are reads,
+/// a spawn and an end are Act, a spawn under a parent never runs, and what
+/// names the caller's own pane (`here`, `--beside`, a plan node,
+/// registering, asking a person, a hook's reads) needs an agent. A spawn
+/// with a task needs Act here; the task itself is Hide's own, which the
+/// spawn's rule refuses any other caller (`coordination`).
+pub fn delivery_need(command: &crate::delivery::Command) -> Need {
+    use crate::coordination::Command as Agents;
+    use crate::delivery::Command as Delivery;
+    match command {
+        Delivery::Agents { command } => match command {
+            Agents::List { .. } => Need::View,
+            Agents::Show { id } if id != crate::coordination::HERE => Need::View,
+            Agents::Spawn {
+                parent: Some(_), ..
+            } => Need::Parent,
+            Agents::Spawn {
+                beside, plan_node, ..
+            } if *beside || plan_node.is_some() => Need::Agent,
+            Agents::Spawn { .. } | Agents::End { .. } => Need::Act,
+            Agents::Show { .. }
+            | Agents::RegisterSelf { .. }
+            | Agents::Register { .. }
+            | Agents::AskHuman { .. }
+            | Agents::AskHumanClear => Need::Agent,
+        },
+        // A hook's own reads: a runtime in a pane asks them.
+        Delivery::Pull { .. } | Delivery::Confirm { .. } => Need::Agent,
+        Delivery::Send { .. }
+        | Delivery::Reply { .. }
+        | Delivery::Ack { .. }
+        | Delivery::AckBundle { .. }
+        | Delivery::Cancel { .. }
+        | Delivery::Show { .. }
+        | Delivery::Inbox { .. }
+        | Delivery::WatchStart { .. }
+        | Delivery::WatchStop { .. }
+        | Delivery::WatchAssign { .. }
+        | Delivery::WatchList => Need::Act,
+    }
+}
+
+/// What a pane command needs: reading a pane is a read, typing into one is
+/// Act, and opening a pane beside the caller or naming its purpose needs
+/// the caller's own pane.
+pub fn pane_need(command: &crate::pane_command::PaneCommand) -> Need {
+    use crate::pane_command::PaneCommand;
+    match command {
+        PaneCommand::Read { .. }
+        | PaneCommand::ReadScreen { .. }
+        | PaneCommand::AgentRead { .. } => Need::View,
+        PaneCommand::Send { .. } => Need::Act,
+        PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => Need::Agent,
+    }
+}
+
+/// What a mission command needs: reading missions is a read; a tool leads
+/// none, a Conductor it starts does (D-12).
+pub fn mission_need(command: &crate::missions::MissionCommand) -> Need {
+    use crate::missions::MissionCommand;
+    match command {
+        MissionCommand::List | MissionCommand::Show { .. } => Need::View,
+        _ => Need::Agent,
+    }
+}
+
+/// What a device command needs: the list is a read, anything else Act.
+pub fn device_need(command: &crate::device_command::DeviceCommand) -> Need {
+    match command {
+        crate::device_command::DeviceCommand::List => Need::View,
+        _ => Need::Act,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,19 +600,25 @@ mod tests {
         key_hash(&format!("{n:064x}"))
     }
 
+    fn id(n: u8) -> String {
+        format!("{n:016x}")
+    }
+
     #[test]
     fn a_request_asked_again_is_the_same_request_and_after_approval_the_same_connection() {
         let mut access = Access::default();
-        let first = access.request("hermes", &key(1), None, 1).unwrap();
+        let first = access.request("hermes", &key(1), None, 1, id(1)).unwrap();
         assert!(first.put_up);
-        let again = access.request("hermes", &key(1), None, 2).unwrap();
+        // Asked again, it keeps its id, whatever id this ask brought.
+        let again = access.request("hermes", &key(1), None, 2, id(9)).unwrap();
         assert!(!again.put_up);
         assert_eq!(again.standing, first.standing);
-        let Standing::Pending { id, .. } = first.standing else {
+        let Standing::Pending { id: pending, .. } = first.standing else {
             panic!("pending")
         };
-        access.approve(&id, Level::View, 3).unwrap();
-        let connected = access.request("hermes", &key(1), None, 4).unwrap();
+        assert_eq!(pending, id(1));
+        access.approve(&pending, Level::View, 3).unwrap();
+        let connected = access.request("hermes", &key(1), None, 4, id(1)).unwrap();
         assert!(matches!(
             connected.standing,
             Standing::Connected(Connection {
@@ -507,7 +627,10 @@ mod tests {
             })
         ));
         assert_eq!(
-            access.request("hermes", &key(1), None, 5).unwrap().standing,
+            access
+                .request("hermes", &key(1), None, 5, id(1))
+                .unwrap()
+                .standing,
             connected.standing
         );
     }
@@ -515,15 +638,17 @@ mod tests {
     #[test]
     fn requests_of_one_name_merge_and_a_fifth_name_drops_the_oldest() {
         let mut access = Access::default();
-        access.request("a", &key(1), None, 1).unwrap();
-        access.request("a", &key(2), None, 2).unwrap();
+        access.request("a", &key(1), None, 1, id(1)).unwrap();
+        access.request("a", &key(2), None, 2, id(2)).unwrap();
         assert_eq!(access.pending().len(), 1);
         assert_eq!(access.standing(&key(1)), Standing::Ended(Ended::Expired));
         for (n, name) in [(3, "b"), (4, "c"), (5, "d")] {
-            access.request(name, &key(n), None, u64::from(n)).unwrap();
+            access
+                .request(name, &key(n), None, u64::from(n), id(n))
+                .unwrap();
         }
-        let fifth = access.request("e", &key(6), None, 6).unwrap();
-        assert_eq!(fifth.expired.as_deref(), Some(id_of(&key(2)).as_str()));
+        let fifth = access.request("e", &key(6), None, 6, id(6)).unwrap();
+        assert_eq!(fifth.expired.as_deref(), Some(id(2).as_str()));
         assert_eq!(access.pending().len(), MAX_PENDING);
         assert_eq!(access.standing(&key(2)), Standing::Ended(Ended::Expired));
     }
@@ -533,7 +658,7 @@ mod tests {
         let mut access = Access::default();
         for n in 0..MAX_CONNECTIONS as u8 {
             let Standing::Pending { id, .. } = access
-                .request(&format!("t{n}"), &key(n), None, 0)
+                .request(&format!("t{n}"), &key(n), None, 0, id(n))
                 .unwrap()
                 .standing
             else {
@@ -542,7 +667,9 @@ mod tests {
             access.approve(&id, Level::Act, 0).unwrap();
         }
         assert_eq!(
-            access.request("one-more", &key(200), None, 0).unwrap_err(),
+            access
+                .request("one-more", &key(200), None, 0, id(200))
+                .unwrap_err(),
             RequestRefusal::Limit
         );
         assert!(access.pending().is_empty());
@@ -551,12 +678,12 @@ mod tests {
     #[test]
     fn refused_and_revoked_keys_say_why_and_a_new_key_asks_again() {
         let mut access = Access::default();
-        access.request("t", &key(1), None, 0).unwrap();
-        access.refuse(&id_of(&key(1))).unwrap();
+        access.request("t", &key(1), None, 0, id(1)).unwrap();
+        access.refuse(&id(1)).unwrap();
         assert_eq!(access.standing(&key(1)), Standing::Ended(Ended::Refused));
-        assert!(access.request("t", &key(2), None, 0).unwrap().put_up);
-        access.approve(&id_of(&key(2)), Level::Act, 0).unwrap();
-        access.revoke(&id_of(&key(2))).unwrap();
+        assert!(access.request("t", &key(2), None, 0, id(2)).unwrap().put_up);
+        access.approve(&id(2), Level::Act, 0).unwrap();
+        access.revoke(&id(2)).unwrap();
         assert_eq!(access.standing(&key(2)), Standing::Ended(Ended::Revoked));
         assert!(access.connections().is_empty());
     }
@@ -564,10 +691,10 @@ mod tests {
     #[test]
     fn a_connected_name_is_not_requested_twice() {
         let mut access = Access::default();
-        access.request("t", &key(1), None, 0).unwrap();
-        access.approve(&id_of(&key(1)), Level::View, 0).unwrap();
+        access.request("t", &key(1), None, 0, id(1)).unwrap();
+        access.approve(&id(1), Level::View, 0).unwrap();
         assert_eq!(
-            access.request("t", &key(2), None, 0).unwrap_err(),
+            access.request("t", &key(2), None, 0, id(2)).unwrap_err(),
             RequestRefusal::NameTaken
         );
     }
@@ -575,11 +702,11 @@ mod tests {
     #[test]
     fn last_use_moves_once_a_minute() {
         let mut access = Access::default();
-        access.request("t", &key(1), None, 0).unwrap();
-        access.approve(&id_of(&key(1)), Level::View, 0).unwrap();
-        assert!(!access.used(&id_of(&key(1)), USE_INTERVAL_MS - 1));
-        assert!(access.used(&id_of(&key(1)), USE_INTERVAL_MS));
-        assert!(!access.used(&id_of(&key(1)), USE_INTERVAL_MS + 1));
+        access.request("t", &key(1), None, 0, id(1)).unwrap();
+        access.approve(&id(1), Level::View, 0).unwrap();
+        assert!(!access.used(&id(1), USE_INTERVAL_MS - 1));
+        assert!(access.used(&id(1), USE_INTERVAL_MS));
+        assert!(!access.used(&id(1), USE_INTERVAL_MS + 1));
     }
 
     #[test]
@@ -587,14 +714,30 @@ mod tests {
         let mut access = Access::default();
         let raw = format!("{:064x}", 7);
         access
-            .request("t", &key_hash(&raw), Some("/usr/bin/python3".into()), 0)
+            .request(
+                "t",
+                &key_hash(&raw),
+                Some("/usr/bin/python3".into()),
+                0,
+                id(7),
+            )
             .unwrap();
-        access
-            .approve(&id_of(&key_hash(&raw)), Level::Act, 0)
-            .unwrap();
+        access.approve(&id(7), Level::Act, 0).unwrap();
         let bytes = encode(&access.stored()).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains(&raw));
         assert_eq!(decode(&bytes).unwrap(), access.stored());
+    }
+
+    #[test]
+    fn view_only_runs_reads_and_act_runs_all_but_what_needs_an_agent_or_a_parent() {
+        assert_eq!(admit(Level::View, Need::View), Ok(()));
+        assert_eq!(admit(Level::View, Need::Act), Err(VIEW_ONLY));
+        assert_eq!(admit(Level::View, Need::Agent), Err(VIEW_ONLY));
+        assert_eq!(admit(Level::View, Need::Parent), Err(VIEW_ONLY));
+        assert_eq!(admit(Level::Act, Need::View), Ok(()));
+        assert_eq!(admit(Level::Act, Need::Act), Ok(()));
+        assert_eq!(admit(Level::Act, Need::Agent), Err(NEEDS_AGENT));
+        assert_eq!(admit(Level::Act, Need::Parent), Err(SPAWN_PARENT));
     }
 
     #[test]
@@ -605,5 +748,8 @@ mod tests {
         assert!(!valid_name(&"a".repeat(NAME_LIMIT + 1)));
         assert!(valid_key(&format!("{:064x}", 1)));
         assert!(!valid_key(&format!("{:064X}", 255)));
+        assert!(valid_id("0123456789abcdef"));
+        assert!(!valid_id("0123456789ABCDEF"));
+        assert!(!valid_id("0123"));
     }
 }

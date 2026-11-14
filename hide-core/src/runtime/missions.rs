@@ -1971,17 +1971,11 @@ impl Runtime {
         // An external tool reads every mission on this machine, and leads
         // none: a Conductor it starts does (PRD hide-external-control D-12).
         let tool = match Caller::parse(caller) {
-            Caller::Access { connection, .. } => {
-                if !matches!(command, MissionCommand::Show { .. } | MissionCommand::List) {
-                    return Err(super::access::NEEDS_AGENT.into());
-                }
-                Some(
-                    self.access_actor(connection)
-                        .filter(|_| device == self.node.as_str())
-                        .ok_or(crate::access::Ended::Revoked.reason())?
-                        .1,
-                )
-            }
+            Caller::Access { connection, .. } => Some(self.access_authority(
+                device,
+                connection,
+                crate::access::mission_need(&command),
+            )?),
             _ => None,
         };
         let every_project = tool.is_some();

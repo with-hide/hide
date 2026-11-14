@@ -480,6 +480,21 @@ pub(crate) mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "task_reserved");
+        // An external tool's identity is code-owned with a hide: pane id,
+        // but it is not Hide itself (PRD hide-external-control B23).
+        let tool = Actor::access("00000000000000a1", "nightly", NODE);
+        let origin = register(&mut ledger, &tool);
+        let error = spawn(
+            &mut ledger,
+            &tool,
+            &origin,
+            false,
+            memory_task("m1"),
+            "z",
+            here("p3"),
+        )
+        .unwrap_err();
+        assert_eq!(error, "task_reserved");
     }
 
     /// A start reserved by a build that kept no task, asked again by one that

@@ -146,7 +146,8 @@ hide access list [--json]
 - View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does. No agent writes to a tool first.
 - What only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
 - A home with several tools' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a tool at any time, and `leave` disconnects it from the tool's side.
-- Any program running as the same account can read the key file and act as that tool; run a tool you do not trust under another account.
+- A key file that cannot be read refuses each command with `access_key_unreadable`; run `request` again, which replaces it and asks anew, and while the old connection of that name stands the operator disconnects it first (`access_name_taken`).
+- Any program running as the same account can read the key file and act as that tool, and a program of another account cannot reach Hide at all. Approve a tool View only unless it must act, give each tool its own name, and disconnect a tool no longer used.
 
 ## The operator's screen
 

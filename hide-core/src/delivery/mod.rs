@@ -168,6 +168,13 @@ impl Actor {
         self.kind == HIDE_KIND && self.pane_id.starts_with(HIDE_PREFIX)
     }
 
+    /// Whether this is Hide itself: Hide's own identity and never an
+    /// external tool's, which is code-owned too ([`Self::access_connection`]).
+    /// A gate that only Hide may pass asks this, not [`Self::hide_owned`].
+    pub fn hide_itself(&self) -> bool {
+        self.hide_owned() && self.access_connection().is_none()
+    }
+
     /// Mailbox authority requires a positively observed native session. Watch
     /// targets may lack it and use status-only activity, without mailbox access.
     pub(crate) fn require_native_identity(&self) -> Result<(), String> {

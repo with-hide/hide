@@ -1713,62 +1713,18 @@ impl ScopedRequest {
     }
 
     /// What an external tool's level must allow for this command (PRD
-    /// hide-external-control B20-B23): the one place a tool's command is
-    /// judged; every other caller runs as before.
-    fn access_need(&self) -> crate::access::Need {
-        use crate::access::Need;
-        use hide_core::coordination::Command as Agents;
-        use hide_core::delivery::Command as Delivery;
-        use hide_core::pane_command::PaneCommand;
+    /// hide-external-control B20-B23). A command family the core also runs
+    /// for a tool takes its need from the core's one table
+    /// (`hide_core::access`), which the core judges again; the rest are
+    /// this boundary's alone.
+    fn access_need(&self) -> hide_core::access::Need {
+        use hide_core::access::{self, Need};
         match self {
+            Self::Delivery(command, _) => access::delivery_need(command),
+            Self::Pane(command) => access::pane_need(command),
+            Self::Mission(command) => access::mission_need(command),
+            Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
-            Self::Device(command) => match command {
-                hide_core::device_command::DeviceCommand::List => Need::View,
-                _ => Need::Act,
-            },
-            Self::Mission(command) => match **command {
-                hide_core::missions::MissionCommand::List
-                | hide_core::missions::MissionCommand::Show { .. } => Need::View,
-                _ => Need::Agent,
-            },
-            Self::Pane(command) => match command {
-                PaneCommand::Read { .. }
-                | PaneCommand::ReadScreen { .. }
-                | PaneCommand::AgentRead { .. } => Need::View,
-                PaneCommand::Send { .. } => Need::Act,
-                PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => Need::Agent,
-            },
-            Self::Delivery(command, _) => match &**command {
-                Delivery::Agents { command } => match command {
-                    Agents::List { .. } => Need::View,
-                    Agents::Show { id } if id != hide_core::coordination::HERE => Need::View,
-                    Agents::Spawn {
-                        parent: Some(_), ..
-                    } => Need::Parent,
-                    Agents::Spawn {
-                        beside, plan_node, ..
-                    } if *beside || plan_node.is_some() => Need::Agent,
-                    Agents::Spawn { .. } | Agents::End { .. } => Need::Act,
-                    Agents::Show { .. }
-                    | Agents::RegisterSelf { .. }
-                    | Agents::Register { .. }
-                    | Agents::AskHuman { .. }
-                    | Agents::AskHumanClear => Need::Agent,
-                },
-                // A hook's own reads: a runtime in a pane asks them.
-                Delivery::Pull { .. } | Delivery::Confirm { .. } => Need::Agent,
-                Delivery::Send { .. }
-                | Delivery::Reply { .. }
-                | Delivery::Ack { .. }
-                | Delivery::AckBundle { .. }
-                | Delivery::Cancel { .. }
-                | Delivery::Show { .. }
-                | Delivery::Inbox { .. }
-                | Delivery::WatchStart { .. }
-                | Delivery::WatchStop { .. }
-                | Delivery::WatchAssign { .. }
-                | Delivery::WatchList => Need::Act,
-            },
             Self::Plan(..) | Self::Memory(..) | Self::MemoryHook(..) => Need::Agent,
             Self::AgentSleep { .. }
             | Self::AgentArchive { .. }
@@ -2012,7 +1968,7 @@ async fn scoped_client_loop(
                             // An external tool runs what its level allows,
                             // judged here for every command (B20-B23).
                             if let Some(level) = cap.access_level() {
-                                crate::access::admit(level, command.access_need()).map_err(|reason| {
+                                hide_core::access::admit(level, command.access_need()).map_err(|reason| {
                                     (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
                                 })?;
                             }
@@ -2071,6 +2027,17 @@ async fn scoped_client_loop(
                                 }
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
+                                }
+                                // A tool outside every checkout has none to
+                                // read: it asks from inside one (B25).
+                                ScopedRequest::Links(_) | ScopedRequest::Session(_)
+                                    if cap.access_level().is_some()
+                                        && cap.context.checkout_path.is_empty() =>
+                                {
+                                    return Err((
+                                        "checkout_not_registered".to_owned(),
+                                        crate::pane_auth::CHECKOUT_NEXT_ACTION,
+                                    ));
                                 }
                                 ScopedRequest::Links(query) => {
                                     let scope = core.links_scope(&cap.context).ok_or((

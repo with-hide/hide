@@ -9,7 +9,9 @@
 use std::path::PathBuf;
 
 use hide_agent_hooks::hook_request::install::{AccessAsk, PaneRequest};
-use hide_core::access::{Call, Level, key_hash, valid_key, valid_name};
+use hide_core::access::{
+    Call, NEEDS_AGENT, SPAWN_PARENT, VIEW_ONLY, key_hash, valid_key, valid_name,
+};
 use hide_core::engine::EngineHandle;
 use serde_json::{Value, json};
 
@@ -19,36 +21,6 @@ use crate::pane_auth::Registry;
 /// What a command refused because the connection is gone says to do.
 pub const REVOKED_NEXT_ACTION: &str =
     "The operator disconnected this tool; run hide access request --name <name> to ask again";
-
-/// The level a command needs from a tool (B20-B23), judged at the command
-/// boundary (`server::ScopedRequest::access_need`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Need {
-    /// Reads what Hide shows: View only runs it.
-    View,
-    /// Changes something, as the operator would: Act runs it.
-    Act,
-    /// Means an agent in a Hide pane: no tool runs it; the tool starts an
-    /// agent and asks it instead (B22).
-    Agent,
-    /// A spawn under a parent: a tool is never one (B23).
-    Parent,
-}
-
-/// Whether a tool at `level` runs a command that needs `need`, or the
-/// reason it is refused.
-pub fn admit(level: Level, need: Need) -> Result<(), &'static str> {
-    match (level, need) {
-        (_, Need::View) | (Level::Act, Need::Act) => Ok(()),
-        (Level::View, _) => Err(VIEW_ONLY),
-        (Level::Act, Need::Agent) => Err(NEEDS_AGENT),
-        (Level::Act, Need::Parent) => Err(SPAWN_PARENT),
-    }
-}
-
-const VIEW_ONLY: &str = "access_view_only";
-const NEEDS_AGENT: &str = "access_needs_agent";
-const SPAWN_PARENT: &str = "access_spawn_parent";
 
 /// Every refusal a tool's command can get, each with its `next_action`
 /// (`hide contract --json` lists them, B36).
@@ -90,7 +62,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "16 tools are connected; ask the operator to disconnect one in Settings > External tools, then run hide access request again"
         }
         "access_name_taken" => {
-            "A connected tool has this name; choose another --name, or ask the operator to disconnect that tool"
+            "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again"
         }
         "access_revoked" => REVOKED_NEXT_ACTION,
         "access_ambiguous" => {
@@ -98,7 +70,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
         }
         "access_not_connected" => "Run hide access request --name <name> first",
         "access_key_unreadable" => {
-            "This tool's key file cannot be read; run hide access request --name <name> to make a new one"
+            "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again"
         }
         "access_view_only" => {
             "This tool is View only; ask the operator to switch it to Act in Settings > External tools"
@@ -179,10 +151,14 @@ pub(crate) fn answer_bootstrap(
             if !valid_name(name) {
                 return (refused("invalid_request"), None);
             }
+            let Some(id) = fresh_id() else {
+                return (refused("access_unavailable"), None);
+            };
             Call::Request {
                 name: name.clone(),
                 key_sha256,
                 program: program_of(peer),
+                id,
             }
         }
         AccessAsk::Status { .. } => Call::Status { key_sha256 },
@@ -256,6 +232,14 @@ fn in_a_pane(
         .any(|program| program.runs() && hide_platform::process::descends_from(peer, program.pid))
 }
 
+/// A request's id, random so that nothing of the key is in it
+/// (`hide_core::access::valid_id`).
+fn fresh_id() -> Option<String> {
+    let mut bytes = [0u8; 8];
+    getrandom::getrandom(&mut bytes).ok()?;
+    Some(hex::encode(bytes))
+}
+
 /// The program that ran `hide access request`, as the kernel names the
 /// requesting process's parent: its file where the system says, else its
 /// name. Shown to the operator beside the request, never trusted.
@@ -272,17 +256,6 @@ fn program_of(peer: i32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn view_only_runs_reads_and_act_runs_all_but_what_needs_an_agent() {
-        assert_eq!(admit(Level::View, Need::View), Ok(()));
-        assert_eq!(admit(Level::View, Need::Act), Err(VIEW_ONLY));
-        assert_eq!(admit(Level::View, Need::Agent), Err(VIEW_ONLY));
-        assert_eq!(admit(Level::View, Need::Parent), Err(VIEW_ONLY));
-        assert_eq!(admit(Level::Act, Need::Act), Ok(()));
-        assert_eq!(admit(Level::Act, Need::Agent), Err(NEEDS_AGENT));
-        assert_eq!(admit(Level::Act, Need::Parent), Err(SPAWN_PARENT));
-    }
 
     #[test]
     fn every_tool_refusal_says_what_to_do() {

@@ -131,6 +131,7 @@ impl Fixture {
             name: "nightly".into(),
             key_sha256: key_hash(KEY),
             program: None,
+            id: "00000000000000a1".into(),
         });
         let id = answer.unwrap()["id"].as_str().unwrap().to_owned();
         assert!(guard.access_event(AccessEvent::Approve {
@@ -358,6 +359,9 @@ fn a_tool_is_refused_what_needs_an_agent_a_parent_or_a_pane_hint() {
         refused(spawn(None, true)).as_deref(),
         Some("access_needs_agent")
     );
+    // A spawn with a task is Act's to ask; the task is Hide's own, which
+    // the spawn's own rule refuses a tool as it does a pane agent
+    // (`coordination::started` tests), not the level.
     let mut tasked = spawn(None, false);
     if let Command::Agents {
         command: crate::coordination::Command::Spawn { task, .. },
@@ -365,7 +369,10 @@ fn a_tool_is_refused_what_needs_an_agent_a_parent_or_a_pane_hint() {
     {
         *task = Some(serde_json::from_value(json!({"kind": "memory_promote"})).unwrap());
     }
-    assert_eq!(refused(tasked).as_deref(), Some("task_reserved"));
+    assert!(
+        !refused(tasked).is_some_and(|code| code.starts_with("access_")),
+        "a task is no level's"
+    );
     for command in [
         crate::coordination::Command::AskHumanClear,
         crate::coordination::Command::Show {
@@ -551,4 +558,74 @@ fn a_tool_reads_panes_and_missions_types_only_at_act_and_conducts_nothing() {
         },
     );
     assert_eq!(created.err().as_deref(), Some("access_needs_agent"));
+}
+
+/// The watches a tool keeps, as the store holds them.
+fn tool_watches(fixture: &Fixture) -> usize {
+    let ledger = fixture.runtime.lock().unwrap().delivery_state().unwrap();
+    ledger
+        .watches
+        .iter()
+        .filter(|watch| watch.parent.access_connection().is_some())
+        .count()
+}
+
+/// D-23: a disconnect, the tool's own leave and a list restored without
+/// the connection (a stop that lost the first cleanup) each end the watch
+/// the tool kept, through the store, while the agent it watched runs on.
+#[test]
+#[allow(clippy::disallowed_methods)] // polls the store's worker, bounded by a deadline
+fn a_disconnect_a_leave_or_a_restore_without_the_tool_ends_the_watch_it_kept() {
+    for end in ["revoke", "leave", "restore"] {
+        let fixture = Fixture::start();
+        let connection = fixture.connect(Level::Act);
+        let worker = fixture.ids["worker"].clone();
+        fixture
+            .tool(
+                &connection,
+                Command::WatchStart {
+                    target: worker.clone(),
+                    observer: None,
+                    actor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(tool_watches(&fixture), 1, "{end}");
+        match end {
+            "revoke" => fixture.operator(AccessEvent::Revoke {
+                id: connection.clone(),
+            }),
+            "leave" => {
+                let (left, _) = fixture.runtime.lock().unwrap().access_call(Call::Leave {
+                    key_sha256: key_hash(KEY),
+                });
+                left.unwrap();
+            }
+            _ => {
+                let (store, _) =
+                    crate::runtime::access::restore(fixture._root.path().join("access.json"));
+                fixture
+                    .runtime
+                    .lock()
+                    .unwrap()
+                    .install_access_store(store, crate::access::Stored::default());
+            }
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while tool_watches(&fixture) > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{end}: the watch stayed"
+            );
+            std::thread::sleep(Duration::from_millis(5)); // wait-ok: the store's worker applied the posted cleanup
+        }
+        let ledger = fixture.runtime.lock().unwrap().delivery_state().unwrap();
+        assert!(
+            ledger
+                .agents
+                .iter()
+                .any(|record| record.id == worker && !record.ended),
+            "{end}"
+        );
+    }
 }

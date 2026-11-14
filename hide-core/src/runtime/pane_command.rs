@@ -34,22 +34,7 @@ impl Runtime {
                 (caller_pane, context)
             }
             Caller::Access { connection, .. } => {
-                let (level, _) = self
-                    .access_actor(connection)
-                    .filter(|_| device == self.node.as_str())
-                    .ok_or(crate::access::Ended::Revoked.reason())?;
-                match &command {
-                    PaneCommand::Read { .. }
-                    | PaneCommand::ReadScreen { .. }
-                    | PaneCommand::AgentRead { .. } => {}
-                    PaneCommand::Send { .. } if level == crate::access::Level::Act => {}
-                    PaneCommand::Send { .. } => {
-                        return Err(super::access::VIEW_ONLY.into());
-                    }
-                    PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => {
-                        return Err(super::access::NEEDS_AGENT.into());
-                    }
-                }
+                self.access_authority(device, connection, crate::access::pane_need(&command))?;
                 ("", expected.clone())
             }
             _ => return Err("pane_required".into()),

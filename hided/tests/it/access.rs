@@ -5,9 +5,7 @@
 //! It then runs what its level allows and is refused the rest with a code
 //! and what to do; a refusal, a disconnect, its own leave, a restart and a
 //! damaged key each answer as the tool can act on.
-#![cfg(unix)]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -24,8 +22,7 @@ type Socket =
 
 fn daemon_env(root: &Path) -> Env {
     let state = root.join("state");
-    std::fs::create_dir_all(&state).unwrap();
-    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    hide_platform::fs::private::create_dir_all(&state).unwrap();
     std::fs::create_dir_all(root.join("operator")).unwrap();
     Env {
         home: root.join("operator"),
@@ -56,6 +53,12 @@ struct Window(Socket);
 
 impl Window {
     async fn open(running: &hided::RunningDaemon) -> Self {
+        Self::open_as(running, Some("web")).await
+    }
+
+    /// A screen connection of `kind`; only a `web` or `desktop` one is a
+    /// window, and one that names no kind draws nothing.
+    async fn open_as(running: &hided::RunningDaemon, kind: Option<&str>) -> Self {
         let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
             .into_client_request()
             .unwrap();
@@ -68,9 +71,15 @@ impl Window {
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         socket
             .send(Message::Text(
-                json!({"token": running.token, "schema_version": 2, "client_kind": "web"})
-                    .to_string()
-                    .into(),
+                {
+                    let mut hello = json!({"token": running.token, "schema_version": 2});
+                    if let Some(kind) = kind {
+                        hello["client_kind"] = json!(kind);
+                    }
+                    hello
+                }
+                .to_string()
+                .into(),
             ))
             .await
             .unwrap();
@@ -87,6 +96,44 @@ impl Window {
             ))
             .await
             .unwrap();
+    }
+
+    /// The message of the next error the daemon answers this connection.
+    async fn error(&mut self) -> String {
+        use futures_util::StreamExt;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let frame = tokio::time::timeout(left, self.0.next())
+                .await
+                .expect("no error came")
+                .expect("the connection closed")
+                .unwrap();
+            let Message::Text(text) = frame else { continue };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["type"] == "error" {
+                return value["message"].as_str().unwrap().to_owned();
+            }
+        }
+    }
+}
+
+/// A shell recorded as a pane's program, waiting to start `hide`.
+#[cfg(unix)]
+struct InAPane {
+    child: std::process::Child,
+    record: PathBuf,
+}
+
+#[cfg(unix)]
+impl InAPane {
+    /// Lets the shell start `hide`, and what it answered.
+    fn finish(mut self) -> Ran {
+        use std::io::Write;
+        self.child.stdin.take().unwrap().write_all(b"go\n").unwrap();
+        let output = self.child.wait_with_output().unwrap();
+        std::fs::remove_file(&self.record).unwrap();
+        Ran::of(output)
     }
 }
 
@@ -105,6 +152,17 @@ struct Ran {
 }
 
 impl Ran {
+    fn of(output: std::process::Output) -> Self {
+        Self {
+            ok: output.status.success(),
+            out: format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+    }
+
     /// The JSON line the run printed last.
     fn json(&self) -> Value {
         let line = self.out.lines().rev().find(|line| line.starts_with('{'));
@@ -136,7 +194,11 @@ impl Tool {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_hide"));
+        self.command_of(Path::new(env!("CARGO_BIN_EXE_hide")), args)
+    }
+
+    fn command_of(&self, program: &Path, args: &[&str]) -> Command {
+        let mut command = Command::new(program);
         for (key, _) in std::env::vars_os() {
             let upper = key.to_string_lossy().to_uppercase();
             if upper.starts_with("HIDE_") {
@@ -162,15 +224,55 @@ impl Tool {
         for (key, value) in env {
             command.env(key, value);
         }
-        let output = command.output().unwrap();
-        Ran {
-            ok: output.status.success(),
-            out: format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        }
+        Ran::of(command.output().unwrap())
+    }
+
+    /// `hide args` started by a shell the core's engine records as a pane's
+    /// program, as an agent in a pane that cleared its environment runs it:
+    /// the shell waits until [`InAPane::finish`], so its record can be read
+    /// meanwhile.
+    #[cfg(unix)]
+    fn in_a_pane(&self, args: &[&str]) -> InAPane {
+        // `exit` after `hide` keeps the shell from becoming it, so `hide`
+        // is the shell's child.
+        let mut shell = vec![
+            "-c",
+            "read _ && \"$0\" \"$@\"; exit $?",
+            env!("CARGO_BIN_EXE_hide"),
+        ];
+        shell.extend_from_slice(args);
+        let child = self
+            .command_of(Path::new("/bin/sh"), &shell)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let record =
+            hide_kit::layout::pane_record(&self.state, &format!("in-a-pane-{}", child.id()));
+        hide_platform::fs::private::create_dir_all(record.parent().unwrap()).unwrap();
+        let program = hide_holder_protocol::record::Identity::of(child.id()).unwrap();
+        hide_holder_protocol::record::write(
+            &record,
+            &hide_holder_protocol::record::PaneRecord {
+                format: hide_holder_protocol::record::RECORD_FORMAT,
+                pane: "in-a-pane".to_owned(),
+                owner: "fixture".to_owned(),
+                incarnation: 1,
+                phase: hide_holder_protocol::record::Phase::Running,
+                protocol: hide_holder_protocol::PROTOCOL_VERSION,
+                version_folder: "fixture".to_owned(),
+                spec: "fixture".to_owned(),
+                reservation: None,
+                reserved_at_unix_ms: 0,
+                boot: None,
+                holder: None,
+                program: Some(program),
+                end: None,
+            },
+        )
+        .unwrap();
+        InAPane { child, record }
     }
 
     fn key_file(&self, name: &str, extension: &str) -> PathBuf {
@@ -232,8 +334,16 @@ async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
     assert_eq!(connected.json()["value"]["state"], "connected");
     assert_eq!(connected.json()["value"]["level"], "view");
     let key = tool.key_file("nightly", "key");
-    let mode = std::fs::metadata(&key).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600, "the key file is {mode:o}");
+    assert!(
+        hide_platform::fs::private::is_private(&key).unwrap(),
+        "the key file is open to others"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&key).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the key file is {mode:o}");
+    }
     assert!(!tool.key_file("nightly", "request").exists());
     let human = tool.run(&["access", "request", "--name", "nightly"]);
     assert!(
@@ -404,9 +514,33 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
         .run(&["access", "status", "--json"])
         .refused("access_request_expired");
 
-    // B32: a damaged key file.
+    // B32: a damaged key file, and the way back its refusal names: the
+    // request replaces the file, the core says the name is still
+    // connected, the operator disconnects it, and the request asks anew.
     std::fs::write(kept.key_file("kept", "key"), "{not a key").unwrap();
     kept.run(&["ps"]).refused("access_key_unreadable");
+    kept.run(&["access", "request", "--name", "kept", "--json"])
+        .refused("access_name_taken");
+    assert!(!kept.key_file("kept", "key").exists());
+    let mut window = Window::open(&running).await;
+    window.send("access_revoke", json!({"id": id})).await;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let again = loop {
+        let ran = kept.run(&["access", "request", "--name", "kept", "--json"]);
+        if ran.ok {
+            break ran;
+        }
+        ran.refused("access_name_taken");
+        assert!(Instant::now() < deadline, "still taken: {}", ran.out);
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's disconnect reached the core; the tool's next request reads it
+    };
+    let renewed = again.json()["value"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(renewed, id, "a new key is a new connection");
+    window
+        .send("access_approve", json!({"id": renewed, "level": "view"}))
+        .await;
+    assert!(kept.request_until_answered("kept").await.ok);
+    assert!(kept.run(&["ps", "--json"]).ok);
 
     // B8, B19: a caller that names a pane runs as a pane, never as a tool.
     kept.run_with(
@@ -440,5 +574,54 @@ async fn a_home_with_two_keys_needs_hide_access_to_choose() {
     );
     assert!(chosen.ok, "{}", chosen.out);
     assert_eq!(chosen.json()["value"]["name"], "second");
+    running.stop();
+}
+
+/// B8 (D-08): who is never a tool, and who answers one. A process that
+/// descends from a pane's program is never a tool, with no pane in its
+/// environment and a valid key in its home: it runs as its folder, as
+/// before; any other process with the key runs as the tool. An approval
+/// from a connection that is not an operator window is refused, and the
+/// request still waits.
+// The daemon runs on this test's runtime while a fake tool's `hide` blocks
+// a thread of it, so it needs threads of its own.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pane_program_is_never_a_tool_and_only_a_window_approves_one() {
+    let root = tempfile::tempdir().unwrap();
+    let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
+    let tool = Tool::new(root.path(), "tool-home");
+
+    let id = tool.put_up("paned");
+    let mut screen = Window::open_as(&running, None).await;
+    screen
+        .send("access_approve", json!({"id": id, "level": "act"}))
+        .await;
+    assert_eq!(
+        screen.error().await,
+        "External tools are approved in an operator window"
+    );
+    let status = tool.run(&["access", "status", "--json"]);
+    assert_eq!(status.json()["value"]["state"], "pending", "{}", status.out);
+
+    let mut window = Window::open(&running).await;
+    window
+        .send("access_approve", json!({"id": id, "level": "act"}))
+        .await;
+    assert!(tool.request_until_answered("paned").await.ok);
+
+    let pane = tool.in_a_pane(&["ps", "--json"]);
+    let outside = tool.run(&["ps", "--json"]);
+    assert!(
+        outside.ok,
+        "a process outside every pane is the tool: {}",
+        outside.out
+    );
+    let inside = pane.finish();
+    inside.refused("checkout_not_registered");
+    assert!(!inside.out.contains("access_"), "{}", inside.out);
+    tool.in_a_pane(&["access", "request", "--name", "paned", "--json"])
+        .finish()
+        .refused("access_from_pane");
     running.stop();
 }

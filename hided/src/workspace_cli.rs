@@ -66,9 +66,14 @@ impl<'a> Credential<'a> {
             Ok(value) if !value.is_empty() => Ok(Self::named(env, PathBuf::from(value))),
             Ok(_) => Err("invalid_reference".to_owned()),
             // Outside Hide's panes, a connected external tool runs as its
-            // connection (B18); any other caller as before.
+            // connection (B18); any other caller as before. A process the
+            // daemon finds under a pane's program is never the tool, whatever
+            // key its home holds: it runs as its folder, as it did (B37).
             Err(_) => match crate::access_cli::tool_key(env)? {
-                Some(key) => Self::tool(env, key),
+                Some(key) => match Self::tool(env, key) {
+                    Err(code) if code == "access_from_pane" => Self::one_shot(env),
+                    credential => credential,
+                },
                 None => Self::one_shot(env),
             },
         }

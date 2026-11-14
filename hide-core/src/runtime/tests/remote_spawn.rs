@@ -730,6 +730,7 @@ fn a_spawn_a_tool_asks_for_starts_as_its_connection_and_names_the_tool_as_origin
             name: "nightly".into(),
             key_sha256: key_hash(&"7".repeat(64)),
             program: None,
+            id: "00000000000000a7".into(),
         });
         let id = asked.unwrap()["id"].as_str().unwrap().to_owned();
         assert!(runtime.access_event(AccessEvent::Approve {

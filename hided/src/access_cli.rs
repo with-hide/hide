@@ -146,7 +146,19 @@ pub fn run(env: &Env, cli: &AccessCli) -> Result<(), String> {
 fn request(env: &Env, name: &str) -> Result<Value, Refusal> {
     refuse_in_pane(env)?;
     let folder = hide_kit::layout::access_keys(&env.home);
-    match kept(&folder, name)? {
+    let kept = match kept(&folder, name) {
+        // A damaged file proves nothing, and the core cannot be told which
+        // connection it held: it goes, and a new key asks anew (B32). An
+        // old connection of the name still stands until the operator
+        // disconnects it, which the core's `access_name_taken` says.
+        Err(refusal) if refusal.code == "access_key_unreadable" => {
+            remove_key(&folder, name, Kept::Connected);
+            remove_key(&folder, name, Kept::Requested);
+            None
+        }
+        kept => kept?,
+    };
+    match kept {
         Some(key) => settle(env, &folder, key),
         None => {
             let key = fresh_key()?;

@@ -973,7 +973,7 @@ fn is_zero(value: &u64) -> bool {
 /// Whether `caller` is Hide's own identity for typed input, the only one
 /// that reports a brief's record or its notice (`delivery::typed`).
 fn input_authority(caller: &Actor) -> bool {
-    caller.hide_owned()
+    caller.hide_itself()
         && caller.name
             == format!(
                 "{}{}",
@@ -1100,6 +1100,17 @@ pub(crate) enum Mutation {
         mission: String,
         conductor: String,
         former: Option<String>,
+    },
+    /// External tools' connections are those of `connections` (PRD
+    /// hide-external-control D-23): what a tool whose connection is not
+    /// among them keeps in the ledger ends, its origin records and the
+    /// watches it keeps or that watch it, with the answer waits of its
+    /// letters. Derived from the list, so asking it again converges, and a
+    /// post lost to a stop is made again at the next start. Only Hide
+    /// itself asks it, after a disconnect, a tool's leave and the list's
+    /// restore.
+    EndTools {
+        connections: Vec<String>,
     },
 }
 
@@ -1851,7 +1862,7 @@ pub(crate) fn apply_with(
             // identity may give one, and only on a handoff.
             if task.as_ref().is_some_and(|task| {
                 mode != SpawnMode::Handoff
-                    || !caller.hide_owned()
+                    || !caller.hide_itself()
                     || task.target.as_deref().is_some_and(|target| !key(target))
             }) {
                 return Err("task_reserved".into());
@@ -2401,11 +2412,49 @@ pub(crate) fn apply_with(
             conductor,
             former,
         } => {
-            if !caller.hide_owned() {
+            if !caller.hide_itself() {
                 return Err("parent_authority_required".into());
             }
             let moved = adopt_mission_workers(ledger, mission, conductor, former.as_deref())?;
             Ok(json!({"moved": moved}))
+        }
+        Mutation::EndTools { connections } => {
+            if !caller.hide_itself() {
+                return Err("parent_authority_required".into());
+            }
+            let gone = |actor: &Actor| {
+                actor
+                    .access_connection()
+                    .is_some_and(|id| !connections.iter().any(|kept| kept == id))
+            };
+            let before = ledger.watches.len();
+            ledger.watches.retain(|watch| !gone(&watch.parent));
+            let ended: Vec<String> = ledger
+                .agents
+                .iter()
+                .filter(|record| !record.ended && gone(&record.actor))
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &ended {
+                end_record(ledger, id, now);
+            }
+            // A tool's letter waits for an answer it can no longer read,
+            // with or without an origin record of the tool.
+            let mut parties: Vec<Actor> = Vec::new();
+            for letter in &ledger.letters {
+                for party in [&letter.sender, &letter.recipient] {
+                    if letter.waiting_answer
+                        && gone(party)
+                        && !parties.iter().any(|known| known.same_identity(party))
+                    {
+                        parties.push(party.clone());
+                    }
+                }
+            }
+            for party in &parties {
+                ledger.end_answer_waits_of(party, now);
+            }
+            Ok(json!({"ended": ended, "watches": before - ledger.watches.len()}))
         }
     }
 }
@@ -2924,6 +2973,92 @@ mod tests {
             .unwrap()
             .into()
     }
+    /// D-23: what a tool whose connection is gone keeps ends, its origin
+    /// record, the watch it keeps and its letter's answer wait, while a tool
+    /// still connected and the agent it watches are untouched; asked again
+    /// it changes nothing, and no one but Hide itself asks it.
+    #[test]
+    fn ending_tools_ends_only_what_tools_no_longer_connected_keep() {
+        let mut ledger = Ledger::default();
+        let gone = Actor::access("00000000000000a1", "gone", "local");
+        let kept = Actor::access("00000000000000a2", "kept", "local");
+        let worker = record("worker", "worker-session", None);
+        let worker_id = register(&mut ledger, worker.clone(), &worker.actor);
+        let tool_record = |actor: &Actor| AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: "local".into(),
+            host_scope: actor.kind.clone(),
+            native_machine: actor.kind.clone(),
+            session: actor.name.clone(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+        };
+        let gone_id = register(&mut ledger, tool_record(&gone), &gone);
+        let kept_id = register(&mut ledger, tool_record(&kept), &kept);
+        for tool in [&gone, &kept] {
+            crate::delivery::watch::start(&mut ledger, tool, &worker.actor, 1).unwrap();
+        }
+        let asked = crate::delivery::mailbox::send(
+            &mut ledger,
+            &gone,
+            &worker.actor,
+            "look",
+            "please look",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        // The worker took it in: its answer is owed from now on.
+        let taken = ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == asked.id && letter.waiting_answer)
+            .unwrap();
+        taken.state = crate::delivery::ledger::State::Delivered;
+
+        let end = Mutation::EndTools {
+            connections: vec!["00000000000000a2".into()],
+        };
+        assert_eq!(
+            apply(&mut ledger, &gone, &end, 2).unwrap_err(),
+            "parent_authority_required"
+        );
+        let hide = Actor::hide(crate::delivery::HIDE_ACCESS_ROLE, "local");
+        apply(&mut ledger, &hide, &end, 2).unwrap();
+        let ended = |ledger: &Ledger, id: &str| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == id)
+                .unwrap()
+                .ended
+        };
+        assert!(ended(&ledger, &gone_id));
+        assert!(!ended(&ledger, &kept_id));
+        assert!(!ended(&ledger, &worker_id));
+        assert_eq!(ledger.watches.len(), 1);
+        assert!(ledger.watches[0].parent.same_identity(&kept));
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == asked.id)
+            .unwrap();
+        assert!(!letter.waiting_answer);
+
+        let again = apply(&mut ledger, &hide, &end, 3).unwrap();
+        assert_eq!(again["ended"], json!([]));
+        assert_eq!(ledger.watches.len(), 1);
+    }
+
     /// A registration an earlier build made for a parent the engine never named
     /// holds its pane id as its name. Reading the ledger gives it none, so
     /// it is called by its registration id and by its screen title, never by
