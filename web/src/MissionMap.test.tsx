@@ -513,8 +513,8 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // A worker Hide put to sleep leaves its node in progress; its words name the sleep (B1), and its ring rests in dashes, since a ring turns only while someone works the node (operator decision 2026-11-13).
     expect([card(map, "sleeping").dataset.nodeLook, card(map, "sleeping").querySelector("[data-node-mark]")?.getAttribute("aria-label")]).toEqual(["working", "In progress · Worker asleep"]);
     expect(card(map, "sleeping").querySelector("[data-node-mark]")?.getAttribute("data-node-mark-pace")).toBe("waiting");
-    expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).not.toContain("animate-spin");
-    expect(card(map, "core").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
+    expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).not.toContain("animate-working-turn");
+    expect(card(map, "core").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-working-turn");
     // The worker has its own row under the title: its agent mark and model, the plan's marked planned, the launch's once kept (codex here, where the plan said claude); effort is the hover's (D-51).
     const worker = (key: string) => {
       const run = card(map, key).querySelector<HTMLElement>("[data-node-run]");

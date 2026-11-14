@@ -23,7 +23,7 @@ export function MissionNodeMark({ look, label, pace = null, failed = false, hint
   const moves = look === "working" ? (pace ?? "working") : null;
   const mark = (
     <span role="img" aria-label={label} data-node-mark={look} data-node-mark-pace={moves ?? undefined} data-node-mark-failed={(failed && look === "done") || undefined} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
-      <svg viewBox="0 0 12 12" className={cn("size-full", moves === "working" && "motion-safe:animate-spin")} aria-hidden="true">
+      <svg viewBox="0 0 12 12" className={cn("size-full", moves === "working" && "motion-safe:animate-working-turn")} aria-hidden="true">
         {failed && look === "done" ? <Failed /> : moves === "stopped" ? <Paused /> : moves === "waiting" ? <Dashed /> : <Shape look={look} />}
       </svg>
     </span>
