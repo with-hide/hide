@@ -108,6 +108,24 @@ describe("the table (B2-B5)", () => {
     const cellDetail = await mount({ missions, tools: [cell], toolCell: tool.connection, place: { selected: "mission-4" } });
     expect(cellDetail.q('[data-mission-list-row="mission-4"]')).not.toBeNull();
     expect(cellDetail.q("[data-tool-mark]")).toBeNull();
+    await cellDetail.unmount();
+  });
+
+  it("returns to the device once the tool's cell goes, and stays there when the tool acts again (PRD hide-external-control B44)", async () => {
+    const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+    const missions = { items: [mission("mission-1"), mission("mission-4", { tool })] };
+    const cell = { connection: tool.connection, name: "nightly", turn: 0, devices: [], mission_asks: [] };
+    const { q, all } = await mount({ missions, tools: [cell], toolCell: tool.connection });
+    expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
+    const navigator = (tools: unknown[]) => act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, navigator: { ...state.rest!.navigator!, tools } } as SnapshotRest })));
+    // Disconnect, leave or View only: the cell goes and the window shows the device's missions.
+    await navigator([]);
+    expect(q("[data-mission-screen-tool]")).toBeNull();
+    expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-1"]);
+    expect(useUiStore.getState().toolCell).toBeNull();
+    // Act again on the same tool: its tile is back, and the window stays on the device until it is picked.
+    await navigator([cell]);
+    expect(q("[data-mission-screen-tool]")).toBeNull();
   });
 
   it("narrows the rows and the count to a project's chip, and back with 모든 프로젝트 (B3)", async () => {

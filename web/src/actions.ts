@@ -1691,8 +1691,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
       if (screen?.kind === "main") ui().setOverview({ deviceId: null, projectId: null, panel: null });
       ui().setToolCell(connection);
-      const local = localDeviceId(rest());
-      if (frontDeviceId(rest()) !== local) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: local } });
+      // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
+      const own = windowDeviceId(rest()?.navigator?.devices);
+      if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11). */

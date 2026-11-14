@@ -438,3 +438,30 @@ describe("input after a confirmed View close", () => {
     } finally { remove(); }
   });
 });
+
+// PRD hide-external-control B44: a tool's cell stands over this window's own
+// machine, which the window shows again once the cell goes (disconnect, leave
+// or View only), whether the window is a node's or the Overview showed another device.
+describe("selecting a tool's cell", () => {
+  const TOOL = "c0ffee00c0ffee00";
+  afterEach(() => {
+    window.location.hash = "";
+    useShellStore.setState({ rest: null });
+    useUiStore.getState().setToolCell(null);
+  });
+  const select = (hash: string, front: string, overview: string | null = null) => {
+    window.location.hash = hash;
+    useShellStore.setState({ rest: { navigator: { focused_device_id: front, devices: [{ id: "core", kind: "local" }, { id: "node-window", kind: "remote" }, { id: "mini", kind: "remote" }], workspaces: [], tools: [{ connection: TOOL, name: "nightly", turn: 0, devices: [] }] }, status: { remote: [] } } as never });
+    useUiStore.setState({ screen: { kind: "main" } } as never);
+    useUiStore.getState().setOverview({ deviceId: overview });
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).focusTool(TOOL);
+    return { focus: sent.filter((event) => event.kind === "focus_device").map((event) => (event.payload as { device_id: string }).device_id), overview: useUiStore.getState().overview.deviceId, cell: useUiStore.getState().toolCell };
+  };
+
+  it("brings this window's own machine to the front under the cell, never the core's from a node's window", () => {
+    expect(select("#node=node-window", "core"), "a node's window").toEqual({ focus: ["node-window"], overview: null, cell: TOOL });
+    expect(select("#node=node-window", "node-window"), "already in front").toEqual({ focus: [], overview: null, cell: TOOL });
+    expect(select("", "mini", "mini"), "the core's window on a device's Overview").toEqual({ focus: ["core"], overview: null, cell: TOOL });
+  });
+});

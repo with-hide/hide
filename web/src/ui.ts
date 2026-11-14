@@ -264,7 +264,8 @@ type UiStore = {
    * The external tool whose cell the rail selected, by connection id, in
    * place of the device in front (PRD hide-external-control D-45, B40); this
    * window's alone, as which cell a window shows is. A tool no longer at Act
-   * has no cell, and the window shows the device in front again (B44).
+   * has no cell, and `toolCells.ts` forgets it here at once, so the window
+   * shows the device in front again (B44).
    */
   toolCell: string | null;
   setToolCell: (connection: string | null) => void;
