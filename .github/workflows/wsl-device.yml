@@ -246,7 +246,7 @@ jobs:
         # Flaky tests).
         # The lane's own 15 minutes, or enough for the repeat a hand run asked
         # for (docs/TESTING.md, The repeat lane, bounds one the same way).
-        timeout-minutes: ${{ (inputs.repeat == '' || inputs.repeat == '1') && 15 || 45 }}
+        timeout-minutes: ${{ inputs.repeat == '' && 15 || inputs.repeat == '1' && 15 || 45 }}
         env:
           HIDE_E2E_WSL_DISTRO: Ubuntu-24.04
           HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
