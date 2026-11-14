@@ -72,6 +72,40 @@ on:
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
+  # A hand run on a branch checks a change to this lane before it merges:
+  # `gh workflow run web-e2e.yml --ref <branch> -f lane=windows -f runner=windows-latest -f shards=3 -f grep=@platform -f table=web/e2e/shard-durations-windows.json`.
+  # `pr.yml` and the nightly call it through `workflow_call`, so a lane that
+  # only exists to be called has no way to be measured on a branch.
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Names the lane in job names and artifact names.
+        type: string
+        default: windows
+      runner:
+        description: The GitHub-hosted runner label.
+        type: string
+        default: windows-latest
+      shards:
+        description: How many shards deal the tests out.
+        type: number
+        default: 3
+      grep:
+        description: Playwright `--grep` filter; empty runs every test.
+        type: string
+        default: "@platform"
+      specs:
+        description: Space-separated spec paths to repeat; empty is the lane as the suites run it.
+        type: string
+        default: ""
+      repeat:
+        description: With `specs`, how many times each test runs (`--repeat-each`), with no retry.
+        type: string
+        default: ""
+      table:
+        description: The suite's duration table for this system's runner.
+        type: string
+        default: web/e2e/shard-durations-windows.json
 
 permissions:
   contents: read
