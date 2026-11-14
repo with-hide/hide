@@ -1,7 +1,8 @@
 import { AlertTriangleIcon, ArrowRightIcon, ChevronRightIcon, ExternalLinkIcon, FolderGit2Icon, FolderIcon, LoaderCircleIcon, PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useContext, useEffect, useMemo } from "react";
 import { Trans } from "react-i18next";
 import type { Actions } from "./actions";
+import { InToolCell } from "./components/tool-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { layerLines } from "./diskCleanup";
@@ -120,10 +121,13 @@ const NOW_TONE: Record<NowPart["key"], string> = { needs: "bg-warning", working:
  * The non-zero of `내 차례 N · 작업 중 N · 대기 N · 읽을 것 N`, `쉬는 중 N`
  * when nothing moves, `태스크 없음` with no task (B48): with its colour bar in a
  * row, and as words alone in the panel, Needs You in the warning colour
- * (PRD sidebar-task-lens B41).
+ * (PRD sidebar-task-lens B41). In an external tool's cell it is the tool's
+ * turn, `도구 차례 N`, in no warning colour (PRD hide-external-control B40).
  */
 function NowCell({ now, bar = true }: { now: NowCounts; bar?: boolean }) {
   const { t } = useInterfaceTranslation();
+  const tool = useContext(InToolCell);
+  const word = (part: NowPart) => t(tool && part.key === "needs" ? "overviewProjects.now.toolTurn" : `overviewProjects.now.${part.key}`, { count: part.value });
   if (now.total === 0) return <span className="text-muted-foreground">{t("overviewProjects.noTasks")}</span>;
   if (now.total === now.resting) return <span className="text-muted-foreground">{t("overviewProjects.restingCount", { count: now.resting })}</span>;
   const parts = nowParts(now);
@@ -133,7 +137,7 @@ function NowCell({ now, bar = true }: { now: NowCounts; bar?: boolean }) {
         {parts.map((part, index) => (
           <span key={part.key}>
             {index > 0 ? " · " : null}
-            <span className={cn(part.key === "needs" && "text-warning")}>{t(`overviewProjects.now.${part.key}`, { count: part.value })}</span>
+            <span className={cn(part.key === "needs" && !tool && "text-warning")}>{word(part)}</span>
           </span>
         ))}
       </span>
@@ -142,9 +146,9 @@ function NowCell({ now, bar = true }: { now: NowCounts; bar?: boolean }) {
   return (
     <span className="flex min-w-0 flex-col gap-xxs">
       <span aria-hidden="true" className="flex h-(--size-hairline) w-full gap-px overflow-hidden rounded-full bg-muted">
-        {parts.map((part) => <span key={part.key} className={NOW_TONE[part.key]} style={{ flexGrow: part.value }} />)}
+        {parts.map((part) => <span key={part.key} className={tool && part.key === "needs" ? NOW_TONE.waiting : NOW_TONE[part.key]} style={{ flexGrow: part.value }} />)}
       </span>
-      <span className="text-body text-subtle-foreground">{parts.map((part) => t(`overviewProjects.now.${part.key}`, { count: part.value })).join(" · ")}</span>
+      <span className="text-body text-subtle-foreground">{parts.map(word).join(" · ")}</span>
     </span>
   );
 }

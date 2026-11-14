@@ -35,6 +35,7 @@ import { workKey } from "./sessionWork";
 import { OverviewProjectHome } from "./OverviewProjectHome";
 import type { ToolCell } from "./agentScope";
 import { toolProjects } from "./toolCells";
+import { InToolCell } from "./components/tool-mark";
 
 // The five Overview tabs share a device and project scope. Account usage
 // keeps its global scope. A wide detail retains the list beneath it, so
@@ -92,6 +93,7 @@ export function MainScreen({ actions, deviceId, tool = null }: { actions: Action
   };
   const widePanel = panel?.kind === "item" || (panel?.kind === "record" && panel.returnTo === "history");
   return (
+    <InToolCell.Provider value={tool !== null}>
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label={t("overview.title")} data-main-screen="true" data-main-view={view}>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
         <Tabs className="-mb-[calc(var(--spacing-xs)+var(--size-hairline))] min-w-0 self-end overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
@@ -146,6 +148,7 @@ export function MainScreen({ actions, deviceId, tool = null }: { actions: Action
         </div>
       )}
     </section>
+    </InToolCell.Provider>
   );
 }
 

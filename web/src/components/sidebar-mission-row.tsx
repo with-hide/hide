@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useAgentLogosShown } from "../agentLogoMode";
 import type { Actions } from "../actions";
-import { deviceScope } from "../agentScope";
+import { deviceScope, type ToolCell } from "../agentScope";
 import { frontDeviceId } from "../devices";
 import { machineName } from "../screenMachine";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -23,10 +23,13 @@ import { ToolLabel } from "./tool-mark";
 
 /**
  * The missions `deviceId`'s scope names as its own Needs You items, the ones
- * its Needs You number counts; with `projectId`, only that project's.
+ * its Needs You number counts, or with `tool` the ones that wait on that
+ * external tool's answer, which its cell lists (PRD hide-external-control
+ * B40); with `projectId`, only that project's.
  */
-export function useMissionAsks(deviceId: string | null | undefined, projectId: string | null = null): MissionAsk[] {
-  const ids = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.mission_asks : undefined));
+export function useMissionAsks(deviceId: string | null | undefined, projectId: string | null = null, tool: ToolCell | null = null): MissionAsk[] {
+  const deviceIds = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.mission_asks : undefined));
+  const ids = tool ? tool.mission_asks : deviceIds;
   const missions = useShellStore((s) => (s.rest?.missions?.failed ? null : s.rest?.missions?.items) ?? null);
   return useMemo(() => (missions && ids ? projectAsks(missionAsks(missions, ids), projectId) : []), [missions, ids, projectId]);
 }

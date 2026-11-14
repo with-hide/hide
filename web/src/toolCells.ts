@@ -24,6 +24,14 @@ export function frontTool(rest: SnapshotRest | null, picked: string | null): Too
   return picked === null ? null : (toolCells(rest).find((cell) => cell.connection === picked) ?? null);
 }
 
+// A cell that goes (disconnect, leave, View only) is forgotten at once: the
+// window shows the device under it (B44), and Act again on the same tool does
+// not take the window back into its cell unasked.
+useShellStore.subscribe((state) => {
+  const picked = useUiStore.getState().toolCell;
+  if (picked !== null && state.rest !== null && frontTool(state.rest, picked) === null) useUiStore.getState().setToolCell(null);
+});
+
 /** The tool cell this window shows, or null while it shows a device. */
 export function useFrontTool(): ToolCell | null {
   const picked = useUiStore((s) => s.toolCell);
@@ -51,13 +59,20 @@ export function keptBy(mission: Pick<Mission, "tool">, connection: string): bool
 
 /**
  * The Overview's projects in a tool's cell (D-48): those the tool works in,
- * each holding the tool's members only, so the graph draws the tool's work
- * and none of the operator's.
+ * each holding the tool's members and the tool's tasks only, so the graph
+ * and the Projects tab draw the tool's work and none of the operator's, even
+ * in a project both work in. A task belongs to the project its root works in,
+ * as a member of the tool's says.
  */
 export function toolProjects(projects: readonly BoardProject[], cell: ToolCell): BoardProject[] {
   return projects.flatMap((project) => {
     const { workspace } = project;
-    const members = cell.devices.find((device) => device.device_id === workspace.device_id)?.members.filter((member) => member.project_id === workspace.id) ?? [];
-    return members.length === 0 ? [] : [{ ...project, workspace: { ...workspace, agent_scope: { ...workspace.agent_scope, members } } }];
+    const device = cell.devices.find((row) => row.device_id === workspace.device_id);
+    const members = device?.members.filter((member) => member.project_id === workspace.id) ?? [];
+    if (!device || members.length === 0) return [];
+    const roots = new Set(members.map((member) => member.pane_id));
+    const cards = device.tasks.cards.filter((card) => roots.has(card.root));
+    const tasks = { cards, needs_you: cards.filter((card) => card.state === "needs_you").length, recency: device.tasks.recency };
+    return [{ ...project, workspace: { ...workspace, agent_scope: { ...workspace.agent_scope, members, tasks } } }];
   });
 }

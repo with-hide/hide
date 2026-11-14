@@ -1899,7 +1899,8 @@ export type GraphProjectKey = { device_id: string; workspace_id: string };
 /** A session by machine, engine pane and session digest (or native id), so a reused pane is never taken for it. */
 export type GraphSessionKey = { device_id: string; pane_id: string; session: string | null };
 /** One device's map of every project, or one project's own map (PRD overview-graph-remembered D-07). */
-export type GraphScope = { kind: "all"; device_id: string } | { kind: "project"; device_id: string; workspace_id: string };
+/** `tool`: the external tool whose map it is, by connection id, whose places are its own; absent on a device's map (PRD hide-external-control B40). */
+export type GraphScope = { kind: "all"; device_id: string; tool?: string } | { kind: "project"; device_id: string; workspace_id: string; tool?: string };
 /** A dropped place in map units at interface scale one (D-08). */
 export type GraphPlace<K> = { scope: GraphScope; key: K; x: number; y: number };
 /** The Overview Work map's remembered choices (`ui_state.overview_graph`, D-05); each list keeps the most recently changed last. */

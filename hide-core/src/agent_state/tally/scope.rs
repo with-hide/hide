@@ -239,13 +239,23 @@ fn tool_rows(devices: &[DeviceRows<'_>], connection: &str) -> Vec<Vec<SidebarAge
 }
 
 /// One tool's cell, from the rows it keeps (`tool_rows`, in `devices`'
-/// order), without its mission asks, which `Cache::apply` lays on.
+/// order), without its mission asks, which `Cache::apply` lays on. A tool
+/// keeping no row has an empty cell, built without a pass over the panes.
 fn tool_cell(
     connection: &str,
     name: &str,
     devices: &[DeviceRows<'_>],
     rows: &[Vec<SidebarAgentSnapshot>],
 ) -> ToolCell {
+    if rows.iter().all(Vec::is_empty) {
+        return ToolCell {
+            connection: connection.to_owned(),
+            name: name.to_owned(),
+            turn: 0,
+            devices: Vec::new(),
+            mission_asks: Vec::new(),
+        };
+    }
     let mut places = Vec::new();
     for (device, rows) in devices.iter().zip(rows) {
         let by_pane: HashMap<_, _> = rows.iter().map(|row| (row.pane_id.as_str(), row)).collect();
