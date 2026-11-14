@@ -106,11 +106,13 @@ impl Actor {
     /// name carries the tool's name, which a letter's recipient reads as
     /// the sender (B23).
     pub fn access(connection: &str, name: &str, node: &str) -> Self {
-        let pane_id = format!("{HIDE_PREFIX}{HIDE_ACCESS_ROLE}:{connection}");
+        let name = format!("{HIDE_PREFIX}{HIDE_ACCESS_ROLE}:{name}");
         Self {
-            session: crate::engine::tokens::session_digest(&pane_id),
-            pane_id,
-            name: format!("{HIDE_PREFIX}{HIDE_ACCESS_ROLE}:{name}"),
+            // A code-owned record keeps its name as its session
+            // (`register_code_owned`), so the digest is of the name.
+            session: crate::engine::tokens::session_digest(&name),
+            pane_id: format!("{HIDE_PREFIX}{HIDE_ACCESS_ROLE}:{connection}"),
+            name,
             kind: HIDE_KIND.into(),
             device_id: node.into(),
         }
@@ -126,6 +128,15 @@ impl Actor {
             .strip_prefix(HIDE_ACCESS_ROLE)?
             .strip_prefix(':')
             .filter(|id| !id.is_empty())
+    }
+
+    /// The name an external tool connected with, for its identity.
+    pub fn access_name(&self) -> Option<&str> {
+        self.access_connection()?;
+        self.name
+            .strip_prefix(HIDE_PREFIX)?
+            .strip_prefix(HIDE_ACCESS_ROLE)?
+            .strip_prefix(':')
     }
 
     /// The operator's own code-owned identity on `node`, the core's own:

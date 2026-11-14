@@ -1497,6 +1497,19 @@ pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &Registratio
     json!(agent_view(record, ledger, sleeping))
 }
 
+/// The name of the external tool whose connection started `record`, read
+/// from the origin record its start names (PRD hide-external-control B31).
+pub(crate) fn origin_tool(record: &AgentRecord, ledger: &Ledger) -> Option<String> {
+    let origin = record.origin.as_deref()?;
+    ledger
+        .agents
+        .iter()
+        .find(|agent| agent.id == origin)?
+        .actor
+        .access_name()
+        .map(str::to_owned)
+}
+
 pub(crate) fn agent_view(
     record: &AgentRecord,
     ledger: &Ledger,
@@ -1518,6 +1531,7 @@ pub(crate) fn agent_view(
         pane: record.pane.clone(),
         parent: record.parent.clone(),
         origin: record.origin.clone().or_else(|| record.parent.clone()),
+        origin_tool: origin_tool(record, ledger),
         project: record.project.clone(),
         profile: sleeping.profiles.get(&record.id).cloned(),
         runtime,
