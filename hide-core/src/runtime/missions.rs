@@ -743,6 +743,11 @@ pub(crate) struct MissionRuntime {
     /// already holds them as unconfirmed, so a stop in between never types
     /// one again.
     pub(crate) answers_typing: std::collections::HashSet<String>,
+    /// The missions whose move to the pane their Conductor's conversation
+    /// came back in registered that pane, until the mission names the
+    /// registration the store made (`note_conductor_registrations`). Memory
+    /// only, at most one entry per open mission.
+    heirs: std::collections::HashSet<String>,
     /// When each mission's Conductor was first seen missing while its
     /// answer waited; only those missions are kept.
     pub(crate) answer_absent_since: HashMap<String, u64>,
@@ -2967,9 +2972,9 @@ impl Runtime {
     }
 
     /// The registration of the agent the core observes in `pane` of
-    /// `device`, as a spawn's parent or a take registers the caller
-    /// (`coordination::executor::record`), built from what the session the
-    /// engine published says of it, so no engine read runs under the lock:
+    /// `device`, in the shape a take or a spawn's parent registers the
+    /// caller (`coordination::executor::registration`), built from the
+    /// session the engine published, so no engine read runs under the lock:
     /// none while the observation does not name its scope or its session.
     fn heir_record(
         &self,
@@ -2977,12 +2982,13 @@ impl Runtime {
         pane: &str,
         project: Option<String>,
     ) -> Option<crate::coordination::AgentRecord> {
+        use crate::coordination::executor::{HostIdentity, Native, registration};
         let observation = self.delivery_observations.get(pane)?;
         observation.actor.require_native_identity().ok()?;
         let on_node = device == self.node.as_str();
         // A local observation names its engine's socket; a device's is
-        // scoped by the device (`continue_moved_registrations`).
-        let host_scope = observation
+        // scoped by the device, as `coordination_context` names both.
+        let scope = observation
             .host_scope
             .clone()
             .or_else(|| (!on_node).then(|| device.to_owned()))?;
@@ -2991,26 +2997,28 @@ impl Runtime {
         } else {
             self.device_machine_ids.get(device)?.clone()
         };
-        let session = observation.session.as_ref()?.reference_value.clone();
-        let raw = &observation.raw_pane_id;
-        Some(crate::coordination::AgentRecord {
-            id: String::new(),
-            // The engine's name for it, never its pane id (`record`).
-            name: Some(observation.actor.name.clone()).filter(|name| name != raw),
-            machine: device.to_owned(),
-            host_scope,
-            native_machine,
-            session,
-            instance: raw.clone(),
-            pane: raw.clone(),
-            parent: None,
-            origin: None,
-            project,
-            actor: observation.actor.clone(),
-            ended: false,
+        let native = Native {
+            pane: &observation.raw_pane_id,
+            session: observation.session.as_ref()?.reference_value.clone(),
             terminal_id: observation.terminal_id.clone(),
-            forked: false,
-        })
+            actor: observation.actor.clone(),
+        };
+        let host = HostIdentity {
+            machine: device,
+            on_node,
+            scope: &scope,
+            native_machine: &native_machine,
+        };
+        // The engine's own identifier for the agent is its name, else its pane.
+        let name = Some(observation.actor.name.clone());
+        Some(registration(
+            native,
+            &host,
+            observation.raw_pane_id.clone(),
+            name,
+            None,
+            project,
+        ))
     }
 
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
@@ -3206,7 +3214,11 @@ impl Runtime {
             // later included, are handed to it now (B43).
             let handed = match (agent_id.as_deref(), former.agent_id.as_deref()) {
                 (None, Some(former_id)) => match self.heir_record(device, &pane, project) {
-                    Some(heir) => self.adopt_mission_workers_as_heir(&id, heir, former_id),
+                    Some(heir) => self
+                        .adopt_mission_workers_as_heir(&id, heir, former_id)
+                        .map(|()| {
+                            self.missions.heirs.insert(id.clone());
+                        }),
                     None => {
                         crate::diagnostic!(json!({
                             "component": "missions", "kind": "mission.heir_unregistered",
@@ -3246,35 +3258,45 @@ impl Runtime {
         }
     }
 
-    /// An open mission's Conductor whose pane registered after the mission
-    /// came to it (the pane a conversation came back in, registered by the
-    /// move's own change of the store, or a heir's first start): the mission
-    /// names that registration from then on, so the next take or return
-    /// hands its children on in turn. Whether any mission changed; a pass
-    /// with every Conductor named reads nothing of the ledger.
+    /// A mission whose move registered the pane its Conductor's
+    /// conversation came back in names that registration once the store
+    /// holds it, so the next take or return hands its children on in turn.
+    /// Whether any mission changed. The ledger is the core's own copy in
+    /// memory, read only while such a move waits, at most once per waiting
+    /// mission per pass.
     fn note_conductor_registrations(&mut self, device: &str) -> bool {
+        if self.missions.heirs.is_empty() {
+            return false;
+        }
         let Ok(ledger) = self.delivery_ledger.as_ref() else {
             return false;
         };
         let mut noted = false;
-        for mission in &mut self.missions.book.missions {
-            if mission.conductor.agent_id.is_some()
-                || !mission.status.open()
-                || mission.device_id != device
-            {
-                continue;
+        let book = &mut self.missions.book;
+        self.missions.heirs.retain(|id| {
+            let Some(mission) = book.get_mut(id) else {
+                return false;
+            };
+            if mission.device_id != device {
+                return true;
+            }
+            // A mission closed, or taken by a registered pane, needs no name.
+            if !mission.status.open() || mission.conductor.agent_id.is_some() {
+                return false;
             }
             let conductor = &mission.conductor.actor;
-            if let Some(record) = ledger
+            let Some(record) = ledger
                 .agents
                 .iter()
                 .rev()
                 .find(|record| !record.ended && record.actor.same_identity(conductor))
-            {
-                mission.conductor.agent_id = Some(record.id.clone());
-                noted = true;
-            }
-        }
+            else {
+                return true;
+            };
+            mission.conductor.agent_id = Some(record.id.clone());
+            noted = true;
+            false
+        });
         noted
     }
 

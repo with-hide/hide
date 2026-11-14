@@ -638,11 +638,37 @@ fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_wo
     assert!(child.ended);
     // The next sight of the pane names its registration on the mission.
     let heir_id = heir_record.id.clone();
+    let mut later = heir_record.clone();
     seen(&mut runtime);
     assert_eq!(
         runtime.missions.book.missions[0].conductor.agent_id,
-        Some(heir_id)
+        Some(heir_id.clone())
     );
+    drop(runtime);
+
+    // The pane's own registration later, as `hide mission take` or its first
+    // start makes it (the checkout it runs in for a project), is the one the
+    // move made: one live record for the pane and its session.
+    later.id.clear();
+    later.project = Some("/checkouts/fixture/elsewhere".into());
+    let again = submit(
+        &heir,
+        Mutation::Register {
+            record: later,
+            check: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(again["id"], heir_id.as_str());
+    let runtime = fixture.runtime.lock().unwrap();
+    let live = runtime
+        .delivery_state()
+        .unwrap()
+        .agents
+        .iter()
+        .filter(|record| !record.ended && record.actor.same_identity(&heir))
+        .count();
+    assert_eq!(live, 1);
 }
 
 /// 미션 종료 from the map (UI_BEHAVIOR, A mission's map): a Conductor that
