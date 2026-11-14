@@ -703,6 +703,35 @@ struct Wake {
     kind: &'static str,
 }
 
+/// What the move of a mission to the pane its Conductor's conversation came
+/// back in did with the former registration's children (`hand_over`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Handover {
+    /// The pane holds the former registration itself, carried there.
+    Carried,
+    /// The pane's own registration took them.
+    Adopted,
+    /// The pane was registered, and its registration took them.
+    Registered,
+    /// A carry of the former registration to the pane is on its way.
+    Waits,
+    /// The pane could not be registered: its observation names no scope or
+    /// the engine no session.
+    Unregistered,
+}
+
+impl Handover {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Carried => "carried",
+            Self::Adopted => "adopted",
+            Self::Registered => "registered",
+            Self::Waits => "waits",
+            Self::Unregistered => "unregistered",
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct MissionRuntime {
     pub(crate) book: MissionBook,
@@ -743,12 +772,13 @@ pub(crate) struct MissionRuntime {
     /// already holds them as unconfirmed, so a stop in between never types
     /// one again.
     pub(crate) answers_typing: std::collections::HashSet<String>,
-    /// The missions whose move to the pane their Conductor's conversation
-    /// came back in registered that pane, or left it to a registration Hide
-    /// carries there, until the mission names the registration the store
-    /// holds for the pane (`note_conductor_registrations`). Memory only, at
-    /// most one entry per open mission.
-    heirs: std::collections::HashSet<String>,
+    /// The moves that found a wake, an archive resume, Reopen closed or a
+    /// store move carrying the former Conductor's registration to the very
+    /// pane the mission moved to, by mission: that registration and that
+    /// pane, until the carry is no longer on its way and the workers are
+    /// handed over (`settle_waiting_handovers`). Memory only, at most one
+    /// entry per mission; a restart forgets it.
+    pub(super) waiting_handovers: HashMap<String, (String, String)>,
     /// When each mission's Conductor was first seen missing while its
     /// answer waited; only those missions are kept.
     pub(crate) answer_absent_since: HashMap<String, u64>,
@@ -1950,11 +1980,13 @@ impl Runtime {
             return Err("mission_full".into());
         }
         if let Some(id) = taken {
+            self.drop_waiting_handover(&id, "taken");
             // A take whose workers cannot be handed over is not made, so
-            // asking it again tries again.
+            // asking it again tries again. The former Conductor's registration
+            // is the ledger's when the mission names none.
             let former = before
                 .get(&id)
-                .and_then(|mission| mission.conductor.agent_id.clone());
+                .and_then(|mission| self.registration_of(&mission.conductor));
             let conductor = self
                 .missions
                 .book
@@ -2974,33 +3006,35 @@ impl Runtime {
 
     /// The registration of the agent the core observes in `pane` of
     /// `device`, in the shape a take or a spawn's parent registers the
-    /// caller (`coordination::executor::registration`), built from the
-    /// session the engine published, so no engine read runs under the lock:
-    /// none while the observation does not name its scope or its session.
+    /// caller (`coordination::executor::registration`), from the session
+    /// the engine published (`payload`) rather than an engine read under
+    /// the lock: none while the observation names no scope or the engine no
+    /// session for it.
     fn heir_record(
         &self,
         device: &str,
         pane: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
         project: Option<String>,
     ) -> Option<crate::coordination::AgentRecord> {
-        use crate::coordination::executor::{HostIdentity, Native, registration};
+        use crate::coordination::executor::{HostIdentity, Native, native_session, registration};
         let observation = self.delivery_observations.get(pane)?;
         observation.actor.require_native_identity().ok()?;
+        let agent = payload
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id.as_deref() == Some(observation.raw_pane_id.as_str()))?;
         let on_node = device == self.node.as_str();
-        // A local observation names its engine's socket; a device's is
-        // scoped by the device, as `coordination_context` names both.
+        // The engine the agent was observed on: its socket on this node, the
+        // device itself for a device's (`continue_moved_registrations`).
         let scope = observation
             .host_scope
             .clone()
             .or_else(|| (!on_node).then(|| device.to_owned()))?;
-        let native_machine = if on_node {
-            self.node.to_string()
-        } else {
-            self.device_machine_ids.get(device)?.clone()
-        };
+        let native_machine = self.native_machine(device).ok()?;
         let native = Native {
             pane: &observation.raw_pane_id,
-            session: observation.session.as_ref()?.reference_value.clone(),
+            session: native_session(agent.agent_session.as_ref()).ok()?,
             terminal_id: observation.terminal_id.clone(),
             actor: observation.actor.clone(),
         };
@@ -3010,13 +3044,11 @@ impl Runtime {
             scope: &scope,
             native_machine: &native_machine,
         };
-        // The engine's own identifier for the agent is its name, else its pane.
-        let name = Some(observation.actor.name.clone());
         Some(registration(
             native,
             &host,
             observation.raw_pane_id.clone(),
-            name,
+            agent.name.clone(),
             None,
             project,
         ))
@@ -3024,9 +3056,10 @@ impl Runtime {
 
     /// The registration `conductor` conducted under: the one the mission
     /// names, else the latest the ledger, the core's copy in memory, holds
-    /// for its pane and session, ended or not, since its children still
-    /// name it as their parent.
-    fn registration_of(&self, conductor: &Conductor) -> Option<String> {
+    /// for its pane and session, ended or not, since its children still name
+    /// it as their parent. A Conductor registers at its first start, after
+    /// it made the mission, so the mission often names none.
+    pub(super) fn registration_of(&self, conductor: &Conductor) -> Option<String> {
         conductor.agent_id.clone().or_else(|| {
             self.delivery_ledger
                 .as_ref()
@@ -3037,6 +3070,18 @@ impl Runtime {
                 .find(|record| record.actor.same_identity(&conductor.actor))
                 .map(|record| record.id.clone())
         })
+    }
+
+    /// The live registration `actor` holds, as `conductor_of` names it.
+    fn live_registration(&self, actor: &Actor) -> Option<String> {
+        self.delivery_ledger
+            .as_ref()
+            .ok()?
+            .agents
+            .iter()
+            .rev()
+            .find(|record| !record.ended && record.actor.same_identity(actor))
+            .map(|record| record.id.clone())
     }
 
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
@@ -3172,8 +3217,12 @@ impl Runtime {
     /// or the operator's own resume alike, so the move follows the session
     /// rather than the button that resumed it. A resumed conversation gets
     /// no prompt of its own, so a `resumed` wake tells it to go on.
-    pub(super) fn follow_resumed_conductors(&mut self, device: &str) {
-        let noted = self.note_conductor_registrations(device);
+    pub(super) fn follow_resumed_conductors(
+        &mut self,
+        device: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+    ) {
+        self.settle_waiting_handovers(device, payload);
         let moves: Vec<(String, String, Actor)> = self
             .missions
             .book
@@ -3203,16 +3252,12 @@ impl Runtime {
             })
             .collect();
         if moves.is_empty() {
-            if noted {
-                self.save_missions();
-            }
             return;
         }
         let now = crate::delivery::worker::now();
         let mut moved = false;
         for (id, pane, actor) in moves {
             let mut conductor = self.conductor_of(device, &pane, actor);
-            let agent_id = conductor.agent_id.clone();
             let Some(mission) = self.missions.book.get_mut(&id) else {
                 continue;
             };
@@ -3226,44 +3271,23 @@ impl Runtime {
             let project = Some(mission.checkout_path.clone());
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
-            // A pane the conversation came back in has no registration of
-            // its own yet: Hide registers it, as a take does, so the former
-            // registration's children, the workers of a mission that closes
-            // later included, are handed to it now (B43). A Conductor
-            // registers at its first start, after it created the mission,
-            // so the mission may not name that registration: the ledger
-            // does, by the former pane's identity.
-            let former_registration = agent_id
-                .is_none()
-                .then(|| self.registration_of(&former))
-                .flatten();
-            let handed = match (agent_id.as_deref(), former_registration.as_deref()) {
-                // Hide's own wake, archive resume or Reopen closed carries the
-                // former registration itself to the pane, children and
-                // letters with it; a second registration would take the pane
-                // first and the store would refuse that move.
-                (None, Some(former_id)) if self.registration_continues(former_id) => {
-                    self.missions.heirs.insert(id.clone());
-                    Ok(())
-                }
-                (None, Some(former_id)) => match self.heir_record(device, &pane, project) {
-                    Some(heir) => self
-                        .adopt_mission_workers_as_heir(&id, heir, former_id)
-                        .map(|()| {
-                            self.missions.heirs.insert(id.clone());
-                        }),
-                    None => {
-                        crate::diagnostic!(json!({
-                            "component": "missions", "kind": "mission.heir_unregistered",
-                            "mission": id, "pane": pane,
-                        }));
-                        Ok(())
-                    }
-                },
-                (conductor, _) => {
-                    self.adopt_mission_workers(&id, conductor, former.agent_id.as_deref())
-                }
-            };
+            let former_registration = self.registration_of(&former);
+            self.drop_waiting_handover(&id, "moved");
+            let handed = self.hand_over(
+                &id,
+                device,
+                &pane,
+                payload,
+                former_registration.as_deref(),
+                project,
+            );
+            if let Ok(outcome) = &handed {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.handover",
+                    "mission": id, "pane": pane, "agent_id": former_registration,
+                    "outcome": outcome.name(),
+                }));
+            }
             if let Err(code) = handed {
                 // Not moved, so the next sight of the pane tries again.
                 if let Some(mission) = self.missions.book.get_mut(&id) {
@@ -3285,55 +3309,131 @@ impl Runtime {
             }));
             moved = true;
         }
-        if moved || noted {
-            self.save_missions();
-        }
         if moved {
+            self.save_missions();
             self.flush_mission_wakes();
         }
     }
 
-    /// A mission whose move registered the pane its Conductor's
-    /// conversation came back in, or found its former registration carried
-    /// there, names that registration once the store holds it for the pane,
-    /// so the next take or return hands its children on in turn.
-    /// Whether any mission changed. The ledger is the core's own copy in
-    /// memory, read only while such a move waits, at most once per waiting
-    /// mission per pass.
-    fn note_conductor_registrations(&mut self, device: &str) -> bool {
-        if self.missions.heirs.is_empty() {
-            return false;
-        }
-        let Ok(ledger) = self.delivery_ledger.as_ref() else {
-            return false;
+    /// Hands the children of `former`, the registration the mission's last
+    /// Conductor conducted under, to `pane` of `device`, where the mission
+    /// moved because its Conductor's conversation came back there (B43):
+    /// to the pane's own registration when it has one; to `former` itself,
+    /// by waiting, while a wake, an archive resume, Reopen closed or a store
+    /// move carries `former` to that very pane, since a registration made
+    /// first would take the pane and the store would refuse the carry; else
+    /// to a registration made for the pane now from the session the engine
+    /// published (`payload`), as a take registers its caller, so its first
+    /// `hide agent end` already holds, the workers of a mission that closes
+    /// later included.
+    fn hand_over(
+        &mut self,
+        mission: &str,
+        device: &str,
+        pane: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+        former: Option<&str>,
+        project: Option<String>,
+    ) -> Result<Handover, String> {
+        let registered = self
+            .delivery_observations
+            .get(pane)
+            .and_then(|observation| self.live_registration(&observation.actor));
+        let Some(former) = former else {
+            return self
+                .adopt_mission_workers(mission, registered.as_deref(), None)
+                .map(|()| Handover::Adopted);
         };
-        let mut noted = false;
-        let book = &mut self.missions.book;
-        self.missions.heirs.retain(|id| {
-            let Some(mission) = book.get_mut(id) else {
-                return false;
-            };
-            if mission.device_id != device {
-                return true;
+        if let Some(registered) = registered {
+            if registered == former {
+                return Ok(Handover::Carried);
             }
-            // A mission closed, or taken by a registered pane, needs no name.
-            if !mission.status.open() || mission.conductor.agent_id.is_some() {
-                return false;
-            }
-            let conductor = &mission.conductor.actor;
-            let Some(record) = ledger
-                .agents
-                .iter()
-                .rev()
-                .find(|record| !record.ended && record.actor.same_identity(conductor))
+            return self
+                .adopt_mission_workers(mission, Some(&registered), Some(former))
+                .map(|()| Handover::Adopted);
+        }
+        if self.registration_continues(former, device, pane) {
+            // Leaves when the carry is no longer on its way, or when the
+            // mission moves again or is taken (`settle_waiting_handovers`).
+            self.missions
+                .waiting_handovers
+                .insert(mission.to_owned(), (former.to_owned(), pane.to_owned()));
+            return Ok(Handover::Waits);
+        }
+        match self.heir_record(device, pane, payload, project) {
+            Some(heir) => self
+                .adopt_mission_workers_as_heir(mission, heir, former)
+                .map(|()| Handover::Registered),
+            None => Ok(Handover::Unregistered),
+        }
+    }
+
+    /// Forgets a hand-over that waited for a carry, because the mission's
+    /// Conductor moved again or was taken (`why`), whose own hand-over now
+    /// stands.
+    fn drop_waiting_handover(&mut self, mission: &str, why: &str) {
+        if let Some((former, pane)) = self.missions.waiting_handovers.remove(mission) {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.handover_dropped",
+                "mission": mission, "pane": pane, "agent_id": former, "reason": why,
+            }));
+        }
+    }
+
+    /// A hand-over that waited for a carry to its pane (`hand_over`) is
+    /// made once the carry is no longer on its way: the carried registration
+    /// holds the pane and the children already (`carried`), or the carry
+    /// ended without it and the pane is registered or adopts then. The entry
+    /// leaves here, or when the mission moves again or is taken
+    /// (`drop_waiting_handover`); a mission that closes meanwhile keeps it,
+    /// so its workers are not left behind, until its carry ends, within the
+    /// hour a woken sleeper gets. One `is_empty` check while nothing waits;
+    /// otherwise the carries are read from the core's own maps, and the
+    /// ledger only once a carry ended.
+    fn settle_waiting_handovers(
+        &mut self,
+        device: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+    ) {
+        if self.missions.waiting_handovers.is_empty() {
+            return;
+        }
+        let ended: Vec<(String, String, String)> = self
+            .missions
+            .waiting_handovers
+            .iter()
+            .filter(|(id, (former, pane))| {
+                self.missions
+                    .book
+                    .get(id)
+                    .is_none_or(|mission| mission.device_id == device)
+                    && !self.registration_continues(former, device, pane)
+            })
+            .map(|(id, (former, pane))| (id.clone(), former.clone(), pane.clone()))
+            .collect();
+        for (id, former, pane) in ended {
+            self.missions.waiting_handovers.remove(&id);
+            let Some(project) = self
+                .missions
+                .book
+                .get(&id)
+                .map(|mission| Some(mission.checkout_path.clone()))
             else {
-                return true;
+                continue;
             };
-            mission.conductor.agent_id = Some(record.id.clone());
-            noted = true;
-            false
-        });
-        noted
+            let outcome = self.hand_over(&id, device, &pane, payload, Some(&former), project);
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.handover_settled",
+                "mission": id, "pane": pane, "agent_id": former,
+                "outcome": outcome.as_ref().map_or("failed", |outcome| outcome.name()),
+            }));
+            if outcome.is_err() {
+                // Asked again at the next pass.
+                self.missions
+                    .waiting_handovers
+                    .insert(id.clone(), (former, pane));
+            }
+        }
     }
 
     /// The admission of a spawn `actor` asks for (B4, B8, B11, B12): none

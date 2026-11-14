@@ -691,13 +691,7 @@ pub(super) fn record(
     parent: Option<String>,
     project: Option<String>,
 ) -> Result<AgentRecord, String> {
-    let session = agent
-        .agent_session
-        .as_ref()
-        .ok_or("native_identity_unavailable")?
-        .value
-        .clone();
-    super::kept_session(&session)?;
+    let session = native_session(agent.agent_session.as_ref())?;
     let native = Native {
         pane: &agent.pane_id,
         session,
@@ -705,6 +699,19 @@ pub(super) fn record(
         actor: actor_for(agent, host.machine, host.on_node)?,
     };
     Ok(registration(native, &host, instance, name, parent, project))
+}
+
+/// The session a registration records for an agent, from the engine's own
+/// reference to it, for every kind: an id, or a session file's path.
+pub(crate) fn native_session(
+    reference: Option<&crate::sidebar::SessionAgentSessionPayload>,
+) -> Result<String, String> {
+    let session = reference
+        .ok_or("native_identity_unavailable")?
+        .value
+        .clone();
+    super::kept_session(&session)?;
+    Ok(session)
 }
 
 /// What a registration says of the agent the engine shows in a pane: the
