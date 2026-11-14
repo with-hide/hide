@@ -3036,25 +3036,9 @@ impl Runtime {
                 // Rule 11: reaching for the tab already showing, with nothing
                 // in flight, converges on the state it is already in and
                 // sends the engine no second notification.
-                //
-                // Converged means the engine's global focus is this tab too.
-                // Hide moves its visible tab on the frame the operator asked
-                // for and tells the engine afterwards, so "Hide shows this
-                // tab" alone does not make the engine be on it, and a press
-                // can name a tab the engine never moved to. Skipping the
-                // notification then left the two disagreeing with nothing in
-                // flight: the next session read the engine's focus in another
-                // checkout as the truth and took the screen there
-                // (with-hide/hide#2575). A tab active only in a background
-                // workspace is not global focus, so this compares the engine's
-                // one focused tab and not a workspace's active tab.
-                //
-                // With no live engine there is nothing to send and nothing to
-                // disagree with, so the press still converges silently rather
-                // than reporting a control it could not make.
-                let engine_on_tab = self.engine_focused_tab_seen.as_deref()
-                    == Some(payload.tab_id.as_str());
-                if already_visible && (self.live.is_none() || engine_on_tab) {
+                if already_visible
+                    && self.view_focus_settled_on(ViewFocusSlot::Tab, &payload.tab_id)
+                {
                     return true;
                 }
                 if self.live.is_none() {
