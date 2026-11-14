@@ -108,14 +108,16 @@ class Splitting(unittest.TestCase):
         _, smaller = shard.split(sorted(table), table, count - 1)
         self.assertGreater(max(smaller), 720)
 
-    # The Windows lane is sized by when the lane finishes, not by its test work
-    # alone: on Windows `build hided` precedes the shards (`needs:`) and a shard
-    # adds its own setup before a test runs, so the fixed cost is about 6.7
-    # minutes whatever the shard count, and only another shard shortens the
-    # wait. These are the medians of 115 successful `web e2e windows` jobs
-    # measured on 2026-11-15 (build hided 288 s, the shard's own setup 114 s),
-    # and the target is the 12 minutes the lane is sized for, 60 % of the
-    # 1200-second step cap as linux's 720-second budget is.
+    # The Windows lane is sized by when a shard finishes, not by its test work
+    # alone: the daemon and shell builds precede the shards (`needs:`) and each
+    # shard then pays its own setup before a test runs, so the fixed cost is
+    # about 402 seconds whatever the count, and only another shard shortens the
+    # wait. The lane's own numbers, medians of 115 successful `web e2e windows`
+    # jobs measured on 2026-11-15: `build hided` 288 s, the shard's setup 114 s.
+    # The target is the 720 s the shard's own step is sized to, which the test
+    # work alone already met at two shards, so this holds what that does not:
+    # that the lane, fixed cost and tests together, clears it at the fewest
+    # shards the recording allows.
     WINDOWS_BUILD_SECONDS = 288
     WINDOWS_SHARD_SETUP_SECONDS = 114
     WINDOWS_LANE_TARGET_SECONDS = 720
