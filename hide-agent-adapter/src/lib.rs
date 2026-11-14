@@ -973,11 +973,14 @@ pub struct AgentAdapter {
     pub subagent_counts: Option<HookDialect>,
     /// Automatic model-context injection, not the Memory store or extraction.
     pub memory: Capability<ContextRoute>,
+    /// A reviewed product decision, not a reading of the findings: whether a
+    /// letter's bell may type into this agent. `scenes` is the evidence the
+    /// review reads, and the contract only requires that a bell has a `rest`
+    /// scene seen safe.
     pub bell: bool,
     /// Every screen a letter's bell can meet, each with the door the journey
-    /// opens it through and what a survey found (`docs/VERIFICATION.md#agent-scenes`).
-    /// `bell` is still declared by hand: it follows the findings once the
-    /// surveys have closed them ([`scene::SceneDeclaration::bell_from_findings`]).
+    /// opens it through and what a survey found (`docs/VERIFICATION.md#agent-scenes`);
+    /// `docs/INSTALL.md` carries the table they generate.
     pub scenes: scene::SceneDeclaration,
     pub bell_names_inbox: bool,
     /// How the agent shows the doorbell's line in its own transcript, so the

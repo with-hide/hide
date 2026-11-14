@@ -880,62 +880,75 @@ fn rest_and_working_are_proven_by_the_letter_cells_and_a_bell_has_a_rest() {
 
 /// A finding a survey wrote names the version and date it was seen on and a
 /// procedure that exists, and is never newer than today; an `Unknown` one says
-/// why and what closes it.
+/// why and what closes it, and names where it looked when a survey did.
 #[test]
 fn a_finding_names_its_version_date_and_procedure_and_an_unknown_one_says_what_closes_it() {
+    for row in ADAPTERS {
+        check_scene_findings(row);
+    }
+}
+
+fn check_scene_findings(row: &hide_agent_adapter::AgentAdapter) {
     use hide_agent_adapter::scene::Finding;
     use hide_agent_adapter::usage::Support;
     let today = today();
-    for row in ADAPTERS {
-        for (scene, capability) in row.scenes.cells() {
-            let Support::Supported(case) = capability else {
-                continue;
-            };
-            let at = format!("{} {}", row.id, scene.name());
-            match case.finding {
-                Finding::Safe(seen) | Finding::Unsafe { seen, .. } => {
-                    assert!(
-                        !seen.why.trim().is_empty(),
-                        "{at}: a finding says what the line did"
-                    );
-                    evidence(seen.procedure);
-                    assert!(
-                        seen.on.len() == 10
-                            && seen.on.bytes().enumerate().all(|(index, byte)| {
-                                if matches!(index, 4 | 7) {
-                                    byte == b'-'
-                                } else {
-                                    byte.is_ascii_digit()
-                                }
-                            }),
-                        "{at}: {:?} is not YYYY-MM-DD",
-                        seen.on
-                    );
-                    assert!(
-                        seen.on <= today.as_str(),
-                        "{at}: seen on {}, after today",
-                        seen.on
-                    );
-                    let minimum = row.minimum.expect("a supported agent declares one").version;
-                    assert!(
-                        version_parts(seen.version) >= version_parts(minimum),
-                        "{at}: seen on {}, below the declared minimum {minimum}",
-                        seen.version
-                    );
-                    if let Finding::Unsafe { closes_with, .. } = case.finding {
-                        assert!(
-                            !closes_with.trim().is_empty(),
-                            "{at}: unsafe, closes with nothing"
-                        );
-                    }
-                }
-                Finding::Unknown { why, closes_with } => {
-                    assert!(!why.trim().is_empty(), "{at}: unknown, with no reason");
+    for (scene, capability) in row.scenes.cells() {
+        let Support::Supported(case) = capability else {
+            continue;
+        };
+        let at = format!("{} {}", row.id, scene.name());
+        if let Some(looked) = case.finding.looked() {
+            assert!(
+                looked.on.len() == 10
+                    && looked.on.bytes().enumerate().all(|(index, byte)| {
+                        if matches!(index, 4 | 7) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_digit()
+                        }
+                    }),
+                "{at}: {:?} is not YYYY-MM-DD",
+                looked.on
+            );
+            assert!(
+                looked.on <= today.as_str(),
+                "{at}: seen on {}, after today",
+                looked.on
+            );
+            let minimum = row.minimum.expect("a supported agent declares one").version;
+            assert!(
+                version_parts(looked.version) >= version_parts(minimum),
+                "{at}: seen on {}, below the declared minimum {minimum}",
+                looked.version
+            );
+        }
+        match case.finding {
+            Finding::Safe(seen) | Finding::Unsafe { seen, .. } => {
+                assert!(
+                    !seen.why.trim().is_empty(),
+                    "{at}: a finding says what the line did"
+                );
+                evidence(seen.procedure);
+                if let Finding::Unsafe { closes_with, .. } = case.finding {
                     assert!(
                         !closes_with.trim().is_empty(),
-                        "{at}: unknown, closes with nothing"
+                        "{at}: unsafe, closes with nothing"
+                    );
+                } else {
+                    assert!(
+                        seen.held_by.is_some(),
+                        "{at}: a safe finding names what held the line"
                     );
                 }
+            }
+            Finding::Unknown {
+                why, closes_with, ..
+            } => {
+                assert!(!why.trim().is_empty(), "{at}: unknown, with no reason");
+                assert!(
+                    !closes_with.trim().is_empty(),
+                    "{at}: unknown, closes with nothing"
+                );
             }
         }
     }
@@ -961,16 +974,112 @@ fn a_safe_finding_was_seen_on_the_pinned_version() {
                     .as_str()
                     .unwrap_or_else(|| panic!("{}: no pin", row.id));
                 assert_eq!(
-                    seen.version,
+                    seen.looked.version,
                     pinned,
                     "{} {}: seen on {}, pinned {pinned}; survey it again on the pin",
                     row.id,
                     scene.name(),
-                    seen.version
+                    seen.looked.version
                 );
             }
         }
     }
+}
+
+/// `bell` is a reviewed decision and the table shows the evidence, so the
+/// contract keeps one thing of it: an agent that rings has a `rest` scene
+/// seen safe, since a bell types into the empty box at rest.
+#[test]
+fn rest_is_safe_for_a_bell() {
+    for row in ADAPTERS {
+        check_bell_has_a_safe_rest(row);
+    }
+}
+
+fn check_bell_has_a_safe_rest(row: &hide_agent_adapter::AgentAdapter) {
+    use hide_agent_adapter::usage::Support;
+    if !row.bell {
+        return;
+    }
+    let Support::Supported(rest) = row.scenes.rest else {
+        panic!("{}: a bell with no `rest` scene", row.id);
+    };
+    assert!(
+        rest.finding.is_safe(),
+        "{}: the bell is on and `rest` is {}",
+        row.id,
+        rest.finding.word()
+    );
+}
+
+/// An agent added with every scene unknown and no bell passes the scene
+/// contract, which is how a new agent's row is born (`docs/agent-hooks.md`,
+/// Adding an agent); its bell waits for a survey.
+#[test]
+fn a_new_agent_with_every_scene_unknown_passes_with_its_bell_off() {
+    use hide_agent_adapter::scene::{Finding, SceneCase, SceneDeclaration};
+    use hide_agent_adapter::usage::Support;
+    use hide_agent_adapter::{ADAPTERS, Capability};
+    let born = |capability: Capability<SceneCase>| match capability {
+        Support::Supported(case) => Support::Supported(SceneCase {
+            finding: Finding::Unknown {
+                looked: None,
+                why: "not surveyed",
+                closes_with: "a survey on the pinned version",
+            },
+            ..case
+        }),
+        absent => absent,
+    };
+    let declared = ADAPTERS[0].scenes;
+    let mut row = ADAPTERS[0];
+    row.bell = false;
+    row.scenes = SceneDeclaration {
+        rest: born(declared.rest),
+        rest_draft: born(declared.rest_draft),
+        working: born(declared.working),
+        interrupted: born(declared.interrupted),
+        session_picker: born(declared.session_picker),
+        model_picker: born(declared.model_picker),
+        popup: born(declared.popup),
+        tool_approval: born(declared.tool_approval),
+        question: born(declared.question),
+        plan_approval: born(declared.plan_approval),
+        trust_dialog: born(declared.trust_dialog),
+        hooks_review: born(declared.hooks_review),
+        first_run: born(declared.first_run),
+        update_notice: born(declared.update_notice),
+    };
+    check_scene_findings(&row);
+    check_bell_has_a_safe_rest(&row);
+    row.bell = true;
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            check_bell_has_a_safe_rest(&row)
+        }))
+        .is_err(),
+        "a bell needs a rest seen safe"
+    );
+}
+
+/// The table in `docs/INSTALL.md` is the declarations, byte for byte, so a
+/// finding changes in one place and the page follows
+/// (`export_scene_table --markdown`).
+#[test]
+fn scene_table_is_generated() {
+    let docs = std::fs::read_to_string(root().join("docs/INSTALL.md")).unwrap();
+    let table = docs
+        .split("<!-- bell-scenes:start -->\n")
+        .nth(1)
+        .expect("INSTALL.md carries the bell-scenes block")
+        .split("<!-- bell-scenes:end -->")
+        .next()
+        .unwrap();
+    assert_eq!(
+        table,
+        hide_agent_adapter::scene::table_markdown(),
+        "run export_scene_table --markdown and paste it between the markers"
+    );
 }
 
 /// What a scene's door needs of the agent: keys need a composer to read and

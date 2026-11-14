@@ -58,7 +58,7 @@
           "kind": "cell",
           "cell": "letter"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -78,7 +78,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -87,7 +87,7 @@
           "kind": "cell",
           "cell": "letter_busy"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -106,7 +106,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -129,7 +129,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -152,7 +152,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -175,7 +175,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -333,7 +333,7 @@
           "kind": "cell",
           "cell": "letter"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -353,7 +353,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -362,7 +362,7 @@
           "kind": "cell",
           "cell": "letter_busy"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -381,7 +381,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -404,7 +404,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -427,7 +427,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": true
       },
       {
@@ -450,7 +450,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -613,7 +613,7 @@
           "kind": "cell",
           "cell": "letter"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -633,7 +633,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "unsafe",
         "release_check": false
       },
       {
@@ -642,7 +642,7 @@
           "kind": "cell",
           "cell": "letter_busy"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -684,7 +684,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "unsafe",
         "release_check": false
       },
       {
@@ -707,7 +707,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "unsafe",
         "release_check": false
       },
       {
@@ -730,7 +730,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "unsafe",
         "release_check": false
       },
       {
@@ -884,7 +884,7 @@
           "kind": "cell",
           "cell": "letter"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -904,7 +904,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -913,7 +913,7 @@
           "kind": "cell",
           "cell": "letter_busy"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -924,6 +924,9 @@
           "open": [
             {
               "key": "esc"
+            },
+            {
+              "key": "esc"
             }
           ],
           "close": [
@@ -932,7 +935,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -955,7 +958,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "unsafe",
         "release_check": false
       },
       {
@@ -978,7 +981,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1001,7 +1004,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1010,7 +1013,7 @@
           "kind": "turn",
           "script": "shell"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1019,7 +1022,7 @@
           "kind": "turn",
           "script": "ask"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1129,8 +1132,8 @@
       "scene_model_picker": true,
       "scene_popup": true,
       "scene_tool_approval": false,
-      "scene_question": true,
-      "scene_plan_approval": true,
+      "scene_question": false,
+      "scene_plan_approval": false,
       "scene_trust_dialog": true,
       "scene_hooks_review": false,
       "scene_first_run": true,
@@ -1152,7 +1155,7 @@
           "kind": "cell",
           "cell": "letter"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1172,7 +1175,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1181,7 +1184,7 @@
           "kind": "cell",
           "cell": "letter_busy"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1200,7 +1203,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1223,7 +1226,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1246,7 +1249,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1269,7 +1272,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1280,20 +1283,14 @@
       },
       {
         "scene": "question",
-        "door": {
-          "kind": "turn",
-          "script": "ask"
-        },
-        "finding": "unknown",
+        "door": null,
+        "finding": "none",
         "release_check": false
       },
       {
         "scene": "plan_approval",
-        "door": {
-          "kind": "turn",
-          "script": "plan"
-        },
-        "finding": "unknown",
+        "door": null,
+        "finding": "none",
         "release_check": false
       },
       {
@@ -1304,7 +1301,7 @@
             "kind": "untrusted_folder"
           }
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1422,7 +1419,7 @@
           "kind": "cell",
           "cell": "letter"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1442,7 +1439,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1451,7 +1448,7 @@
           "kind": "cell",
           "cell": "letter_busy"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1470,7 +1467,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1493,7 +1490,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1516,7 +1513,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1539,7 +1536,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1548,7 +1545,7 @@
           "kind": "turn",
           "script": "shell"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1557,7 +1554,7 @@
           "kind": "turn",
           "script": "ask"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1566,7 +1563,7 @@
           "kind": "turn",
           "script": "plan"
         },
-        "finding": "unknown",
+        "finding": "safe",
         "release_check": false
       },
       {
@@ -1761,7 +1758,7 @@
             }
           ]
         },
-        "finding": "unknown",
+        "finding": "unsafe",
         "release_check": false
       },
       {

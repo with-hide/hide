@@ -150,8 +150,8 @@ The engine's `blocked` status holds every permission or selection menu it report
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
 Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request.
-Every screen a bell can meet is a scene each agent declares, with the door the journey opens it through and the finding a survey recorded ([VERIFICATION.md](VERIFICATION.md#agent-scenes)); every finding is unknown until a survey closes it, and `bell` is still declared by hand, so no declaration changes until a finding does.
-The adapter declaration is a reviewed product decision, never changed by a measurement.
+Every screen a bell can meet is a scene each agent declares, with the door the journey opens it through and the finding a survey recorded ([VERIFICATION.md](VERIFICATION.md#agent-scenes)); [INSTALL.md](INSTALL.md#what-a-letters-bell-does-on-each-screen) shows the findings of every agent on every scene.
+The adapter declaration is a reviewed product decision and the table shows the evidence it rests on: `bell` is declared by hand, the contract requires only that an agent that rings has its `rest` scene seen safe (`rest_is_safe_for_a_bell`), and the known hazards and gaps of an agent that rings are written in the table's second block instead of switching its bell off.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
 Cursor is not a target: its menus have not been observed, and the agent checks leave Cursor out by the operator's decision of 2026-10-17.
@@ -179,7 +179,8 @@ Grok's three hooks did the same on both versions:
 
 Cursor's letters at rest are read through `hide inbox`; Grok's rest bell opens a turn that takes them at a tool call or turn end, and while they work their own tool hook hands due letters over ([Letters while the agent works](#letters-while-the-agent-works)).
 OpenCode, Pi and omp are not targets either, though Hide's plugin and extension give them a prompt hook: on 2026-10-07 OpenCode's previous-session picker read `done`, and a bell's Enter there opened another session, and Pi's and omp's resume pickers read `done` too.
-Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once the live-check tool has found a bell harmless in every scene that agent does not read as `blocked`.
+A survey on 2026-11-12 on the own engine, with a forced letter, held the letter on almost every screen of the three through the composer read, and typed it into OpenCode's session picker search; that survey did not measure the draft record or the 30 s quiet period, so it is no case for a bell ([INSTALL.md](INSTALL.md#what-a-letters-bell-does-on-each-screen)).
+Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once a survey with the bell on has found it harmless in every scene that agent does not read as `blocked`.
 Measured under Herdr 0.9.1, a built-in slash picker such as `/model` or `/resume` read as `done`, not `blocked`, for both targets, and a bell typed into an open picker was accepted by it.
 Hide therefore does not take the Enter that opens a picker for a submission: the pane holds as a draft, and stays held after `/clear`, `/model` or `/help` until the next real prompt runs its hook.
 The same holds after an Esc or Ctrl-C that interrupts a turn, since no prompt hook runs for it.

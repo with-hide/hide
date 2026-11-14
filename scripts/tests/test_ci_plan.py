@@ -120,6 +120,9 @@ class Selection(unittest.TestCase):
         guide = plan("docs/AI_PROVIDERS.md")
         self.assertEqual(guide["lanes"], ["policy", "rust"])
         self.assertEqual(guide["rust_packages"], ["hide-agent-adapter"])
+        install = plan("docs/INSTALL.md")
+        self.assertEqual(install["lanes"], ["policy", "rust"])
+        self.assertEqual(install["rust_packages"], ["hide-agent-adapter"])
         self.assertEqual(plan("web/src/assets/agents/manifest.json")["rust_packages"], ["hide-agent-adapter", "hide-core"])
 
     def test_a_web_display_change_runs_both_suites_of_the_shell_and_skips_windows(self):
