@@ -529,6 +529,10 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
                 .is_some_and(|mark| mark.kind == super::escalation::MarkKind::Raised)
         {
             0
+        } else if waiting && agent.sleep.is_some() {
+            // A sleeping row keeps its wait, but the moon is not work in
+            // progress: it stands behind a working sibling, not before it.
+            if agent.unread { 3 } else { 4 }
         } else if waiting {
             1
         } else if activity == "working" {
@@ -2062,6 +2066,86 @@ mod row_tests {
         derive_from_axes(&mut working);
         assert!(waiting.state.tree_rank < working.state.tree_rank);
         assert_eq!((waiting.state.tree_rank, working.state.tree_rank), (1, 2));
+    }
+
+    fn sleeping_row(wait: crate::model::AgentWait) -> SidebarAgentSnapshot {
+        let mut sleeping = row();
+        sleeping.activity = "stopped".into();
+        sleeping.completed = true;
+        sleeping.wait = Some(wait);
+        sleeping.sleep = Some(crate::model::AgentSleepSnapshot {
+            state: "sleeping".into(),
+            reason: None,
+            since_unix_ms: 1,
+            progress: None,
+            cause: None,
+        });
+        sleeping
+    }
+
+    /// A sleeping child keeps its wait, but the moon is not work in progress:
+    /// whatever it waits on, it stands behind a working sibling, so a parent's
+    /// children chip leads with the working mark (unread: behind the working
+    /// one and before the resting).
+    #[test]
+    fn a_sleeping_child_waiting_on_work_ranks_behind_a_working_one() {
+        use crate::model::AgentWait;
+        let mut working = row();
+        working.activity = "working".into();
+        derive_from_axes(&mut working);
+        for wait in [AgentWait::Checks, AgentWait::Background, AgentWait::Reply] {
+            let mut read = sleeping_row(wait);
+            read.unread = false;
+            derive_from_axes(&mut read);
+            assert_eq!(read.mark, RowMark::Asleep);
+            assert!(read.wait.is_some(), "its wait itself is unchanged");
+            assert_eq!(
+                (read.state.tree_rank, working.state.tree_rank),
+                (4, 2),
+                "a read sleeper waiting on {wait:?}"
+            );
+            let mut unread = sleeping_row(wait);
+            unread.unread = true;
+            derive_from_axes(&mut unread);
+            assert_eq!(
+                (unread.state.tree_rank, working.state.tree_rank),
+                (3, 2),
+                "an unread sleeper waiting on {wait:?}"
+            );
+        }
+    }
+
+    /// The operator has to act on a sleeping child that asks or is raised, so
+    /// it keeps the first rank, ahead of a working sibling.
+    #[test]
+    fn a_sleeping_child_that_asks_or_is_raised_ranks_first() {
+        let mut working = row();
+        working.activity = "working".into();
+        derive_from_axes(&mut working);
+
+        let mut asking = sleeping_row(crate::model::AgentWait::Checks);
+        asking.demand = "question".into();
+        derive_from_axes(&mut asking);
+
+        let mut raised_row = sleeping_row(crate::model::AgentWait::Checks);
+        raised_row.raised = vec![raised("grandchild", Some(10))];
+        derive_from_axes(&mut raised_row);
+
+        let mut under = sleeping_row(crate::model::AgentWait::Checks);
+        under.descendant_mark = Some(super::super::escalation::DescendantMark {
+            kind: super::super::escalation::MarkKind::Raised,
+            count: 1,
+        });
+        derive_from_axes(&mut under);
+
+        for (name, agent) in [
+            ("asking", &asking),
+            ("raised", &raised_row),
+            ("raised below", &under),
+        ] {
+            assert_eq!(agent.state.tree_rank, 0, "a sleeping child that is {name}");
+            assert!(agent.state.tree_rank < working.state.tree_rank);
+        }
     }
 
     /// status-marks D-25, B36: a row that waits on proven work draws the
