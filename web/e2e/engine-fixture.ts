@@ -12,7 +12,7 @@ import { connectControl, type HidedControl } from "./hided-control.mjs";
 import { agentIn, areaShowing, closePane, focusPane, openProject, splitPane, startAgentInCheckout, startedAgentIn, tabOfPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./pane-fixture";
 import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
-import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRun, type HideAnswer } from "./agent-pane";
 
 /** Runs one `hide` command as an agent from inside its pane. */
@@ -53,6 +53,12 @@ function startOwnEngine(): EngineServer {
       try { cleanup(); } catch (error) { failed.push(error); }
     }
     if (failed.length > 0) throw failed[0];
+    // Windows keeps a running executable locked, and `bin` holds the stand-in
+    // programs hided also runs: a process still running one from here makes
+    // the removal fail with EPERM on that file (with-hide/hide#2575's
+    // sibling, with-hide/hide-private#819). End what runs from the root first,
+    // as the desktop fixture does.
+    if (process.platform === "win32") endWindowsProcesses([], root);
     fs.rmSync(root, { recursive: true, force: true });
   });
   try {

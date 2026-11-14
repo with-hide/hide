@@ -6,12 +6,14 @@
 // The engine reads the stand-in's screen with the rules for Claude Code
 // (`hide-agent-adapter/agents/claude-code.toml`).
 
+import fs from "node:fs";
 import path from "node:path";
 import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
 import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
-import { agentIn, closePane, focusTab, newTab, preparePaneInput, sendKeys, startAgentInCheckout, startedAgentIn, tabOfPane, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { agentIn, closePane, coreLog, focusTab, newTab, preparePaneInput, sendKeys, startAgentInCheckout, startedAgentIn, tabOfPane, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { dumpOnFailure } from "./failure-dump";
 import type { Daemon } from "./hided-fixture";
-import type { AgentFixture, EngineServer } from "./engine-fixture";
+import { paneInputLog, type AgentFixture, type EngineServer } from "./engine-fixture";
 
 export type AgentState = "working" | "blocked" | "idle" | "question";
 
@@ -64,8 +66,29 @@ export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pa
 export async function setAgentSession(fixture: Pick<EngineServer, "root">, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
   await withControl(daemon, async (control) => {
     await waitForAgentInput(fixture.root, pane);
+    // The request is one escape sequence typed into the pane; the row names
+    // the session only after the stand-in's own SessionStart hook reaches the
+    // core. A wait that gives up keeps both: the bytes the pane was sent and
+    // the hook records the core logged, so a run that cannot be reproduced
+    // says whether the request was lost or its report was (with-hide/hide#2567).
+    const log = paneInputLog(fixture.root, pane);
+    const offset = fs.existsSync(log) ? fs.statSync(log).size : 0;
     sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
-    await control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}, started`, 20_000);
+    await dumpOnFailure(`the session report for ${pane}`, () => {
+      // What the pane was sent since the request, and whether the request is
+      // among it: a request the stand-in never received reads differently
+      // from one whose hook report never reached the core.
+      const sent = fs.existsSync(log) ? fs.readFileSync(log).subarray(offset).toString("utf8") : "";
+      const stateDir = (daemon as { stateDir?: string }).stateDir;
+      const logged = stateDir ? coreLog({ stateDir }) : "";
+      return {
+        pane,
+        wanted: session,
+        inputBytes: sent.length,
+        requestTyped: sent.includes(`session=${session}`),
+        hookRecords: logged.split("\n").filter((line) => line.includes("hook") && line.includes(pane)).slice(-8),
+      };
+    }, () => control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}, started`, 20_000));
   });
 }
 
