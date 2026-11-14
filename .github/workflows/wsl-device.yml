@@ -164,7 +164,30 @@ jobs:
           Start-Service sshd
           "openssh_server_install_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
           $config = Join-Path $env:ProgramData 'ssh\sshd_config'
-          (Get-Content $config) -replace '^#?Port .*', "Port $port" | Set-Content -Encoding ascii $config
+          # What the server did with each session, which the walks' own
+          # diagnostics cannot see: the login shell and the start script run
+          # under this sshd, not under the client whose tree Hide records
+          # (with-hide/hide-private#2564). DEBUG1 logs the command it runs for
+          # a session, and nothing else is kept: a passing run reads none of
+          # it, and the step below prints the tail only when a walk failed.
+          (Get-Content $config) `
+            -replace '^#?Port .*', "Port $port" `
+            -replace '^#?LogLevel .*', 'LogLevel DEBUG1' | Set-Content -Encoding ascii $config
+          $sshdLog = Join-Path $env:RUNNER_TEMP 'sshd.log'
+          Add-Content -Encoding utf8 -Path $env:GITHUB_ENV -Value "HIDE_E2E_WINDOWS_SSHD_LOG=$sshdLog"
+          $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+          $binPath = $service.PathName
+          $exe = $binPath.Trim('"').Split('"')[0]
+          # The service is told to keep its own log. Its command line keeps
+          # what it already had after the exe (`-f` and the config), with
+          # `-E` added: resetting it to the exe alone would drop a `-f` the
+          # image set and start sshd on its default config, which the key
+          # check below would then fail on with nothing saying why.
+          $rest = if ($binPath -match '^"[^"]+"\s*(.*)$') { $Matches[1] } elseif ($binPath -match '^\S+\s*(.*)$') { $Matches[1] } else { '' }
+          $rest = ($rest -replace '\s*-E\s+"?[^"]*"?', '').Trim()
+          $arguments = if ($rest) { "$rest -E `"$sshdLog`"" } else { "-f `"$config`" -E `"$sshdLog`"" }
+          & sc.exe config sshd binPath= "`"$exe`" $arguments" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "sshd's log could not be configured" }
           # The redirection guard Windows' OpenSSH installer turns on for
           # sshd.exe (PowerShell/openssh-portable install-sshd.ps1), which
           # this capability's install leaves off: every process of a session
@@ -264,7 +287,19 @@ jobs:
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
           threads=()
           if [ -n "$THREADS" ]; then threads=(--test-threads "$THREADS"); fi
-          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate --retries 0 --stress-count "$REPEAT" ${threads[@]+"${threads[@]}"}
+          status=0
+          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate --retries 0 --stress-count "$REPEAT" ${threads[@]+"${threads[@]}"} || status=$?
+          # What the server did with the sessions a failed walk could not
+          # start, kept only when one failed (with-hide/hide-private#2564).
+          if [ "$status" -ne 0 ] && [ -n "${HIDE_E2E_WINDOWS_SSHD_LOG:-}" ] && [ -f "$HIDE_E2E_WINDOWS_SSHD_LOG" ]; then
+            echo "::group::sshd's log for the failed walks"
+            tail -c 65536 "$HIDE_E2E_WINDOWS_SSHD_LOG"
+            echo "::endgroup::"
+            echo "::group::connections at the end"
+            netstat.exe -ano | grep -E "47623|ESTABLISHED" | head -50 || true
+            echo "::endgroup::"
+          fi
+          exit "$status"
       - name: Mint the development issues token
         # Development issues live in this repository (docs/TESTING.md,
         # Flaky tests); the App's token reads this run and files them. A run
