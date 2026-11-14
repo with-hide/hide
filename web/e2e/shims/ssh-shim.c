@@ -21,8 +21,13 @@
 #include <string.h>
 
 #define MAX_PATH_LENGTH 4096
-#define MAX_ALIASES 64
 #define MAX_ALIAS_BYTES 255
+
+/** A value with the line end words read on Windows keep: `\r` is not part of it. */
+static void trim(char *value) {
+  size_t length = strlen(value);
+  while (length > 0 && (value[length - 1] == '\r' || value[length - 1] == ' ' || value[length - 1] == '\t')) value[--length] = '\0';
+}
 
 /** The last argument is the alias: `ssh ... -G -- <alias>`. */
 static int listing_requested(int argc, char **argv) {
@@ -63,8 +68,13 @@ static void config_answer(const char *path, const char *alias, char *hostname, c
       continue;
     }
     if (!matches) continue;
-    if (strcmp(keyword, "HostName") == 0) snprintf(hostname, MAX_ALIAS_BYTES, "%s", value);
-    else if (strcmp(keyword, "User") == 0) snprintf(user, MAX_ALIAS_BYTES, "%s", value);
+    if (strcmp(keyword, "HostName") == 0) {
+      trim(value);
+      snprintf(hostname, MAX_ALIAS_BYTES, "%s", value);
+    } else if (strcmp(keyword, "User") == 0) {
+      trim(value);
+      snprintf(user, MAX_ALIAS_BYTES, "%s", value);
+    }
   }
   fclose(file);
 }
