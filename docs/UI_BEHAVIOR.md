@@ -295,7 +295,7 @@ Once every other tab is a mark, the selected tab gives up width from the title m
 The strip scrolls only when even that selected mark and the other marks overflow.
 The same width and tab count always draw the same strip whichever way the window was resized, a resize never paints an overflowing frame, and opening, closing or selecting a tab shares the bar again at once.
 A tab being renamed keeps the preferred width at every density, and each tab's tooltip and accessible name still give its agent, full title, state and agent pane count.
-Two or more agent panes in the same tab add a neutral pane icon and count beside the title; shell panes and an agent's internal subagents do not count.
+Two or more agent panes in the same tab add a neutral pane icon and count beside the title; shell panes and an agent's internal subagents ([Subagents](#subagents)) do not count.
 One agent pane shows no count beside the title.
 The count folds away while renaming, at compact and mark density, or when the title slot holds less than two small controls, leaving the title and close or shortcut control their room.
 The full count remains in the tooltip and accessible name at every density.
@@ -855,19 +855,29 @@ The choice is a core preference, `ui_state.pane_turn_row_mode` (`one_line`, `two
 The mode never changes the terminal's viewport or its PTY grid, because the row overlays the terminal.
 Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `hide-core/src/runtime/events.rs`.
 
-### Subagent count
+### Subagents
 
-Hide draws no count of the subagents an agent runs inside its own session, on any surface: not on a sidebar row, in a pane header, in the 태스크 list, in an Overview line, in ⌘K and not in Settings (operator decision on issue #810).
-A subagent has no pane of its own, so it is not a delegated child: it has no row to open and the operator can neither enter it nor act on it, so the number is not a state they would act on (design principle 13).
-The child marks on screen mean only the agents Hide started, which have their own panes and tree rows: the descendant mark `! N` in the tree popover, the tree button with its `자식 에이전트 N` tooltip, and the child popover.
-A subagent count beside them would give "child" two meanings on one row.
-The count reaches the core and no surface reads it.
-Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads.
+An agent's own subagents, the ones it runs inside its session, are drawn on every screen that lists agents, so a pane running six of them never looks like one working alone and a resting agent whose subagents still run never looks idle (operator decision 2026-11-14, reversing issue #810).
+A subagent has no pane and no row of its own, so it is not a delegated child: nothing about it opens anything, and its marks stay smaller and lighter than the child chip (`1/5`) and a child's circle.
+
+- A row, wherever the sidebar row is drawn (the project tree, the 태스크 list and its children, the child popover): one small blue dot per running subagent right after the title, three at most and then `+N` (`SubagentDots`, `web/src/components/subagent-dots.tsx`); the row's hover card and accessible name say `서브에이전트 N개 작업 중` while the agent works.
+- The Overview work map: one small blue dot per running subagent, eight at most, slowly circling just outside the session's circle, which itself stays as it is (`SubagentOrbit`, `web/src/overviewGraphNodes.tsx`); a reduced-motion setting holds them still.
+- The pane head: a light chip, `서브 N`, after the title's marks, whose hover says `서브에이전트 N개 작업 중`; it has nothing to press (`PaneSubagentChip`, `web/src/PaneHeaderBand.tsx`).
+- The phone: the same dots after the title, and the same lines.
+- Nothing is drawn for none, nor for a count Hide cannot read: an agent that declares none, a hook that is not in or switched off, a session older than the hook (the reasons the core keeps in `PaneChildren.instrumented`), each exactly as none.
+  The done count is drawn nowhere.
+
+A resting agent whose subagents still run waits on them, as one waits on its children ([status-model.md](status-model.md#a-quiet-row-that-waits)): the still dashed ring, in Working, its line `서브에이전트 N개 기다림 · …`, and with children working too, `자식 1개 · 서브에이전트 2개 기다림`.
+Every wait line counts what it waits on, `자식 N개 기다림`, `서브에이전트 N개 기다림`, `백그라운드 N개 기다림`, `답장 N개 기다림`, and running checks keep `CI 기다림 · PR #N`.
+A turn the label read as finished is not hidden by the subagents it left, while the operator has not read it: the unread dot, the line ending `· 서브 N개 남음`, its hover `서브에이전트 N개 남음`; once read, the row waits on them again, and when the last one ends the row ends as background work does, with one Done notice.
+
+The count comes from each agent's hook.
+Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, and reads the running count once for both the pane head (`PaneChildren.subagents`) and the row (`SidebarAgentSnapshot.subagents`, laid before the lineage by `Runtime::lay_subagents`, and for a device's rows from that device's tokens and kit), through `sidebar::running_subagents`.
 docs/agent-hooks.md owns the hook.
-`working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
-Each count is separately knowable, and a count the core cannot read is `None`, never zero, because a zero would claim the agent works alone; an agent whose adapter declares no count has none to read.
-Claude Code, Codex, Grok, OpenCode and omp report a count, and Pi (it runs no subagents) declares none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
-Settings > Agents lists no subagent count either: the kit's feature table has no `subagents` entry.
+`working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero.
+Claude Code, Codex, Grok, OpenCode, omp and Antigravity report a count, and Pi (it runs no subagents) and Cursor declare none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
+Which kind each subagent is and how long it has run are not drawn yet: the hook keeps only their ids, so the pane head's hover gives the count alone for every agent.
+Settings > Agents lists no subagent count: the kit's feature table has no `subagents` entry.
 
 ### Closing an agent that spawned others
 

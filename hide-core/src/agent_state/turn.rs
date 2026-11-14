@@ -517,7 +517,10 @@ pub(crate) fn is_running(agent: &SidebarAgentSnapshot) -> bool {
 /// A root shown Done for a finished turn not read yet still has children at
 /// work (`children_moving`), which the shown group no longer says.
 pub(crate) fn has_work_in_progress(agent: &SidebarAgentSnapshot) -> bool {
-    is_running(agent) || agent.group == "working" || agent.children_moving
+    is_running(agent)
+        || agent.group == "working"
+        || agent.children_moving
+        || super::axes::subagents_running(agent)
 }
 
 pub(crate) fn is_waiting_for_operator(agent: &SidebarAgentSnapshot) -> bool {
