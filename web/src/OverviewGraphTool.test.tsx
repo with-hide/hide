@@ -158,7 +158,7 @@ it("leads the operator's Waiting on you card and the node's line with the tool's
   expect(asks[0]!.line).toMatch(/^nightly·/);
   expect(await node(WAITING_ON_PERSON)).toEqual({ text: "nightly·Sign-in · github.com/login", asking: true });
   // The operator's own row names no tool, and in the tool's own cell the line stands alone, as the same one line
-  // with its chip and its asking colour (review of #2586: the cell's lines lost both).
+  // with its chip and its asking colour (review of pull request 2586: the cell's lines lost both).
   expect(await node({ ...WAITING_ON_PERSON, tool: undefined })).toEqual({ text: "Sign-in · github.com/login", asking: true });
   expect(await node(WAITING_ON_PERSON, true)).toEqual({ text: "Sign-in · github.com/login", asking: true });
 });
