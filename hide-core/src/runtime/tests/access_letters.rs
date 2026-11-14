@@ -234,6 +234,7 @@ fn a_tool_at_act_writes_to_an_agent_and_reads_its_reply_once_in_its_inbox() {
                 id: id.into(),
                 intent: "answer".into(),
                 body: "done".into(),
+                now: false,
             },
         )
         .unwrap();

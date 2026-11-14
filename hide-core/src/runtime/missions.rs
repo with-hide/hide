@@ -701,6 +701,9 @@ struct Wake {
     intent: String,
     body: String,
     kind: &'static str,
+    /// Sent with `--now`: the Conductor's, taken at its next tool call even
+    /// while it works, since every worker and checker waits on it.
+    now: bool,
 }
 
 #[derive(Default)]
@@ -4017,6 +4020,7 @@ impl Runtime {
                     } else {
                         "progress"
                     },
+                    now: wake.to.is_none(),
                 });
             }
         }
@@ -4110,7 +4114,7 @@ impl Runtime {
                                 intent: wake.intent.clone(),
                                 body: wake.body,
                                 kind: wake.kind.into(),
-                                now: false,
+                                now: wake.now,
                                 force: false,
                             },
                         );

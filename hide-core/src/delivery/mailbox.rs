@@ -39,6 +39,11 @@ pub enum Command {
         id: String,
         intent: String,
         body: String,
+        /// Set by the core, never by `hide request reply`: a reply to an
+        /// open mission's Conductor is taken at its next tool call, as a
+        /// sent letter's `--now` is.
+        #[serde(skip)]
+        now: bool,
     },
     Ack {
         id: String,
@@ -361,7 +366,9 @@ pub fn apply_in(
         }
         // A reply goes to its original's sender, so the same original is the
         // same recipient.
-        Command::Reply { id, intent, body } => {
+        Command::Reply {
+            id, intent, body, ..
+        } => {
             if let Some(letter) = retried_send(
                 ledger,
                 actor,
@@ -408,12 +415,17 @@ pub fn apply_in(
             }
             Ok(json!(letter))
         }
-        Command::Reply { id, intent, body } => {
+        Command::Reply {
+            id,
+            intent,
+            body,
+            now: immediate,
+        } => {
             let original = authorized(ledger, actor, id)?.clone();
             if !original.recipient.same_identity(actor) {
                 return Err("recipient_required".into());
             }
-            let reply = send(
+            let mut reply = send(
                 ledger,
                 actor,
                 &original.sender,
@@ -423,6 +435,15 @@ pub fn apply_in(
                 Some(id.clone()),
                 now,
             )?;
+            if *immediate
+                && let Some(stored) = ledger
+                    .letters
+                    .iter_mut()
+                    .find(|stored| stored.id == reply.id)
+            {
+                stored.immediate = true;
+                reply = stored.clone();
+            }
             let original = ledger
                 .letters
                 .iter_mut()
@@ -1542,6 +1563,7 @@ mod tests {
                 id: first.id.clone(),
                 intent: "reply".into(),
                 body: "done".into(),
+                now: false,
             },
             4,
         )
@@ -1550,6 +1572,7 @@ mod tests {
             id: id.into(),
             intent: "reply".into(),
             body: body.into(),
+            now: false,
         };
         // The same reply again is a retry; a reply to another letter, or
         // with another body, under that intent is refused and answers nothing.
@@ -1588,6 +1611,7 @@ mod tests {
             id: asked.id.clone(),
             intent: "status".into(),
             body: "1/2".into(),
+            now: false,
         };
         assert_eq!(
             apply(&mut ledger, &b, None, &reply, 3),
@@ -3241,6 +3265,7 @@ mod tests {
                 id: first.id.clone(),
                 intent: "answer".into(),
                 body: "done".into(),
+                now: false,
             },
             answered,
         )
@@ -3469,6 +3494,7 @@ mod tests {
                 id: answered.id.clone(),
                 intent: "answer".into(),
                 body: "done".into(),
+                now: false,
             },
             2,
         )
