@@ -45,9 +45,25 @@ function watchCore(page: Page): Seen {
   return seen;
 }
 
-/** The worktrees Git lists for `repo`, other than `repo` itself. */
+/**
+ * The worktrees Git lists for `repo`, other than `repo` itself.
+ *
+ * `git worktree add` writes `.git/worktrees/<name>/` a file at a time, so a
+ * read that lands inside it fails on the entry it has not finished yet
+ * (`fatal: failed to read .git/worktrees/<name>/commondir`). That is a state
+ * to wait for rather than a failure of the run: this answers the worktrees it
+ * could read, and the poll below keeps reading until Git lists the one it
+ * made. Every other failure is the test's and is rethrown.
+ */
 function worktreesOf(repo: string): string[] {
-  return git(repo, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length)).filter((folder) => fs.realpathSync.native(folder) !== repo);
+  let listing: string;
+  try {
+    listing = git(repo, ["worktree", "list", "--porcelain"]);
+  } catch (error) {
+    if (/failed to read .*\/commondir/.test(String(error))) return [];
+    throw error;
+  }
+  return listing.split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length)).filter((folder) => fs.realpathSync.native(folder) !== repo);
 }
 
 test("a project outside home is asked about again after its removal, and its worktree is made, selected and read", async ({ page }) => {
