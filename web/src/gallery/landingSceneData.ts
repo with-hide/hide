@@ -223,7 +223,8 @@ export function landingSidebar(nowMs: number, expanded: string[], width: number,
   };
   // The lead waits on its workers whatever Hide AI does: a proven wait (docs/status-model.md, `wait`).
   const waits = (row: AgentRow): AgentRow => (row.pane_id === "a1" ? { ...row, wait: "children", state: { ...row.state, line: { text: "", mode: "waiting", tone: { kind: "working", read: true } } } } : row);
-  const rows = base.agents.map((row) => waits(revisit(reword(row, ai))));
+  // The page's story has no subagents: the site's shots stay as they were before rows drew them.
+  const rows = base.agents.map((row) => waits(revisit(reword({ ...row, subagents: undefined }, ai))));
   // The lead's list, as the core lays it: its own and its workers' (`LEAD_WORKERS`).
   const held = LEAD_WORKERS.flatMap((pane) => {
     const worker = rows.find((row) => row.pane_id === pane);
