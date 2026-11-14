@@ -51,6 +51,21 @@ pub enum CriterionKind {
     Human,
 }
 
+impl CriterionKind {
+    /// Whether the node's worker answers for a line of this kind: it records
+    /// the line itself (`Runtime::record_criterion`), where the CI is Hide's,
+    /// the review and verification a checker's and the gate the operator's.
+    /// An end gate asks once these are met (`Runtime::gate_reached`), and an
+    /// open one of these waits on the worker. The match names every kind, so
+    /// a new kind is placed here before it compiles.
+    pub fn worker_answers(self) -> bool {
+        match self {
+            Self::Own | Self::Check | Self::Defect => true,
+            Self::Ci | Self::Review | Self::Verify | Self::Human => false,
+        }
+    }
+}
+
 /// Where the operator's answer to a human gate came from (PRD
 /// mission-human-gate D-21): the decision card, the phone, or the
 /// Conductor's pane, where it relays the operator's words.

@@ -12145,13 +12145,39 @@ fn a_gate_the_conductor_shows_asks_at_once_with_its_views() {
         ),
         "mission_not_conductor"
     );
+    // `hide mission gate --show <path>` opens the path from the Conductor's
+    // pane first, which links it as the Conductor's View: a refused showing
+    // leaves it for no question (review O1).
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let conductor_views = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .conductor_views
+            .len()
+    };
+    let refused = project_view(&mut runtime, "/checkouts/fixture/refused.html");
+    runtime.link_mission_view(
+        &place,
+        &refused,
+        "sender",
+        crate::runtime::unix_milliseconds(),
+    );
+    assert_eq!(conductor_views(&runtime), 1);
     assert_eq!(
         refusal(
             &mut runtime,
             "sender",
-            json!({"op": "gate_show", "node": "docs", "show": [screen]})
+            json!({"op": "gate_show", "node": "docs", "show": [refused]})
         ),
         "mission_gate_none"
+    );
+    assert_eq!(
+        conductor_views(&runtime),
+        0,
+        "a refused showing links nothing"
     );
 
     command(
@@ -12173,6 +12199,87 @@ fn a_gate_the_conductor_shows_asks_at_once_with_its_views() {
     )
     .unwrap();
     assert!(question(&runtime).is_some(), "the fixed screens ask again");
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate", "node": "fix", "pass": true, "said": "좋아"}),
+    )
+    .unwrap();
+    let late = project_view(&mut runtime, "/checkouts/fixture/late.html");
+    runtime.link_mission_view(&place, &late, "sender", crate::runtime::unix_milliseconds());
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            "sender",
+            json!({"op": "gate_show", "node": "fix", "show": [late]})
+        ),
+        "mission_gate_passed",
+        "screens shown for a gate that passed would reach no one"
+    );
+    assert_eq!(conductor_views(&runtime), 0);
+}
+
+/// Review of with-hide/hide#2584 (S1): a gate that asks before its node's
+/// checks waits on the operator for the look alone, so a worker that stops
+/// with its own lines still owed and nothing to wait on warns its Conductor
+/// as it would with no gate; the gate's question holds no stall of the
+/// mission while its node owes other work.
+#[test]
+fn a_gate_asking_before_its_checks_still_warns_of_a_stopped_worker() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
+        Some(STOPPED_SINCE - MINUTE);
+    let screen = project_view(&mut runtime, "/checkouts/fixture/screens.html");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate_show", "node": "fix", "show": [screen]}),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(
+        mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.as_deref()),
+        Some("fix"),
+        "the gate asks"
+    );
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "idle");
+    row.lineage_session = worker.session.clone();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    assert!(
+        !runtime.mission_worker_waits(&worker),
+        "the gate's question leaves the node's own lines to its worker"
+    );
+    runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [WarningKind::Stopped],
+        "the look waits on the operator, the node's own lines on its worker"
+    );
 }
 
 /// Screens shown for two gates while the Conductor's own question holds
@@ -12245,6 +12352,11 @@ fn a_shown_gate_keeps_its_own_screens_and_new_work_needs_a_new_showing() {
         asked(&mut runtime).unwrap().1,
         None,
         "the Conductor's question stands"
+    );
+    assert_eq!(
+        node_view(&runtime, "fix").waiting_on,
+        Some(crate::missions::WaitingOn::Decision),
+        "a shown gate waits on the operator behind the Conductor's question"
     );
     command(
         &mut runtime,

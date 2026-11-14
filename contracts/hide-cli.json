@@ -6431,6 +6431,7 @@
                 "mission_node_unknown",
                 "mission_gate_none",
                 "mission_gate_not_open",
+                "mission_gate_passed",
                 "mission_gate_words_missing",
                 "mission_closed"
             ],
@@ -6934,7 +6935,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:dec585bfa7c66438ac599e7ae613dd8be2d04d4d572eb12878a2753be81b9f82",
+    "digest": "sha256:09fd3283f626be0598d769940b189d319345961e02c6450fed42c8ad1eb9de26",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -1396,6 +1396,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_unknown",
             "mission_gate_none",
             "mission_gate_not_open",
+            "mission_gate_passed",
             "mission_gate_words_missing",
             "mission_closed",
         ],

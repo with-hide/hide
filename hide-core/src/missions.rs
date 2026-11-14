@@ -3976,6 +3976,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_gate_not_open" => {
             "The node's gate does not take this answer now: a fix waits until the gate asks, once you show its screens with --show or the node's own lines are met; an early pass or a --show needs an end gate on a node working in a running mission; or it already passed (hide mission show <node>)"
         }
+        "mission_gate_passed" => {
+            "The node's gate passed already, so screens shown for it reach no one: show what changed after the operator's OK with your next report, or ask them again with hide mission decide --line <question> --node <key> --show <path>"
+        }
         "mission_defects_too_many" => {
             "The node holds 16 defects; ask the operator how to go on with it"
         }

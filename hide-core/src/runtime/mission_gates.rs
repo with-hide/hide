@@ -149,22 +149,16 @@ impl Runtime {
         }
     }
 
-    /// Whether the lines `node`'s worker answers for are met, as the done
-    /// refusal judges them: its own, the check command and the defects; an
-    /// operator who looks at the work then does not wait for its CI, review
-    /// or verification, which run beside the look (operator decision
-    /// 2026-11-14: a look after a review sent the review round again). A
-    /// node with none of those, a waiting node's or one a mission Hide
-    /// exempts, waits for every line as before.
+    /// Whether the lines `node`'s worker answers for
+    /// (`CriterionKind::worker_answers`) are met, as the done refusal judges
+    /// them; an operator who looks at the work then does not wait for its
+    /// CI, review or verification, which run beside the look (operator
+    /// decision 2026-11-14: a look after a review sent the review round
+    /// again). A node with none of those lines, a waiting (external) node,
+    /// waits for every line as before.
     fn own_lines_met(&self, mission: &Mission, node: &MissionNode) -> bool {
-        let own = |kind: CriterionKind| {
-            matches!(
-                kind,
-                CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect
-            )
-        };
         let unmet = self.node_unmet(mission, node);
-        if !node.criteria.iter().any(|line| own(line.kind)) {
+        if !node.criteria.iter().any(|line| line.kind.worker_answers()) {
             return unmet == [GATE_KEY];
         }
         // A key no line has is the CI of a pull request GitHub has not
@@ -173,7 +167,7 @@ impl Runtime {
             node.criteria
                 .iter()
                 .find(|line| line.key == *key)
-                .is_none_or(|line| !own(line.kind))
+                .is_none_or(|line| !line.kind.worker_answers())
         })
     }
 
@@ -195,6 +189,25 @@ impl Runtime {
             MissionStatus::Running | MissionStatus::MergeWait
         ) && place
             && (asks(mission.question.as_ref(), node) || self.gate_reached(mission, node))
+    }
+
+    /// Whether each of `mission`'s nodes, in the record's order, waits on
+    /// the operator's answer to its gate and owes nothing else: a start gate
+    /// open, or an end gate open with every other line met. An end gate
+    /// that asks while the node's checks, review or CI still run excuses no
+    /// stall, stop or quiet of it or of the mission (`mission_health`,
+    /// `stall_excused`).
+    pub(super) fn operator_waits(&self, mission: &Mission) -> Vec<bool> {
+        mission
+            .nodes
+            .iter()
+            .map(|node| {
+                self.gate_open(mission, node)
+                    && crate::mission_criteria::gate(&node.criteria).is_some_and(|line| {
+                        line.when == GateWhen::Start || self.node_unmet(mission, node) == [GATE_KEY]
+                    })
+            })
+            .collect()
     }
 
     /// `node`'s gate as the map reads it; none for a node without one.
@@ -480,7 +493,8 @@ impl Runtime {
     /// already, else when it asks. Only the Conductor shows, and only an end
     /// gate not passed on a node at work in a mission that runs; a start
     /// gate asks by itself once its node could start, and a gate that passed
-    /// changes nothing.
+    /// is refused (`mission_gate_passed`), since its screens would reach no
+    /// one.
     pub(super) fn show_gate(
         &mut self,
         actor: &Actor,
@@ -490,25 +504,49 @@ impl Runtime {
         now: u64,
     ) -> Result<(Value, bool), String> {
         let id = self.gate_mission(actor, named)?;
-        let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+        // A path the CLI opened for this showing is already among the Views
+        // the Conductor opened (`link_mission_view`), which its next question
+        // takes: shown, it belongs to this gate alone, and refused, to no
+        // question at all.
+        let place = self.show_place(&id, actor);
+        let mut forgot = false;
+        if let Some(mission) = self.missions.book.get_mut(&id) {
+            let before = mission.conductor_views.len();
+            mission.conductor_views.retain(|known| {
+                !(place.as_ref().is_some_and(|(device, checkout)| {
+                    known.device_id == *device && known.checkout_path == *checkout
+                }) && show.contains(&known.display_id))
+            });
+            forgot = mission.conductor_views.len() != before;
+        }
+        let shown = self.show_gate_views(actor, &id, key, show, now);
+        if shown.is_err() && forgot {
+            self.save_missions();
+        }
+        shown
+    }
+
+    fn show_gate_views(
+        &mut self,
+        actor: &Actor,
+        id: &str,
+        key: &str,
+        show: &[String],
+        now: u64,
+    ) -> Result<(Value, bool), String> {
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
         let node = mission.node(key).ok_or("mission_node_unknown")?;
         let line = crate::mission_criteria::gate(&node.criteria)
             .ok_or_else(|| crate::coordination::refusal("mission_gate_none", key))?;
         if line.state == CriterionState::Pass {
-            return Ok((self.gate_answer(actor, &id), false));
+            return Err(crate::coordination::refusal("mission_gate_passed", key));
         }
         if !end_gate_unpassed(mission, node) {
             return Err(crate::coordination::refusal("mission_gate_not_open", key));
         }
         let asking = asks(mission.question.as_ref(), node);
-        let links = self.question_view_links(&id, actor, show, None, false)?;
-        let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
-        // A path the CLI opened is already among the Views the Conductor
-        // opened (`link_mission_view`), which the next question takes: shown
-        // for this gate, it belongs to the gate alone.
-        target
-            .conductor_views
-            .retain(|known| !links.iter().any(|link| link.same_view(known)));
+        let links = self.question_view_links(id, actor, show, None, false)?;
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         if let Some(question) = target.question.as_mut().filter(|_| asking) {
             for link in &links {
                 push_view_link(&mut question.views, link.clone());
@@ -534,8 +572,8 @@ impl Runtime {
             "mission": id, "node": key, "views": show.len(), "asking": asking,
         }));
         self.save_missions();
-        self.raise_gates(&id, now);
-        Ok((self.gate_answer(actor, &id), true))
+        self.raise_gates(id, now);
+        Ok((self.gate_answer(actor, id), true))
     }
 
     /// The mission a gate command of `actor`'s means: the one it names, else

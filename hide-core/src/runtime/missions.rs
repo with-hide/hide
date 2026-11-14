@@ -468,7 +468,9 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
                 // A CI line open for want of a read waits on no run.
                 Some(CriterionKind::Ci) if view.pr_state.is_some() => WaitingOn::Ci,
                 Some(CriterionKind::Ci) => WaitingOn::Conductor,
-                Some(_) => WaitingOn::Worker,
+                Some(CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect) => {
+                    WaitingOn::Worker
+                }
                 None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
                     WaitingOn::Merge
                 }
@@ -4325,6 +4327,7 @@ impl Runtime {
         let github = self.github_project_on(&mission.device_id, &mission.project);
         let blocked = mission.blocked();
         let conductor_present = self.conductor_present(&mission.conductor.actor);
+        let operator_waits = self.operator_waits(mission);
         let nodes = mission
             .nodes
             .iter()
@@ -4513,7 +4516,7 @@ impl Runtime {
                     node,
                     &fact,
                     self.mission_pulls(mission),
-                    self.gate_open(mission, node),
+                    &operator_waits,
                 );
                 view.work = node_work(mission, &view, activity, stopped, clock);
                 view

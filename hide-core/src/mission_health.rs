@@ -488,7 +488,11 @@ fn still_holds(
             if stall_excused(
                 mission,
                 node,
-                fact.unmet == [crate::mission_criteria::GATE_KEY],
+                &facts
+                    .nodes
+                    .iter()
+                    .map(|fact| fact.unmet == [crate::mission_criteria::GATE_KEY])
+                    .collect::<Vec<_>>(),
             ) =>
         {
             false
@@ -640,7 +644,7 @@ pub(crate) fn stopped_worker<'a>(
     node: &MissionNode,
     fact: &'a NodeFacts,
     pulls: Option<&GithubProjectSnapshot>,
-    operator_waits: bool,
+    operator_waits: &[bool],
 ) -> Option<&'a WorkerStopped> {
     let raised = node
         .attention
@@ -650,7 +654,7 @@ pub(crate) fn stopped_worker<'a>(
         && fact.worker == Some(WorkerLife::Running)
         && !stall_excused(mission, node, operator_waits)
         && !raised
-        && owed_elsewhere(mission, node, pulls) == Some(false);
+        && owed_elsewhere(mission, node, pulls, operator_waits) == Some(false);
     fact.stopped.as_ref().filter(|_| stands)
 }
 
@@ -706,9 +710,8 @@ pub(crate) fn warn_acts(
         let works = node_works(mission, node);
         let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
         let fact = facts.get(at);
-        let stopped = fact
-            .zip(operator_waits.get(at))
-            .and_then(|(fact, waits)| stopped_worker(mission, node, fact, pulls, *waits));
+        let stopped =
+            fact.and_then(|fact| stopped_worker(mission, node, fact, pulls, operator_waits));
         match standing(WarningKind::Stopped) {
             Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
                 node: at,
@@ -758,7 +761,7 @@ pub(crate) fn warn_acts(
                 && stopped.is_none()
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
-                && quiet_waits(mission, node, pulls) == Some(false) =>
+                && quiet_waits(mission, node, pulls, operator_waits) == Some(false) =>
             {
                 acts.push(WarnAct::Raise {
                     node: at,
@@ -831,7 +834,7 @@ pub(crate) fn stalls(
     }
     let mut out = Vec::new();
     for (at, node) in mission.nodes.iter().enumerate() {
-        if node.attention.is_some() || stall_excused(mission, node, operator_waits[at]) {
+        if node.attention.is_some() || stall_excused(mission, node, operator_waits) {
             continue;
         }
         let stall = |reason, pr| Stall {
@@ -862,11 +865,39 @@ pub(crate) fn stalls(
 }
 
 /// Whether no move is owed now: a delay holds the mission or the node, a
-/// decision waits on the operator, or the node waits on the operator's
-/// answer to its gate or to a question about it. The one rule raising and
-/// settling a stall, and holding a node in the safety net, read.
-fn stall_excused(mission: &Mission, node: &MissionNode, operator_waits: bool) -> bool {
-    mission.delay.is_some() || node.hold.is_some() || mission.decision.is_some() || operator_waits
+/// decision holds the mission (`decision_holds`), or the node waits on the
+/// operator's answer to its gate alone. The one rule raising and settling a
+/// stall, and holding a node in the safety net, read. `operator_waits` has
+/// one entry per node, in the record's order: whether the node's gate asks
+/// and nothing else of it is open (`Runtime::operator_waits`).
+fn stall_excused(mission: &Mission, node: &MissionNode, operator_waits: &[bool]) -> bool {
+    mission.delay.is_some()
+        || node.hold.is_some()
+        || decision_holds(mission, operator_waits)
+        || waits_on_operator(mission, node, operator_waits)
+}
+
+/// Whether `node` waits on the operator's answer to its gate and owes
+/// nothing else.
+fn waits_on_operator(mission: &Mission, node: &MissionNode, operator_waits: &[bool]) -> bool {
+    mission
+        .nodes
+        .iter()
+        .position(|known| known.key == node.key)
+        .and_then(|at| operator_waits.get(at))
+        .copied()
+        .unwrap_or(false)
+}
+
+/// Whether the mission's open decision holds its work: the Conductor's own
+/// question does, and a gate's question once its node owes nothing else.
+/// A gate that asks while its node's checks, review or CI still run holds
+/// nothing, so their stalls and stops are still told (operator decision
+/// 2026-11-14: a gate asks before the checks).
+fn decision_holds(mission: &Mission, operator_waits: &[bool]) -> bool {
+    mission.decision.is_some()
+        && crate::missions::gate_asked(mission)
+            .is_none_or(|gated| waits_on_operator(mission, gated, operator_waits))
 }
 
 /// A mission whose raises its Conductor has not settled, the operator's one
@@ -896,13 +927,13 @@ pub(crate) fn held_nodes(mission: &Mission, operator_waits: &[bool]) -> Vec<usiz
         .nodes
         .iter()
         .enumerate()
-        .filter(|(at, node)| {
+        .filter(|(_, node)| {
             node.status != NodeStatus::Dropped
                 && node
                     .attention
                     .as_ref()
                     .is_some_and(|attention| !attention.reason.operator_first())
-                && !stall_excused(mission, node, operator_waits[*at])
+                && !stall_excused(mission, node, operator_waits)
         })
         .filter_map(|(at, node)| Some((node.attention.as_ref()?.since_unix_ms, at)))
         .collect();
@@ -1035,23 +1066,25 @@ pub(crate) fn quiet_waits(
     mission: &Mission,
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
+    operator_waits: &[bool],
 ) -> Option<bool> {
     if node.attention.is_some() {
         return Some(true);
     }
-    owed_elsewhere(mission, node, pulls)
+    owed_elsewhere(mission, node, pulls, operator_waits)
 }
 
 /// Whether the next move on `node` is someone else's besides a raise on
-/// it: the Conductor's question about it, or a pull request that waits on
-/// CI, a review or the merge (`worker_waits`); unknown while GitHub's
-/// answer does not hold the pull request.
+/// it: a question about it that holds the mission (`decision_holds`), or a
+/// pull request that waits on CI, a review or the merge (`worker_waits`);
+/// unknown while GitHub's answer does not hold the pull request.
 fn owed_elsewhere(
     mission: &Mission,
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
+    operator_waits: &[bool],
 ) -> Option<bool> {
-    if mission.deciding_on(&node.key) {
+    if mission.deciding_on(&node.key) && decision_holds(mission, operator_waits) {
         return Some(true);
     }
     worker_waits(node, pulls)
@@ -1718,6 +1751,16 @@ mod tests {
             material_asked: false,
         });
         assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
+        // Its gate's question holds it only once nothing else is open.
+        let mut gate = crate::mission_criteria::Criterion::new(
+            "human",
+            crate::mission_criteria::CriterionKind::Human,
+        );
+        gate.asked = Some(1);
+        m.nodes[0].criteria.push(gate);
+        assert_eq!(warn_acts(&m, Some(&failing), &[], &[false], late).len(), 1);
+        assert!(warn_acts(&m, Some(&failing), &[], &[true], late).is_empty());
+        m.nodes[0].criteria.pop();
         // A question about another node, or about none, leaves it its worker's.
         m.question.as_mut().unwrap().node = None;
         assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
@@ -1818,6 +1861,42 @@ mod tests {
         let mut named = startable();
         named.nodes[1].agent_id = Some("agent-b".into());
         assert!(stalls(&named, None, false, &NONE_WAITS).is_empty());
+    }
+
+    /// A gate's question holds the mission only once its node owes nothing
+    /// else (operator decision 2026-11-14): one that asks while its node's
+    /// review or CI still run leaves a sibling's stall and the gated node's
+    /// quiet warning standing; once it owes nothing else, both wait on the
+    /// operator as before.
+    #[test]
+    fn a_gate_asking_before_its_checks_holds_no_stall() {
+        use crate::mission_criteria::{Criterion, CriterionKind};
+        let mut m = startable();
+        m.nodes[0].status = NodeStatus::Working;
+        m.nodes[0].finished_at_unix_ms = None;
+        m.nodes[1].depends_on.clear();
+        let mut gate = Criterion::new("human", CriterionKind::Human);
+        gate.text = Some("the screens".into());
+        gate.asked = Some(1);
+        m.nodes[0].criteria.push(gate);
+        m.decision = Some("Check the screens and tell me".into());
+        m.question = Some(crate::missions::Question {
+            key: 1,
+            why: None,
+            options: Vec::new(),
+            recommend: None,
+            node: Some("a".into()),
+            nodes: Vec::new(),
+            asked_at_unix_ms: 0,
+            views: Vec::new(),
+            material_asked: false,
+        });
+        assert_eq!(
+            stalls(&m, None, false, &NONE_WAITS),
+            [stall(1, AttentionReason::NotStarted, None)],
+            "the gate asks while its node still owes its checks"
+        );
+        assert!(stalls(&m, None, false, &[true, false]).is_empty());
     }
 
     /// A warning stands as a stall only once its Conductor was told it: one
