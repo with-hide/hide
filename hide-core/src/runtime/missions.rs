@@ -3021,6 +3021,23 @@ impl Runtime {
         ))
     }
 
+    /// The registration `conductor` conducted under: the one the mission
+    /// names, else the latest the ledger, the core's copy in memory, holds
+    /// for its pane and session, ended or not, since its children still
+    /// name it as their parent.
+    fn registration_of(&self, conductor: &Conductor) -> Option<String> {
+        conductor.agent_id.clone().or_else(|| {
+            self.delivery_ledger
+                .as_ref()
+                .ok()?
+                .agents
+                .iter()
+                .rev()
+                .find(|record| record.actor.same_identity(&conductor.actor))
+                .map(|record| record.id.clone())
+        })
+    }
+
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
         let session = self
             .machine_agents(device)
@@ -3211,8 +3228,15 @@ impl Runtime {
             // A pane the conversation came back in has no registration of
             // its own yet: Hide registers it, as a take does, so the former
             // registration's children, the workers of a mission that closes
-            // later included, are handed to it now (B43).
-            let handed = match (agent_id.as_deref(), former.agent_id.as_deref()) {
+            // later included, are handed to it now (B43). A Conductor
+            // registers at its first start, after it created the mission,
+            // so the mission may not name that registration: the ledger
+            // does, by the former pane's identity.
+            let former_registration = agent_id
+                .is_none()
+                .then(|| self.registration_of(&former))
+                .flatten();
+            let handed = match (agent_id.as_deref(), former_registration.as_deref()) {
                 (None, Some(former_id)) => match self.heir_record(device, &pane, project) {
                     Some(heir) => self
                         .adopt_mission_workers_as_heir(&id, heir, former_id)
@@ -3227,7 +3251,9 @@ impl Runtime {
                         Ok(())
                     }
                 },
-                (conductor, former_id) => self.adopt_mission_workers(&id, conductor, former_id),
+                (conductor, _) => {
+                    self.adopt_mission_workers(&id, conductor, former.agent_id.as_deref())
+                }
             };
             if let Err(code) = handed {
                 // Not moved, so the next sight of the pane tries again.

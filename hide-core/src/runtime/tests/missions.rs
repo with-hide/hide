@@ -498,6 +498,14 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
 /// the mission names the new registration from then on.
 #[test]
 fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_workers() {
+    // A Conductor registers at its first start, after `hide mission create`,
+    // so the mission does not name that registration; one that was
+    // registered before it created the mission is named.
+    resumed_in_a_pane_with_no_registration(false);
+    resumed_in_a_pane_with_no_registration(true);
+}
+
+fn resumed_in_a_pane_with_no_registration(registered_before_the_mission: bool) {
     use crate::coordination::{AgentRecord, Mutation};
     let fixture = conducting();
     let digest = crate::engine::tokens::session_digest;
@@ -565,6 +573,19 @@ fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_wo
             .unwrap()
             .to_owned()
     };
+    let create = || {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.snapshot.navigator.agents = vec![conductor_row()];
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+    };
+    if !registered_before_the_mission {
+        create();
+    }
     // The Conductor registered when it started its worker, which is its child.
     let former = registered(&conductor, "sender-session", None);
     let worker = Actor {
@@ -575,18 +596,14 @@ fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_wo
         session: digest("worker-session"),
     };
     let worker_id = registered(&worker, "worker-session", Some(former.clone()));
+    if registered_before_the_mission {
+        create();
+    }
 
     let mut runtime = fixture.runtime.lock().unwrap();
-    runtime.snapshot.navigator.agents = vec![conductor_row()];
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the bug"}),
-    )
-    .unwrap();
     assert_eq!(
         runtime.missions.book.missions[0].conductor.agent_id,
-        Some(former.clone())
+        registered_before_the_mission.then(|| former.clone())
     );
     // The Conductor's pane closed, and its conversation came back in the
     // pane `recipient`, which has no registration.
