@@ -57,7 +57,7 @@ impl Runtime {
         })
     }
 
-    /// What `hide session fold` from `caller`'s pane writes through: its own
+    /// What `hide session fold-ask` from `caller`'s pane writes through: its own
     /// session and the link worker, for a caller still in the checkout it
     /// was admitted to.
     pub(crate) fn fold_ask_scope(

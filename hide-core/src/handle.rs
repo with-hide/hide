@@ -1477,7 +1477,7 @@ impl Core {
         lock_recover(&self.runtime).asks_give_scope(device, caller, session_id)
     }
 
-    /// What `hide session fold` from `caller`'s pane writes through, run off
+    /// What `hide session fold-ask` from `caller`'s pane writes through, run off
     /// the owner thread by the caller (`FoldScope::run`).
     pub fn fold_ask_scope(
         &self,
