@@ -819,6 +819,21 @@ A feature that makes Hide AI start a new kind of agent names the kind's home in 
 A connected device's agents follow the same rules, and they hold across a restart of hided because the ledger is persisted.
 Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line, whether a tree draws a checkout, where a row opens), `web/src/AgentMark.tsx` (the owl, the badge and the pane header's mark), `web/src/AgentRowMark.tsx` (the row's mark by view mode), `web/src/sidebar.tsx` and `web/src/components/sidebar-agent-row.tsx` (the rows), `web/src/TaskLens.tsx` (the 태스크 row) and `openListedAgent` in `web/src/actions.ts`; core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs` and `hide-core/src/runtime/memory_promotion.rs`.
 
+### Work an external tool keeps
+
+An external tool the operator approved at Act in Settings › External tools starts agents for its own purposes, and while it stays connected at Act that work is the tool's, not the operator's (PRD hide-external-control D-09): the agent it started, the agents that one started under itself with `--parent here` (a Conductor's workers among them), and a mission such an agent conducts.
+`docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws.
+
+The work is in no list of the operator's: not the sidebar's tree, Needs You, Done or Working, not the 태스크 list, Sessions, Overview's requests, graph or counts, not a Project tool's session count, a checkout's count or the device rail, not the mission screen or the sidebar's `미션` number, not the phone's agent or mission list, and it moves no app badge, desktop notification or push (B26, B27, B30).
+The tool reads it and answers it itself, so an agent's own question, approval, block or finished turn, and a mission's decision, gate, safety net or merge, never reach the operator while the tool keeps it.
+It is still found by ⌘K, the recent panel, the tab strip and `hide agent list`, and Settings › External tools lists each tool's agents and missions and opens them.
+The pane head of such an agent writes the tool's name after the title, a quiet badge cut short in a narrow pane, whose hint says the work is the tool's and kept out of the operator's lists (`외부 도구 nightly의 일이라 내 목록에는 없어요`); once the tool lets go, the name stays as where the work came from and the hint says so (`외부 도구 nightly에서 시작됨`) (B31, `PaneToolMark` in `web/src/PaneHeaderBand.tsx`).
+
+Two things reach the operator anyway, as one row in the sidebar's Needs You and the 태스크 list's Needs You, never in a tree (B29): a step only a person can take (`hide agent ask-human auth|permission`), the agent's own or a child's, which also notifies on the desktop and the phone, and a View the agent opened for the operator with `hide file open`, `hide diff open` or `hide browser open`, which is its `볼 것` as on any agent's row.
+When the operator disconnects the tool, the tool leaves, or the operator sets it to View only, all its work is the operator's from that moment, still running: it enters the lists, counts and mission screen at once, and its next question is the operator's turn; setting the same connection to Act again takes it back, and a new connection under the same name takes none of it (B16).
+A connected device's agents follow the same rules.
+Web owners: `PaneToolMark` in `web/src/PaneHeaderBand.tsx` (the pane head) and `deviceMissions` in `web/src/missionList.ts` (the mission screen and its number); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs` and `hide-core/src/runtime/access.rs`.
+
 ### Agent logo view mode
 
 The View menu, Help and Settings stand together, in that order: stacked at the foot of the device rail, their hints and menus opening to the right, or, while the rail is hidden, at the sidebar footer's right edge after the usage chips, opening upwards.

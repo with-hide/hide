@@ -90,10 +90,11 @@ impl RowMark {
             return Self::Turn;
         }
         // A demand the operator has read stays theirs until it is answered;
-        // a delegated child's is its parent's (B8, B24), so it waits on the
-        // parent's answer, in progress rather than at rest.
+        // a delegated child's is its parent's (B8, B24), and a tool's agent's
+        // is the tool's (PRD hide-external-control B28), so it waits on that
+        // answer, in progress rather than at rest.
         if demand != AgentDemand::None {
-            return if matches!(ownership, Ownership::Delegated) {
+            return if matches!(ownership, Ownership::Delegated | Ownership::Tool) {
                 Self::Waiting
             } else {
                 Self::Turn
@@ -955,18 +956,11 @@ pub mod phone {
             if pane_id.is_empty() {
                 continue;
             }
-            // `listed_for_operator` on the wire form: a row its home owns is
-            // on the phone only while it is in Needs You (PRD
-            // hide-ai-work-home B4); its detail stays reachable from there.
-            if agent
-                .pointer("/hide_ai/home")
-                .is_some_and(|home| !home.is_null())
-                && !agent
-                    .get("delegated")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                && str_of(agent, "group") != "needs_you"
-            {
+            // The core's `listed_for_operator`, as the row publishes it: a row
+            // Hide AI's home or an external tool keeps is on the phone only
+            // while it is in Needs You (PRD hide-ai-work-home B4, PRD
+            // hide-external-control B26); its detail stays reachable from there.
+            if agent.get("unlisted").and_then(Value::as_bool) == Some(true) {
                 continue;
             }
             let title = agent

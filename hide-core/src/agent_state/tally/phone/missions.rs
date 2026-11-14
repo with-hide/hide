@@ -532,6 +532,9 @@ impl PhoneMissions {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            // A mission an external tool keeps is not the operator's to
+            // follow (PRD hide-external-control B30).
+            .filter(|item| item.get("unlisted").and_then(Value::as_bool) != Some(true))
         {
             let mission = match MissionIn::deserialize(item) {
                 Ok(mission) => mission,

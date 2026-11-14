@@ -921,6 +921,22 @@ pub struct HideAiSnapshot {
     pub turn: Option<HomeTurn>,
 }
 
+/// An external tool's work on a row (PRD hide-external-control D-09, D-15).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolWorkSnapshot {
+    /// The tool's connection, by id (`AccessConnectionSnapshot::id`): a new
+    /// connection of the same name is another id, and takes none of this
+    /// work (D-40).
+    pub connection: String,
+    /// The name the tool connected with, which the pane head writes.
+    pub name: String,
+    /// The tool keeps the work now: its connection stands at Act. Read from
+    /// the connection list on every projection, never stored, so a
+    /// disconnect, a leave or View only hands the work to the operator at
+    /// once and Act again takes it back (D-14, D-40).
+    pub owns: bool,
+}
+
 /// The home's turn: the operator is to act on the work the agent did
 /// (D-14). The agent's own question, approval or block is the row's demand,
 /// not this.
@@ -2239,6 +2255,20 @@ pub struct SidebarAgentSnapshot {
     /// it; absent from the wire for every other agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_ai: Option<HideAiSnapshot>,
+    /// An external tool's work (PRD hide-external-control D-09): an agent
+    /// the tool started, or one started under it with `--parent`. Set by
+    /// the runtime from the coordination ledger and the tool's connection,
+    /// so a session read never makes it; absent from the wire for every
+    /// other agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolWorkSnapshot>,
+    /// The operator's own lists leave this row out
+    /// (`agent_state::listed_for_operator`): work Hide AI's home or an
+    /// external tool keeps, while it asks nothing of the operator. Written
+    /// with the group, so a wire reader (the phone) follows the core's one
+    /// decision instead of making its own; absent while the row is listed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     /// The request view's part of the row: the verb and since when, the
     /// request and reply lines, the pull requests (`request_view.rs`).
     /// Absent until the core has built it.

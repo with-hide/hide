@@ -635,25 +635,22 @@ struct DeviceRows<'a> {
     projects: Vec<&'a WorkspaceSnapshot>,
     /// Every row the device lists, for lookups by pane.
     agents: Vec<&'a SidebarAgentSnapshot>,
-    /// The rows the operator's own lists enumerate: a row its home owns is
-    /// left out unless it is in Needs You (PRD hide-ai-work-home D-13), so
-    /// no tree, section, count, request or graph names it.
+    /// The rows the operator's own lists enumerate: a row a home or an
+    /// external tool keeps is left out unless it is in Needs You (PRD
+    /// hide-ai-work-home D-13, PRD hide-external-control B26), so no tree,
+    /// section, count, request or graph names it.
     listed: Vec<&'a SidebarAgentSnapshot>,
 }
 
-/// The rows a checkout's tree draws: `listed` without the rows a home owns,
-/// which the raised Needs You and Sessions lists draw and no checkout's tree
-/// does (PRD hide-ai-work-home D-17).
+/// The rows a checkout's tree draws: `listed` without the rows a home or an
+/// external tool keeps, which the raised Needs You and Sessions lists draw
+/// and no checkout's tree does (PRD hide-ai-work-home D-17, PRD
+/// hide-external-control B29).
 fn tree_rows<'a>(listed: &[&'a SidebarAgentSnapshot]) -> Vec<&'a SidebarAgentSnapshot> {
     listed
         .iter()
         .copied()
-        .filter(|row| {
-            !matches!(
-                crate::agent_state::ownership_of(row),
-                crate::agent_state::Ownership::HideAi { .. }
-            )
-        })
+        .filter(|row| !crate::agent_state::kept_elsewhere(row))
         .collect()
 }
 

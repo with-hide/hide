@@ -99,12 +99,22 @@ export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number } | 
  */
 export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn };
 
+/**
+ * An external tool's work (PRD hide-external-control D-09, D-15): an agent the tool started, or one started under it.
+ * `owns` says the tool keeps it now (its connection stands at Act); the core decides it and the lists it leaves.
+ */
+export type ToolWork = { connection: string; name: string; owns: boolean };
+
 /** A checkout Hide AI made for an agent it started, joined to a checkout by device and path. */
 export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask };
 
 export type AgentRow = {
   /** Set by the core from the coordination record of the spawn, never from a branch name. */
   hide_ai?: HideAi;
+  /** An external tool started this agent, or an agent of the tool started it under itself; set by the core from the same record. */
+  tool?: ToolWork;
+  /** The operator's lists leave this row out (`agent_state::listed_for_operator`); the core's scopes already did, and the phone reads it. */
+  unlisted?: boolean;
   resolved?: { at_unix_ms: number; source: "operator" | "automatic" } | null;
   /** Resolved within the last 24 hours, so Sessions still lists it. */
   resolved_recent?: boolean;
@@ -1730,6 +1740,8 @@ export type MissionSkip = { node: string; title: string; line: string; kind: Mis
 export type Mission = {
   id: string;
   title: string;
+  /** An external tool keeps it now (its Conductor is the tool's work at Act, PRD hide-external-control B30): the operator's mission screen, count and cards leave it out, and Settings › External tools still opens its map by id. */
+  unlisted?: boolean;
   workspace_id: string;
   project: string;
   checkout_path: string;

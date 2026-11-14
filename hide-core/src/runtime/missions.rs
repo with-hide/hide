@@ -51,6 +51,14 @@ pub struct MissionsSnapshot {
 pub struct MissionView {
     pub id: String,
     pub title: String,
+    /// An external tool keeps the mission (PRD hide-external-control B30,
+    /// D-36): its Conductor is the tool's work and the tool's connection
+    /// stands at Act. The operator's mission screen, its count and cards,
+    /// `mission_asks`, the mission's notices and the phone's list leave it
+    /// out, while Settings › External tools still opens its map by id;
+    /// absent while the mission is the operator's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     pub workspace_id: String,
     pub project: String,
     pub checkout_path: String,
@@ -845,6 +853,9 @@ struct ViewsMadeFrom {
     /// catalog lists it, which a mission that records no destination and
     /// an outside branch are drawn with, and which moves without the book.
     defaults: Vec<Option<String>>,
+    /// Per mission in book order: whether an external tool keeps it, which
+    /// a disconnect or a level moves without the book (B16).
+    kept_by_tool: Vec<bool>,
     made: bool,
 }
 
@@ -4508,6 +4519,7 @@ impl Runtime {
         MissionView {
             id: mission.id.clone(),
             title: mission.title.clone(),
+            unlisted: self.mission_kept_by_tool(mission),
             workspace_id: mission.workspace_id.clone(),
             project: mission.project.clone(),
             checkout_path: mission.checkout_path.clone(),
@@ -4706,6 +4718,13 @@ impl Runtime {
             .iter()
             .map(|mission| self.project_default_branch(&mission.device_id, &mission.project))
             .collect();
+        let kept_by_tool: Vec<bool> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.mission_kept_by_tool(mission))
+            .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -4719,7 +4738,8 @@ impl Runtime {
             && before.stale == stale
             && before.sleeping == sleeping
             && before.laid == laid
-            && before.defaults == defaults;
+            && before.defaults == defaults
+            && before.kept_by_tool == kept_by_tool;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -4810,6 +4830,7 @@ impl Runtime {
             rows_and_holds,
             views_generation,
             defaults,
+            kept_by_tool,
             made: true,
         };
     }
@@ -4828,7 +4849,15 @@ impl Runtime {
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
-        for mission in &self.snapshot.missions.items {
+        // A mission an external tool keeps asks the tool, never the
+        // operator, until the tool lets go of it (B30, D-14).
+        for mission in self
+            .snapshot
+            .missions
+            .items
+            .iter()
+            .filter(|mission| !mission.unlisted)
+        {
             let oldest = mission
                 .nodes
                 .iter()

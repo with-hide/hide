@@ -20,7 +20,7 @@ import { LookButton, StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneDeskReturn } from "./DeskScreen";
-import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
+import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, PaneToolMark, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
@@ -429,6 +429,8 @@ export const PaneView = memo(function PaneView({
             </Hint>
           </>
         )}
+        {/* The external tool's name stays at every width too, cut short, since it says why no list of the operator's holds the agent. */}
+        {agentKind ? <PaneToolMark tool={recordAgent?.tool} /> : null}
         {/* The fork mark stays at every width: an icon alone, and a side fork is what makes a narrow pane. */}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
         {/* The PR mark gives way below the tight breakpoint, since the session record also holds it; the work chip stays, its mark and count alone, since a Conductor's pane opens its map from it. */}

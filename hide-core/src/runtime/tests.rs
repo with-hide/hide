@@ -177,6 +177,8 @@ mod strays;
 mod suggestions;
 #[path = "tests/terminal.rs"]
 mod terminal;
+#[path = "tests/tool_work.rs"]
+mod tool_work;
 #[path = "tests/tree_close.rs"]
 mod tree_close;
 #[path = "tests/tree_reopen.rs"]

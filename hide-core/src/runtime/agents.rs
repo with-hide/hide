@@ -4133,6 +4133,32 @@ impl Runtime {
         }
     }
 
+    /// Marks the rows of an external tool's work: the agents it started and
+    /// those delegated under them (`started::ToolWork`), matched as Hide AI's
+    /// are, by pane and the session the registration holds. Whether the tool
+    /// keeps the work is read from its connection now, never stored, so a
+    /// disconnect, a leave or View only hands the work to the operator on
+    /// this pass, and Act again takes it back (PRD hide-external-control
+    /// D-14, D-40).
+    fn lay_tool_work(&self, agents: &mut [SidebarAgentSnapshot]) {
+        let work = &self.hide_started.tool_work;
+        for agent in agents {
+            agent.tool = work
+                .iter()
+                .find(|work| {
+                    !work.ended
+                        && work.pane_id == agent.pane_id
+                        && work.session.is_some()
+                        && work.session == agent.lineage_session
+                })
+                .map(|work| crate::model::ToolWorkSnapshot {
+                    connection: work.connection.clone(),
+                    name: work.name.clone(),
+                    owns: self.access_keeps_work(&work.connection),
+                });
+        }
+    }
+
     /// The checkouts Hide made for the agents it started. A spawn's machine
     /// is the id of the device the shell names its Projects by (this node's
     /// own id for a local one), so it is the checkout's device as it stands.
@@ -4231,6 +4257,7 @@ impl Runtime {
         self.lay_awaited_replies(&mut agents, &unreachable);
         self.lay_checks(&mut agents);
         self.lay_hide_ai(&mut agents);
+        self.lay_tool_work(&mut agents);
         self.lay_unseen_views(&mut agents);
         self.lay_human_turns(&mut agents);
         crate::agent_state::apply_lineage(

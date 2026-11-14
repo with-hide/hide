@@ -9,14 +9,14 @@ What it needs from the operator, whether it is running, whether it has reported 
 - Activity: working, stopped, unknown.
 - Completion: reported, not reported.
 - Read: read, unread.
-- Ownership: operator, delegated, or Hide AI's, for work a Hide-started agent does for a screen that owns it.
+- Ownership: operator, delegated, Hide AI's, for work a Hide-started agent does for a screen that owns it, or an external tool's, for work a tool the operator approved at Act started and keeps.
 
 `hide-core/src/agent_state/axes.rs` is the single owner of all five.
 `agent_state/turn.rs` derives the group, request verb, close and rest gates from them; `sidebar.rs` assembles the snapshot rows.
 It also derives everything a view draws from them - the group, the mark, whether the row is emphasized, the status word, the descendant mark, and whether closing the pane needs a confirmation or a fresh status check - so no surface decides any of it a second time.
 
 Ownership is not stored anywhere.
-It is read back off the row: a row whose lineage depth is greater than zero is delegated, a root whose Hide AI snapshot names a home is Hide AI's, and every other row, including an orphan whose parent is gone, is the operator's.
+It is read back off the row: a row whose lineage depth is greater than zero is delegated, a root whose Hide AI snapshot names a home is Hide AI's, a root whose `tool` mark says its tool keeps it is that tool's, and every other row, including an orphan whose parent is gone, is the operator's.
 `ownership_of` is the only function that makes that judgement, and `apply_lineage` reapplies every derived value once the lineage is known.
 
 ### Work Hide AI does for a home
@@ -26,6 +26,8 @@ The coordination ledger's record of the spawn is the only source of the fact (`c
 A kind this build does not know, or a record with no task, loads with the rest of the ledger and reads as no home: that one agent stays an operator row with its mark and a `hide_ai.task_kind_unknown` diagnostic (D-19).
 The row stays in the agent data, so ⌘K, tabs, the pane header's owl and `hide agent list` find it as before; what changes is which lists enumerate it.
 `agent_state::listed_for_operator` is the one decision: a `HideAi` row is a member of the sidebar's tree roots, the device's tasks, Overview's requests and graph, the phone's list and the checkout counts only while it is in Needs You, and no tree draws it even then (the raised Needs You and the 태스크 list do).
+Needs You is the row's group as derived, a raise from below and a person's turn included, so every list that counts Needs You agrees with the raised Needs You and the phone, which read the same group; before 2026-11-14 the decision read the group without them, and a Hide AI agent's `ask-human` stood in the raised Needs You and on the phone but in no 태스크, Sessions, Overview or checkout count.
+The row publishes the decision as `unlisted` (absent while it is listed), which the phone reads instead of judging the row again.
 Its group is Needs You or Seen and never Working or Done, so it moves no Working or Done badge, rail count or notification.
 It is in Needs You when the agent itself asks (a question, approval or block, read like any row's) or when the home has a turn for the operator.
 The home's turn is computed by the core from what the home's own tracker already follows (the Memory promotion module for `memory_promote`, `runtime/suggestion_apply.rs` for `suggestion_apply`), the attempt's pull request in the machine's PR catalog, and published on the row as `hide_ai.turn`:
@@ -44,6 +46,21 @@ Only a live agent has a row: an attempt with no agent (a failure with no pull re
 The shell words the turn and opens the home from the row (the Hide AI tool's 제안 tab with the target's row open); the phone opens the agent's detail.
 Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_and_out_of_needs_you` and `a_home_owned_row_is_listed_only_while_the_operator_has_something_to_do` in `hide-core/src/runtime/tests/`, `the_home_turn_follows_the_pull_request_and_the_agent` in `memory_promotion.rs`, and `a_home_owned_row_notifies_once_on_entering_needs_you_and_not_on_a_turn_change` in `hided/src/mobile/push.rs`.
 
+### Work an external tool keeps
+
+An external tool the operator approved at Act ([ARCHITECTURE.md: External tools](ARCHITECTURE.md#external-tools)) starts agents for its own purposes, and they are the tool's work, not the operator's: the agent it started, and every agent started under that one with `--parent` however deep, such as a Conductor's workers (PRD hide-external-control D-09, B26, B27).
+The coordination ledger is the only source of the fact: `coordination::started` collects, from the tool's handoff spawns and the registrations whose responsibility parent is already one of them, each registration with its connection's id and name (`HideStarted::tool_work`), ended ones included, and the runtime lays the `tool` mark `{connection, name, owns}` on each live row of them by its pane and the session the registration holds, as it lays Hide AI's.
+`owns` is read from the connection list on every projection and stored nowhere: it holds while the tool's connection stands at Act (`Runtime::access_keeps_work`).
+A disconnect, the tool's `hide access leave` or View only hands the work to the operator at once, still running; Act again on the same connection takes it back; a new connection under the same name is another id and takes none of it (D-14, D-40).
+On that event the rows and their lists are judged again (`Runtime::tool_work_moved`), so nothing waits for the next session read.
+A root the tool keeps is the fourth ownership value, `Tool`; a delegated row the tool keeps stays `Delegated` for its group, Working or Seen, and `kept_elsewhere` keeps it off the lists too.
+`listed_for_operator` treats the tool's work as it treats Hide AI's: listed only while it is in Needs You, and no tree draws it even then.
+Unlike a Hide AI row, a tool's row is not in Needs You for the agent's own question, approval or block, since the tool reads and answers its agent itself (`hide ps`, `hide agent show`, `agent read`, its letters and `pane send`, D-09, B28); its mark for its own ask is `waiting`, as a delegated child's is, and it is Seen otherwise, never Working or Done.
+Only what a tool cannot take calls the operator (B29): a person's turn, its agent's own or a delegated child's raised to it (`hide agent ask-human`, the only raise that counts on a tool's root, `turn.rs::raise_calls`), and a View its agent opened for the operator, which is theirs to look at (`look`, D-38); a delegated child's View rises as a descendant signal, as for every root.
+The row stays in the agent data, so ⌘K, the recent panel, the tab strip and `hide agent list` find it, and its pane head writes the tool's name ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#work-an-external-tool-keeps)).
+A mission whose Conductor is the tool's work is the tool's too, which A mission adds no status below says.
+Regression owners: `each_row_reaches_the_operators_lists_by_whose_work_it_is`, `a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view` and `a_tools_delegated_child_rises_to_the_operator_only_for_a_person` in `hide-core/src/runtime/tests/tool_work.rs`, and `a_tools_work_holds_what_its_agent_delegates_however_deep_and_ends_nothing` in `coordination/started.rs`.
+
 ### A held Memory card is no status
 
 An agent reporting a Project Memory card stale (`hide memory stale`) changes no agent row, group, badge, notification or snapshot field, and the operator is told nothing (PRD memory-stale-cards D-11, B15).
@@ -52,6 +69,7 @@ The hold is the card's, not the agent's: it decides only what the hooks give, an
 ### A mission adds no status
 
 A Conductor and its workers are ordinary agents: a Conductor's row, its workers' rows and their delegated tabs read and group as any agent's do, and a mission adds no attention state, group, badge or notification (PRD software-factory-conductor D-14).
+A mission whose Conductor is an external tool's work the tool keeps (Work an external tool keeps above; `Runtime::mission_kept_by_tool`, by the Conductor's registration) is the tool's: its view carries `unlisted`, so the mission screen and its number leave it out, and the core leaves it out of `mission_asks`, the mission's notices and the phone's mission list, while `hide mission list` and `show` and Settings › External tools still reach it; what it asks the operator comes only through a person's turn on its rows, and once the tool lets go, what it holds unannounced is told then (PRD hide-external-control B30, D-14, D-36; [hide-private missions.md](delivery.md#missions)).
 The mission's own states (`planning`, `running`, `merge_wait`, `done`, `cancelled`) and each node's live only in the mission record and are drawn only on the map and the row's mission chip ([hide-private tasks-and-pr-list.md: A mission's map](UI_BEHAVIOR.md#tasks-the-보기-slot-and-the-pr-list)).
 A node carries its worker's life as `hide agent show` gives it (`agent_runtime`, from `coordination::life`), so a node the Conductor still records as working whose worker Hide put to sleep is drawn asleep, never at work, on its card, the head, the pane chip and the summary's `지금`.
 A decision the Conductor waits on reaches the operator through the Conductor's own row: the core lays it there as a question, as it lays a plan waiting for review (below), with `ask_subject` `{cause: "mission_decision", line, views}` carrying the decision's one line (needs-you-cleanup D-12) and how many Views it links for the operator to look at, left out at none ([ARCHITECTURE.md: Conductor missions](ARCHITECTURE.md#conductor-missions)).
@@ -269,7 +287,7 @@ A View is seen when, in one window, all of these hold (D-07): the window holds t
 The core decides it on every snapshot (`settle_unseen_views` in `runtime/unseen_views.rs`), from state it already holds; the shell sends only the window's focus, and only when it changes.
 An open of a View that is already looked at in the same event is never unseen, so nothing flickers (B5, B14), and an open again of a seen View is news again (D-11).
 
-The View's last opener's row carries it (D-19): an operator-owned row with an unseen View is in Needs You, whatever its own axes say, and draws the `look` mark (The mark).
+The View's last opener's row carries it (D-19): an operator-owned row with an unseen View is in Needs You, whatever its own axes say, and draws the `look` mark (The mark); so is a root an external tool keeps, since the tool cannot look in the operator's place (PRD hide-external-control D-38).
 Seeing the View does not read the pane, and reading the pane does not see the View (D-20); when the last unseen View is seen or closed the row goes back to the group its own axes give it (B4, B13).
 The row carries `look` on the wire: the newest unseen View's id and name, how many there are, the checkout it sits in and the group the row would be in with nothing to look at.
 Its line is `볼 것 · <newest View>`, ending with ` · 외 N` for the rest, a tail a narrow row never cuts (`lineParts` in `web/src/agentRow.ts`); a question, approval, block or native question or plan on the same row takes the mark and the line, which then ends with `볼 것 N` (D-14, D-18).
@@ -550,7 +568,7 @@ Ownership, the tree, the ancestor path and the descendant mark all start from on
 `hide agent spawn --parent here|<self id>` records delegation; omitting `--parent` hands the agent to the operator as an independent root.
 The latter has no indentation, from hint, parent line, descendant contribution, ancestor unread propagation, waiting-on-descendants effect or inclusion in the spawner's subtree close.
 Its own demand and completion enter Needs You and Done normally, and closing the spawner leaves it running.
-The CLI's required `origin` field records the spawner in both modes (null for ordinary roots), but origin never enters the UI or any ownership calculation.
+The CLI's required `origin` field records the spawner in both modes (null for ordinary roots); a pane agent's origin enters no UI and no ownership calculation, and only a start whose origin is Hide's own identity or an external tool's makes the agent Hide AI's work or the tool's, from the coordination record of the spawn ([Work Hide AI does for a home](#work-hide-ai-does-for-a-home), [Work an external tool keeps](#work-an-external-tool-keeps)).
 PR and issue panels still find the independent session through its own branch records without a delegated-by line.
 The engine records no lineage, so hided writes the four pane tokens through the engine (`Engine::report_pane_tokens`): `parent_pane` names the parent's pane id, `parent_machine` names its machine when the parent is remote, and `child_session` and `parent_session` are the original session digests.
 The value and lifetime contract is unchanged.

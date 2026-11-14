@@ -620,6 +620,18 @@ pub fn agent_group_for(
             AgentGroup::Seen
         };
     }
+    if ownership == Ownership::Tool {
+        // The tool reads its agent's state and answers it itself (PRD
+        // hide-external-control D-09, B28), so unlike Hide AI's row the
+        // agent's own question, approval or block calls no one here; only
+        // a View it opened for the operator does (D-38), and a person's
+        // turn is laid over the group as on every root (B29).
+        return if look {
+            AgentGroup::NeedsYou
+        } else {
+            AgentGroup::Seen
+        };
+    }
     if let Ownership::HideAi { operator_turn } = ownership {
         // Its home shows the work's progress and result; the operator is
         // called out only for what the operator has to do: the agent's own
@@ -883,16 +895,18 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         waiting,
         !agent.unseen_views.is_empty(),
     );
-    let group = if !agent.raised.is_empty() || human {
+    let raised = raise_calls(agent);
+    let group = if raised || human {
         AgentGroup::NeedsYou
     } else {
         group
     };
     agent.group = group.name().to_owned();
+    agent.unlisted = !super::axes::listed_for_operator(agent);
     agent.look = look_of(agent, |agent| {
         // Where the row would stand with nothing to look at, which tells the
         // notifications a View to look at from the row's own ask.
-        if !agent.raised.is_empty() || human {
+        if raised || human {
             return AgentGroup::NeedsYou;
         }
         agent_group_for(
@@ -988,14 +1002,31 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     agent.state = row_state(agent);
 }
 
+/// Whether the descendants raised to this root call the operator. A raise
+/// is the parent's failure to handle its child, which on a tool's root is
+/// the tool's to see; only a person's turn, which no tool can take, reaches
+/// the operator through it (PRD hide-external-control B29).
+fn raise_calls(agent: &SidebarAgentSnapshot) -> bool {
+    if ownership_of(agent) == Ownership::Tool {
+        agent
+            .raised
+            .iter()
+            .any(super::escalation::RaisedAsk::human_turn)
+    } else {
+        !agent.raised.is_empty()
+    }
+}
+
 /// What an operator's own row says about the Views it opened that they have
-/// not seen (PRD unseen-agent-views D-05, D-14). A delegated row's go up as
-/// its ancestors' signals instead (D-10), and a home's row has none (D-18).
+/// not seen (PRD unseen-agent-views D-05, D-14), and a tool's row, whose
+/// agent opened them for the operator, since a tool cannot look in its place
+/// (PRD hide-external-control D-38). A delegated row's go up as its
+/// ancestors' signals instead (D-10), and a home's row has none (D-18).
 fn look_of(
     agent: &SidebarAgentSnapshot,
     otherwise: impl FnOnce(&SidebarAgentSnapshot) -> AgentGroup,
 ) -> Option<crate::model::LookSnapshot> {
-    if ownership_of(agent) != Ownership::Operator {
+    if !matches!(ownership_of(agent), Ownership::Operator | Ownership::Tool) {
         return None;
     }
     let newest = agent.unseen_views.first()?;
