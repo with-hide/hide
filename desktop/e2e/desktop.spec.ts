@@ -410,11 +410,18 @@ test("failure: an attached node whose core update failed shows both builds, and 
     await screenshot(page, "desktop-update-failed");
     const connects = () => fs.readFileSync(runs, "utf8").trim().split("\n").length;
     expect(connects()).toBe(1);
+    // A failed discovery is logged by the host's health watch, whose tick is
+    // HEALTH_INTERVAL_MS after it attached, not by the connection itself: the
+    // fake CLI answers as soon as Retry runs it, so the second record lands a
+    // tick later, and asserting the count at once raced that tick on a loaded
+    // runner (with-hide/hide-private#810).
+    const failures = () => hostLog(run.env).filter((line) => line.event === "discovery.failed" && line.reason === "update_failed").length;
+    expect(failures()).toBe(1);
     await page.getByRole("button", { name: "Retry" }).click();
     // Retry is one connection, which this node answers with the same failure; nothing connects again on its own.
     await expect.poll(connects).toBe(2);
     await expect(page.locator("h1")).toHaveText("The core was not updated", { timeout: 20_000 });
-    expect(hostLog(run.env).filter((line) => line.event === "discovery.failed" && line.reason === "update_failed")).toHaveLength(2);
+    await expect.poll(failures, { message: "Retry's connection reaching the same failure" }).toBe(2);
     expect(connects()).toBe(2);
   } finally {
     node.close();
