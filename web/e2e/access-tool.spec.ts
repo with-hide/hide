@@ -19,7 +19,7 @@ import { fixtureExecutable } from "./platform-fixture";
 test.describe.configure({ timeout: 240_000 }); // wait-ok: a fixture with agent panes and a daemon, started and stopped whole
 
 type Answer = { ok: boolean; value?: Record<string, unknown>; result?: Record<string, unknown>; error?: { code?: string; message?: string }; reason?: string };
-type Listed = { id: string; pane?: string; origin_tool?: string; life?: string };
+type Listed = { id: string; pane?: string; origin_tool?: string; runtime?: string };
 
 /**
  * The built `hide` as a tool runs it: in its own home, with that home as
@@ -117,9 +117,13 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
 
     // It types into the agent's pane, and ends the agent.
     ok(tool(["pane", "send", pane, "hello from the tool"]), "pane send");
-    ok(tool(["agent", "end", helperId]), "agent end");
+    // The registration ends before the command answers, as it does for an agent in a pane (coordination/end.rs):
+    // the answer says so, the full list keeps the row as ended, and the live list leaves it out.
+    expect(ok(tool(["agent", "end", helperId]), "agent end")).toMatchObject({ id: helperId, runtime: "ended", pane: "closed" });
     const after = ok(tool(["agent", "list"]), "agent list after end").items as Listed[];
-    expect(after.some((agent) => agent.id === helperId)).toBe(false);
+    expect(after.find((agent) => agent.id === helperId)?.runtime, JSON.stringify(after)).toBe("ended");
+    const live = ok(tool(["agent", "list", "--live"]), "agent list --live after end").items as Listed[];
+    expect(live.some((agent) => agent.id === helperId), JSON.stringify(live)).toBe(false);
   } finally {
     daemon?.stop();
     fixture.stop();
