@@ -836,7 +836,7 @@ Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen
 
 - The sidebar draws the 태스크 list of the tool's work by state, `도구가 답할 차례` first, then `작업 중` and `끝남`, then the folds, with no lens switch, since the cell has one list.
   `도구가 답할 차례` is what waits on the tool's answer: its agent's question, approval or block, read or not.
-  Nothing in the cell takes the warning colour, since nothing in it is the operator's turn, and no row names the tool, since every row is its work.
+  Nothing in the cell takes the warning colour, since nothing in it is the operator's turn: a Conductor row's mission chip keeps its `!` in the grey of the cell's count (operator decision 2026-11-14), and no row names the tool, since every row is its work.
 - A task on another device, such as an agent the tool started with `--machine`, names its device on its row (B45).
 - A cell with no work says `아직 맡은 일이 없어요`, in the sidebar and in the Overview's work tab (B42).
 - The mission screen lists the missions the tool keeps, on every device, its head naming the tool; its turn group reads `도구가 답할 차례`, nothing takes the decision colour, and neither a row nor an opened mission's map head names the tool, since every mission there is its own.

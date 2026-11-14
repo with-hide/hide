@@ -539,6 +539,19 @@ it("names a profile child's agent and profile in its hover and accessible name, 
   expect(named("plain").title).not.toContain(" · ");
 });
 
+/** A running mission `pane` conducts, whose decision waits; with `tool`, the tool keeps it. */
+function decidedBy(pane: string, tool: AgentRow["tool"] | null = null) {
+  return { id: "mission-tool", title: "API", workspace_id: "hide", project: "/hide", checkout_path: "/hide", device_id: "local", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: pane, name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: "Which order?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...(tool ? { tool } : {}) };
+}
+
+// Operator decision 2026-11-14: outside a tool's cell a Conductor row's chip keeps the operator's colour for a decision that waits.
+it("keeps the operator's colour on a Conductor row's mission chip outside a tool's cell", async () => {
+  const agents = [row("ask", { demand: "question" }, { group: "needs_you", line: "Which order?" })];
+  const { container } = await render({ ...snapshot(agents, [card("ask", "needs_you", "hide-main")]), missions: { items: [decidedBy("ask")], failed: null } } as unknown as SnapshotRest, agents);
+  const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
+  expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone]).toEqual(["decision", "hold"]);
+});
+
 it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the warning colour, names a task on another device and none by the tool, and says when it holds nothing (PRD hide-external-control B40, B42, B45)", async () => {
   const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
   const agents = [
@@ -556,8 +569,13 @@ it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the 
       { device_id: "mini", tasks: { cards: [card("away", "working", "mini-main")], needs_you: 0, recency: "" }, members: [] },
     ],
   };
-  const { container } = await render(withMini, agents, null, cell);
+  // `ask` conducts a mission whose decision waits: its chip keeps its `!` in the cell's grey, not the operator's colour.
+  const decided = decidedBy("ask", tool);
+  const withMission = { ...withMini, missions: { items: [decided], failed: null } } as unknown as SnapshotRest;
+  const { container } = await render(withMission, agents, null, cell);
   expect(heads(container)).toEqual(["도구가 답할 차례1", "끝남1", "작업 중2"]);
+  const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
+  expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone, chip?.className.includes("text-mission-hold")]).toEqual(["decision", "waiting", false]);
   expect(container.querySelector('[data-task-group-head="needs_you"] button')?.className).not.toContain("text-warning");
   expect(container.querySelector('[data-task-row="ask"] [data-task-line]')?.className).not.toContain("text-warning");
   expect(container.querySelector("[data-tool-mark]")).toBeNull();
