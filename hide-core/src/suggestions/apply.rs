@@ -206,9 +206,9 @@ pub(crate) fn issue_text(brief: &ApplyBrief) -> (String, String) {
             format!("Reviews keep asking for changes: `{tag}`")
         }
         Some((_, tag)) => format!("Recurring failure: `{tag}`"),
-        // A line whose records were pruned before it was pressed names
-        // nothing, and a made-up name would be filed as a real one.
-        None => "Recurring failure with no record left to name".to_owned(),
+        // Its records were pruned, or name no command or check this page may
+        // quote, and a made-up name would be filed as a real one.
+        None => "Recurring failure with no command or check to name".to_owned(),
     };
     let mut body = vec![match &brief.basis {
         Some((signal, _)) => format!(
@@ -217,7 +217,7 @@ pub(crate) fn issue_text(brief: &ApplyBrief) -> (String, String) {
             brief.records
         ),
         None => format!(
-            "Hide found this recurring in {} records, none of which is still kept.",
+            "Hide found this recurring in {} records, none of which names a command or check.",
             brief.records
         ),
     }];
@@ -266,12 +266,17 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
 }
 
 /// The signal and tag a line's records name most, the newest first on a tie:
-/// what a line the grouping did not write rests on (B14). `entries` is newest
-/// first, so the first record of a key is the newest one. `None` when every
-/// record the line named was pruned.
+/// what a line the grouping did not write rests on (B14). Only a signal whose
+/// tag is a command or a check's name counts, because that tag is the one an
+/// issue may quote on a public page (D-29). `entries` is newest first, so the
+/// first record of a key is the newest one. `None` when every record the line
+/// named was pruned or names no work.
 fn named_by_records(entries: &[&super::ledger::RecordEntry]) -> Option<(Signal, String)> {
     let mut counts: BTreeMap<(Signal, String), (usize, usize)> = BTreeMap::new();
     for (newest, entry) in entries.iter().enumerate() {
+        if !entry.signal.tag_names_work() {
+            continue;
+        }
         counts
             .entry((entry.signal, entry.tag.clone()))
             .or_insert((0, newest))
@@ -644,25 +649,35 @@ mod tests {
             "a retry looks for the first try's title"
         );
 
-        let mut pruned = line(Stage::Suggested);
-        pruned.id = LineId(5);
-        pruned.basis = None;
-        pruned.outcome = Some(Outcome::Issue);
-        pruned.records = vec![RecordId(9)];
-        let mut pruned_life = LineLife::default();
-        begin(
-            &mut pruned,
-            &mut pruned_life,
-            &index,
-            Begin::New,
-            false,
-            400,
-        )
-        .unwrap();
-        assert_eq!(
-            pruned_life.attempt.as_ref().unwrap().issue_title.as_deref(),
-            Some("Recurring failure with no record left to name")
-        );
+        // Its records were pruned, or name only a session's words, which a
+        // public page may not quote (D-29).
+        let words = records(&[(Signal::Improvement, "6 config files searched", 40)]);
+        for (id, index) in [(9, &index), (1, &words)] {
+            let mut unnamed = line(Stage::Suggested);
+            unnamed.id = LineId(5);
+            unnamed.basis = None;
+            unnamed.outcome = Some(Outcome::Issue);
+            unnamed.records = vec![RecordId(id)];
+            let mut unnamed_life = LineLife::default();
+            begin(
+                &mut unnamed,
+                &mut unnamed_life,
+                index,
+                Begin::New,
+                false,
+                400,
+            )
+            .unwrap();
+            assert_eq!(
+                unnamed_life
+                    .attempt
+                    .as_ref()
+                    .unwrap()
+                    .issue_title
+                    .as_deref(),
+                Some("Recurring failure with no command or check to name")
+            );
+        }
     }
 
     #[test]
