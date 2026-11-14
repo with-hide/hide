@@ -832,7 +832,7 @@ They are still found by ⌘K, the recent panel, the tab strip and `hide agent li
 
 A mission such an agent conducts is the tool's too (B30, D-36): a device's mission screen, the sidebar's `미션` number, its 내 차례 rows, its decision, gate and safety-net cards, the device's Needs You, its notices and the phone's mission list leave it out, and the tool's cell lists it.
 
-Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen and the Overview in place of a device's (B40):
+Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen and the Overview in place of a device's (B40), with this window's own machine in front under it; the selection is the window's alone, and a cell that goes is forgotten at once, so Act again on the same tool brings its tile back without taking the window into it (B44):
 
 - The sidebar draws the 태스크 list of the tool's work by state, `도구가 답할 차례` first, then `작업 중` and `끝남`, then the folds, with no lens switch, since the cell has one list.
   `도구가 답할 차례` is what waits on the tool's answer: its agent's question, approval or block, read or not.
@@ -841,7 +841,10 @@ Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen
 - A cell with no work says `아직 맡은 일이 없어요`, in the sidebar and in the Overview's work tab (B42).
 - The mission screen lists the missions the tool keeps, on every device, its head naming the tool; its turn group reads `도구가 답할 차례`, nothing takes the decision colour, and neither a row nor an opened mission's map head names the tool, since every mission there is its own.
 - The Overview draws only the tool's agents, on the projects it works in, and names the tool in place of its device switch; the device's Overview never draws them (D-48).
-  The map's centre is the tool, drawn with its tile's letters and without the `+` a device's map gives `나`, since what the operator starts is never the tool's work.
+  The map's centre is the tool, drawn with its tile's letters and without the `+` a device's map gives `나`, since what the operator starts is never the tool's work; for the same reason the tool's map has no start circles, no Add project place, no project `+` and no `New agent`.
+  Its side column lists what waits on the tool under `도구가 답할 차례`, the missions waiting on its answer among them, where a device's lists `나를 기다리는 것`.
+  The Projects tab counts the tool's tasks in each project, even one the operator works in too, the tool's turn as `도구 차례 N` in no warning colour.
+  The places dragged on a tool's map are its own; the filter and the hidden and folded projects are one choice for every map, as they are across devices.
 - The Overview and `미션` rows of the sidebar draw no number in a tool's cell, since their numbers are the operator's (B41).
 
 The operator can answer in a row's pane from the cell; the answer takes the row out of the tool's turn, and the work stays the tool's (B43).
@@ -854,7 +857,7 @@ Two things of the agents reach the operator anyway, as one row in the sidebar's 
 When the operator disconnects the tool, the tool leaves, or the operator sets it to View only, all its work is the operator's from that moment, still running: its agents and missions enter the lists, counts and graph at once, and their next question is the operator's turn; the tool's tile goes, and a window showing its cell shows This Mac (B16, B44).
 Setting the same connection to Act again takes the work back, and a new connection under the same name takes none of it.
 A connected device's agents follow the same rules.
-The phone has no tool's cell (B46; `docs/INSTALL.md`, What each system supports).
+The phone has no tool's cell (B46; `docs/INSTALL.md`, What each system supports); a tool's person's turn or View on the phone's list leads its second line with the tool's name, as the desktop's sidebar row does.
 Web owner: `web/src/toolCells.ts` (which cell is in front and what it holds), `ToolTaskLens` in `web/src/TaskLens.tsx`, `ToolTileView` in `web/src/components/device-rail.tsx`, and `ToolMark` and `ToolLabel` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs`, `hide-core/src/agent_state/tally/scope.rs` (`ToolCell`) and `hide-core/src/runtime/access.rs`.
 
 ### Agent logo view mode
