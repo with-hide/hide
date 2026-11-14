@@ -973,7 +973,7 @@ fn is_zero(value: &u64) -> bool {
 /// Whether `caller` is Hide's own identity for typed input, the only one
 /// that reports a brief's record or its notice (`delivery::typed`).
 fn input_authority(caller: &Actor) -> bool {
-    caller.hide_owned()
+    caller.hide_itself()
         && caller.name
             == format!(
                 "{}{}",
@@ -1497,6 +1497,19 @@ pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &Registratio
     json!(agent_view(record, ledger, sleeping))
 }
 
+/// The name of the external tool whose connection started `record`, read
+/// from the origin record its start names (PRD hide-external-control B31).
+pub(crate) fn origin_tool(record: &AgentRecord, ledger: &Ledger) -> Option<String> {
+    let origin = record.origin.as_deref()?;
+    ledger
+        .agents
+        .iter()
+        .find(|agent| agent.id == origin)?
+        .actor
+        .access_name()
+        .map(str::to_owned)
+}
+
 pub(crate) fn agent_view(
     record: &AgentRecord,
     ledger: &Ledger,
@@ -1518,6 +1531,7 @@ pub(crate) fn agent_view(
         pane: record.pane.clone(),
         parent: record.parent.clone(),
         origin: record.origin.clone().or_else(|| record.parent.clone()),
+        origin_tool: origin_tool(record, ledger),
         project: record.project.clone(),
         profile: sleeping.profiles.get(&record.id).cloned(),
         runtime,
@@ -1744,8 +1758,12 @@ pub(crate) fn apply_with(
                 .parent
                 .as_ref()
                 .and_then(|id| resolve_actor(ledger, id));
+            // An external tool at Act does what the operator does (PRD
+            // hide-external-control D-27): it may end any agent, which
+            // its connection's standing was checked for before this ran.
             if !record.actor.same_identity(caller)
                 && !parent.is_some_and(|parent| parent.same_identity(caller))
+                && caller.access_connection().is_none()
             {
                 return Err("parent_authority_required".into());
             }
@@ -1753,6 +1771,16 @@ pub(crate) fn apply_with(
                 !resolve_actor(ledger, id).is_some_and(|actor| actor.same_identity(caller))
             }) {
                 return Err("actor_identity_conflict".into());
+            }
+            if let Some(connection) = caller.access_connection() {
+                // Who ended it, by the tool's connection (B31).
+                crate::diagnostic!(json!({
+                    "component": "coordination",
+                    "kind": "agent.ended_by_tool",
+                    "agent_id": id,
+                    "connection_id": connection,
+                    "by": caller.name,
+                }));
             }
             end_record(ledger, id, now);
             Ok(view(
@@ -1823,7 +1851,7 @@ pub(crate) fn apply_with(
             // identity may give one, and only on a handoff.
             if task.as_ref().is_some_and(|task| {
                 mode != SpawnMode::Handoff
-                    || !caller.hide_owned()
+                    || !caller.hide_itself()
                     || task.target.as_deref().is_some_and(|target| !key(target))
             }) {
                 return Err("task_reserved".into());
@@ -2373,7 +2401,7 @@ pub(crate) fn apply_with(
             conductor,
             former,
         } => {
-            if !caller.hide_owned() {
+            if !caller.hide_itself() {
                 return Err("parent_authority_required".into());
             }
             let moved = adopt_mission_workers(ledger, mission, conductor, former.as_deref())?;
@@ -2603,6 +2631,81 @@ fn insert_record(
     record.id = allocate(ledger, "agent")?;
     ledger.agents.push(record.clone());
     Ok(view(&record, ledger, &RegistrationFacts::NONE))
+}
+
+/// Whether `actor` is an external tool whose connection `connections`, the
+/// ids the access list holds, no longer has (PRD hide-external-control
+/// D-23). A View only connection is still held: its tool keeps what it has.
+fn tool_gone(actor: &Actor, connections: &[String]) -> bool {
+    actor
+        .access_connection()
+        .is_some_and(|id| !connections.iter().any(|held| held == id))
+}
+
+/// Whether the ledger holds anything of a tool no longer connected that
+/// [`end_gone_tools`] ends: a live record, a watch it keeps or that watches
+/// it, or an answer owed on a letter to or from it.
+pub(crate) fn tools_left_behind(ledger: &Ledger, connections: &[String]) -> bool {
+    ledger
+        .agents
+        .iter()
+        .any(|record| !record.ended && tool_gone(&record.actor, connections))
+        || ledger.watches.iter().any(|watch| {
+            tool_gone(&watch.parent, connections) || tool_gone(&watch.target, connections)
+        })
+        || ledger.letters.iter().any(|letter| {
+            letter.waiting_answer
+                && !letter.awaiting_intake()
+                && (tool_gone(&letter.sender, connections)
+                    || tool_gone(&letter.recipient, connections))
+        })
+}
+
+/// Ends what tools no longer connected keep in the ledger (D-23): their
+/// origin records, the watches they keep or that watch them, and the answer
+/// waits of their letters. The store's upkeep runs it before every batch
+/// with the list as the core holds it, so a disconnect, a leave or a stop
+/// between them converges without a request of its own. Whether it changed
+/// anything.
+pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u64) -> bool {
+    if !tools_left_behind(ledger, connections) {
+        return false;
+    }
+    ledger.watches.retain(|watch| {
+        !tool_gone(&watch.parent, connections) && !tool_gone(&watch.target, connections)
+    });
+    let ended: Vec<String> = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && tool_gone(&record.actor, connections))
+        .map(|record| record.id.clone())
+        .collect();
+    for id in &ended {
+        end_record(ledger, id, now);
+    }
+    // A tool's letter waits for an answer it can no longer read, with or
+    // without an origin record of the tool.
+    let mut parties: Vec<Actor> = Vec::new();
+    for letter in &ledger.letters {
+        for party in [&letter.sender, &letter.recipient] {
+            if letter.waiting_answer
+                && tool_gone(party, connections)
+                && !parties.iter().any(|known| known.same_identity(party))
+            {
+                parties.push(party.clone());
+            }
+        }
+    }
+    for party in &parties {
+        ledger.end_answer_waits_of(party, now);
+    }
+    crate::diagnostic!(json!({
+        "component": "coordination",
+        "kind": "access.tools_ended",
+        "records": ended,
+        "parties": parties.len(),
+    }));
+    true
 }
 
 /// Ends a registration, the watches on it and the answer waits of the letters
@@ -2896,6 +2999,100 @@ mod tests {
             .unwrap()
             .into()
     }
+    /// D-23: what a tool whose connection is gone keeps ends, its origin
+    /// record, the watch it keeps and its letter's answer wait, while a tool
+    /// still connected (at any level) and the agent it watches are
+    /// untouched; run again it changes nothing.
+    #[test]
+    fn ending_tools_ends_only_what_tools_no_longer_connected_keep() {
+        let mut ledger = Ledger::default();
+        let gone = Actor::access("00000000000000a1", "gone", "local");
+        let kept = Actor::access("00000000000000a2", "kept", "local");
+        let worker = record("worker", "worker-session", None);
+        let worker_id = register(&mut ledger, worker.clone(), &worker.actor);
+        let tool_record = |actor: &Actor| AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: "local".into(),
+            host_scope: actor.kind.clone(),
+            native_machine: actor.kind.clone(),
+            session: actor.name.clone(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+        };
+        let gone_id = register(&mut ledger, tool_record(&gone), &gone);
+        let kept_id = register(&mut ledger, tool_record(&kept), &kept);
+        for tool in [&gone, &kept] {
+            crate::delivery::watch::start(&mut ledger, tool, &worker.actor, 1).unwrap();
+        }
+        let asked = crate::delivery::mailbox::send(
+            &mut ledger,
+            &gone,
+            &worker.actor,
+            "look",
+            "please look",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        // The worker took it in: its answer is owed from now on.
+        let taken = ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == asked.id && letter.waiting_answer)
+            .unwrap();
+        taken.state = crate::delivery::ledger::State::Delivered;
+
+        let connections = vec!["00000000000000a2".to_owned()];
+        assert!(tools_left_behind(&ledger, &connections));
+        assert!(end_gone_tools(&mut ledger, &connections, 2));
+        let ended = |ledger: &Ledger, id: &str| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == id)
+                .unwrap()
+                .ended
+        };
+        assert!(ended(&ledger, &gone_id));
+        assert!(!ended(&ledger, &kept_id));
+        assert!(!ended(&ledger, &worker_id));
+        assert_eq!(ledger.watches.len(), 1);
+        assert!(ledger.watches[0].parent.same_identity(&kept));
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == asked.id)
+            .unwrap();
+        assert!(!letter.waiting_answer);
+
+        assert!(!tools_left_behind(&ledger, &connections));
+        assert!(!end_gone_tools(&mut ledger, &connections, 3));
+        assert_eq!(ledger.watches.len(), 1);
+    }
+
+    /// A watch is all a tool left: it still counts as left behind, and goes.
+    #[test]
+    fn a_gone_tools_watch_alone_is_left_behind_and_ends() {
+        let mut ledger = Ledger::default();
+        let gone = Actor::access("00000000000000a1", "gone", "local");
+        let worker = record("worker", "worker-session", None);
+        register(&mut ledger, worker.clone(), &worker.actor);
+        crate::delivery::watch::start(&mut ledger, &gone, &worker.actor, 1).unwrap();
+        assert!(tools_left_behind(&ledger, &[]));
+        assert!(end_gone_tools(&mut ledger, &[], 2));
+        assert!(ledger.watches.is_empty());
+        assert!(!tools_left_behind(&ledger, &[]));
+    }
+
     /// A registration an earlier build made for a parent the engine never named
     /// holds its pane id as its name. Reading the ledger gives it none, so
     /// it is called by its registration id and by its screen title, never by

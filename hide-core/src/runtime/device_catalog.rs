@@ -647,9 +647,22 @@ impl Runtime {
 
     /// Reads the worktrees of the device's Git repositories through its
     /// helper: every repository when `all` (after a worktree was created or
-    /// removed there, or a new connection), otherwise the ones not read yet.
-    /// One read at a time; a request during it runs one more after it.
+    /// removed there, or a new connection), otherwise the ones not read yet
+    /// and the ones its Git watch saw change, those once
+    /// [`crate::worktrees::WATCH_READ_SPACING`] has passed since the last
+    /// read landed (the fetch pump's tick starts them then,
+    /// `retry_device_reads`). One read at a time; a request during it runs
+    /// one more after it.
     pub(super) fn request_device_worktrees(&mut self, target: &str, all: bool) -> bool {
+        self.request_device_worktrees_at(target, all, std::time::Instant::now())
+    }
+
+    fn request_device_worktrees_at(
+        &mut self,
+        target: &str,
+        all: bool,
+        now: std::time::Instant,
+    ) -> bool {
         let Some(session) = self
             .snapshot
             .status
@@ -681,9 +694,14 @@ impl Runtime {
             entry.again |= all || roots.iter().any(|root| !entry.projects.contains_key(root));
             return false;
         }
+        let spaced = entry.landed_at.is_none_or(|at| {
+            now.saturating_duration_since(at) >= crate::worktrees::WATCH_READ_SPACING
+        });
         let wanted = roots
             .into_iter()
-            .filter(|root| all || !entry.projects.contains_key(root) || entry.stale.contains(root))
+            .filter(|root| {
+                all || !entry.projects.contains_key(root) || (spaced && entry.stale.contains(root))
+            })
             .collect::<Vec<_>>();
         if wanted.is_empty() {
             return false;
@@ -789,9 +807,15 @@ impl Runtime {
             entry.again = false;
             return self.request_device_worktrees(target, true);
         }
+        entry.landed_at = Some(std::time::Instant::now());
         for (root, project) in answers {
             match project {
                 Some(project) => {
+                    crate::worktrees::log_new_failures(
+                        Some(target),
+                        entry.projects.get(&root),
+                        &project,
+                    );
                     entry.projects.insert(root, project);
                 }
                 None => {
@@ -813,7 +837,11 @@ impl Runtime {
         entry
             .notes
             .retain(|root, _| entry.projects.contains_key(root));
-        if let Some(reason) = failure.as_deref() {
+        // A link that keeps failing is logged when it starts failing or
+        // its reason changes, not on every retry.
+        if let Some(reason) = failure.as_deref()
+            && entry.unavailable != failure
+        {
             crate::diagnostic!(serde_json::json!({
                 "component": "device_worktrees",
                 "kind": "worktrees.read_failed",
@@ -870,25 +898,31 @@ impl Runtime {
     }
 
     /// Reads again each device whose last read failed and whose pause is
-    /// over, while a window is attached; one read per device, never more
-    /// often than `DEVICE_READ_RETRY`.
+    /// over, every repository, never more often than `DEVICE_READ_RETRY`,
+    /// and each device whose Git watch saw a change once the spacing since
+    /// its last read has passed; one read per device, while a window is
+    /// attached.
     pub(crate) fn retry_device_reads(&mut self, now: std::time::Instant) -> bool {
         if !self.ui_attached {
             return false;
         }
-        let due: Vec<String> = self
+        let due: Vec<(String, bool)> = self
             .device_worktrees
             .iter_mut()
             .filter(|(_, entry)| {
-                entry.in_flight.is_none() && entry.retry_at.is_some_and(|at| at <= now)
+                entry.in_flight.is_none()
+                    && (entry.retry_at.is_some_and(|at| at <= now) || !entry.stale.is_empty())
             })
             .map(|(device, entry)| {
-                entry.retry_at = None;
-                device.clone()
+                let retry = entry.retry_at.is_some_and(|at| at <= now);
+                if retry {
+                    entry.retry_at = None;
+                }
+                (device.clone(), retry)
             })
             .collect();
-        due.into_iter().fold(false, |changed, device| {
-            changed | self.request_device_worktrees(&device, true)
+        due.into_iter().fold(false, |changed, (device, all)| {
+            changed | self.request_device_worktrees_at(&device, all, now)
         })
     }
 

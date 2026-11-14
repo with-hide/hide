@@ -1,3 +1,5 @@
+pub mod access;
+pub mod access_cli;
 pub mod agent_cli;
 pub mod agent_exec;
 pub mod attach;

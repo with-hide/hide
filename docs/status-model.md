@@ -873,6 +873,8 @@ Several candidates resolve open, then merged, then closed, the most recently upd
 The sidebar row, the worktree catalog, the agent rows' PR mark and the link and hand-off actions all ask that rule, and a catalog read that moves a HEAD decides the connection again.
 The PR list and a worktree's base still list one pull request per head branch (`preferred_per_branch`).
 The same generation also reads open issues, their Project Status, and PR closing references for Project Home.
+A token without `read:project`, or a GitHub Enterprise Server with no Projects, refuses an issue read's Project Status while it answers the rest; the read is asked again without it, and it is a success: the status names no failure, and its `pull_requests.ok` or `pull_requests.empty` diagnostic carries `gh`'s refusal as its `warning`.
+Such a refusal, recognized by `gh`'s own words for the two (`github::projects_refused`), is remembered for the signed-in token as `gh auth status` names it, so every later read asks without the Project Status at once until the token changes (`gh auth refresh -s read:project`, another login), and one `project_metadata.unavailable` diagnostic is written when it is learned; a refusal for any other reason, such as the network, is asked again on the next read.
 The issue list uses `sort:updated-desc` and reads one sentinel beyond the 200-issue display cap so overflow is based on evidence.
 Issue references accept a GitHub issue URL, `owner/repo#N`, or `#N` when the repository is known; unsupported hosts and malformed references are rejected.
 A failed component read retains that component's last successful answer, including a successfully empty answer, while a successful PR read still advances if issue reading fails.

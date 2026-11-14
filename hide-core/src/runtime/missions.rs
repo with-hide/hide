@@ -1968,23 +1968,41 @@ impl Runtime {
         if self.missions.unreadable.is_some() {
             return Err("mission_unavailable".into());
         }
-        let context = self
-            .workspace_control_query(device, caller, Query::Info)
-            .map_err(|refusal| refusal.reason.to_owned())?
-            .context;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
-        let Caller::Pane(pane) = Caller::parse(caller) else {
-            return Err("agent_pane_required".into());
+        // An external tool reads every mission on this machine, and leads
+        // none: a Conductor it starts does (PRD hide-external-control D-12).
+        let tool = match Caller::parse(caller) {
+            Caller::Access { connection, .. } => Some(self.access_authority(
+                device,
+                connection,
+                crate::access::mission_need(&command),
+            )?),
+            _ => None,
         };
-        let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
-        let actor = self
-            .delivery_observations
-            .get(&pane)
-            .ok_or("agent_pane_required")?
-            .actor
-            .clone();
+        let every_project = tool.is_some();
+        // A tool reaches only Show and List, which name no pane.
+        let (context, actor, pane) = match tool {
+            Some(actor) => (expected.clone(), actor.clone(), actor.pane_id),
+            None => {
+                let context = self
+                    .workspace_control_query(device, caller, Query::Info)
+                    .map_err(|refusal| refusal.reason.to_owned())?
+                    .context;
+                if context != *expected {
+                    return Err("caller_context_changed".into());
+                }
+                let Caller::Pane(pane) = Caller::parse(caller) else {
+                    return Err("agent_pane_required".into());
+                };
+                let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
+                let actor = self
+                    .delivery_observations
+                    .get(&pane)
+                    .ok_or("agent_pane_required")?
+                    .actor
+                    .clone();
+                (context, actor, pane)
+            }
+        };
         actor.require_native_identity()?;
         let now = super::memory::now_ms();
         // The caller's project: the Git repository the worktree catalog
@@ -2579,7 +2597,8 @@ impl Runtime {
                             .map(|line| (line, true)),
                     )
                     .filter(|(line, _)| {
-                        line.device_id == device && Some(&line.project) == project.as_ref()
+                        every_project
+                            || (line.device_id == device && Some(&line.project) == project.as_ref())
                     })
                     .collect();
                 lines.sort_by_key(|(line, _)| crate::missions::mission_number(&line.id));

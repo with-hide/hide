@@ -531,6 +531,7 @@ HELP_SOURCES = (
     "hided/src/agent_cli.rs",
     "hided/src/ps_cli.rs",
     "hided/src/device_cli.rs",
+    "hided/src/access_cli.rs",
     "hided/src/mission_cli.rs",
     "hided/src/plan_cli.rs",
     "hided/src/pane_cli.rs",

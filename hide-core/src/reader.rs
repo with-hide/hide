@@ -152,6 +152,11 @@ where
         answer
     }
 
+    /// Whether a read is running or its answer waits for the next poll.
+    pub(crate) fn busy(&self) -> bool {
+        self.inflight.is_some()
+    }
+
     /// Whether a read was started and not yet joined: its answer may already
     /// have landed, so a caller joins first to learn whether one runs.
     #[cfg(test)]

@@ -28,7 +28,11 @@ pub enum Query {
 /// The engine pane ids are `w..:p..` and remote ones `remote:<device>:pane:<id>`, so
 /// neither prefix can collide with a pane. The Desk process (PRD Desk 1차)
 /// is [`DESK_CALLER`]: it has no pane and no checkout, and acts as Hide's own
-/// `hide:desk` identity in delivery commands alone.
+/// `hide:desk` identity in delivery commands alone. An external tool (PRD
+/// hide-external-control) is `access:<connection id>`, with `:<canonical
+/// path>` when the folder it ran the command in is a path: it acts as its
+/// connection's code-owned identity in delivery commands, and its Workspace
+/// commands resolve that folder as a checkout caller's do (D-28).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Caller<'a> {
     Pane(&'a str),
@@ -38,10 +42,15 @@ pub enum Caller<'a> {
         path: &'a str,
         gateway: bool,
     },
+    Access {
+        connection: &'a str,
+        path: Option<&'a str>,
+    },
 }
 
 const CHECKOUT_CALLER_PREFIX: &str = "checkout:";
 const GATEWAY_CALLER_PREFIX: &str = "gateway:";
+const ACCESS_CALLER_PREFIX: &str = "access:";
 
 /// The caller id hided records for the Desk process's capability.
 pub const DESK_CALLER: &str = "hide:desk";
@@ -50,6 +59,19 @@ impl<'a> Caller<'a> {
     pub fn parse(id: &'a str) -> Self {
         if id == DESK_CALLER {
             return Caller::Desk;
+        }
+        if let Some(rest) = id.strip_prefix(ACCESS_CALLER_PREFIX) {
+            let (connection, path) = match rest.split_once(':') {
+                Some((connection, path)) => (connection, Some(path)),
+                None => (rest, None),
+            };
+            if !connection.is_empty()
+                && connection.len() <= 64
+                && connection.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                && path.is_none_or(hide_platform::path::is_wire_absolute)
+            {
+                return Caller::Access { connection, path };
+            }
         }
         id.strip_prefix(CHECKOUT_CALLER_PREFIX)
             .map(|rest| (rest, false))
@@ -77,6 +99,15 @@ impl<'a> Caller<'a> {
 /// The caller id hided records for a checkout-bound capability.
 pub fn checkout_caller_id(key: &str, canonical_path: &str) -> String {
     format!("{CHECKOUT_CALLER_PREFIX}{key}:{canonical_path}")
+}
+
+/// The caller id hided records for an external tool's command: its
+/// connection, and the folder the command ran in when the kernel named one.
+pub fn access_caller_id(connection: &str, canonical_path: Option<&str>) -> String {
+    match canonical_path {
+        Some(path) => format!("{ACCESS_CALLER_PREFIX}{connection}:{path}"),
+        None => format!("{ACCESS_CALLER_PREFIX}{connection}"),
+    }
 }
 
 /// The caller id a desktop window's browser gateway acts as on a checkout.
@@ -546,6 +577,26 @@ mod tests {
                 path: "/srv/project",
                 gateway: true
             }
+        );
+        // An external tool names its connection, and the folder its
+        // command ran in when the kernel named one.
+        assert_eq!(
+            Caller::parse(&super::access_caller_id("c0ffee", Some("C:/work/app"))),
+            Caller::Access {
+                connection: "c0ffee",
+                path: Some("C:/work/app")
+            }
+        );
+        assert_eq!(
+            Caller::parse(&super::access_caller_id("c0ffee", None)),
+            Caller::Access {
+                connection: "c0ffee",
+                path: None
+            }
+        );
+        assert_eq!(
+            Caller::parse("access:x:relative"),
+            Caller::Pane("access:x:relative")
         );
         assert_eq!(Caller::parse("w8P:pM"), Caller::Pane("w8P:pM"));
         assert_eq!(

@@ -875,10 +875,12 @@ A turn the label read as finished is not hidden by the subagents it left, while 
 The count comes from each agent's hook.
 Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, and reads the running count once for both the pane head (`PaneChildren.subagents`) and the row (`SidebarAgentSnapshot.subagents`, laid before the lineage by `Runtime::lay_subagents`, and for a device's rows from that device's tokens and kit), through `sidebar::running_subagents`.
 docs/agent-hooks.md owns the hook.
-`working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero.
+`working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
+Each count is separately knowable, and a count the core cannot read is `None`, never zero, in the core's facts; the screens above draw it exactly as none.
 Claude Code, Codex, Grok, OpenCode, omp and Antigravity report a count, and Pi (it runs no subagents) and Cursor declare none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
+Codex's count follows its subagents past the main turn's end, as Claude Code's does: a subagent still running when the main agent's turn ends stays working until its own end, one the main agent stops itself leaves without being counted done, and a quit and resume of the session counts none of the subagents the quit cut off (docs/agent-hooks.md, Which subagents run).
 Which kind each subagent is and how long it has run are not drawn yet: the hook keeps only their ids, so the pane head's hover gives the count alone for every agent.
-Settings > Agents lists no subagent count: the kit's feature table has no `subagents` entry.
+Settings > Agents lists no subagent count either: the kit's feature table has no `subagents` entry.
 
 ### Closing an agent that spawned others
 

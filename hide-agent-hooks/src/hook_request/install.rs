@@ -74,6 +74,25 @@ pub struct PaneRequest {
     /// it names one: only that installation's daemon or node answers for it.
     #[serde(default)]
     pub install: Option<String>,
+    /// An external tool's ask (PRD hide-external-control), which only the
+    /// core's own daemon answers; a device's node refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<AccessAsk>,
+}
+
+/// What an external tool asks the core's bootstrap socket, with the key it
+/// made and keeps in its own home. The daemon hashes the key and forgets it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "ask", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AccessAsk {
+    /// `hide access request --name <name>`.
+    Request { name: String, key: String },
+    /// `hide access status`.
+    Status { key: String },
+    /// `hide access leave`.
+    Leave { key: String },
+    /// Any other command, run as the connection: its one-shot credential.
+    Use { key: String },
 }
 
 /// The refusal a daemon or node of installation `own` gives `request` before
@@ -244,6 +263,7 @@ mod tests {
     #[test]
     fn a_daemon_or_node_refuses_only_another_installations_pane() {
         let request = |install: Option<&str>| PaneRequest {
+            access: None,
             pane_id: "w1:p1".to_owned(),
             nonce: "0".repeat(32),
             one_shot: false,
