@@ -203,12 +203,32 @@ pub struct ToolCell {
 }
 
 /// An external tool's work on one device: its 태스크 cards, grouped by the
-/// tool's turn (`tool_cell_group`), and the Overview's members.
+/// tool's turn (`tool_cell_group`), the Overview's members, and the
+/// checkouts its sessions work in, which the cell's 프로젝트 tab draws.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ToolDevice {
     pub device_id: String,
     pub tasks: super::tasks::Tasks,
     pub members: Vec<Member>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checkouts: Vec<ToolCheckout>,
+}
+
+/// A checkout that holds a session an external tool keeps, as the cell's
+/// 프로젝트 tab draws it in place of the operator's (operator decision
+/// 2026-11-15, the tool's space reads as the operator's own, D-55): the tree
+/// of the tool's sessions there, built by the operator's checkout tree's
+/// rule (`lineage::sidebar_tree`), which leaves the tool's rows out of
+/// theirs, and the marks its row's badge counts, as a checkout's
+/// `agent_summary.marks` are. A checkout where the tool has only a delegated
+/// child has none: the child is drawn under its root, as on the operator's
+/// side.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolCheckout {
+    pub project_id: String,
+    pub checkout_id: String,
+    pub sidebar_tree: super::lineage::Tree,
+    pub marks: MarkCountsSnapshot,
 }
 
 /// The rows connection `connection`'s tool keeps on each connected device,
@@ -241,11 +261,14 @@ fn tool_rows(devices: &[DeviceRows<'_>], connection: &str) -> Vec<Vec<SidebarAge
 /// One tool's cell, from the rows it keeps (`tool_rows`, in `devices`'
 /// order), without its mission asks, which `Cache::apply` lays on. A tool
 /// keeping no row has an empty cell, built without a pass over the panes.
+/// `family` is the refresh's index of every device's rows, which a
+/// checkout's tree opens its children from, as the operator's trees do.
 fn tool_cell(
     connection: &str,
     name: &str,
     devices: &[DeviceRows<'_>],
     rows: &[Vec<SidebarAgentSnapshot>],
+    family: &super::lineage::Family<'_>,
 ) -> ToolCell {
     if rows.iter().all(Vec::is_empty) {
         return ToolCell {
@@ -257,10 +280,21 @@ fn tool_cell(
         };
     }
     let mut places = Vec::new();
+    let mut checkouts = Vec::with_capacity(devices.len());
     for (device, rows) in devices.iter().zip(rows) {
         let by_pane: HashMap<_, _> = rows.iter().map(|row| (row.pane_id.as_str(), row)).collect();
+        // The kept rows as the device lists them, which a tree's references
+        // name; `rows` are copies regrouped for the cell's 태스크 list.
+        let kept: Vec<_> = device
+            .agents
+            .iter()
+            .copied()
+            .filter(|row| by_pane.contains_key(row.pane_id.as_str()))
+            .collect();
+        let mut held = Vec::new();
         for project in &device.projects {
             for checkout in &project.checkouts {
+                let mut here = Vec::new();
                 for pane in checkout.tabs.iter().flat_map(|t| &t.panes) {
                     if let Some(agent) = by_pane.get(pane.id.as_str()) {
                         places.push(super::tasks::Place {
@@ -270,23 +304,54 @@ fn tool_cell(
                             checkout_id: checkout.id.as_str(),
                             agent,
                         });
+                        here.push(pane.id.as_str());
                     }
                 }
+                if here.is_empty() {
+                    continue;
+                }
+                let physical: Vec<_> = kept
+                    .iter()
+                    .copied()
+                    .filter(|row| here.contains(&row.pane_id.as_str()))
+                    .collect();
+                let sidebar_tree = super::lineage::sidebar_tree(&physical, family);
+                if sidebar_tree.rows.is_empty() {
+                    continue;
+                }
+                let mut marks = MarkCountsSnapshot::default();
+                let mut counted = HashSet::new();
+                for row in physical {
+                    if counted.insert(row.pane_id.as_str()) {
+                        crate::agent_state::RowMark::count_row(row, &mut marks);
+                    }
+                }
+                held.push(ToolCheckout {
+                    project_id: project.id.clone(),
+                    checkout_id: checkout.id.clone(),
+                    sidebar_tree,
+                    marks,
+                });
             }
         }
+        checkouts.push(held);
     }
     let mut tasks = super::tasks::Forest::new(places).publish().devices;
     let devices: Vec<ToolDevice> = devices
         .iter()
         .zip(rows)
-        .filter_map(|(device, rows)| {
+        .zip(checkouts)
+        .filter_map(|((device, rows), checkouts)| {
             let listed: Vec<_> = rows.iter().collect();
             let members = members(&device.projects, &listed);
             let tasks = tasks.remove(device.id).unwrap_or_default();
-            (!tasks.is_empty() || !members.is_empty()).then(|| ToolDevice {
-                device_id: device.id.to_owned(),
-                tasks,
-                members,
+            (!tasks.is_empty() || !members.is_empty() || !checkouts.is_empty()).then(|| {
+                ToolDevice {
+                    device_id: device.id.to_owned(),
+                    tasks,
+                    members,
+                    checkouts,
+                }
             })
         })
         .collect();
@@ -1283,7 +1348,13 @@ impl Cache {
             .tools
             .iter()
             .map(|(connection, name)| {
-                tool_cell(connection, name, &devices, &tool_rows(&devices, connection))
+                tool_cell(
+                    connection,
+                    name,
+                    &devices,
+                    &tool_rows(&devices, connection),
+                    &family,
+                )
             })
             .collect();
         self.output = Output {

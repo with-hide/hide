@@ -130,6 +130,17 @@ impl RowMark {
         Self::Quiet
     }
 
+    /// Counts `agent`'s mark on a badge that stands for its row, a
+    /// checkout's: a resolved row rests in every list, so no badge counts it.
+    pub(crate) fn count_row(
+        agent: &SidebarAgentSnapshot,
+        counts: &mut crate::model::MarkCountsSnapshot,
+    ) {
+        if agent.resolved.is_none() {
+            Self::of(agent).count_into(counts);
+        }
+    }
+
     pub(crate) fn count_into(self, counts: &mut crate::model::MarkCountsSnapshot) {
         match self {
             Self::Turn | Self::Look => counts.turn += 1,
@@ -224,11 +235,7 @@ pub fn sync_checkout_agent_summaries(
             continue;
         }
         let summary = &mut summaries[index];
-        // A resolved row rests in every list, so the badge does not count
-        // its mark either.
-        if agent.resolved.is_none() {
-            RowMark::of(agent).count_into(&mut summary.marks);
-        }
+        RowMark::count_row(agent, &mut summary.marks);
         let group = group_of(agent);
         match group {
             AgentGroup::NeedsYou => summary.needs_you += 1,

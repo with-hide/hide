@@ -574,6 +574,8 @@ it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the 
   const withMission = { ...withMini, missions: { items: [decided], failed: null } } as unknown as SnapshotRest;
   const { container } = await render(withMission, agents, null, cell);
   expect(heads(container)).toEqual(["도구가 답할 차례1", "끝남1", "작업 중2"]);
+  // The operator's 상태 | 프로젝트 switch, on its stored view (operator decision 2026-11-15).
+  expect(container.querySelector("[data-task-view]")?.getAttribute("data-task-view")).toBe("status");
   const chip = container.querySelector<HTMLElement>('[data-task-row="ask"] [data-mission-chip="mission-tool"]');
   expect([chip?.dataset.missionChipTurn, chip?.dataset.missionChipTone, chip?.className.includes("text-mission-hold")]).toEqual(["decision", "waiting", false]);
   expect(container.querySelector('[data-task-group-head="needs_you"] button')?.className).not.toContain("text-warning");

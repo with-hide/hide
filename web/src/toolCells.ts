@@ -3,14 +3,16 @@
 // work it keeps (`navigator.tools`); the window picks which cell it shows.
 // This only reads which tool is in front and what its cell holds.
 
-import type { ToolCell } from "./agentScope";
+import type { PrBoard, ToolCell } from "./agentScope";
 import { localDeviceId } from "./devices";
 import type { BoardProject } from "./projectBoard";
 import { missionAsks } from "./missions";
-import { catalogWorkspaces, type AgentRow, type Mission, type SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, type AgentRow, type Checkout, type CheckoutAgentSummary, type Mission, type SnapshotRest, type TaskView } from "./snapshot";
 import { taskList, type TaskList } from "./taskList";
+import { boardProjects } from "./navigation";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { useMemo } from "react";
 
 const NO_TOOLS: ToolCell[] = [];
 
@@ -44,17 +46,19 @@ export function useFrontTool(): ToolCell | null {
 }
 
 /**
- * The tool's 태스크 list by state (B40, B45): this machine's cards as the
+ * The tool's 태스크 list in `view`, by state or by project, as the operator's
+ * (B40, B45; operator decision 2026-11-15): this machine's cards as the
  * list's own and every other device's named on its rows by `name`, with the
- * tool's missions that are their own ask among its first group's rows. The
- * sidebar draws it and ⌥n numbers it, so both read this one list.
+ * tool's missions that are their own ask among its first group's rows, or
+ * under their project. The sidebar draws it and ⌥n numbers it, so both read
+ * this one list.
  */
-export function toolTaskList(rest: SnapshotRest | null, cell: ToolCell, rows: ReadonlyMap<string, AgentRow>, name: (deviceId: string) => string): TaskList {
+export function toolTaskList(rest: SnapshotRest | null, cell: ToolCell, rows: ReadonlyMap<string, AgentRow>, name: (deviceId: string) => string, view: TaskView): TaskList {
   const local = localDeviceId(rest);
   const own = cell.devices.find((device) => device.device_id === local)?.tasks ?? null;
   const away = cell.devices.filter((device) => device.device_id !== local).flatMap((device) => device.tasks.cards.map((card) => ({ card, device: name(device.device_id), deviceId: device.device_id })));
   const missions = rest?.missions?.failed ? [] : (rest?.missions?.items ?? []);
-  return taskList(own, local, rows, catalogWorkspaces(rest), "status", [], missionAsks(missions, cell.mission_asks ?? []), away);
+  return taskList(own, local, rows, catalogWorkspaces(rest), view, [], missionAsks(missions, cell.mission_asks ?? []), away);
 }
 
 /** Whether `mission` is the work of the tool of `connection` now: its Conductor is the tool's and the tool keeps it (D-36). */
@@ -80,4 +84,62 @@ export function toolProjects(projects: readonly BoardProject[], cell: ToolCell):
     const tasks = { cards, needs_you: cards.filter((card) => card.state === "needs_you").length, recency: device.tasks.recency };
     return [{ ...project, workspace: { ...workspace, agent_scope: { ...workspace.agent_scope, members, tasks } } }];
   });
+}
+
+/**
+ * The sidebar's projects in a tool's cell, which its 프로젝트 and PR tabs draw
+ * as the operator's are drawn (operator decision 2026-11-15): the tool's
+ * projects (`toolProjects`), each cut to the checkouts that hold the tool's
+ * sessions. Such a checkout carries the tool's tree and badge marks in place
+ * of the operator's, keeps only the tabs the tool's sessions stand in, and
+ * none of the operator's tab groups, counts, folds or sleeping-project
+ * presence, so nothing of the operator's is drawn or counted there; the
+ * project's PRs are the ones whose checkouts hold the tool's sessions. A
+ * project holding none of them is left out.
+ */
+export function toolSidebarProjects(projects: readonly BoardProject[], cell: ToolCell): BoardProject[] {
+  return toolProjects(projects, cell).flatMap((project) => {
+    const { workspace } = project;
+    const held = new Map((cell.devices.find((device) => device.device_id === workspace.device_id)?.checkouts ?? []).filter((checkout) => checkout.project_id === workspace.id).map((checkout) => [checkout.checkout_id, checkout]));
+    const checkouts = workspace.checkouts.flatMap((checkout): Checkout[] => {
+      const tool = held.get(checkout.id);
+      if (!tool) return [];
+      const roots = new Set(tool.sidebar_tree.rows.map((row) => row.pane_id));
+      return [{
+        ...checkout,
+        tabs: checkout.tabs.filter((tab) => tab.panes.some((pane) => roots.has(pane.id))),
+        agent_groups: undefined,
+        agent_summary: { ...NO_COUNTS, marks: tool.marks },
+        agent_scope: { ...checkout.agent_scope, sidebar_tree: tool.sidebar_tree, badge_total: 0 },
+      }];
+    });
+    if (checkouts.length === 0) return [];
+    const ids = new Set(checkouts.map((checkout) => checkout.id));
+    const prs = heldPullRequests(workspace.agent_scope.prs, ids);
+    return [{ ...project, workspace: { ...workspace, checkouts, session_folds: undefined, agent_presence: undefined, agent_scope: { ...workspace.agent_scope, prs } } }];
+  });
+}
+
+/**
+ * `toolSidebarProjects` of `tool` from the snapshot, or null while a device's
+ * cell is in front, which then reads nothing more of the snapshot here.
+ */
+export function useToolSidebarProjects(tool: ToolCell | null): BoardProject[] | null {
+  const rest = useShellStore((s) => (tool ? s.rest : null));
+  const agents = useShellStore((s) => s.agents);
+  return useMemo(() => (tool ? toolSidebarProjects(boardProjects(rest, agents), tool) : null), [tool, rest, agents]);
+}
+
+/** A tool's checkout counts no group of the operator's, so its hover card names none; its badge reads `marks`. */
+const NO_COUNTS: CheckoutAgentSummary = { representative_pane_id: null, needs_you: 0, done: 0, working: 0, seen: 0, unknown: 0, marks: { turn: 0, going: 0, done: 0, unread: 0 } };
+
+/** The project's PR board cut to the pull requests whose checkouts include one of `checkouts`, each kept where the core placed it. */
+function heldPullRequests(board: PrBoard, checkouts: ReadonlySet<string>): PrBoard {
+  const rows = board.rows.filter((row) => row.checkout_ids.some((id) => checkouts.has(id)));
+  const numbers = new Set(rows.map((row) => row.number));
+  return {
+    rows,
+    groups: board.groups.map((group) => ({ ...group, numbers: group.numbers.filter((number) => numbers.has(number)) })).filter((group) => group.numbers.length > 0),
+    needs_you: rows.filter((row) => row.group === "needs_you" && row.fold === null).length,
+  };
 }

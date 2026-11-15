@@ -64,8 +64,9 @@ function groupLabel(state: TaskGroupState, tool: boolean, t: TFunction<"translat
 }
 
 /**
- * The sidebar's 프로젝트 | 태스크 switch (PRD sidebar-task-lens B1, B39):
- * under the head, right above the list. ⇧⌘B turns it.
+ * The sidebar's 프로젝트 | 태스크 | PR switch (PRD sidebar-task-lens B1, B39):
+ * under the head, right above the list, a device's cell's and a tool's
+ * alike, with one stored choice. ⇧⌘B turns it.
  */
 export function SidebarLensSwitch({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -143,37 +144,49 @@ export function TaskLens({ actions }: { actions: Actions }) {
 }
 
 /**
- * A tool's cell in the sidebar (PRD hide-external-control B40, B42, B45):
- * the 태스크 list of the work the tool keeps, by state, its first group what
- * waits on the tool's answer, then 작업 중 and 끝남. A task on another device
- * names it on its row; a cell with no work says so. The operator answers in a
- * row's pane from here as anywhere (B43).
+ * A tool's cell's 태스크 list (PRD hide-external-control B40, B42, B45;
+ * operator decision 2026-11-15): the work the tool keeps, by state or by
+ * project under the same `상태 | 프로젝트` switch and stored choice as the
+ * operator's list, the state view's first group what waits on the tool's
+ * answer, then 작업 중 and 끝남. It has no project chip, whose stored project
+ * is the operator's; the project view covers the same need. A task on
+ * another device names it on its row; a cell with no work says so. The
+ * operator answers in a row's pane from here as anywhere (B43).
  */
 export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((s) => s.rest);
   const localAgents = useShellStore((s) => s.agents);
+  const view: TaskView = rest?.ui_state?.task_view ?? "status";
   const folds = rest?.ui_state?.sessions_expanded_agent_pane_ids ?? NO_FOLDS;
   const inWorkspace = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
   const focusedPane = useShellStore((s) => s.focusedPaneId);
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
-  const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t)), [rest, tool, byPane, t]);
-  const count = list.groups.reduce((sum, group) => sum + rowCount(group.bands), 0) + list.resting.length + list.cleanup.length;
+  const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t), view), [rest, tool, byPane, t, view]);
+  // A project group holds its own resting and cleanup rows; the state view holds them under every group.
+  const count = list.groups.reduce((sum, group) => sum + rowCount(group.bands) + group.resting.length + group.cleanup.length, 0) + list.resting.length + list.cleanup.length;
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens="status" data-tool-cell={tool.connection}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view} data-tool-cell={tool.connection}>
       <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
         <span className="min-w-0 flex-1 truncate" data-task-count={count}>{t("taskLens.count", { count })}</span>
+        <ViewSwitch view={view} actions={actions} />
       </div>
       {count === 0 ? (
-        <p className="px-md py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
+        <ToolCellEmpty />
       ) : (
         <InToolCell.Provider value={true}>
-          <TaskGroups list={list} view="status" showProject={true} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
+          <TaskGroups list={list} view={view} showProject={view === "status"} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
         </InToolCell.Provider>
       )}
     </div>
   );
+}
+
+/** What every tab of a tool's cell says while the tool keeps nothing to show there (B42). */
+export function ToolCellEmpty() {
+  const { t } = useInterfaceTranslation();
+  return <p className="px-md py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>;
 }
 
 const TASK_VIEWS: readonly TaskView[] = ["status", "project"];
