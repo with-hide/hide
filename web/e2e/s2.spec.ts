@@ -153,9 +153,9 @@ async function startFlow(page: Page, { tabLabels = ["second", "third"] } = {}): 
     // row the page drew as this run saw it, and the projects the daemon had
     // listed when the wait ended.
     const betaRow = page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first();
-    await dumpOnFailure("the beta row and the daemon's projects", () => ({
-      drawn: page.locator("nav[data-sidebar] [data-project]").evaluateAll((rows) => rows.map((row) => ({ project: row.getAttribute("data-project"), text: (row.textContent ?? "").trim().slice(0, 120), checkouts: row.querySelectorAll("[data-checkout]").length }))),
-      listed: withControl(daemon!, (control) => control.until((rest) => rest.navigator?.workspaces?.map((workspace) => ({ id: workspace.id, path: workspace.path, checkouts: workspace.checkouts.length })), "the daemon's projects", 5_000)),
+    await dumpOnFailure("the beta row and the daemon's projects", async () => ({
+      drawn: await page.locator("nav[data-sidebar] [data-project]").evaluateAll((rows) => rows.map((row) => ({ project: row.getAttribute("data-project"), text: (row.textContent ?? "").trim().slice(0, 120), checkouts: row.querySelectorAll("[data-checkout]").length }))),
+      listed: await withControl(daemon!, (control) => control.until((rest) => rest.navigator?.workspaces?.map((workspace) => ({ id: workspace.id, path: workspace.path, checkouts: workspace.checkouts.length })), "the daemon's projects", 5_000)),
       sent: Object.fromEntries(sent),
     }), async () => showProjectRow(page, betaRow));
     await expect(page.locator("[data-checkout]")).toHaveCount(2);

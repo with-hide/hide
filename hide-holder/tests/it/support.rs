@@ -407,6 +407,57 @@ pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// Whether the system reports `pid` stopped: `SIGSTOP` asked for it, and the
+/// kernel has taken the process off a processor, so it drains nothing more.
+///
+/// A signal asks for a stop and takes effect when the process next runs, so a
+/// caller that means to write to what a process reads has to wait for this
+/// state rather than for the signal's return. Unix only: nothing stops a
+/// process this way on Windows.
+#[cfg(unix)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a bounded poll for a process's state"
+)]
+pub fn stopped(pid: u32) -> bool {
+    #[cfg(target_vendor = "apple")]
+    {
+        // SAFETY: `proc_pidinfo` fills the `proc_bsdinfo` sized by its own
+        // length argument, for a pid the caller owns.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let filled = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast(),
+                size,
+            )
+        };
+        // Only a structure the system filled says anything: a process it does
+        // not know has no state to report.
+        filled == size && info.pbi_status == libc::SSTOP
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // `/proc/<pid>/stat` puts the state after the command name, which may
+        // hold spaces and parentheses, so the fields start after the last one.
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        let Some(after) = stat.rfind(')').map(|end| &stat[end + 1..]) else {
+            return false;
+        };
+        after.split_whitespace().next() == Some("T")
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 fn first_line(reader: impl std::io::Read + Send + 'static) -> String {
     let (sender, heard) = mpsc::channel();
     thread::spawn(move || {
