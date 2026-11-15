@@ -535,7 +535,8 @@ pub enum CloseReason {
 }
 
 impl CloseReason {
-    const ALL: [Self; 18] = [
+    /// Every reason, in the order of its code.
+    pub const ALL: [Self; 18] = [
         Self::Released,
         Self::Terminated,
         Self::ProgramExited,
