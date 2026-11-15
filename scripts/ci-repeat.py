@@ -14,7 +14,8 @@ tests, a fixture at the top of the file):
 * A unit test file added or modified: a `*.test.ts`, `*.test.tsx`,
   `*.test.mjs` or `*.unit.ts` of the `web`, `desktop` or `mobile` package,
   whose tests the `checks` lane runs under Vitest; every test in the file,
-  run with `vitest run --retry=0 --repeat-each`. The package is the file's
+  run with `vitest run --retry=0` once per iteration (Vitest has no
+  `--repeat-each`). The package is the file's
   top folder, and a file the package's Vitest config does not collect is not
   selected.
 * Rust: a module of a crate's `tests/it` binary added or modified (`foo.rs`,
