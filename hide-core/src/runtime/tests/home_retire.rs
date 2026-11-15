@@ -607,8 +607,17 @@ fn an_unreadable_marker_keeps_the_project_and_asks_only_once() {
     wait_for("the helper's refusal", || {
         machine.asked.load(std::sync::atomic::Ordering::SeqCst) == 1
     });
-    wait(&shared, "the refusal to be ingested", |runtime| {
-        runtime.home_retiring.contains(crate::node::TEST_NODE)
+    // The refusal is ingested off the runtime lock: `home_retiring` holds the
+    // device from before the worker starts, so it says nothing of the answer.
+    // The ingestion renames the project, which is the state the answer leaves.
+    wait(&shared, "the refusal to settle the project", |runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .find(|registration| registration.id == id)
+            .is_some_and(|registration| registration.label == "hide")
     });
     shared.lock().unwrap().request_home_retirements();
     shared.lock().unwrap().persist_ui_state();

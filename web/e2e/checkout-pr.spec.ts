@@ -21,7 +21,7 @@ import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { chooseTheme, countSent, enterWorkspace, openOtherCheckouts, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { quietFor } from "./wait";
+import { animationsFinished, quietFor } from "./wait";
 import { withCheckoutHoverDump } from "./checkout-hover";
 import { initGithubRepository } from "./github-remote";
 
@@ -271,6 +271,18 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
 
     await withCheckoutHoverDump(feature.locator("[data-checkout]"), async () => {
       await chooseTheme(page, "light");
+      // Closing the settings sheet re-lays the page, and a row the pointer
+      // moved onto while it settled belongs to another project: its own card
+      // never opens, and the press waits out its limit
+      // (with-hide/hide-private#832, where the retained dump holds this row
+      // 72 px above where the pointer had been put). The hover waits for the
+      // row to hold one box first.
+      await expect.poll(async () => {
+        const before = await feature.locator("[data-checkout]").boundingBox();
+        await animationsFinished(page);
+        const after = await feature.locator("[data-checkout]").boundingBox();
+        return before !== null && after !== null && before.x === after.x && before.y === after.y && before.width === after.width && before.height === after.height;
+      }, { message: "the checkout row holds one box after the sheet closed" }).toBe(true);
       await feature.locator("[data-checkout]").hover();
       await expect(card).toBeVisible();
       await screenshot(page, "checkout-pr-card-light");

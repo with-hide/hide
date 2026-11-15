@@ -1431,6 +1431,17 @@ fn the_endpoint_is_private_to_the_account() {
     }
 }
 
+/// Prints each step of the elevated test as it begins, with the time since
+/// the test started, so a run nextest ends for its period says which step
+/// and which side of the pipe stopped. It timed out twice on the Windows
+/// runner with nothing printed (with-hide/hide-private#2569) and did not
+/// again in 40 repeats there. The line is printed before the step runs,
+/// never collected for the end: a killed test prints nothing afterwards.
+#[cfg(windows)]
+fn step(begun: std::time::Instant, what: &str) {
+    eprintln!("[elevated ipc] {what} at {:?}", begun.elapsed());
+}
+
 /// A program Git Bash starts runs with the same elevated token as a
 /// PowerShell beside it, except that its default owner is the user rather
 /// than the Administrators group. What the elevated side made (a private
@@ -1441,10 +1452,13 @@ fn the_endpoint_is_private_to_the_account() {
 fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
     use hide_platform::fs::private;
 
+    let begun = std::time::Instant::now();
     let folder = tempfile::Builder::new().prefix("hp").tempdir().unwrap();
     let made = folder.path().join("bridge");
     let path = made.join("s.sock");
+    step(begun, "the Administrators act begins");
     let acting = ActingOwner::act(Owner::Administrators);
+    step(begun, "the folder and the pipe are made");
     let bound = private::create_dir(&made)
         .map_err(|error| error.to_string())
         .and_then(|()| LocalListener::bind(&path).map_err(|error| error.to_string()));
@@ -1452,14 +1466,18 @@ fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
     let listener = bound.unwrap();
     let accepted = thread::spawn(move || listener.accept().map(|_| ()));
 
+    step(begun, "the user's act begins");
     let acting = ActingOwner::act(Owner::User);
+    step(begun, "the folder's owner is read and the client connects");
     let owned = private::owned_by_current_user(&made);
     let connected = LocalStream::connect(&path).map(|_| ());
     drop(acting);
 
     assert!(owned.unwrap(), "the folder an elevated process made");
     connected.unwrap();
+    step(begun, "the server is to accept");
     accepted.join().unwrap().unwrap();
+    step(begun, "the server accepted");
 }
 
 /// Whom the acting thread's new objects belong to by default.
