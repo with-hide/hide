@@ -671,19 +671,24 @@ if (AGENT === "omp") {
     const counts = () => calls().filter((call) => call.operation === "subagents").map((call) => `${call.input.working}/${call.input.done}`);
     await until("subagents", 1, (input) => input.working === 0 && input.done === 0);
 
+    // The main agent's `task` call asks for the subagent; its spawn names neither its task nor the call's agent.
+    await host.emit("tool_call", sample("tool_call.task").event, context("tool_call.task"));
     await host.emit("before_subagent_spawn", sample("before_subagent_spawn").event, context("before_subagent_spawn"));
     const [spawned] = await until("subagents", 1, (input) => input.working === 1);
     // The spawn key names it; omp's general `task` agent is no kind a row could show.
     const [running] = spawned.input.running;
     assert.equal(typeof running.started_unix_ms, "number");
-    assert.deepEqual([running.id, running.kind], ["MassMoth", undefined]);
+    assert.deepEqual([running.id, running.kind, running.task], ["MassMoth", undefined, undefined]);
 
     const binding = host.session();
     const sub = context("sub.session_start");
     await binding.emit("session_start", sample("sub.session_start").event, sub);
     await binding.emit("agent_start", sample("sub.agent_start").event, sub);
     answer({ prompt: { context: "LETTER", letters: ["letter-1"] }, subagents: { reported: true } });
-    assert.equal(await prompt(binding, "Say ok.", context("sub.before_agent_start")), undefined, "a subagent's prompt carries no letters");
+    assert.equal(await binding.emit("before_agent_start", sample("sub.before_agent_start").event, context("sub.before_agent_start")), undefined, "a subagent's prompt carries no letters");
+    // Its first prompt carries the asked task's words: the subagent takes that ask's description and agent.
+    const [named] = await until("subagents", 1, (input) => input.running?.[0]?.task !== undefined);
+    assert.deepEqual([named.input.running[0].id, named.input.running[0].kind, named.input.running[0].task], ["MassMoth", "explore", "look"]);
     await binding.emit("agent_end", sample("sub.agent_end").event, sub);
     await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
     assert.equal(calls().filter((call) => call.operation === "prompt").length, 0);
