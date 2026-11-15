@@ -795,8 +795,8 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
         ended = more;
     }
     assert!(
-        found.is_complete(),
-        "the last round left panes unsettled: {found:?}"
+        found.failed.is_none(),
+        "the rounds ended every pane but one round failed: {found:?}"
     );
     for number in 0..PANES {
         let Some(Judgment::Ended(ended)) = found.panes.get(&format!("p{number}")) else {
