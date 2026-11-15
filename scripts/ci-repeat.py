@@ -517,8 +517,13 @@ def plan_run_ignored(plan, lister=None):
     decided = []
     for entry in plan:
         package, test, expression = entry["package"], entry["test"], entry["filter"]
-        run_ignored = entry.get("run_ignored", "")
-        if not run_ignored and not lister(package, test, expression, "")[0] and lister(package, test, expression, "ignored-only")[0]:
+        # A pull request's plan carries the flag the count job decided, empty
+        # included; only a hand run's entry, which has none yet, is asked.
+        if "run_ignored" in entry:
+            decided.append(entry)
+            continue
+        run_ignored = ""
+        if not lister(package, test, expression, "")[0] and lister(package, test, expression, "ignored-only")[0]:
             run_ignored = "ignored-only"
         decided.append({**entry, "run_ignored": run_ignored})
     return decided
@@ -591,8 +596,10 @@ def resolve(event, web, rust, repeat, runner, units=""):
         if not specs and not modules and not unit_files:
             raise ValueError("name at least one spec (web), one unit test file (units) or one Rust test module (rust)")
         # Not listed: the system asked for may not be the one this job runs on, so
-        # a module that lists no test there fails in the Rust job, where it runs.
-        plan = [{"package": package, "test": test, "filter": expression, "run_ignored": ""}
+        # a module that lists no test there fails in the Rust job, where it runs,
+        # and whether it asks for ignored tests is left for that job to decide
+        # (no `run_ignored` yet; `plan_run_ignored`).
+        plan = [{"package": package, "test": test, "filter": expression}
                 for package, test, expression in nextest_filters(modules)]
         # The unit files are listed even for a hand run: the units job runs the
         # files the count found in each package, and only Vitest can say which

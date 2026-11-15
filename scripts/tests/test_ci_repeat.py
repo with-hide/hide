@@ -370,7 +370,7 @@ class RustIgnoredAndHolder(unittest.TestCase):
 
         plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "opener_lifecycle"}], lister)
         self.assertEqual((plan[0]["run_ignored"], plan[0]["tests"]), ("", 5))
-        decided = repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "test(/^(opener_lifecycle)::/)", "tests": 5}], lister)
+        decided = repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "test(/^(opener_lifecycle)::/)"}], lister)
         self.assertEqual(decided[0]["run_ignored"], "")
 
     def test_an_ordinary_module_passes_no_flag_and_builds_no_holder(self):
@@ -847,7 +847,7 @@ class IgnoredPreparation(unittest.TestCase):
             return {"": (0, 0), "ignored-only": (10, 10), "all": (11, 10)}[run_ignored]
 
         plan = repeat.plan_run_ignored([{"package": "hide-core", "test": "lib",
-                                         "filter": "test(/^(engine::contract)::/)", "run_ignored": ""}], lister)
+                                         "filter": "test(/^(engine::contract)::/)"}], lister)
         self.assertEqual(plan, [{"package": "hide-core", "test": "lib", "filter": "test(/^(engine::contract)::/)",
                                  "run_ignored": "ignored-only"}])
 
@@ -857,12 +857,14 @@ class IgnoredPreparation(unittest.TestCase):
             return {"": (5, 1), "all": (7, 1)}[run_ignored]
 
         self.assertEqual(
-            repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "", "run_ignored": ""}], mixed_lister)[0]["run_ignored"],
+            repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": ""}], mixed_lister)[0]["run_ignored"],
             "",
         )
-        # A plan the count job already decided is not asked again.
-        decided = {"package": "hide-kit", "test": "lib", "filter": "", "run_ignored": "ignored-only"}
-        self.assertEqual(repeat.plan_run_ignored([decided], lambda *args: self.fail("asked again")), [decided])
+        # A plan the count job already decided is not asked again, an empty
+        # flag included: a pull request's plan never lists on the Rust runner.
+        for flag in ("ignored-only", ""):
+            decided = {"package": "hide-kit", "test": "lib", "filter": "", "run_ignored": flag}
+            self.assertEqual(repeat.plan_run_ignored([decided], lambda *args: self.fail("asked again")), [decided])
         self.assertEqual(mixed, {})
 
     def test_the_repeat_lane_prepares_only_where_the_plan_asked_for_an_ignored_test(self):
