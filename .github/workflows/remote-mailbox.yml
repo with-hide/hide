@@ -143,9 +143,27 @@ jobs:
           # is kept for the check below (`--stress-count` hides an earlier
           # failure in the exit status alone).
           log="$RUNNER_TEMP/nextest.log"
+          status=0
           HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder HIDE_TEST_STRESS_CANARY_FAIL_ITERATION="$CANARY" \
             bash scripts/verify-cargo.sh nextest --profile ci ${stress[@]+"${stress[@]}"} -p hided --test it -E "$filter" --run-ignored only 2>&1 \
-            | tee "$log"
+            | tee "$log" || status=$?
+          # What the password sshd did with a sign-in its client saw only as
+          # `Connection closed`, kept only when this step failed
+          # (with-hide/hide#2554). A log that was never written is said so: an
+          # empty group would read as a server that refused nothing.
+          if [ "$status" -ne 0 ]; then
+            sshd_log=${HIDE_E2E_SSH_PASSWORD_SSHD_LOG:-}
+            if [ -z "$sshd_log" ]; then
+              echo "the password sshd's log was not named in this run"
+            elif [ ! -f "$sshd_log" ]; then
+              echo "the password sshd wrote no log at $sshd_log"
+            else
+              echo "::group::the password sshd's log for the failed run ($(wc -c < "$sshd_log") bytes)"
+              tail -c 65536 "$sshd_log"
+              echo "::endgroup::"
+            fi
+          fi
+          exit "$status"
       - name: Another account's hide <path> on a device's bridge
         # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only
         # as a process of the node's own account, by the kernel's answer about
