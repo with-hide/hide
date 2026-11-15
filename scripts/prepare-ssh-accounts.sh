@@ -116,12 +116,64 @@ set_password() {
     printf '%s:%s\n' "$account" "$password" | sudo chpasswd
 }
 
+# The macOS account, with its password. `sysadminctl -addUser` says on its
+# own line whether it took the password, and the answer is not guessable from
+# a green exit: it prints `No clear text password or interactive option was
+# specified` and still creates the account, with no password for sshd to
+# accept. The account is read back after this for the hash that line would
+# leave out (with-hide/hide#2554).
+make_account() {
+    sudo sysadminctl -addUser "$account" -password "$password" \
+        -home "/Users/$account" -shell /bin/sh
+}
+
+# Whether the account holds a password, judged by the directory record and
+# not by re-sending the password, which would put it in the runner's process
+# list. macOS keeps a password as a `ShadowHash` entry of the account's
+# `AuthenticationAuthority`; an account made without one has none, and sshd
+# then refuses every sign-in to it however the client asks.
+account_holds_a_password() {
+    local authority
+    authority=$(sudo dscl . -read "/Users/$account" AuthenticationAuthority) || return 1
+    case "$authority" in
+        *';ShadowHash;'*) return 0 ;;
+    esac
+    printf 'prepare-ssh-accounts: %s holds no password (%s)\n' "$account" "$authority" >&2
+    return 1
+}
+
+# Puts the account on macOS's Remote Login list so its sshd's PAM stack may
+# sign it in (the reason is at its caller). A runner whose Remote Login is
+# off has no list to join, which is an answer of its own and not a failure:
+# without the list everyone is allowed.
+add_to_ssh_service_acl() {
+    # `dscl` ends 56 for a record that is not there; `dseditgroup -o read`
+    # ends 0 either way and says `Group not found.` on its output, so only
+    # this answer is a guard.
+    if ! sudo dscl . -read /Groups/com.apple.access_ssh >/dev/null 2>&1; then
+        printf 'prepare-ssh-accounts: this runner has no Remote Login list, so every account may sign in\n'
+        return 0
+    fi
+    sudo dseditgroup -o edit -a "$account" -t user com.apple.access_ssh
+}
+
+# Says whether the account is on that list, so a run that still fails says
+# which of the two answers this step made.
+on_ssh_service_acl() {
+    sudo dseditgroup -o checkmember -m "$account" com.apple.access_ssh
+}
+
 write_sshd_config() {
     local config=$1
+    # `LogLevel VERBOSE` records the line each refused sign-in leaves
+    # ("Failed password for ...", "Connection closed by authenticating
+    # user"), which a passing run never reads: this server's log is kept for
+    # the lane, and the lane's step prints its tail only when the tests
+    # failed (with-hide/hide#2554).
     printf '%s\n' \
         "ListenAddress 127.0.0.1:2222" "HostKey $config/host" "PidFile $config/sshd.pid" \
         "PasswordAuthentication yes" "KbdInteractiveAuthentication no" "PubkeyAuthentication no" \
-        "UsePAM yes" >"$config/sshd_config"
+        "UsePAM yes" "LogLevel VERBOSE" >"$config/sshd_config"
 }
 
 # A bounded command runs in the background, so it cannot set a variable in
@@ -148,10 +200,27 @@ if [ "$runner_os" = Linux ]; then
     run_named "the password account's password (chpasswd $account)" set_password
     run_named 'the sshd privilege separation folder' sudo mkdir -p /run/sshd
 else
-    run_named "the password account (sysadminctl -addUser $account)" \
-        sudo sysadminctl -addUser "$account" -password "$password" -home "/Users/$account" -shell /bin/sh
+    run_named "the password account (sysadminctl -addUser $account)" make_account
     run_named "the password account's home folder (createhomedir $account)" \
         sudo createhomedir -c -u "$account"
+    # macOS keeps a list of who Remote Login may sign in, and its sshd's PAM
+    # configuration asks that list on every connection (`pam_sacl.so
+    # sacl_service=ssh` in /etc/pam.d/sshd). A server started on a runner
+    # whose Remote Login is on therefore refuses an account that is not on
+    # the list, and the refusal happens before ssh ever asks for a password:
+    # the client is told `Connection closed by 127.0.0.1 port 2222` and
+    # nothing says why (with-hide/hide#2554). The list is the
+    # `com.apple.access_ssh` group, and a runner with Remote Login off has
+    # none, which allows everyone and needs no edit.
+    add_to_ssh_service_acl
+    # The account is proven here rather than left to the lane an hour later:
+    # an account that holds no password fails sshd every time, and says
+    # nothing the lane's own log names. This reads the record, not the
+    # password, so the password still never reaches a command line.
+    run_named "the password account holds a password ($account)" \
+        account_holds_a_password
+    printf -- '-> %s\n' 'the Remote Login list this account is on'
+    on_ssh_service_acl || printf 'prepare-ssh-accounts: %s is not on the Remote Login list\n' "$account"
 fi
 
 config="$temp/password-sshd"
@@ -162,6 +231,12 @@ run_named 'the sshd host key and configuration belong to root' \
     sudo chown root "$config/host" "$config/sshd_config"
 run_named 'the password sshd starts' \
     sudo /usr/sbin/sshd -f "$config/sshd_config" -E "$config/sshd.log"
+# The server's own log is the only place a refused sign-in says why, and the
+# test that runs later cannot read it: it is root's file under the runner's
+# temporary folder, and the test's own failure carries ssh's side alone
+# (with-hide/hide#2554). The workflow's lane step prints the tail when its
+# run failed, and a passing run reads none of it.
+echo "HIDE_E2E_SSH_PASSWORD_SSHD_LOG=$config/sshd.log" >>"$GITHUB_ENV"
 
 echo "HIDE_E2E_SSH_PASSWORD=$account:$password:2222" >>"$GITHUB_ENV"
 printf 'prepare-ssh-accounts: ready in %s s (budget %s s)\n' \

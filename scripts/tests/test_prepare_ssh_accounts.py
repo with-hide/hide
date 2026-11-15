@@ -56,6 +56,19 @@ for argument in "$@"; do
 done
 exec REAL_MKDIR "${arguments[@]}"
 '''
+# `dscl` answers the macOS account read: a record whose
+# `AuthenticationAuthority` carries the password hash, or one without it when
+# a test names `ACCOUNT_WITHOUT_PASSWORD`, which is the account a `sysadminctl`
+# that lost `-password` leaves behind.
+DSCL = r'''#!/usr/bin/env bash
+echo "dscl $*" >> "$SSH_LOG"
+if [ "${ACCOUNT_WITHOUT_PASSWORD:-}" = 1 ]; then
+  echo "AuthenticationAuthority: ;Kerberosv5;;hidepw@LKDC:SHA1.0000;LKDC:SHA1.0000;"
+else
+  echo "AuthenticationAuthority: ;ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>;SecureToken;"
+fi
+exit 0
+'''
 # The default key's public half must exist for the script to name it, and the
 # host key's own `-f` path is the path the script then writes into the
 # configuration.
@@ -89,13 +102,20 @@ class PrepareSshAccounts(unittest.TestCase):
         self.github_env.touch()
         bin_dir = root / 'bin'
         bin_dir.mkdir()
+        self.bin_dir = bin_dir
         # The account tools and the ones that change the machine are stand-ins;
         # `mkdir`, `chmod` and `chown` are the real ones, because the script's
         # own files and folders must exist for the rest of it to run, and
         # `openssl` is the machine's own, so the password it writes is real.
-        for name in ('useradd', 'chpasswd', 'sysadminctl', 'createhomedir', 'chown'):
+        for name in ('useradd', 'chpasswd', 'sysadminctl', 'createhomedir', 'chown', 'dseditgroup'):
             (bin_dir / name).write_text(STAND_IN.format(name=name))
             (bin_dir / name).chmod(0o755)
+        # `dscl` answers the macOS account read the script makes after
+        # `sysadminctl`: a record with a password, unless a test asks for one
+        # without it (`ACCOUNT_WITHOUT_PASSWORD`), which is what the runner
+        # in with-hide/hide#2554 had.
+        (bin_dir / 'dscl').write_text(DSCL)
+        (bin_dir / 'dscl').chmod(0o755)
         (bin_dir / 'sudo').write_text(SUDO)
         (bin_dir / 'sudo').chmod(0o755)
         (bin_dir / 'ssh-keygen').write_text(SSH_KEYGEN)
@@ -205,6 +225,52 @@ class PrepareSshAccounts(unittest.TestCase):
         self.assertTrue(any(call.startswith('sudo sysadminctl -addUser hidepw') for call in calls), calls)
         self.assertTrue(any(call.startswith('sudo createhomedir -c -u hidepw') for call in calls), calls)
         self.assertFalse(any(call.startswith('sudo useradd') for call in calls), calls)
+
+    def test_macos_puts_the_account_on_the_remote_login_list(self):
+        # macOS's sshd asks `com.apple.access_ssh` on every connection, and an
+        # account that is not on it is refused before ssh is asked for a
+        # password (with-hide/hide#2554).
+        done, _ = self.run_script(RUNNER_OS='macOS')
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        calls = self.calls()
+        joined = [i for i, call in enumerate(calls)
+                  if call.startswith('sudo dseditgroup -o edit -a hidepw -t user com.apple.access_ssh')]
+        made = [i for i, call in enumerate(calls) if call.startswith('sudo sysadminctl -addUser hidepw')]
+        self.assertTrue(joined, calls)
+        self.assertTrue(made and made[0] < joined[0], 'the account exists before it joins the list')
+
+    def test_a_runner_with_no_remote_login_list_still_prepares(self):
+        # A runner whose Remote Login is off has no such group, and without
+        # one every account may sign in, so its absence is not a failure.
+        (self.bin_dir / 'dscl').write_text(DSCL.replace(
+            'exit 0', 'case " $* " in *" /Groups/com.apple.access_ssh "*) exit 56 ;; esac\nexit 0'))
+        done, _ = self.run_script(RUNNER_OS='macOS')
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertIn('has no Remote Login list', done.stdout)
+        self.assertFalse(any(call.startswith('sudo dseditgroup -o edit') for call in self.calls()),
+                         self.calls())
+
+    def test_a_mac_account_with_no_password_fails_the_preparation(self):
+        # A `sysadminctl` that lost its `-password` leaves an account sshd
+        # refuses every time, and the lane then reports only ssh's
+        # `Connection closed` (with-hide/hide#2554). This script is where
+        # that cause is named, before the lane spends an hour on a build.
+        done, _ = self.run_script(RUNNER_OS='macOS', ACCOUNT_WITHOUT_PASSWORD='1')
+        self.assertEqual(done.returncode, 1, done.stderr + done.stdout)
+        self.assertIn('hidepw holds no password', done.stderr)
+        # Nothing past the account ran, so no server was started for a
+        # password no one could use.
+        self.assertFalse(any('sshd' in call for call in self.calls()), self.calls())
+
+    def test_the_password_sshd_log_is_named_for_a_failed_run(self):
+        # The lane prints this server's own log when its tests failed: it is
+        # the only place a refused sign-in says why.
+        done, _ = self.run_script(RUNNER_OS='macOS')
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        written = self.github_env.read_text()
+        line = [row for row in written.splitlines()
+                if row.startswith('HIDE_E2E_SSH_PASSWORD_SSHD_LOG=')][0]
+        self.assertTrue(line.endswith('/password-sshd/sshd.log'), line)
 
     def test_the_summary_says_how_long_it_took_and_what_it_was_allowed(self):
         done, _ = self.run_script(PREPARE_BUDGET_SECONDS='150')
