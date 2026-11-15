@@ -14,8 +14,6 @@ import { PrMark } from "../components/pr-mark";
 import { MilestoneMark, SessionRow, SessionRowBody } from "../components/session-row";
 import { LookButton, StatusMark } from "../components/status-mark";
 import { HumanTurnDone, HumanTurnLine } from "../components/human-turn";
-import { ToolViewList } from "../components/tool-views";
-import type { ToolView } from "../agentScope";
 import { RowButton } from "../components/ui/row-button";
 import { UpdateReadyCardBody } from "../components/update-ready";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -43,12 +41,6 @@ const conductor = (state: (typeof MISSION_STATES)[number]) => ({ session: { devi
 const HUMAN_TURN = { id: "gallery.1", kind: "auth", place: "https://github.com/login/device?user_code=TEST-1234" } as const;
 /** The gallery's Copy takes the place without touching the clipboard, so a press shows the check. */
 const galleryCopy = async () => true;
-/** The Views a tool's cell lists (PRD hide-external-control D-55): one unseen, one seen and one an agent opened. */
-const TOOL_VIEWS: ToolView[] = [
-  { view_id: "d3", kind: "browser", label: "hello.html", device_id: "local", checkout_path: "/fixture", unseen: true, opened_unix_ms: AT - 40_000 },
-  { view_id: "d2", kind: "file", label: "report.md", device_id: "local", checkout_path: "/fixture", unseen: false, opened_unix_ms: AT - 600_000, opened_by: "worker" },
-  { view_id: "d1", kind: "diff", label: "src/main.rs", device_id: "local", checkout_path: "/fixture", unseen: false, opened_unix_ms: AT - 3_600_000 },
-];
 const time = (text: string) => <span className="font-mono text-caption text-muted-foreground">{text}</span>;
 const marks = (mark: Parameters<typeof StatusMark>[0]["mark"], kind = "claude") => <><StatusMark mark={mark} /><AgentMark kind={kind} /></>;
 
@@ -119,10 +111,6 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
           <State name="Needs You row"><ol><SessionRow mark={<><StatusMark mark="turn" human /><AgentMark kind="claude" /></>} title="배포 스크립트 정리" right={time("4m")} /></ol><div className="flex flex-col gap-xxs pl-(--size-agent-mark)"><HumanTurnLine turn={HUMAN_TURN} copy={galleryCopy} /><HumanTurnDone turn={HUMAN_TURN} actions={{ finishHumanTurn: open }} /></div></State>
           <State name="Long place, permission"><div className="flex flex-col gap-xxs"><HumanTurnLine turn={{ ...HUMAN_TURN, id: "long", kind: "permission", place: "System Settings > Privacy & Security > Screen & System Audio Recording > Terminal" }} copy={galleryCopy} /><HumanTurnDone turn={{ ...HUMAN_TURN, id: "long" }} actions={{ finishHumanTurn: open }} /></div></State>
           <State name="Device not connected"><HumanTurnDone turn={{ ...HUMAN_TURN, id: "away", device_id: "mini" }} actions={{ finishHumanTurn: open }} /></State>
-        </Part>
-        <Part name="A tool's opened Views · ToolViewList">
-          <State name="Unseen first, no warning colour"><div className="w-(--size-pr-popover)"><ToolViewList views={TOOL_VIEWS} actions={{ openViewAt: open }} /></div></State>
-          <State name="Past the limit"><div className="w-(--size-pr-popover)"><ToolViewList views={TOOL_VIEWS} limit={2} actions={{ openViewAt: open }} /></div></State>
         </Part>
         <Part name="Ready update · UpdateReadyCardBody">
           <State name="Card beside the ↑ button"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>

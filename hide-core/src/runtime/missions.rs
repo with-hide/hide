@@ -4883,8 +4883,7 @@ impl Runtime {
     /// it is laid on the tool's cell instead, whose grey number counts it
     /// (PRD hide-external-control B30, D-46), until the tool lets go of it.
     /// Every tool connected at Act is named to the cells here too, after
-    /// the access section, so a tool with no work yet has its cell (D-47),
-    /// and each cell's open Views (`tool_views`) are laid with them.
+    /// the access section, so a tool with no work yet has its cell (D-47).
     pub(super) fn publish_mission_asks(&mut self) -> bool {
         let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
             std::collections::BTreeMap::new();
@@ -4915,7 +4914,7 @@ impl Runtime {
                 })
                 .collect()
         };
-        let tools: Vec<(String, String)> = self
+        let tools = self
             .snapshot
             .access
             .as_deref()
@@ -4931,10 +4930,7 @@ impl Runtime {
         let devices = self
             .agent_scope_cache
             .note_mission_asks(oldest_first(waiting));
-        let views = self.tool_views(&tools);
-        let tools = self
-            .agent_scope_cache
-            .note_tools(tools, oldest_first(kept), views);
+        let tools = self.agent_scope_cache.note_tools(tools, oldest_first(kept));
         (devices || tools) && self.refresh_agent_scopes()
     }
 }

@@ -585,24 +585,3 @@ it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the 
   const empty = await render(rest, [], null, { ...cell, turn: 0, devices: [] });
   expect(empty.container.querySelector("[data-tool-cell-empty]")?.textContent).toBe("아직 맡은 일이 없어요");
 });
-
-// PRD hide-external-control D-55, B47, B48: the Views a tool or its agent opened are the cell's `연 화면` group,
-// newest first with a mark until seen, in no warning colour; a cell holding only them is not empty, and a press opens one.
-it("lists the Views a tool opened as 연 화면 in its cell, marks the unseen one, opens one on a press, and is not empty with only them", async () => {
-  const views = [
-    { view_id: "d2", kind: "browser" as const, label: "hello.html", device_id: "local", checkout_path: "/hide", unseen: true, opened_unix_ms: Date.now() - 5_000 },
-    { view_id: "d1", kind: "diff" as const, label: "report.md", device_id: "local", checkout_path: "/hide", unseen: false, opened_unix_ms: Date.now() - 90_000, opened_by: "worker" },
-  ];
-  const cell: ToolCell = { connection: "c0ffee00c0ffee00", name: "nightly", turn: 0, devices: [], views };
-  const { container, sent } = await render(snapshot([], []), [], null, cell);
-  expect(container.querySelector("[data-tool-cell-empty]"), "a cell with only Views is not empty").toBeNull();
-  const group = container.querySelector("[data-tool-cell-views]")!;
-  expect(group.querySelector("h3")?.textContent).toBe("연 화면2");
-  expect([...group.querySelectorAll("[data-tool-view]")].map((entry) => entry.getAttribute("data-tool-view"))).toEqual(["d2", "d1"]);
-  expect(group.querySelector('[data-tool-view="d2"]')?.hasAttribute("data-tool-view-unseen")).toBe(true);
-  expect(group.querySelector('[data-tool-view="d1"]')?.hasAttribute("data-tool-view-unseen")).toBe(false);
-  expect(group.querySelector('[data-tool-view="d1"]')?.textContent).toContain("worker");
-  expect(group.innerHTML, "nothing in the cell takes the warning colour").not.toContain("warning");
-  await act(async () => group.querySelector<HTMLElement>('[data-tool-view="d2"]')!.click());
-  expect(sent.find((event) => event.kind === "focus_checkout")?.payload).toMatchObject({ display_id: "d2" });
-});

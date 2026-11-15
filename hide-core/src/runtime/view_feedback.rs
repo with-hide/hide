@@ -301,23 +301,17 @@ impl Runtime {
     /// Marks the View `view_id` of `key` as opened by `opener` (D-03), and
     /// puts it in that session's Files strip (PRD session-files D-26); with
     /// no opener the operator opened it, and it is in every strip (D-10).
-    /// `tool` is the external tool whose work opened it, the tool itself or
-    /// an agent it keeps: the View is then that tool's cell's and not the
-    /// operator's lists' (PRD hide-external-control D-55, D-38). Any open
-    /// that names no tool takes the View back from one.
     pub(super) fn stamp_view_opener(
         &mut self,
         key: &WorkspaceKey,
         view_id: &str,
         opener: Option<Opener>,
-        tool: Option<String>,
     ) {
-        let now = super::unix_milliseconds();
         let stamped = self.change_view_layout(key, |layout, _| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
-            let mut changed = match opener {
+            let changed = match opener {
                 Some(opener) => {
                     let changed = display.opener.as_ref() != Some(&opener)
                         || display.openers.last() != Some(&opener);
@@ -326,29 +320,8 @@ impl Runtime {
                     }
                     changed
                 }
-                None => {
-                    // A tool's own open has no agent behind it to wear the
-                    // View's mark or to take its comments.
-                    let marked = tool.is_some() && display.opener.take().is_some();
-                    !std::mem::replace(&mut display.operator, true) || marked
-                }
+                None => !std::mem::replace(&mut display.operator, true),
             };
-            match tool {
-                Some(connection) => {
-                    // An open again is news again, so the stamp moves on
-                    // each one (it orders the tool's list).
-                    let opened_unix_ms = display
-                        .tool
-                        .as_ref()
-                        .map_or(now, |held| now.max(held.opened_unix_ms + 1));
-                    display.tool = Some(crate::view_feedback::ToolOpen {
-                        connection,
-                        opened_unix_ms,
-                    });
-                    changed = true;
-                }
-                None => changed |= display.tool.take().is_some(),
-            }
             Ok(((), changed))
         });
         if let Err(error) = stamped {
@@ -360,19 +333,6 @@ impl Runtime {
                 "error": error.kind(),
             }));
         }
-    }
-
-    /// The external tool that keeps the work of the agent in `pane_id` now,
-    /// by its row's mark; none for an operator's, Hide AI's or a released
-    /// tool's agent.
-    fn tool_of_pane(&self, pane_id: &str) -> Option<String> {
-        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
-        self.machine_agents(device)
-            .iter()
-            .find(|agent| agent.pane_id == pane_id)
-            .and_then(|agent| agent.tool.as_ref())
-            .filter(|tool| tool.owns)
-            .map(|tool| tool.connection.clone())
     }
 
     /// A pane caller's `hide file open`, `hide diff open` or `hide browser
@@ -396,25 +356,16 @@ impl Runtime {
         ) {
             return;
         }
-        let (opener, tool) = match Caller::parse(caller_id) {
-            Caller::Pane(pane) => (self.opener_of_pane(pane), self.tool_of_pane(pane)),
-            // An external tool's own open is the tool's, not the operator's
-            // (PRD hide-external-control D-55); a connection that no longer
-            // keeps its work has no cell to hold it.
-            Caller::Access { connection, .. } => (
-                None,
-                self.access_keeps_work(connection)
-                    .then(|| connection.to_owned()),
-            ),
-            Caller::Checkout { .. } | Caller::Desk => (None, None),
+        let opener = match Caller::parse(caller_id) {
+            Caller::Pane(pane) => self.opener_of_pane(pane),
+            Caller::Checkout { .. } | Caller::Access { .. } | Caller::Desk => None,
         };
         // An agent's open is for the operator to look at (PRD
-        // unseen-agent-views D-06), and a tool's for its cell's list; nobody's
-        // is the operator's own, and a page's own new target, opened by a
-        // `hide browser` action, is not an open.
-        let agent =
-            (opener.is_some() || tool.is_some()) && super::workspace_control::lane_call(action);
-        self.stamp_view_opener(key, view_id, opener, tool);
+        // unseen-agent-views D-06); nobody's is the operator's own, and a
+        // page's own new target, opened by a `hide browser` action, is not
+        // an open.
+        let agent = opener.is_some() && super::workspace_control::lane_call(action);
+        self.stamp_view_opener(key, view_id, opener);
         if agent {
             self.mark_view_unseen(key, view_id);
             if let Caller::Pane(pane) = Caller::parse(caller_id) {
@@ -494,7 +445,7 @@ impl Runtime {
         }) else {
             return false;
         };
-        self.stamp_view_opener(key, &view_id, opener, None);
+        self.stamp_view_opener(key, &view_id, opener);
         true
     }
 

@@ -663,10 +663,10 @@ pub fn agent_group_for(
     if ownership == Ownership::Tool {
         // The tool reads its agent's state and answers it itself (PRD
         // hide-external-control D-09, B28), so the agent's own question,
-        // approval or block calls no one here, and a View it opened is the
-        // tool's cell's, not the operator's to look at (D-38, D-55, B29);
-        // only a person's turn, laid over the group as on every root,
-        // reaches the operator (B29).
+        // approval or block calls no one here, and neither does a View it
+        // opened: the eye is drawn in the tool's cell and no list of the
+        // operator's counts it (D-38); only a person's turn, laid over the
+        // group as on every root, reaches the operator (B29).
         return AgentGroup::Seen;
     }
     if let Ownership::HideAi { operator_turn } = ownership {
@@ -1098,15 +1098,16 @@ fn raise_calls(agent: &SidebarAgentSnapshot) -> bool {
 }
 
 /// What an operator's own row says about the Views it opened that they have
-/// not seen (PRD unseen-agent-views D-05, D-14). A delegated row's go up as
-/// its ancestors' signals instead (D-10), a home's row has none (D-18), and
-/// neither has a tool's, whose Views are its cell's (PRD
-/// hide-external-control D-38, D-55).
+/// not seen (PRD unseen-agent-views D-05, D-14), and a tool's row, whose
+/// agent opened them to be looked at, which the tool's cell draws as the
+/// eye and no list of the operator's counts (PRD hide-external-control
+/// D-38). A delegated row's go up as its ancestors' signals instead (D-10),
+/// and a home's row has none (D-18).
 fn look_of(
     agent: &SidebarAgentSnapshot,
     otherwise: impl FnOnce(&SidebarAgentSnapshot) -> AgentGroup,
 ) -> Option<crate::model::LookSnapshot> {
-    if ownership_of(agent) != Ownership::Operator {
+    if !matches!(ownership_of(agent), Ownership::Operator | Ownership::Tool) {
         return None;
     }
     let newest = agent.unseen_views.first()?;

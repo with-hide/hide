@@ -11312,7 +11312,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
         .unwrap();
     let file = project_view(&mut runtime, "/checkouts/fixture/missing.md");
     for view in [&page, &diff, &file] {
-        runtime.stamp_view_opener(&key, view, Some(agent.clone()), None);
+        runtime.stamp_view_opener(&key, view, Some(agent.clone()));
     }
     command(
         &mut runtime,

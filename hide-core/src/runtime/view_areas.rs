@@ -2074,10 +2074,7 @@ impl Runtime {
                         display.operator |= *operator;
                         display.opener = display.opener.take().or_else(|| mark.clone());
                     }
-                    (None, None) => {
-                        display.operator = true;
-                        display.tool = None;
-                    }
+                    (None, None) => display.operator = true,
                 };
                 if let Some(display_id) = shown {
                     layout.focus(&display_id, stamp)?;
@@ -2161,7 +2158,6 @@ impl Runtime {
                 // D-10).
                 display.opener = None;
                 display.operator = true;
-                display.tool = None;
             }
             display.load = load;
             Ok(((), changed))
