@@ -524,10 +524,13 @@ class Command(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "3")
         result, _ = self.run_script("spec-patterns", "web/e2e/s3.spec.ts")
         self.assertEqual(result.stdout.strip(), r"web/e2e/s3\.spec\.ts$")
-        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1},
-                           {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9}])
+        # A plan whose flags are decided, as the count job writes it: an
+        # undecided one asks nextest on the runner, which this job has not.
+        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "all"},
+                           {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
-        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\t\nhide-platform\tlib\t\t\n")
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\tall\nhide-platform\tlib\t\tignored-only\n")
         units = json.dumps([{"package": "web", "files": ["web/src/a.test.ts"], "tests": 2},
                             {"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
         result, _ = self.run_script("units-lines", "--plan", units)
@@ -536,9 +539,10 @@ class Command(unittest.TestCase):
     def test_every_line_the_jobs_read_ends_with_lf_even_on_a_windows_runner(self):
         # Windows translates `\n` to `\r\n` on stdout, and the trailing `\r`
         # reached nextest as unparsed input (run 43619979993).
-        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1}])
+        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "all"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
-        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\t\n")
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\tall\n")
         self.assertNotIn("\r", result.stdout)
 
 
