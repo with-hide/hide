@@ -326,6 +326,41 @@ mod tests {
         );
     }
 
+    /// A hook asks Memory only for a session it read, so a request whose
+    /// session it could not take records nothing at all.
+    ///
+    /// The Windows hook tests read a Memory diagnostic as proof that their
+    /// payload crossed the shell, in either of the two causes a failed ask
+    /// leaves (`memory_unavailable`, `memory_deadline`; with-hide/hide-private
+    /// #852). That reading holds only while no record is written for a
+    /// session the hook never read, which is what this case keeps true: a
+    /// session of no valid id is turned away before the ask, and the
+    /// diagnostics file is not made.
+    #[test]
+    fn a_session_the_hook_never_read_records_no_memory_cause() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home
+            .path()
+            .join(".hide/agent-hooks/delivery-diagnostics.json");
+        for session in [None, Some(String::new()), Some("-not-a-session".to_owned())] {
+            let context = memory_context_until(
+                MemoryRequest {
+                    runtime_id: "antigravity",
+                    event: HookEvent::SessionStart,
+                    prompt: None,
+                    session_id: session.clone(),
+                },
+                home.path(),
+                Instant::now() + MEMORY_BUDGET,
+            );
+            assert_eq!(context.outcome, HookMemoryOutcome::Unavailable);
+            assert!(
+                !path.exists(),
+                "{session:?} recorded a cause for a session it never read"
+            );
+        }
+    }
+
     #[test]
     fn oversized_input_is_drained_but_never_parsed() {
         let bytes = vec![b'x'; HOOK_INPUT_LIMIT_BYTES + 7];

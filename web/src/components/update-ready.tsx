@@ -13,11 +13,12 @@
 // State and actions are `updates.ts`'s; this file draws them.
 
 import { ArrowUpIcon, ShieldCheckIcon, XIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cardVersion, dismissUpdateCard, readyVersion, releaseNotesUrl, restartIntoUpdate, useUpdateStatus } from "../updates";
 import { Button } from "./ui/button";
+import { useReturnFocus } from "./ui/layer";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Hint } from "./ui/tooltip";
 import { hintSide, menuSide, type MenuPlace } from "./menu-place";
@@ -83,8 +84,15 @@ export function UpdateReadyButton({ actions, place }: { actions: Actions; place:
   const pending = cardVersion(status);
   // A required update's card is never folded here, so a close from before it was required does not keep it shut.
   const auto = pending !== null && (required || pending !== closed);
-  if (ready === null) return null;
   const open = opened || auto;
+  const button = useRef<HTMLButtonElement>(null);
+  // Radix hands the keyboard back from a timer after the close, and under load
+  // that timer runs after the operator moved on: the hand-back would take the
+  // keyboard from a menu opened since, and the key they pressed would land on
+  // the ↑ button (issue 2547). `useReturnFocus` hands it back to the button only
+  // while nothing the operator chose holds the keyboard.
+  const lateClose = useReturnFocus(open, { target: () => button.current });
+  if (ready === null) return null;
   const fold = () => {
     setOpened(false);
     if (auto && !required) {
@@ -97,7 +105,7 @@ export function UpdateReadyButton({ actions, place }: { actions: Actions; place:
     <Popover open={open} onOpenChange={(next) => (next ? setOpened(true) : fold())} escape={!auto}>
       <Hint label={label} side={hintSide(place)}>
         <PopoverTrigger asChild>
-          <Button size="icon-sm" aria-label={label} className="update-ready-ring" data-update-button={ready}>
+          <Button ref={button} size="icon-sm" aria-label={label} className="update-ready-ring" data-update-button={ready}>
             <ArrowUpIcon />
           </Button>
         </PopoverTrigger>
@@ -111,6 +119,7 @@ export function UpdateReadyButton({ actions, place }: { actions: Actions; place:
         onOpenAutoFocus={(event) => (auto ? event.preventDefault() : undefined)}
         onInteractOutside={(event) => (auto ? event.preventDefault() : undefined)}
         onEscapeKeyDown={(event) => (auto ? event.preventDefault() : undefined)}
+        onCloseAutoFocus={lateClose}
       >
         <UpdateReadyCardBody version={ready} required={required} onRestart={restartIntoUpdate} onLater={fold} onReleaseNotes={() => actions.openLink(releaseNotesUrl(ready), true)} />
       </PopoverContent>

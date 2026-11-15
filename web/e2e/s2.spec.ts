@@ -10,6 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
+import { dumpOnFailure } from "./failure-dump";
 import { corePaneFocus, focusTab, newTab, openProject, sendKeys, tabsOf, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { executeTerminalCheck, waitForTerminal } from "./group-start-helper";
@@ -148,7 +149,15 @@ async function startFlow(page: Page, { tabLabels = ["second", "third"] } = {}): 
     // Two checkouts in the Projects sidebar. Which one the core focuses at
     // boot is its own choice, so the flow starts by choosing the first.
     // beta runs no agent; it is an ordinary row of the list, which this waits to see drawn.
-    await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first());
+    // A wait that gives up keeps both sides (with-hide/hide-private#816): the
+    // row the page drew as this run saw it, and the projects the daemon had
+    // listed when the wait ended.
+    const betaRow = page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first();
+    await dumpOnFailure("the beta row and the daemon's projects", async () => ({
+      drawn: await page.locator("nav[data-sidebar] [data-project]").evaluateAll((rows) => rows.map((row) => ({ project: row.getAttribute("data-project"), text: (row.textContent ?? "").trim().slice(0, 120), checkouts: row.querySelectorAll("[data-checkout]").length }))),
+      listed: await withControl(daemon!, (control) => control.until((rest) => rest.navigator?.workspaces?.map((workspace) => ({ id: workspace.id, path: workspace.path, checkouts: workspace.checkouts.length })), "the daemon's projects", 5_000)),
+      sent: Object.fromEntries(sent),
+    }), async () => showProjectRow(page, betaRow));
     await expect(page.locator("[data-checkout]")).toHaveCount(2);
     // The core names projects by directory, not by the engine's label or id.
     const firstRow = page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first();

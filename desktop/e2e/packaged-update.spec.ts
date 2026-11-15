@@ -27,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import { openProject, splitPane, tabPanes, waitForPaneInput } from "../../web/e2e/daemon-actions";
 import { startEngine } from "../../web/e2e/engine-fixture";
-import { connectStateDir } from "../../web/e2e/hided-control.mjs";
+import { connectStateDir, useControl } from "../../web/e2e/hided-control.mjs";
 import { ownedHolders } from "../../web/e2e/pane-holders.mjs";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { panePrompt } from "../../web/e2e/pane-fixture";
@@ -118,12 +118,9 @@ test("the installed app updates to the next version and the panes and daemon kee
     expect(daemon).not.toBeNull();
     // Two shells in one tab of the fixture's folder, made through the app's daemon as the web shell makes them.
     const stateDir = run.env.HIDE_STATE_DIR!;
-    const control = await connectStateDir(stateDir);
-    let tab: string;
-    try {
+    const tab = await useControl(await connectStateDir(stateDir), async (control) => {
       const made = await openProject(control, path.join(engine.root, "fixture"), "fixture");
       const panes = [made.pane, await splitPane(control, made.tab, made.folder)];
-      tab = made.tab;
       await withProbe(page);
       await enterWorkspace(page, "fixture");
       for (const pane of panes) {
@@ -139,7 +136,8 @@ test("the installed app updates to the next version and the panes and daemon kee
           catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
         }).length, { message: "both holders and their shell processes ready before updating", timeout: 20_000 }).toBe(panes.length);
       }
-    } finally { control.close(); }
+      return made.tab;
+    });
     // The panes the daemon lists, and off Windows the holder processes that run them.
     const panesNow = async () => {
       const reading = await connectStateDir(stateDir);

@@ -503,11 +503,21 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
         }
     }
     let _resume = Resume(pid);
+    // SIGSTOP asks for the stop and the kernel stops the holder when it next
+    // runs. Until then the holder goes on reading, so keys written now can be
+    // drained into its socket and settle, and the renewal then rightly goes on
+    // to close a holder it found stopped: that is the failure this test
+    // reported (run 43551399472, `holder_renewal_unsettled`), not a lost
+    // write. The test waits for the state it needs.
+    wait_until("the earlier holder stops", || {
+        stopped(u32::try_from(pid).unwrap())
+    });
     // The node's whole unwritten input cap, none of it refused: more than
-    // the holder's connection takes on every system (about 200 KiB on Linux,
-    // 8 KiB on macOS), so the writer stops on it with bytes left, and the
-    // renewal's barrier, which a backlog past the cap would refuse at once,
-    // waits behind them.
+    // the stopped holder's connection takes (about 200 KiB on Linux, 8 KiB on
+    // macOS), so the writer stops on it with bytes left, and the renewal's
+    // barrier, which a backlog past the cap would refuse at once, waits
+    // behind them. More keys than the cap would overflow the writer and make
+    // that answer immediate, which is a different path.
     let piece = hide_node_link::terminal::MAX_UNSENT_KEY_BYTES / 8;
     for _ in 0..8 {
         next.service

@@ -10,7 +10,7 @@ import { expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import type { EngineServer } from "./engine-fixture";
-import { connectStateDir } from "./hided-control.mjs";
+import { connectStateDir, useControl } from "./hided-control.mjs";
 import { fixtureExecutable } from "./platform-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { configureSpawnProvider, writeSessionReporter } from "./spawn-provider";
@@ -31,12 +31,9 @@ export type AgentPaneFixture = Pick<EngineServer, "root"> & { bin?: string };
 
 /** Types `text` into `pane` as the operator's keys, through the daemon whose state folder is `stateDir`. */
 export async function typeInto(stateDir: string, pane: string, text: string): Promise<void> {
-  const control = await connectStateDir(stateDir);
-  try {
+  await useControl(await connectStateDir(stateDir), async (control) => {
     control.send("key", { pane_id: pane, bytes_base64: Buffer.from(text, "utf8").toString("base64") });
-  } finally {
-    control.close();
-  }
+  });
 }
 
 /**
@@ -47,17 +44,14 @@ export async function typeInto(stateDir: string, pane: string, text: string): Pr
  */
 export async function agentPane(fixture: AgentPaneFixture, stateDir: string, pane: string): Promise<(args: string[], run?: AgentRun) => Promise<HideAnswer>> {
   const run = agentRunner(fixture, stateDir, pane);
-  const control = await connectStateDir(stateDir);
-  try {
+  await useControl(await connectStateDir(stateDir), async (control) => {
     await focusPane(control, pane);
     await typeInto(stateDir, pane, "claude\r");
     const marker = reportedMarker(fixture.root, pane);
     await expect.poll(() => fs.existsSync(marker), { message: `${pane} ran its session reporter`, timeout: 20_000 }).toBe(true);
     const session = fs.readFileSync(marker, "utf8");
     await control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on its reported native session, started`, 20_000);
-  } finally {
-    control.close();
-  }
+  });
   return run;
 }
 
@@ -137,13 +131,10 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
     // Read by the stand-in (`spawn-provider.c`, `ran_as_hook`) once the command has run.
     if (run.hook) fs.writeFileSync(`${completed}.hook`, "");
     else fs.rmSync(`${completed}.hook`, { force: true });
-    const control = await connectStateDir(stateDir);
-    try {
+    await useControl(await connectStateDir(stateDir), async (control) => {
       await restoreFocusAfterInput(control, pane, () => typeInto(stateDir, pane, "!"), arrived);
       fs.writeFileSync(gate, "");
-    } finally {
-      control.close();
-    }
+    });
     await expect.poll(() => (fs.existsSync(completed) ? fs.readFileSync(completed, "utf8").trim() : null),
       { message: `hide ${args.join(" ")} ran in ${pane}`, timeout: 40_000 }).toBe("0");
     return JSON.parse(fs.readFileSync(output, "utf8")) as HideAnswer;

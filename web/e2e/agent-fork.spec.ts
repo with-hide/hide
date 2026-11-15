@@ -74,17 +74,22 @@ async function fork(page: Page, engine: AgentFixture, daemon: Daemon, forker: st
     heldPane = await page.evaluate(({ origin, token, forker, marker }) => new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(`${origin.replace(/^http/, "ws")}/ws`);
       const timer = setTimeout(() => { ws.close(); reject(new Error("fork never published a pending pane holder")); }, 30_000);
+      // This fork's own request row: a tab the fixture made holds its keys
+      // under its own `create_tab` request for up to two seconds, and a row
+      // matched by any hold picked that one's pane instead of the fork's
+      // (issue 2546).
+      const requestId = `e2e-fork-${crypto.randomUUID()}`;
       let requested = false;
       ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
       ws.onerror = () => { clearTimeout(timer); ws.close(); reject(new Error("fork client failed")); };
       ws.onmessage = (message) => {
         if (!requested) {
           requested = true;
-          ws.send(JSON.stringify({ schema_version: 2, kind: "fork_pane", payload: { pane_id: forker, placement: "tab", origin: "operator" } }));
+          ws.send(JSON.stringify({ schema_version: 2, kind: "fork_pane", payload: { pane_id: forker, placement: "tab", origin: "operator", request_id: requestId } }));
           return;
         }
         const frame = JSON.parse(String(message.data));
-        const held = frame.payload?.rest?.terminal?.input_requests?.find((row: { state: string; held_for?: string }) => row.state === "pending" && row.held_for);
+        const held = frame.payload?.rest?.terminal?.input_requests?.find((row: { request_id: string; state: string; held_for?: string }) => row.request_id === requestId && row.state === "pending" && row.held_for);
         if (!held) return;
         // Send on the very frame that announces the hold, before UI focus or
         // a process-info round trip can let the startup finish unnoticed.

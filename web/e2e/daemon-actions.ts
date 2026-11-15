@@ -10,7 +10,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import { connectControl, useControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import { dumpOnFailure } from "./failure-dump";
 import type { Daemon } from "./hided-fixture";
 import { paneProgramLine, type PaneShell } from "./pane-fixture";
 
@@ -18,14 +19,13 @@ type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: La
 type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };
 type NavigatorWorkspace = { id: string; path: string; label?: string; checkouts: { id: string; path?: string; tabs?: { id: string }[]; agent_groups?: { groups: { tabs: string[] }[] } }[] };
 
-/** Runs `use` on a connection of its own to `daemon`, closed whatever happens. */
+/**
+ * Runs `use` on a connection of its own to `daemon`, closed whatever happens,
+ * and returns once the daemon has applied every event `use` sent on it
+ * (`useControl`): the next step's connection cannot overtake them.
+ */
 export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, use: (control: HidedControl) => Promise<T>): Promise<T> {
-  const control = await connectControl(daemon);
-  try {
-    return await use(control);
-  } finally {
-    control.close();
-  }
+  return useControl(await connectControl(daemon), use);
 }
 
 /** The core's log of `daemon`, every file of it, as text. */
@@ -323,10 +323,36 @@ export async function focusPane(control: HidedControl, pane: string): Promise<vo
   await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the focus of ${pane}`, 30_000);
 }
 
-/** Shows `tab` of `at` as a click on its tab does, and waits until the core shows it. */
+/**
+ * Shows `tab` of `at` as a click on its tab does, and waits until the core shows it.
+ *
+ * A tab focus the core accepted but never applied is silent: the wait says
+ * only which tab it wanted. A wait that gives up records both sides, the tab
+ * the snapshot shows beside the tabs and panes the core lists for the
+ * checkout and the focus it holds, because the failure then lies in what the
+ * core did with the request rather than in the page (with-hide/hide#2575).
+ */
 export async function focusTab(control: HidedControl, at: { workspace: string; checkout: string }, tab: string): Promise<void> {
   control.send("focus_tab", { workspace_id: at.workspace, checkout_id: at.checkout, tab_id: tab });
-  await control.until((rest) => shownTab(rest) === tab || undefined, `${tab} shown`, 30_000);
+  await dumpOnFailure(`the tab focus of ${tab}`, () => tabFocusSides(control, at, tab), () =>
+    control.until((rest) => shownTab(rest) === tab || undefined, `${tab} shown`, 30_000));
+}
+
+/** What the core holds about `tab`'s checkout when a tab focus never showed it. */
+function tabFocusSides(control: HidedControl, at: { workspace: string; checkout: string }, tab: string): Promise<unknown> {
+  return control.until((rest) => ({
+    wanted: tab,
+    shown: shownTab(rest),
+    checkout: at.checkout,
+    // The checkout's own tab list, and whether its workspace still lists it.
+    tabs: workspacesOf(rest)
+      .flatMap((workspace) => workspace.checkouts)
+      .find((checkout) => checkout.id === at.checkout)?.tabs?.map((listed) => listed.id) ?? null,
+    listedTabs: tabsOf(rest, at.workspace) ?? null,
+    layout: tabPanes(rest, tab),
+    focus: corePaneFocus(rest),
+    error: ((rest.status as { last_error?: unknown } | undefined)?.last_error) ?? null,
+  }), "the core's tab state", 5_000);
 }
 
 /**

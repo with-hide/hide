@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{self, End, EndReason, Identity, PaneRecord, Phase, Unreadable};
 use hide_holder_protocol::{
-    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION,
-    Size, Theme, read_holder, write_client,
+    ClientMessage, CloseReason, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError,
+    PROTOCOL_VERSION, Size, Theme, read_holder, write_client,
 };
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
@@ -1620,29 +1620,24 @@ impl Panes {
             write_client(&mut stream, &ClientMessage::Terminate)
                 .map_err(|error| NotAsked::Refused(error.to_string()))?;
             stream.set_deadline(deadline);
-            let ended = loop {
+            let answer = loop {
                 match read_holder(&mut stream) {
-                    Ok(HolderMessage::Closed(closed)) => {
-                        return Ok(closed.reason.name().to_owned());
-                    }
+                    Ok(HolderMessage::Closed(closed)) => break asked_to_end(closed.reason),
                     Ok(_) => {}
-                    Err(error) => break error,
+                    Err(error) => break dropped_connection(error),
                 }
             };
-            // A holder closes a connection whose output it could not hand
-            // over with no `Closed`, and a terminate it had not read yet goes
-            // with that connection; one that still runs is asked again on a
-            // new connection until the bound.
-            let dropped = matches!(
-                &ended,
-                FrameError::Io(error) if error.kind() == std::io::ErrorKind::UnexpectedEof
-            );
-            if !dropped || Instant::now() >= deadline || !holder.runs() {
-                return Err(NotAsked::Refused(ended.to_string()));
+            let why = match answer {
+                Asked::Ended(reason) => return Ok(reason.name().to_owned()),
+                Asked::Again(why) => why,
+                Asked::Refused(why) => return Err(NotAsked::Refused(why)),
+            };
+            if Instant::now() >= deadline || !holder.runs() {
+                return Err(NotAsked::Refused(why));
             }
             self.emit(
                 "pane_holder.terminate_again",
-                json!({ "pane": pane, "holder": holder.pid }),
+                json!({ "pane": pane, "holder": holder.pid, "why": why }),
             );
         }
     }
@@ -1680,6 +1675,85 @@ enum NotAsked {
     /// It was reached and refused, answered out of protocol or did not say
     /// it ended.
     Refused(String),
+}
+
+/// What one ask of a holder to end a pane said.
+enum Asked {
+    /// The pane ended, with the reason the holder named.
+    Ended(CloseReason),
+    /// This ask is not the pane's end and the pane still runs: ask again.
+    Again(String),
+    /// The holder answered something this ask cannot retry: asking again
+    /// sends the same bytes and is refused the same way.
+    Refused(String),
+}
+
+/// The close reason a `Terminate` was answered with, read from what
+/// [`CloseReason`] says each one means.
+///
+/// Every reason is named, so a new one stops this from compiling until
+/// someone decides which it is.
+///
+/// - The pane went: the holder ended it as asked (`terminated`), its program
+///   exited (`program_exited`), or it ended it and some of its processes
+///   outlived the bound (`tree_end_unconfirmed`). That last one is a final
+///   answer: the holder wrote the end, with the pids left, and exits, so
+///   asking again finds nothing to ask. The caller reads the record, whose
+///   end carries `left`, as it does for any other end.
+/// - The pane runs on and the close was only the connection's: asking again
+///   on a new connection can end it. A pane's terminal attaches as its close
+///   is asked for, and the holder closes the connection that carried the
+///   `Terminate` with `taken_over` before it reads the message; reading that
+///   as the end reported a pane that still ran (with-hide/hide-private#912).
+///   `released`, `size_invalid`, `resize_failed`, `input_failed` and
+///   `input_queue_full` close the connection that sent the input, size or
+///   release while the pane runs on, and a new connection that sends none of
+///   them is answered. `hello_timeout` and `opening_full` closed it before
+///   anything of it was read. `holder_failed` is both a connection the
+///   holder could not serve and an end whose processes it could not end; a
+///   holder that is ending answers a new connection from its record or is
+///   unreachable, which ends the pane by its pids, so asking again is right
+///   for either.
+/// - The holder refused what this build sent, and the same bytes on a new
+///   connection are refused the same way: `hello_invalid`,
+///   `unsupported_version`, `frame_too_large`, `protocol_error`,
+///   `ask_invalid` and `ask_failed`.
+fn asked_to_end(reason: CloseReason) -> Asked {
+    match reason {
+        CloseReason::Terminated | CloseReason::ProgramExited | CloseReason::TreeEndUnconfirmed => {
+            Asked::Ended(reason)
+        }
+        CloseReason::TakenOver
+        | CloseReason::Released
+        | CloseReason::SizeInvalid
+        | CloseReason::ResizeFailed
+        | CloseReason::InputFailed
+        | CloseReason::InputQueueFull
+        | CloseReason::HelloTimeout
+        | CloseReason::OpeningFull
+        | CloseReason::HolderFailed => Asked::Again(reason.name().to_owned()),
+        CloseReason::HelloInvalid
+        | CloseReason::UnsupportedVersion
+        | CloseReason::FrameTooLarge
+        | CloseReason::ProtocolError
+        | CloseReason::AskInvalid
+        | CloseReason::AskFailed => Asked::Refused(reason.name().to_owned()),
+    }
+}
+
+/// What a connection that failed mid-ask says of the pane's end.
+///
+/// A holder closes a connection whose output it could not hand over with no
+/// `Closed`, and a `Terminate` it had not read yet goes with that connection:
+/// one that still runs is asked again on a new connection until the bound.
+/// Any other failure is the ask's.
+fn dropped_connection(error: FrameError) -> Asked {
+    match error {
+        FrameError::Io(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Asked::Again(error.to_string())
+        }
+        error => Asked::Refused(error.to_string()),
+    }
 }
 
 /// When a start reached each of its steps, for its `pane_holder.started`
@@ -2181,6 +2255,91 @@ mod tests {
             assert!(!holder.runs());
             assert_eq!(ended.end.unwrap().reason, EndReason::Terminated);
         }
+    }
+
+    /// with-hide/hide-private#912: a pane's terminal attaches as its close is
+    /// asked for, and the holder closes the connection that carried the
+    /// `Terminate` with `taken_over` before reading it. That close says the
+    /// connection was replaced, not that the pane ended: asking again is the
+    /// only answer that can end it, and reading the close as the end left a
+    /// running holder behind a close reported as done.
+    ///
+    /// Each reason's class is what `hide_holder_protocol::CloseReason` says it
+    /// means, not what `asked_to_end` returns. The table has to name every
+    /// reason, so one added to the protocol fails here until it is read.
+    #[test]
+    fn every_close_reason_is_read_as_the_protocol_says_it_means() {
+        #[derive(Debug, PartialEq)]
+        enum Class {
+            /// "ended whole", "exited on its own", or an end some of its
+            /// processes outlived: the pane went, and the holder is done.
+            Ended,
+            /// Only this connection closed and the pane runs on.
+            Again,
+            /// The same bytes are refused the same way.
+            Refused,
+        }
+        use CloseReason::*;
+        let table = [
+            (Terminated, Class::Ended),
+            (ProgramExited, Class::Ended),
+            (TreeEndUnconfirmed, Class::Ended),
+            (Released, Class::Again),
+            (TakenOver, Class::Again),
+            (HelloTimeout, Class::Again),
+            (InputQueueFull, Class::Again),
+            (SizeInvalid, Class::Again),
+            (HolderFailed, Class::Again),
+            (InputFailed, Class::Again),
+            (ResizeFailed, Class::Again),
+            (OpeningFull, Class::Again),
+            (HelloInvalid, Class::Refused),
+            (UnsupportedVersion, Class::Refused),
+            (FrameTooLarge, Class::Refused),
+            (ProtocolError, Class::Refused),
+            (AskInvalid, Class::Refused),
+            (AskFailed, Class::Refused),
+        ];
+        let named: Vec<_> = table.iter().map(|(reason, _)| *reason).collect();
+        for reason in CloseReason::ALL {
+            assert_eq!(
+                named.iter().filter(|named| **named == reason).count(),
+                1,
+                "{reason:?} is not named exactly once"
+            );
+        }
+        assert_eq!(named.len(), CloseReason::ALL.len());
+        for (reason, expected) in table {
+            let read = match asked_to_end(reason) {
+                Asked::Ended(ended) => {
+                    assert_eq!(ended, reason, "{reason:?} ended as another reason");
+                    Class::Ended
+                }
+                Asked::Again(why) => {
+                    assert_eq!(why, reason.name(), "{reason:?}");
+                    Class::Again
+                }
+                Asked::Refused(why) => {
+                    assert_eq!(why, reason.name(), "{reason:?}");
+                    Class::Refused
+                }
+            };
+            assert_eq!(read, expected, "{reason:?}");
+        }
+    }
+
+    /// A holder that dropped the connection may not have read the ask: it
+    /// goes again, and a failure that says anything else does not.
+    #[test]
+    fn a_dropped_connection_asks_again_and_any_other_failure_does_not() {
+        assert!(matches!(
+            dropped_connection(FrameError::Io(std::io::ErrorKind::UnexpectedEof.into())),
+            Asked::Again(_)
+        ));
+        assert!(matches!(
+            dropped_connection(FrameError::Malformed("not this build's".to_owned())),
+            Asked::Refused(_)
+        ));
     }
 
     #[test]

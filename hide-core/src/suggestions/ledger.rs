@@ -89,6 +89,14 @@ impl Signal {
         matches!(self, Self::CheckFailed | Self::ChangeRequest)
     }
 
+    /// Whether its tag is a command or a check's name, which an issue may
+    /// quote on a public page (B14, D-29). Every other signal's tag is a
+    /// session's words, an analysis's sentence or a Memory card's name, and
+    /// none of those leaves a session.
+    pub(crate) fn tag_names_work(self) -> bool {
+        matches!(self, Self::FailedTool | Self::CheckFailed)
+    }
+
     /// Whether it is counted by session rather than by pull request.
     pub(crate) fn per_session(self) -> bool {
         !self.needs_github()
@@ -404,6 +412,26 @@ mod tests {
         let mut unsaid = said("a", 1, None);
         unsaid.said = None;
         assert_eq!(unsaid.key(), None);
+    }
+
+    /// B14, D-29: only a command or a check's name may leave a session for a
+    /// public page; every other signal's tag is a session's words, an
+    /// analysis's sentence or a Memory card's name.
+    #[test]
+    fn only_a_command_or_check_names_work_an_issue_may_quote() {
+        assert!(Signal::FailedTool.tag_names_work());
+        assert!(Signal::CheckFailed.tag_names_work());
+        for signal in [
+            Signal::AgentWait,
+            Signal::Correction,
+            Signal::LabelMissed,
+            Signal::Improvement,
+            Signal::ChangeRequest,
+            Signal::RepeatedRequest,
+            Signal::MemoryIgnored,
+        ] {
+            assert!(!signal.tag_names_work(), "{signal:?}");
+        }
     }
 
     #[test]

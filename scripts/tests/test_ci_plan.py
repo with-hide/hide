@@ -61,7 +61,10 @@ class Selection(unittest.TestCase):
                          "desktop/e2e/fixture-cleanup.unit.ts"):
                 with self.subTest(status=status, path=path):
                     result = plan(path, status=status)
-                    self.assertEqual(result["lanes"], ["policy", "checks", "windows-check"])
+                    # An added or modified unit test also plans the lane that
+                    # repeats it; a deleted one has no test left to repeat.
+                    expected = ["policy", "checks", "windows-check"] + (["repeat"] if status in ("A", "M") else [])
+                    self.assertEqual(result["lanes"], expected)
                     self.assertEqual(result["rust_packages"], [])
                     self.assertFalse(ci.reads_no_lane(status, path, CRATES, ROOT))
 
@@ -80,16 +83,21 @@ class Selection(unittest.TestCase):
         for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx"):
             with self.subTest(path=path):
                 result = plan(path)
-                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e"})
+                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e", "repeat"})
                 self.assertEqual(result["rust_packages"], ["hide-core"])
+                self.assertEqual(result["repeat"]["units"], [path])
         self.assertEqual(set(plan("web/e2e/platform-program.unit.ts")["lanes"]),
-                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"})
+                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check", "repeat"})
 
     def test_unit_tests_do_not_remove_a_products_lanes_or_a_conservative_fallback(self):
         for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
                         "Cargo.lock", "scripts/ci-plan.py", "unclaimed/config.json"):
             with self.subTest(product=product):
-                expected = set(plan(product)["lanes"]) | {"checks"}
+                # The changed unit test adds the lane that repeats it, beside
+                # a product that plans every lane too: the pull request's diff
+                # still names the test.
+                base = plan(product)
+                expected = set(base["lanes"]) | {"checks", "repeat"}
                 self.assertEqual(set(plan("desktop/src/main/new.test.ts", product)["lanes"]), expected | {"windows-check"})
         self.assertIn("package", plan("desktop/src/main/updater.ts")["lanes"])
         self.assertEqual(plan("web/src/new.test.ts", status="R100")["lanes"], FULL)
@@ -238,8 +246,10 @@ class Selection(unittest.TestCase):
         node = plan("hide-node/src/ssh/kit/contract.rs")
         self.assertEqual(contract["rust_packages"], node["rust_packages"])
         # The desktop unit suite runs the packaging scripts' tests, and the
-        # package lane carries the kits.
-        self.assertEqual(set(contract["lanes"]), set(node["lanes"]) | {"checks", "package"})
+        # package lane carries the kits. The contract file holds no test, so
+        # it plans no repeat of one; the Rust file that reads it does.
+        self.assertEqual(set(contract["lanes"]), (set(node["lanes"]) | {"checks", "package"}) - {"repeat"})
+        self.assertIn("repeat", node["lanes"])
 
     def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
         pin = plan("contracts/conpty.json")
@@ -649,7 +659,7 @@ class NamedPaths(unittest.TestCase):
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
             ".github/ISSUE_TEMPLATE/bug.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml", ".github/APPROVED_CONTRIBUTORS",
             "scripts/tests/test_ci_plan.py", "scripts/check-harness-ignore-anchor.sh",
-            "scripts/web-shell-measure/run.sh", "scripts/rust_scan.py",
+            "scripts/web-shell-measure/run.sh",
             # The design contract's generators and checks, which `design-contract.yml` runs.
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
@@ -767,8 +777,10 @@ class NamedPaths(unittest.TestCase):
 
     def test_the_shared_prompt_identity_examples_run_the_hooks_and_policy_readers(self):
         result = plan("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json")
-        # The journey runs the hook program, which the test fixture is not part of.
-        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey"})
+        # The journey runs the hook program, which the test fixture is not part
+        # of, and the fixture declares no test, so it repeats none: the Rust
+        # file beside it does.
+        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey", "repeat"})
         self.assertIn("hide-agent-hooks", result["rust_packages"])
         self.assertIn("policy", result["lanes"])
 
@@ -796,7 +808,9 @@ class NamedPaths(unittest.TestCase):
         self.assertEqual(selected, registered)
         for path in registered:
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check"})
+                # A registered desktop unit test is also a changed test, which
+                # the `repeat` lane repeats.
+                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check", "repeat"})
         # Both retained jobs run both Vitest suites; a configured matrix alone
         # would not establish that these tests are executed on Windows.
         for lane in ("checks", "windows-check"):
@@ -955,8 +969,9 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
-        # The count, the web specs' run, the Rust modules' run and the verdict.
-        return 4
+        # The count, the web specs' run, the unit tests' run, the Rust modules'
+        # run and the verdict.
+        return 5
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -1104,13 +1119,18 @@ class Workflows(unittest.TestCase):
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
         # for the device link's crates, its device test and the device kit
         # contract (with-hide/hide-private#501).
-        # The repeat lane's count, web specs, Rust modules and final verdict
-        # raise it from 51 to 55. The verdict requires actual completed runs
-        # from every leg the count chose.
-        # The user docs lane adds one, planned for `site/`, the web shell's
-        # sources, `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
+        # The repeat lane's count, web specs, unit tests, Rust modules and
+        # final verdict raise it from 51 to 56. The verdict requires actual
+        # completed runs from every leg the count chose. The user docs lane
+        # adds one, planned for `site/`, the web shell's sources,
+        # `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
         # The Android app host's lane adds one, planned for `mobile/android/`.
-        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
+        # The Windows `@platform` lane's third shard, its daemon and shell
+        # builds now outside the shard, and its second shard raise it from 58
+        # to 62: one job held the suite at 22.4 minutes, the longest of a run,
+        # and three shards plan 4.2 minutes of tests each (docs/TESTING.md,
+        # "Balancing the e2e shards").
+        self.assertLessEqual(most, 62, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1266,6 +1286,16 @@ class MacosOnPullRequests(unittest.TestCase):
 
 
 class Aggregate(unittest.TestCase):
+    def test_a_sparse_checkout_carries_every_script_its_scripts_load(self):
+        # A job that checks out only some scripts dies at import when one of them
+        # loads a sibling the list left out, before it can report on any lane.
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for block in re.findall(r"sparse-checkout: \|\n((?:[ \t]+\S.*\n)+?)[ \t]+sparse-checkout-cone-mode", workflow.read_text()):
+                listed = {line.strip() for line in block.splitlines()}
+                for script in sorted(path for path in listed if path.endswith(".py")):
+                    for sibling in re.findall(r'Path\(__file__\)\.resolve\(\)\.parent / "([^"]+\.py)"', (ROOT / script).read_text()):
+                        self.assertIn(f"scripts/{sibling}", listed, f"{workflow.name}: {script} loads {sibling}")
+
     def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
         jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
                 "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
@@ -1446,8 +1476,10 @@ class ReuseGreenRun(unittest.TestCase):
         self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
 
     def test_only_registered_unit_checks_rerun_after_a_green_app_run(self):
-        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check"]),
-                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check"])):
+        # A changed unit test also plans the lane that repeats it; the run
+        # that reuses a green one rechecks it, so it plans that lane too.
+        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check", "repeat"]),
+                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check", "repeat"])):
             with self.subTest(path=path):
                 self.pr.git("checkout", "-q", "topic")
                 self.pr.git("reset", "--hard", self.green["head"])
@@ -1467,7 +1499,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "second\n"})
         self.pr.check_out_merge()
         first = self.pr.plan(lambda: self.green)
-        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check"])
+        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check", "repeat"])
         # This partial green must not claim that its app lanes checked a new
         # head: later runs still compare with the original app-tested commits.
         anchor = ci.plan_record(first, 7, 202)["verified"]
@@ -1475,6 +1507,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.git("rm", "desktop/src/main/x.test.ts")
         self.pr.git("commit", "-qm", "delete unit test")
         self.pr.check_out_merge()
+        # A deleted unit test has no test left to repeat.
         deleted = self.pr.plan(lambda: anchor)
         self.assertEqual(deleted["lanes"], ["policy", "checks", "windows-check"])
         self.assertEqual(deleted["verified"], self.green)

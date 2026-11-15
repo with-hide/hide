@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 _REPEAT = importlib.util.spec_from_file_location("ci_repeat", Path(__file__).resolve().parent / "ci-repeat.py")
 ci_repeat = importlib.util.module_from_spec(_REPEAT)
 _REPEAT.loader.exec_module(ci_repeat)
-NO_REPEAT = {"web": [], "rust": []}
+NO_REPEAT = {"web": [], "units": [], "rust": [], "rust_sources": []}
 
 # The order is the order the summary prints.
 LANES = (
@@ -436,7 +436,7 @@ POLICY_ONLY = (
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh",
-    "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
+    "scripts/check-core-touches-no-machine.py",
     "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
@@ -541,8 +541,10 @@ NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
     ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
     ("scripts/check-relay-protocol.sh", {"relay-protocol"}),
-    # The repeat lane's selection and budget, which the plan job also imports.
+    # The repeat lane's selection and budget, which the plan job also imports,
+    # and the Rust module scanner it reads a crate's test modules with.
     ("scripts/ci-repeat.py", {"repeat"}),
+    ("scripts/rust_scan.py", {"repeat"}),
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
@@ -635,7 +637,12 @@ def named_lanes(path):
 
 
 def cargo_crates(root=ROOT):
-    """Each workspace crate's directory, mapped to the crates that consume it."""
+    """Each workspace crate's directory, mapped to the crates that consume it.
+
+    `targets` carries the crate's `lib`, `main` and `bin` source targets, the
+    way `cargo metadata` names them, which `scripts/ci-repeat.py` reads to
+    select the tests a changed `src` file declares.
+    """
     raw = subprocess.check_output(
         ["bash", "scripts/verify-cargo.sh", "metadata", "--format-version", "1", "--no-deps"],
         cwd=root,
@@ -644,9 +651,15 @@ def cargo_crates(root=ROOT):
     metadata = json.loads(raw)
     workspace = PurePosixPath(Path(metadata["workspace_root"]).as_posix())
     directory = {}
+    targets = {}
     for package in metadata["packages"]:
         manifest = PurePosixPath(Path(package["manifest_path"]).as_posix())
         directory[package["name"]] = manifest.parent.relative_to(workspace).as_posix()
+        targets[package["name"]] = [
+            ("lib" if "lib" in target["kind"] else "bin", target["src_path"])
+            for target in package["targets"]
+            if "lib" in target["kind"] or "bin" in target["kind"]
+        ]
     consumers = {name: set() for name in directory}
     for package in metadata["packages"]:
         for dependency in package["dependencies"]:
@@ -654,7 +667,8 @@ def cargo_crates(root=ROOT):
             # against the changed crate too.
             if dependency.get("path") and dependency["name"] in directory:
                 consumers[dependency["name"]].add(package["name"])
-    return {directory[name]: {"name": name, "consumers": consumers[name]} for name in directory}
+    return {directory[name]: {"name": name, "consumers": consumers[name], "targets": targets[name]}
+            for name in directory}
 
 
 def reverse_closure(crates, start):
@@ -799,7 +813,8 @@ def select(entries, crates, root=ROOT, full_reason=None):
     packages = set()
     full = []
     crate_dirs = {directory: crate["name"] for directory, crate in crates.items()}
-    repeat = ci_repeat.select(entries, crate_dirs)
+    targets = {directory: crate["targets"] for directory, crate in crates.items() if crate.get("targets")}
+    repeat = ci_repeat.select(entries, crate_dirs, targets)
     all_lanes = any(fnmatchcase(name, pattern) for _, name in entries for pattern in ALL_LANE_PATHS)
     if full_reason:
         full.append(full_reason)
@@ -824,13 +839,21 @@ def select(entries, crates, root=ROOT, full_reason=None):
         reasons["policy"].append(reason)
         for lane in lanes:
             reasons[lane].append(reason)
-        if any(ci_repeat.select([(status, name)], crate_dirs).values()):
+        if any(ci_repeat.select([(status, name)], crate_dirs, targets).values()):
             reasons["repeat"].append(f"changed test: {name}")
     if full:
         # Preserve main/nightly defaults; a PR editing CI exercises everything.
         for lane in PATH_LANES if all_lanes else FULL_LANES:
             reasons[lane] = list(full)
         packages = {crate["name"] for crate in crates.values()}
+        if full_reason or not entries:
+            # A push to main, the nightly and a comparison that could not be
+            # listed (each a `full_reason`) have no diff of a pull request's
+            # own to name the tests it changed, so `repeat` is not one of
+            # their lanes. A pull request
+            # whose diff plans every lane still names its changed tests, and
+            # they are repeated as on any other pull request.
+            reasons["repeat"] = []
     planned = [lane for lane in LANES if reasons[lane]]
     return {
         "full": bool(full),
@@ -1189,7 +1212,11 @@ def main():
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
                 repeat = result.get("repeat", NO_REPEAT)
                 output.write(f"repeat-web={json.dumps(repeat['web'], separators=(',', ':'))}\n")
-                output.write(f"repeat-rust={json.dumps(repeat['rust'], separators=(',', ':'))}\n")
+                output.write(f"repeat-units={json.dumps(repeat['units'], separators=(',', ':'))}\n")
+                # The Rust leg runs the `tests/it` modules and the `src` test
+                # modules in one nextest call, so the plan carries both as the
+                # `{package, test, module}` entries nextest selects by.
+                output.write(f"repeat-rust={json.dumps(repeat['rust'] + repeat['rust_sources'], separators=(',', ':'))}\n")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
                 server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")

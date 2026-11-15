@@ -42,6 +42,8 @@ use hide_node_link::terminal::{
 
 use crate::fixture_v1;
 use crate::role::GO;
+#[cfg(unix)]
+use crate::support::stopped;
 use crate::support::{
     HANG_LIMIT, Home, PIDS_FILE, ROLE, Running, SCRIPT, Script, node_theme, print_ok, role_program,
     shell, source, wait_until,
