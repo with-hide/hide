@@ -479,11 +479,15 @@ fn a_close_during_a_renewal_ends_the_holder_the_renewal_leaves() {
 }
 
 /// The writes handed to the pane's holder before its agent slept are
-/// waited for before anything is judged, a released session's included,
+/// answered for before anything is judged, a released session's included,
 /// whose writer goes on writing what it was handed; the core's input that
 /// comes beside them never reaches the asleep pane, and writes that do not
 /// settle leave the earlier holder untouched. The holder is stopped, so its
-/// connection stops taking what the node writes.
+/// connection stops taking what the node writes: a writer whose whole backlog
+/// is waiting is refused at its cap, which is one answer this test makes for
+/// itself rather than leaving to the machine's socket, since a socket that
+/// took every byte would let the writes settle and the renewal rightly go on
+/// to end the holder.
 #[cfg(unix)]
 fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
     let folder = Folder::new();
