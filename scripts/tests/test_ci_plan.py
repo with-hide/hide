@@ -93,11 +93,11 @@ class Selection(unittest.TestCase):
         for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
                         "Cargo.lock", "scripts/ci-plan.py", "unclaimed/config.json"):
             with self.subTest(product=product):
-                # The changed unit test adds the lane that repeats it. A
-                # product that plans every lane names no pull request diff for
-                # `repeat` to select tests from, and that lane stays unplanned.
+                # The changed unit test adds the lane that repeats it, beside
+                # a product that plans every lane too: the pull request's diff
+                # still names the test.
                 base = plan(product)
-                expected = (set(base["lanes"]) | {"checks"}) | (set() if base["full"] else {"repeat"})
+                expected = set(base["lanes"]) | {"checks", "repeat"}
                 self.assertEqual(set(plan("desktop/src/main/new.test.ts", product)["lanes"]), expected | {"windows-check"})
         self.assertIn("package", plan("desktop/src/main/updater.ts")["lanes"])
         self.assertEqual(plan("web/src/new.test.ts", status="R100")["lanes"], FULL)
