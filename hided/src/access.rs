@@ -50,7 +50,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes"
         }
         "access_pending" => {
-            "Wait until the operator approves the request in Settings > External tools, then run hide access request again"
+            "Wait until the operator approves the request in Settings > External tools; the next hide command then runs as the tool"
         }
         "access_refused" => {
             "The operator refused this tool; run hide access request --name <name> to ask again"

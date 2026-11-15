@@ -136,14 +136,14 @@ hide device retry <device id or ssh alias> [--wait] [--json]
 ## Tools outside Hide
 
 ```
-hide access request --name <name> [--json]
+hide access request --name <name> [--no-wait] [--json]
 hide access status [--json]
 hide access leave [--json]
 hide access list [--json]
 ```
 
 - These are for a program outside Hide's panes, on the machine where Hide's core runs, such as a scheduler or another assistant; an agent in a Hide pane acts as itself and is refused with `access_from_pane`.
-- `request` asks the operator, who approves it in Settings › External tools as View only or Act; run the same `request` again to see the answer. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
+- `request` asks the operator, who approves it in Settings › External tools as View only or Act, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
 - View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does. No agent writes to a tool first.
 - What only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
 - A home with several tools' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a tool at any time, and `leave` disconnects it from the tool's side.

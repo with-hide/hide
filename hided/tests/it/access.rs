@@ -280,12 +280,12 @@ impl Tool {
         hide_kit::layout::access_keys(&self.home).join(format!("{name}.{extension}"))
     }
 
-    /// `hide access request --name <name> --json` until the answer is not
-    /// pending, as a tool polls after the operator was asked.
+    /// `hide access request --name <name> --no-wait --json` until the
+    /// answer is not pending, as a script polls after the operator was asked.
     async fn request_until_answered(&self, name: &str) -> Ran {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            let ran = self.run(&["access", "request", "--name", name, "--json"]);
+            let ran = self.run(&["access", "request", "--name", name, "--no-wait", "--json"]);
             if !(ran.ok && ran.json()["value"]["state"] == "pending") {
                 return ran;
             }
@@ -294,9 +294,9 @@ impl Tool {
         }
     }
 
-    /// Requests and returns the pending request's id (B1).
+    /// Requests without waiting and returns the pending request's id (B1).
     fn put_up(&self, name: &str) -> String {
-        let ran = self.run(&["access", "request", "--name", name, "--json"]);
+        let ran = self.run(&["access", "request", "--name", name, "--no-wait", "--json"]);
         assert!(ran.ok, "{}", ran.out);
         let value = &ran.json()["value"];
         assert_eq!(value["state"], "pending", "{}", ran.out);
@@ -527,7 +527,7 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
     window.send("access_revoke", json!({"id": id})).await;
     let deadline = Instant::now() + Duration::from_secs(20);
     let again = loop {
-        let ran = kept.run(&["access", "request", "--name", "kept", "--json"]);
+        let ran = kept.run(&["access", "request", "--name", "kept", "--no-wait", "--json"]);
         if ran.ok {
             break ran;
         }
@@ -549,6 +549,89 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
         &[("HIDE_PANE_ID", "w1:p1")],
     )
     .refused("access_from_pane");
+    running.stop();
+}
+
+/// D-56: a request stays until the operator answers it, approved or
+/// refused, and a request whose wait ended becomes the key on the tool's
+/// next command, with no second `hide access request`.
+// The daemon runs on this test's runtime while a fake tool's `hide` blocks
+// a thread of it, so it needs threads of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_waits_for_its_answer_and_a_later_command_picks_up_the_key() {
+    let root = tempfile::tempdir().unwrap();
+    let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
+    let mut window = Window::open(&running).await;
+
+    for (name, answer, payload_level, state) in [
+        ("approved", "access_approve", Some("act"), Some("connected")),
+        ("refused", "access_refuse", None, None),
+    ] {
+        let tool = Tool::new(root.path(), &format!("{name}-home"));
+        let waiting = tool
+            .command(&["access", "request", "--name", name, "--json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let id = loop {
+            let status = tool.run(&["access", "status", "--json"]);
+            if status.ok && status.json()["value"]["state"] == "pending" {
+                break status.json()["value"]["id"].as_str().unwrap().to_owned();
+            }
+            assert!(Instant::now() < deadline, "never put up: {}", status.out);
+            tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the waiting request's own process puts it up
+        };
+        let payload = match payload_level {
+            Some(level) => json!({"id": id, "level": level}),
+            None => json!({"id": id}),
+        };
+        window.send(answer, payload).await;
+        let ran = Ran::of(
+            tokio::task::spawn_blocking(move || waiting.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(
+            ran.out
+                .contains("Waiting up to 10 minutes for the operator to approve"),
+            "{}",
+            ran.out
+        );
+        match state {
+            Some(state) => {
+                assert!(ran.ok, "{}", ran.out);
+                assert_eq!(ran.json()["value"]["state"], state, "{}", ran.out);
+                assert!(tool.key_file(name, "key").exists());
+            }
+            None => ran.refused("access_refused"),
+        }
+        assert!(!tool.key_file(name, "request").exists());
+    }
+
+    let later = Tool::new(root.path(), "later-home");
+    let id = later.put_up("later");
+    window
+        .send("access_approve", json!({"id": id, "level": "view"}))
+        .await;
+    // `access status` reads where the request stands and keeps no key.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let status = later.run(&["access", "status", "--json"]);
+        if status.ok && status.json()["value"]["state"] == "connected" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never approved: {}", status.out);
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's approval reached the core
+    }
+    assert!(later.key_file("later", "request").exists());
+    // The first command after the approval already runs as the tool.
+    let ps = later.run(&["ps", "--json"]);
+    assert!(ps.ok, "{}", ps.out);
+    assert!(later.key_file("later", "key").exists());
+    assert!(!later.key_file("later", "request").exists());
     running.stop();
 }
 

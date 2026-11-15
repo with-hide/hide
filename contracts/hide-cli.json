@@ -14,7 +14,7 @@
             "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again",
             "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
             "access_not_connected": "Run hide access request --name <name> first",
-            "access_pending": "Wait until the operator approves the request in Settings > External tools, then run hide access request again",
+            "access_pending": "Wait until the operator approves the request in Settings > External tools; the next hide command then runs as the tool",
             "access_refused": "The operator refused this tool; run hide access request --name <name> to ask again",
             "access_request_expired": "The request was dropped; run hide access request --name <name> to ask again",
             "access_revoked": "The operator disconnected this tool; run hide access request --name <name> to ask again",
@@ -4871,6 +4871,12 @@
                     }
                 },
                 {
+                    "name": "--no-wait",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
@@ -6994,7 +7000,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a1ce395cd70b29fa3386f242985febbc94ba910b52be7b3cbf94fad30a6a25f5",
+    "digest": "sha256:53d4a2d1d3e4d4aa1a325301404c5b458cc486c4ebcd9c9167e84b3ff05393fc",
     "envelopes": {
         "access": {
             "answer": "value",
